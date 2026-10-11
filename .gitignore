@@ -102,6 +102,10 @@ web_modules/
 # but ignored so one can never be committed here by accident)
 .npmrc
 
+# Generated forwarding package for the short name (scratch; the manifest is built by
+# scripts/publish-shortname.mjs and must never be committed)
+/scripts/publish-shortname/out/
+
 # Yarn Integrity file
 .yarn-integrity
 
