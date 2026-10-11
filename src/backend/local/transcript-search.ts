@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { MessageSearchResponse } from "@letta-ai/letta-client/resources/messages";
 import { isRecord } from "@/utils/type-guards";
@@ -11,6 +11,8 @@ import {
   LOCAL_TRANSCRIPT_LEGACY_MESSAGE_FORMAT,
   LOCAL_TRANSCRIPT_MESSAGE_FORMAT,
   type LocalTranscriptManifest,
+  readJsonFileOrUndefined,
+  readJsonlFileTolerant,
 } from "./local-transcript";
 import type { StoredMessage } from "./local-types";
 
@@ -73,27 +75,6 @@ export type RankableSearchRecord = {
 type LocalTranscriptSearchOptions = {
   currentConversationId?: string;
 };
-
-function readJsonFile<T>(path: string): T | undefined {
-  if (!existsSync(path)) return undefined;
-  try {
-    return JSON.parse(readFileSync(path, "utf8")) as T;
-  } catch {
-    return undefined;
-  }
-}
-
-function readJsonlFile(path: string): unknown[] {
-  if (!existsSync(path)) return [];
-  try {
-    return readFileSync(path, "utf8")
-      .split("\n")
-      .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line) as unknown);
-  } catch {
-    return [];
-  }
-}
 
 export function conversationSearchRecord(
   value: unknown,
@@ -289,6 +270,17 @@ function normalizeText(value: string): string {
   return tokenize(value).join(" ");
 }
 
+/** Non-overlapping occurrences of `term` in `text`. */
+function countOccurrences(text: string, term: string): number {
+  let count = 0;
+  let index = text.indexOf(term);
+  while (index !== -1) {
+    count += 1;
+    index = text.indexOf(term, index + term.length);
+  }
+  return count;
+}
+
 /**
  * Exported so the memory retriever can pick the best line inside a hit paragraph
  * with the same term/phrase semantics this scorer ranks by, instead of growing a
@@ -296,23 +288,13 @@ function normalizeText(value: string): string {
  */
 export function termFrequency(tokens: readonly string[], term: string): number {
   if (CJK_RUN.test(term)) {
-    // These scripts commonly omit word separators. Preserve substring recall
-    // within a run without restoring Latin token-suffix matches.
-    //
-    // `token.split(term).length - 1` counts the same non-overlapping
-    // occurrences, but allocates one array per token, and this is the CJK
-    // search's hot path: every corpus record is scanned once per query term to
-    // build the document frequencies. The index scan is measurably faster on
-    // the real transcript corpus and returns identical counts.
-    let count = 0;
-    for (const token of tokens) {
-      let index = token.indexOf(term);
-      while (index !== -1) {
-        count += 1;
-        index = token.indexOf(term, index + term.length);
-      }
-    }
-    return count;
+    // These scripts commonly omit word separators, so a CJK term is a *substring*
+    // of a token rather than a token: substring recall within a run is the point,
+    // and it comes without restoring Latin token-suffix matches.
+    return tokens.reduce(
+      (count, token) => count + countOccurrences(token, term),
+      0,
+    );
   }
   return tokens.reduce((count, token) => count + Number(token === term), 0);
 }
@@ -331,25 +313,18 @@ export function termFrequency(tokens: readonly string[], term: string): number {
  *
  * The Latin branch keeps exact token equality, because substring occurrence is not
  * what `termFrequency` means for a Latin term ("bun" must not match "bunny").
- * The spaced-term branch is a correctness fallback: a term containing a space can
- * straddle the join separator, so it has to be counted the slow way.
+ *
+ * There is no branch for a term containing a space, and one would be dead if it
+ * existed: no producer here emits such a term (`parseQuery` and the recall query
+ * layer both build terms from `tokenize`, whose pattern cannot produce a space),
+ * and the per-token fallback it reached could only compare the term against tokens
+ * that never contain one.
  */
 export function hasTerm(record: RankableSearchRecord, term: string): boolean {
   if (term.length === 0) return false;
-  if (term.includes(" ")) return termFrequency(record.tokens, term) > 0;
   return isCjkRun(term)
     ? record.normalizedText.includes(term)
     : record.tokens.includes(term);
-}
-
-function countOccurrences(text: string, term: string): number {
-  let count = 0;
-  let index = text.indexOf(term);
-  while (index !== -1) {
-    count += 1;
-    index = text.indexOf(term, index + term.length);
-  }
-  return count;
 }
 
 /**
@@ -366,7 +341,6 @@ export function termOccurrences(
   term: string,
 ): number {
   if (term.length === 0) return 0;
-  if (term.includes(" ")) return termFrequency(record.tokens, term);
   return isCjkRun(term)
     ? countOccurrences(record.normalizedText, term)
     : record.tokens.reduce((count, token) => count + Number(token === term), 0);
@@ -467,15 +441,22 @@ export function rankMatches<T extends RankableSearchRecord>(
 
   const scored: Array<T & { score: number }> = [];
   for (const record of candidates) {
-    // Stopping here returns the scores computed so far: a truncated ranking is
-    // still a ranking, and the caller has already decided what to do with a
-    // partial result (it marks the run degraded and injects what it has).
+    // Stopping here returns the scores computed so far: a truncated ranking is a
+    // ranking, and the caller has already decided what to do with a partial result
+    // (it marks the run degraded and injects what it has). An expiry during the
+    // document-frequency pass above gets no such result — that pass runs to
+    // completion before the first candidate is scored, so a term it never reached
+    // has no frequency, and the run returns nothing rather than something wrong.
     if (shouldStop?.()) break;
     let score = 0;
     for (const term of query.terms) {
       const frequency = termOccurrences(record, term);
       if (frequency === 0) continue;
-      const frequencyInDocuments = documentFrequency.get(term) ?? 0;
+      // A term the frequency pass never reached is read as the most common term
+      // there can be, not the rarest: an unknown frequency must not inflate a
+      // score, and the only way to be missing here is for the pass to have been
+      // cut short.
+      const frequencyInDocuments = documentFrequency.get(term) ?? corpus.length;
       const inverseDocumentFrequency = Math.log(
         1 +
           (corpus.length - frequencyInDocuments + 0.5) /
@@ -565,9 +546,9 @@ function collectConversationMessages(input: {
     return [];
 
   const messagesPath = join(conversationDir, "messages.jsonl");
-  const rows = readJsonlFile(messagesPath);
+  const rows = readJsonlFileTolerant<unknown>(messagesPath);
   if (rows.length === 0) return [];
-  const manifest = readJsonFile<LocalTranscriptManifest>(
+  const manifest = readJsonFileOrUndefined<LocalTranscriptManifest>(
     join(conversationDir, "manifest.json"),
   );
   const format = transcriptFormat(manifest, rows);
@@ -619,10 +600,15 @@ function collectConversationMessages(input: {
         tool_call_id?: string;
       };
       const text = searchableText(message);
+      // One tokenization for both fields: `normalizedText` is defined as
+      // `tokens.join(" ")`, so deriving them separately tokenizes every message
+      // twice on the per-turn path and leaves the contract resting on the two
+      // calls happening to agree.
+      const tokens = tokenize(text);
       return {
         message,
-        normalizedText: normalizeText(text),
-        tokens: tokenize(text),
+        normalizedText: tokens.join(" "),
+        tokens,
         score: 0,
         isSearchEcho:
           (candidate.message_type === "approval_request_message" &&
@@ -678,7 +664,7 @@ export function searchLocalTranscriptMessages(
   const records = conversationDirectories(storageDir).flatMap(
     (conversationDir) => {
       const conversation = conversationSearchRecord(
-        readJsonFile(join(conversationDir, "conversation.json")),
+        readJsonFileOrUndefined(join(conversationDir, "conversation.json")),
       );
       if (!conversation) return [];
       if (conversation.hidden && !includeHidden) return [];

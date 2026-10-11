@@ -409,6 +409,45 @@ export function readJsonlFile<T>(path: string): T[] {
     .map((line) => JSON.parse(line) as T);
 }
 
+/**
+ * {@link readJsonFile}, with a damaged file reading as absent instead of throwing.
+ *
+ * The strict reader is right where a parse failure is the caller's business — a
+ * migration, a compiled prompt, a pinned memory document. It is wrong on a read
+ * path that is derived and rebuildable: a recall index covers every conversation
+ * in the store, and one truncated `conversation.json` must not cost the others
+ * their data or take down the turn that was merely searching them.
+ */
+export function readJsonFileOrUndefined<T>(path: string): T | undefined {
+  if (!existsSync(path)) return undefined;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * {@link readJsonlFile}, skipping the lines JSON cannot parse.
+ *
+ * An interrupted append leaves one partial final line, and the strict reader
+ * turns that into "this transcript holds no messages at all". Everything before
+ * the damaged line is intact, so the damage stays on the line it happened on.
+ */
+export function readJsonlFileTolerant<T>(path: string): T[] {
+  if (!existsSync(path)) return [];
+  const items: T[] = [];
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    if (line.trim().length === 0) continue;
+    try {
+      items.push(JSON.parse(line) as T);
+    } catch {
+      // One damaged line; the rest of the file is still readable.
+    }
+  }
+  return items;
+}
+
 export function readJsonlFileSuffix<T>(
   path: string,
   maxBytes: number,
