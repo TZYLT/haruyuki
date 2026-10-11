@@ -88,6 +88,12 @@ import {
   stampFreezeMetadata,
 } from "./prefix-freeze";
 import {
+  type RecallDedupWindow,
+  recallDedupPorts,
+  type SettledRecallDedup,
+  settleRecallDedup as settleLocalRecallDedup,
+} from "./recall-dedup";
+import {
   appendAvailableSkillsBlock,
   compileLocalSystemPrompt,
   type LocalCompiledSystemPrompt,
@@ -576,6 +582,31 @@ export class LocalBackend extends HeadlessBackend {
       agentId:
         agentId ?? this.store.resolveAgentIdForConversation(conversationId),
       nudgeTurns: readTopicSettings().nudgeTurns,
+    });
+  }
+
+  /**
+   * Local-only: feature ②'s dedup window. Returns the fingerprints whose
+   * recording turn is still inside the window, and (when `injected` is given)
+   * records that this turn injected them.
+   *
+   * One method for the read and the write because the caller needs both answers
+   * from the same observation of the conversation record: it filters candidates
+   * with `suppressed`, then reports what survived. Omit `injected` to only prune —
+   * that is what `/recall status` and a turn with no hits do.
+   */
+  settleRecallDedup(input: {
+    conversationId: string;
+    agentId?: string;
+    currentTurn: number;
+    keepTurns: number;
+    injected?: RecallDedupWindow;
+  }): SettledRecallDedup {
+    return settleLocalRecallDedup(recallDedupPorts(this.store), {
+      ...input,
+      agentId:
+        input.agentId ??
+        this.store.resolveAgentIdForConversation(input.conversationId),
     });
   }
 

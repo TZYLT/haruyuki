@@ -359,6 +359,11 @@ function excerptFor(
 /**
  * Searches the memory workspace for `query`, best match first.
  *
+ * `query` may be a raw string or an already-parsed query. The recall path parses
+ * once and shares the terms with the transcript source, so it passes the parsed
+ * form: re-parsing a string there would fire the query layer's n-gram expansion a
+ * second time and could produce different terms for the two sources.
+ *
  * Scoring is the transcript scorer over a different corpus, not a second dialect
  * of it: document frequencies come from every paragraph in the workspace, never
  * from a candidate subset, so a memory hit means the same thing a transcript hit
@@ -367,7 +372,7 @@ function excerptFor(
  */
 export function searchMemoryFiles(
   memoryDir: string,
-  query: string,
+  query: string | ParsedQuery,
   options: MemorySearchOptions = {},
 ): MemorySearchResult {
   const stats: MemorySearchStats = {
@@ -376,7 +381,7 @@ export function searchMemoryFiles(
     records: 0,
     skippedFiles: 0,
   };
-  const parsedQuery = parseQuery(query);
+  const parsedQuery = typeof query === "string" ? parseQuery(query) : query;
   if (parsedQuery.terms.length === 0 && parsedQuery.phrases.length === 0) {
     return { entries: [], stats };
   }

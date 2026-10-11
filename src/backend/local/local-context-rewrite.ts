@@ -138,6 +138,10 @@ export class LocalContextRewrites {
    * neither the context nor the transcript (`transcript: "skip"`), because the
    * flag is bookkeeping, not conversation content. Writing the same value again
    * is a no-op, so a reader can call it on every turn.
+   *
+   * It edits its own key rather than replacing the object: `context_management`
+   * now holds feature ②'s dedup window too, and a wholesale replace would silently
+   * delete a sibling key (and its window) every time the nudge settled.
    */
   setTopicNudgeSent(
     conversationId: string,
@@ -149,9 +153,61 @@ export class LocalContextRewrites {
     if ((current.nudge_sent_for_streak === true) === sent) return;
 
     if (sent) {
-      conversation.context_management = { nudge_sent_for_streak: true };
+      current.nudge_sent_for_streak = true;
     } else {
+      delete current.nudge_sent_for_streak;
+    }
+    this.persistContextManagement(conversation, agentId, current);
+  }
+
+  /**
+   * Feature ②'s dedup window: recall fingerprint -> the user turn it went out on.
+   *
+   * Read-only; `settleRecallDedup` on the backend is the write path.
+   */
+  readRecallInjectedTurns(
+    conversationId: string,
+    agentId: string,
+  ): Record<string, number> {
+    const conversation = this.ports.ensureConversation(conversationId, agentId);
+    return {
+      ...normalizeContextManagement(conversation.context_management)
+        .recall_injected_turns,
+    };
+  }
+
+  /** Replaces the dedup window; an empty window clears the key. */
+  setRecallInjectedTurns(
+    conversationId: string,
+    agentId: string,
+    turns: Record<string, number>,
+  ): void {
+    const conversation = this.ports.ensureConversation(conversationId, agentId);
+    const current = normalizeContextManagement(conversation.context_management);
+    const next = { ...current };
+    if (Object.keys(turns).length === 0) {
+      delete next.recall_injected_turns;
+    } else {
+      next.recall_injected_turns = { ...turns };
+    }
+    if (contextManagementKey(current) === contextManagementKey(next)) return;
+    this.persistContextManagement(conversation, agentId, next);
+  }
+
+  /**
+   * The one write for conversation-level bookkeeping: no transcript, no context,
+   * no message index — and an empty object removes the key entirely rather than
+   * leaving `{}` behind on a conversation that never used either field.
+   */
+  private persistContextManagement(
+    conversation: StoredConversation,
+    agentId: string,
+    next: LocalConversationContextManagement,
+  ): void {
+    if (Object.keys(next).length === 0) {
       delete conversation.context_management;
+    } else {
+      conversation.context_management = next;
     }
     const key = this.ports.conversationKey(conversation.id, agentId);
     this.ports.saveConversation(key, conversation);
@@ -401,8 +457,13 @@ export class LocalContextRewrites {
 /**
  * Keep the fields this build understands and preserve the ones it does not: a
  * newer build may have written a sibling key, and this one must not delete state it
- * cannot read (L-14). Only `nudge_sent_for_streak` is normalized — unknown values
- * are carried through as they are.
+ * cannot read (L-14). `nudge_sent_for_streak` and the recall dedup window both
+ * have an explicit branch here — a field with no branch is carried through
+ * unvalidated, so every field this build *writes* needs one.
+ *
+ * A damaged value reads as "nothing recorded" rather than throwing. Both fields
+ * only gate a reminder or a repeat injection, so guessing wrong costs at most one
+ * duplicated line, while propagating a shape error would break the turn.
  */
 function normalizeContextManagement(
   value: LocalConversationContextManagement | undefined,
@@ -414,5 +475,35 @@ function normalizeContextManagement(
   } else {
     delete normalized.nudge_sent_for_streak;
   }
+
+  const window: Record<string, number> = {};
+  const turns = normalized.recall_injected_turns;
+  if (turns && typeof turns === "object" && !Array.isArray(turns)) {
+    for (const [fingerprint, turn] of Object.entries(turns)) {
+      if (fingerprint.length === 0) continue;
+      if (typeof turn !== "number" || !Number.isFinite(turn)) continue;
+      window[fingerprint] = turn;
+    }
+  }
+  if (Object.keys(window).length > 0) {
+    normalized.recall_injected_turns = window;
+  } else {
+    delete normalized.recall_injected_turns;
+  }
   return normalized;
+}
+
+/**
+ * Canonical form of the fields this build owns, for the write no-op check. Keys
+ * this build does not know are deliberately excluded: both sides of a comparison
+ * descend from the same normalized value, so a sibling key is identical by
+ * construction and would only add noise.
+ */
+function contextManagementKey(
+  value: LocalConversationContextManagement,
+): string {
+  return JSON.stringify([
+    value.nudge_sent_for_streak === true,
+    Object.entries(value.recall_injected_turns ?? {}).sort(),
+  ]);
 }

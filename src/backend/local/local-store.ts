@@ -1041,6 +1041,26 @@ export class LocalStore {
     return this.agentIdForConversation(conversationId);
   }
 
+  /**
+   * The message ids still in this conversation's context — feature ②'s `N`.
+   *
+   * Deliberately narrower than `retrieveConversation`: that one creates a
+   * conversation when the id is unknown (a write on a read path) and, through
+   * the public `Backend` entry, drops the caller's `agentId` — so a multi-agent
+   * `default` conversation resolves to whichever agent happens to be the store's
+   * default. Recall runs while a turn is being sent, so it must neither write nor
+   * guess the agent.
+   *
+   * The returned array is a copy: a caller that sorted or spliced it in place
+   * would otherwise corrupt the resident conversation.
+   */
+  getInContextMessageIds(conversationId: string, agentId?: string): string[] {
+    const resolvedAgentId =
+      agentId ?? this.agentIdForConversation(conversationId);
+    const conversation = this.findConversation(conversationId, resolvedAgentId);
+    return conversation ? [...conversation.in_context_message_ids] : [];
+  }
+
   getCompiledSystemPrompt(
     conversationId: string,
     agentId: string,

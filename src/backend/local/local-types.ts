@@ -52,4 +52,15 @@ export type StoredConversation = Conversation & {
 export interface LocalConversationContextManagement {
   /** True once the no-marker nudge went out for the current streak. */
   nudge_sent_for_streak?: boolean;
+  /**
+   * Feature ②'s dedup window: recall fingerprint -> the user turn it was
+   * injected on.
+   *
+   * An entry can only be dropped once its turn ages out, so this is the one
+   * place that remembers "the model already has this, do not send it again".
+   * `N` (`in_context_message_ids`) does not cover the case: a recalled item that
+   * compaction removed from the context stays absent from `N` forever, so without
+   * this window it would be re-injected on every turn.
+   */
+  recall_injected_turns?: Record<string, number>;
 }

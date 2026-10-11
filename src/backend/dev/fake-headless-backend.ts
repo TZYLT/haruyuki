@@ -266,6 +266,13 @@ export class HeadlessBackend implements Backend {
     return this.store.retrievePublicConversation(conversationId);
   }
 
+  async getInContextMessageIds(
+    conversationId: string,
+    agentId?: string,
+  ): Promise<string[]> {
+    return this.store.getInContextMessageIds(conversationId, agentId);
+  }
+
   async listConversations(...args: Parameters<Backend["listConversations"]>) {
     const [body] = args;
     return this.store.listConversations(body) as never;

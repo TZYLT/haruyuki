@@ -171,6 +171,21 @@ export interface Backend {
     options?: ConversationRetrieveOptions,
   ): Promise<Awaited<ReturnType<APIClient["conversations"]["retrieve"]>>>;
 
+  /**
+   * Feature ②'s `N`: the message ids still in context for one conversation,
+   * resolved against the agent the caller names.
+   *
+   * It is its own entry rather than a reuse of `retrieveConversation` for two
+   * reasons. That call takes no agent scope, so a multi-agent `default`
+   * conversation resolves against whichever agent the backend happens to hold as
+   * default; and on the local backend it *creates* the conversation when the id
+   * is unknown, which is a write. Passive recall reads this on the send path.
+   */
+  getInContextMessageIds(
+    conversationId: string,
+    agentId?: string,
+  ): Promise<string[]>;
+
   listConversations(
     body?: ConversationListBody,
   ): Promise<Awaited<ReturnType<APIClient["conversations"]["list"]>>>;

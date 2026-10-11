@@ -19,6 +19,7 @@ import type { RankableSearchRecord } from "./transcript-search";
 import {
   conversationDirectories,
   conversationSearchRecord,
+  type LocalTranscriptMessageFormat,
   textFromContent,
   tokenize,
   transcriptFormat,
@@ -172,6 +173,55 @@ function recallRecordText(message: LocalMessage): string {
 }
 
 /**
+ * One transcript message as the recall corpus sees it — text, not tokens.
+ *
+ * This is the corpus boundary in its single definition: the index stores a
+ * tokenized projection of these rows, and a hit's snippet is a window over the
+ * same rows. Two implementations of "what counts as recallable text" would drift,
+ * and the drift would show up as an index that disagrees with its own snippets.
+ */
+export type RecallMessageText = {
+  id: string;
+  role: RecallIndexRole;
+  /** Entry timestamp, falling back to the message metadata creation time. */
+  ts: string;
+  text: string;
+};
+
+/**
+ * Every recallable message of a transcript, last-wins per `message.id`.
+ *
+ * A compaction summary is a stored user message whose text is generated, not
+ * said. Compaction keeps every old row, so those messages stay recallable and the
+ * summary adds nothing.
+ */
+export function recallMessageTexts(
+  rows: readonly unknown[],
+  format: LocalTranscriptMessageFormat | undefined,
+): RecallMessageText[] {
+  const byId = new Map<string, RecallMessageText>();
+  if (!format) return [];
+  for (const row of transcriptMessageRows(rows, format)) {
+    if (row.entryType === "compaction") continue;
+    const role = row.message.role;
+    if (role !== "user" && role !== "assistant") continue;
+    const text = recallRecordText(row.message);
+    if (!text) continue;
+    const record: RecallMessageText = {
+      id: row.message.id,
+      role,
+      ts: row.timestamp ?? row.message.metadata?.created_at ?? "",
+      text,
+    };
+    // Delete before set so an upserted record keeps its latest position, the way
+    // the transcript read side does.
+    if (byId.has(record.id)) byId.delete(record.id);
+    byId.set(record.id, record);
+  }
+  return [...byId.values()];
+}
+
+/**
  * Reads one conversation's transcript and produces its sidecar. Pure read: it
  * never writes, and an unreadable or unversioned transcript yields no records
  * rather than throwing.
@@ -187,30 +237,14 @@ export function ingestConversation(input: {
     transcriptManifestPath(input.conversationDir),
   );
   const format = transcriptFormat(manifest, rows);
-  const records = new Map<string, RecallIndexRecord>();
-
-  if (format) {
-    for (const row of transcriptMessageRows(rows, format)) {
-      // A compaction summary is a stored user message whose text is generated,
-      // not said. Compaction keeps every old row, so those messages stay
-      // recallable and the summary adds nothing.
-      if (row.entryType === "compaction") continue;
-      const role = row.message.role;
-      if (role !== "user" && role !== "assistant") continue;
-      const text = recallRecordText(row.message);
-      if (!text) continue;
-      const record: RecallIndexRecord = {
-        id: row.message.id,
-        role,
-        ts: row.timestamp ?? row.message.metadata?.created_at ?? "",
-        nt: tokenize(text).join(" "),
-      };
-      // Delete before set so an upserted record keeps its latest position, the
-      // way the transcript read side does.
-      if (records.has(record.id)) records.delete(record.id);
-      records.set(record.id, record);
-    }
-  }
+  const records: RecallIndexRecord[] = recallMessageTexts(rows, format).map(
+    (entry) => ({
+      id: entry.id,
+      role: entry.role,
+      ts: entry.ts,
+      nt: tokenize(entry.text).join(" "),
+    }),
+  );
 
   return {
     version: RECALL_INDEX_VERSION,
@@ -222,7 +256,7 @@ export function ingestConversation(input: {
       mtimeMs: 0,
     },
     lineCount: rows.length,
-    records: [...records.values()],
+    records,
   };
 }
 
