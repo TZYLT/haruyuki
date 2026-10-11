@@ -270,7 +270,12 @@ function normalizeText(value: string): string {
   return tokenize(value).join(" ");
 }
 
-function termFrequency(tokens: readonly string[], term: string): number {
+/**
+ * Exported so the memory retriever can pick the best line inside a hit paragraph
+ * with the same term/phrase semantics this scorer ranks by, instead of growing a
+ * second dialect of them.
+ */
+export function termFrequency(tokens: readonly string[], term: string): number {
   if (CJK_RUN.test(term)) {
     // These scripts commonly omit word separators. Preserve substring recall
     // within a run without restoring Latin token-suffix matches.
@@ -293,7 +298,8 @@ function termFrequency(tokens: readonly string[], term: string): number {
   return tokens.reduce((count, token) => count + Number(token === term), 0);
 }
 
-function matchesPhrase(text: string, phrase: string): boolean {
+/** See {@link termFrequency}: shared with the memory retriever. */
+export function matchesPhrase(text: string, phrase: string): boolean {
   const characters = Array.from(phrase);
   const left = CJK_RUN.test(characters[0] ?? "") ? "" : " ";
   const right = CJK_RUN.test(characters.at(-1) ?? "") ? "" : " ";
