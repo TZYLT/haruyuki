@@ -94,6 +94,7 @@ describe("the breaker", () => {
     ).toEqual({
       kind: "timed-out",
       reason: "the recall deadline expired",
+      entries: 0,
     });
     expect(readRecallRuntimeStatus().consecutiveFailures).toBe(1);
   });
@@ -114,14 +115,21 @@ describe("the breaker", () => {
     expect(readRecallRuntimeStatus().lastFailureReason).toBe("boom");
   });
 
-  test("a trip still reports the failure it tripped on, once", () => {
+  test("a trip reports the failure it tripped on, once", () => {
     recordRecallDecision(decision("failed", { reason: "disk on fire" }));
-    const notice = recordRecallDecision(
+    expect(
+      recordRecallDecision(decision("failed", { reason: "disk on fire" })),
+    ).toEqual({ kind: "failed", reason: "disk on fire" });
+    const trip = recordRecallDecision(
       decision("failed", { reason: "disk on fire" }),
     );
-    expect(notice).toEqual({ kind: "failed", reason: "disk on fire" });
-    recordRecallDecision(decision("failed", { reason: "disk on fire" }));
-    expect(formatRecallNoticeLine(notice as never)).toContain("disk on fire");
+    expect(trip).toEqual({
+      kind: "tripped",
+      failures: RECALL_BREAKER_THRESHOLD,
+      reason: "disk on fire",
+    });
+    if (trip?.kind !== "tripped") throw new Error("expected a trip notice");
+    expect(formatRecallNoticeLine(trip)).toContain("disk on fire");
   });
 
   test("stays tripped until it is reset, counting nothing further", () => {
@@ -208,9 +216,9 @@ describe("the degradation notice", () => {
 
 describe("the notice line", () => {
   test("names what happened and what to do about it", () => {
-    expect(formatRecallNoticeLine({ kind: "timed-out", reason: "slow" })).toBe(
-      "Recall timed out and was skipped for this turn: slow",
-    );
+    expect(
+      formatRecallNoticeLine({ kind: "timed-out", reason: "slow", entries: 0 }),
+    ).toBe("Recall timed out and was skipped for this turn: slow");
     expect(formatRecallNoticeLine({ kind: "failed", reason: "boom" })).toBe(
       "Recall failed and was skipped for this turn: boom",
     );
@@ -227,9 +235,22 @@ describe("the notice line", () => {
     expect(tripped).toContain("/recall on");
   });
 
+  test("a timeout that still injected passages is not called a skip", () => {
+    // `timedOut` is orthogonal to the status: the budget can run out after a
+    // passage was already chosen, and the line has to say what actually happened.
+    const line = formatRecallNoticeLine({
+      kind: "timed-out",
+      reason: "slow",
+      entries: 2,
+    });
+    expect(line).toContain("2 passages");
+    expect(line).not.toContain("skipped");
+  });
+
   test("every kind has a line", () => {
     for (const notice of [
-      { kind: "timed-out", reason: "r" },
+      { kind: "timed-out", reason: "r", entries: 0 },
+      { kind: "timed-out", reason: "r", entries: 3 },
       { kind: "failed", reason: "r" },
       { kind: "index-missing" },
       { kind: "tripped", failures: 3, reason: "r" },

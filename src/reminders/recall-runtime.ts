@@ -7,9 +7,10 @@
  * - **In memory only.** A restart clears the count and the trip. Persisting the
  *   trip would turn a transient environment fault (a locked file, a slow disk)
  *   into a setting the user has to remember to undo.
- * - **Only timeouts and exceptions count.** "No match" is a successful recall
- *   that found nothing, and a missing index is degradation — counting either
- *   would make the first few turns of a fresh install trip the breaker.
+ * - **Only timeouts and total failures count.** "No match" is a successful recall
+ *   that found nothing, a missing index is degradation, and one source throwing
+ *   while the other answers is still a turn that recalled something; counting any
+ *   of them would make the first few turns of a fresh install trip the breaker.
  * - **Global, not per conversation.** The counter is process-wide because the
  *   faults it watches for are process-wide: one unreadable store or one overloaded
  *   disk affects every conversation.
@@ -25,7 +26,13 @@ export const RECALL_BREAKER_THRESHOLD = 3;
 
 /** What the user is told about the turn that just ran, if anything. */
 export type RecallNotice =
-  | { kind: "timed-out"; reason: string }
+  /**
+   * The budget ran out. `entries` is what the turn injected anyway: the flag is
+   * orthogonal to the status (a cut-short turn that still produced entries is
+   * `injected` *and* `timedOut`), so the line cannot be written from the kind
+   * alone without claiming the turn was skipped when it was not.
+   */
+  | { kind: "timed-out"; reason: string; entries: number }
   | { kind: "failed"; reason: string }
   /** The index is missing, so nothing could be recalled; `build` is the fix. */
   | { kind: "index-missing" }
@@ -45,11 +52,16 @@ let consecutiveFailures = 0;
 let tripped = false;
 let lastFailureReason: string | null = null;
 /**
- * Whether the user has already been told that this agent's transcript index is
- * missing. Latched because the condition persists: without it, every turn of a
- * fresh install would print the same line until `build` is run.
+ * Which agents have already been told that this agent's transcript index is
+ * missing.
+ *
+ * Latched because the condition persists: without it, every turn of a fresh
+ * install would print the same line until `build` is run. Keyed by agent because
+ * the condition is per agent while this module is process-wide — one agent's
+ * missing index must not silence the notice for another, and one agent's healthy
+ * turn must not re-arm it for the first.
  */
-let indexMissingReported = false;
+const indexMissingReported = new Set<string>();
 
 /** Clear the breaker, the counter, and every latch. `/recall on` calls this. */
 export function resetRecallRuntime(): void {
@@ -57,7 +69,7 @@ export function resetRecallRuntime(): void {
   consecutiveFailures = 0;
   tripped = false;
   lastFailureReason = null;
-  indexMissingReported = false;
+  indexMissingReported.clear();
 }
 
 /** True while the breaker is tripped: the turn path must not even try. */
@@ -115,6 +127,7 @@ function indexMissing(decision: RecallDecision): boolean {
  */
 export function recordRecallDecision(
   decision: RecallDecision,
+  agentId = "",
 ): RecallNotice | null {
   lastDecision = decision;
 
@@ -127,7 +140,7 @@ export function recordRecallDecision(
       return { kind: "tripped", failures: consecutiveFailures, reason };
     }
     return decision.timedOut === true
-      ? { kind: "timed-out", reason }
+      ? { kind: "timed-out", reason, entries: decision.entries.length }
       : { kind: "failed", reason };
   }
 
@@ -136,11 +149,11 @@ export function recordRecallDecision(
   // after the problem, and a cleared field would answer "never" to "what went
   // wrong last time".
   if (indexMissing(decision)) {
-    if (indexMissingReported) return null;
-    indexMissingReported = true;
+    if (indexMissingReported.has(agentId)) return null;
+    indexMissingReported.add(agentId);
     return { kind: "index-missing" };
   }
-  indexMissingReported = false;
+  indexMissingReported.delete(agentId);
   return null;
 }
 
@@ -148,7 +161,9 @@ export function recordRecallDecision(
 export function formatRecallNoticeLine(notice: RecallNotice): string {
   switch (notice.kind) {
     case "timed-out":
-      return `Recall timed out and was skipped for this turn: ${notice.reason}`;
+      return notice.entries === 0
+        ? `Recall timed out and was skipped for this turn: ${notice.reason}`
+        : `Recall ran out of its time budget and stopped early, after injecting ${notice.entries} passage${notice.entries === 1 ? "" : "s"}: ${notice.reason}`;
     case "failed":
       return `Recall failed and was skipped for this turn: ${notice.reason}`;
     case "index-missing":

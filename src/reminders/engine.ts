@@ -570,7 +570,7 @@ async function buildRecallReminder(
     // Recorded before the injection test below: a turn that timed out with
     // nothing to show is still a failure the breaker counts, and a turn with no
     // match is still the success that resets it.
-    const notice = recordRecallDecision(decision);
+    const notice = recordRecallDecision(decision, context.agent.id);
     if (notice) context.state.pendingRecallNotice = notice;
     if (decision.status !== "injected") return null;
     return formatRecallReminder(decision);
