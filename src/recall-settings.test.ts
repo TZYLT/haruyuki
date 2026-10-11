@@ -20,6 +20,7 @@ import {
 } from "@/recall-settings";
 import { RECALL_DEFAULTS } from "@/reminders/recall-port";
 import { settingsManager } from "@/settings-manager";
+import { appHomeDirName } from "@/utils/app-paths";
 
 const originalHome = process.env.HOME;
 let testHomeDir: string;
@@ -37,9 +38,9 @@ afterEach(async () => {
 });
 
 function writeSettings(record: Record<string, unknown>): void {
-  mkdirSync(join(testHomeDir, ".haruyuki"), { recursive: true });
+  mkdirSync(join(testHomeDir, appHomeDirName()), { recursive: true });
   writeFileSync(
-    join(testHomeDir, ".haruyuki", "settings.json"),
+    join(testHomeDir, appHomeDirName(), "settings.json"),
     JSON.stringify(record, null, 2),
   );
 }

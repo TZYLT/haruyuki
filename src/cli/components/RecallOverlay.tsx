@@ -19,6 +19,7 @@ import {
   type RecallDisplay,
 } from "@/reminders/recall-display";
 import type { RecallDiversity } from "@/reminders/recall-port";
+import { isRecallDiversity } from "@/reminders/recall-port";
 import type { Settings } from "@/settings-manager";
 import { colors } from "./colors";
 import { OverlayShell } from "./OverlayShell";
@@ -335,7 +336,7 @@ export const RecallOverlay = memo(function RecallOverlay({
         <SingleSelectPicker
           items={buildDiversityRows(settings.diversity)}
           onSelect={(key) => {
-            if (key === "none" || key === "file" || key === "split") {
+            if (isRecallDiversity(key)) {
               onSave({ recallDiversity: key });
             }
           }}

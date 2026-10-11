@@ -30,12 +30,30 @@ export type RecallSourceId = "transcript" | "memory";
  */
 export type RecallDiversity = "none" | "file" | "split";
 
+/**
+ * The accepted values, in the order a picker should offer them.
+ *
+ * Defined next to the type, the way `recall-display.ts` defines its tiers: the
+ * settings resolver, the `/recall` command and the settings picker all have to
+ * agree on what a valid value is, and three private copies of this list is how
+ * they stop agreeing.
+ */
+export const RECALL_DIVERSITIES: readonly RecallDiversity[] = [
+  "none",
+  "file",
+  "split",
+];
+
+export function isRecallDiversity(value: unknown): value is RecallDiversity {
+  return RECALL_DIVERSITIES.includes(value as RecallDiversity);
+}
+
 export type RecallOptions = {
   /** Total entries across both sources. */
   limit: number;
   /** Characters per entry before truncation. */
   excerptCharacters: number;
-  /** Hard ceiling on the injected text. */
+  /** Hard ceiling on the excerpt text, before the block's marker and headers. */
   totalCharacters: number;
   /**
    * Relative score floor: an entry scoring below `topScore * minScoreRatio` counts
@@ -55,8 +73,8 @@ export type RecallOptions = {
   /**
    * Wall-clock budget for one turn; `0` disables the budget (《26》§6.5).
    *
-   * Not a knob the orchestrator reads — the service turns it into a
-   * {@link RecallDeadline} and the sources consult that — but it belongs here
+   * Not a knob the orchestrator reads — the service turns it into a deadline
+   * (`recall-deadline.ts`) and the sources consult that — but it belongs here
    * with the other tunables so M6 can overlay one settings record on all of them.
    */
   timeoutMs: number;
@@ -156,9 +174,11 @@ export type RecallSourcePort = {
  * The conversation-record operations the dedup window needs, structurally typed
  * so this module (and the service above it) never imports the backend.
  *
- * `settleRecallDedup` is one call for the read and the write on purpose: the
- * caller needs "what to suppress" before it searches and "what to persist" after
- * it selects, and two round trips could observe different conversation states.
+ * One method serves both halves of a turn — "what to suppress" before the search
+ * and "what was injected" after the selection — because both answers come from the
+ * same observation of the conversation record. The service calls it twice, once on
+ * each side of the search, so it must not treat the first call as read-only:
+ * settling prunes the window, and a turn that injects nothing can still write.
  */
 export type RecallDedupPort = {
   settleRecallDedup(input: {

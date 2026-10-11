@@ -1,5 +1,6 @@
 import { loadRecallCorpus } from "@/backend/local/recall-index";
 import {
+  formatRecallSettingsLine,
   type ResolvedRecallSettings,
   readRecallSettings,
 } from "@/recall-settings";
@@ -123,13 +124,12 @@ export function formatRecallStatus(report: RecallStatusReport): string[] {
     );
   }
 
-  lines.push(
-    `Settings: limit ${settings.limit} · excerpt ${settings.excerptCharacters}/${settings.totalCharacters} chars · ratio ${settings.minScoreRatio} · diversity ${settings.diversity} · dedup ${settings.dedupTurns} turns · timeout ${
-      settings.timeoutMs === 0 ? "none" : `${settings.timeoutMs}ms`
-    } · display ${settings.display}`,
-  );
+  lines.push(`Settings: ${formatRecallSettingsLine(settings)}`);
 
-  const indexed = index.ready + index.exempt;
+  // `stale` counts as indexed because it is searched: a stale sidecar is read and
+  // scored like any other, it is merely behind its transcript. Leaving it out
+  // printed a coverage count that disagreed with the record total beside it.
+  const indexed = index.ready + index.stale + index.exempt;
   const coverage =
     index.conversations === 0
       ? "no conversations in scope"

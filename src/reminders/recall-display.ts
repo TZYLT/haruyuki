@@ -11,7 +11,7 @@
  * module that wrote it (`recall-reminder.ts`), so a user who types the tag into
  * their own message gets their text back rather than a forged summary.
  */
-import { parseRecallMarker } from "./recall-reminder";
+import { parseRecallMarker, type RecallMarker } from "./recall-reminder";
 
 export type RecallDisplay = "silent" | "summary" | "full";
 
@@ -26,16 +26,12 @@ export function isRecallDisplay(value: unknown): value is RecallDisplay {
 /**
  * The one line the summary tier shows.
  *
- * Built from the marker rather than from the block's first line: the transcript
- * echo strips reminder bodies before the display layer sees them, so the marker is
- * the only part guaranteed to survive (`recall-reminder.ts` says why the two
- * halves live together).
+ * Built from the marker rather than from the block's first line: the block reaches
+ * this layer whole, but only the marker carries the counts, and parsing them back
+ * out of per-entry headers would make every header change a display change
+ * (`recall-reminder.ts` says why the two halves live together).
  */
-export function formatRecallSummaryLine(marker: {
-  items: number;
-  transcript: number;
-  memory: number;
-}): string {
+export function formatRecallSummaryLine(marker: RecallMarker): string {
   const parts: string[] = [];
   if (marker.transcript > 0) {
     parts.push(

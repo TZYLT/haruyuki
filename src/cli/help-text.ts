@@ -36,6 +36,7 @@ USAGE
   haruyuki connect ...     Connect providers from terminal
   haruyuki install ...     Install a skill or mod package
   haruyuki skills ...      List or delete installed agent skills
+  haruyuki recall ...      Build or inspect the passive-recall index
 
   hryk is an equivalent short name for haruyuki: every command above also works as
   "hryk <args>". It is available from a source checkout or the packaged tarball; npm
@@ -69,6 +70,9 @@ SUBCOMMANDS
   haruyuki install <thing> [--agent <id> | -n <name>]
   haruyuki skills list [--agent <id> | -n <name>]
   haruyuki skills delete <skill_name> --agent <id>
+  haruyuki recall build
+  haruyuki recall status [--agent <id>]
+  haruyuki recall now <query> [--agent <id>] [--conversation <id>]
   haruyuki local-backend migrate-transcripts [--storage-dir <path>] [--dry-run]
 
 BEHAVIOR

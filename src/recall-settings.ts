@@ -24,6 +24,7 @@ import {
   type RecallDisplay,
 } from "@/reminders/recall-display";
 import {
+  isRecallDiversity,
   RECALL_DEFAULTS,
   type RecallDiversity,
   type RecallOptions,
@@ -94,8 +95,6 @@ export const RECALL_SETTING_DEFAULTS: ResolvedRecallSettings = {
   display: RECALL_DISPLAY_DEFAULT,
 };
 
-const DIVERSITIES: readonly RecallDiversity[] = ["none", "file", "split"];
-
 /**
  * A count: `undefined` or unusable falls back to the default, `0` is kept
  * because for every count here it means "off" rather than "unset".
@@ -135,14 +134,19 @@ export function resolveRecallSettings(
       record.recallTotalCharacters,
       RECALL_SETTING_DEFAULTS.totalCharacters,
     ),
+    // `[0, 1]` rather than `>= 0`: above 1 no score can clear the floor, so the
+    // feature would search every turn and silently never inject — a state
+    // `/recall ratio` refuses to write, and a reader must not accept what its own
+    // writer will not produce.
     minScoreRatio:
       typeof record.recallMinScoreRatio === "number" &&
       Number.isFinite(record.recallMinScoreRatio) &&
-      record.recallMinScoreRatio >= 0
+      record.recallMinScoreRatio >= 0 &&
+      record.recallMinScoreRatio <= 1
         ? record.recallMinScoreRatio
         : RECALL_SETTING_DEFAULTS.minScoreRatio,
-    diversity: DIVERSITIES.includes(diversity as RecallDiversity)
-      ? (diversity as RecallDiversity)
+    diversity: isRecallDiversity(diversity)
+      ? diversity
       : RECALL_SETTING_DEFAULTS.diversity,
     excerptLines: resolveCount(
       record.recallExcerptLines,
@@ -188,4 +192,21 @@ export function readRecallSettings(): ResolvedRecallSettings {
   } catch {
     return { ...RECALL_SETTING_DEFAULTS };
   }
+}
+
+/**
+ * One line naming every effective knob.
+ *
+ * Lives here rather than beside a caller because three surfaces print it — the
+ * `/recall` receipt, the settings picker, and `/recall status` — and they are in
+ * two layers: the reminders layer may not import a CLI command module, so a line
+ * they share has to sit below both. This is also the only place that resolves the
+ * knobs, so it is the only place that can describe them without a second opinion.
+ */
+export function formatRecallSettingsLine(
+  settings: ResolvedRecallSettings,
+): string {
+  return `limit ${settings.limit} · excerpt ${settings.excerptCharacters}/${settings.totalCharacters} chars · ratio ${settings.minScoreRatio} · diversity ${settings.diversity} · dedup ${settings.dedupTurns} turns · timeout ${
+    settings.timeoutMs === 0 ? "none" : `${settings.timeoutMs}ms`
+  } · display ${settings.display}`;
 }
