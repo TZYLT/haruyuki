@@ -2432,6 +2432,8 @@ export function App({
     setTokenStreamingEnabled(settings.tokenStreaming);
     _setReasoningTabCycleEnabled(settings.reasoningTabCycleEnabled === true);
     _setShowCompactionsEnabled(settings.showCompactions === true);
+    // The transcript reads its tier from the display store, not from settings.
+    setRecallDisplay(readRecallSettings().display);
 
     try {
       refreshCustomCommands();
