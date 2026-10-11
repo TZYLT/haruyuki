@@ -123,12 +123,14 @@ export async function runRecallSubcommand(
   const conversationId =
     parsed.values.conversation ?? process.env.CONVERSATION_ID ?? undefined;
 
+  // No resolved agent means "no scope", which `status` reports as the whole store
+  // and `now` refuses with a message. Passing an empty id would work by accident
+  // (`loadRecallCorpus` treats a falsy filter as no filter) and hide that choice.
   const output = await handleRecallCommand(
     positionals,
-    {
-      agentId: agentId ?? "",
-      conversationId: conversationId ?? null,
-    },
+    agentId === undefined
+      ? undefined
+      : { agentId, conversationId: conversationId ?? null },
     { backend },
   );
   console.log(output);
