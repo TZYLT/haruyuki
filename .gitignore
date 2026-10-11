@@ -98,6 +98,10 @@ web_modules/
 # Output of 'npm pack'
 *.tgz
 
+# Project-local npm config (pins the registry for publishing; never holds a token,
+# but ignored so one can never be committed here by accident)
+.npmrc
+
 # Yarn Integrity file
 .yarn-integrity
 
