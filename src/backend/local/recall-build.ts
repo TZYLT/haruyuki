@@ -4,6 +4,7 @@ import { readSourceSignature, rebuildConversationIndex } from "./recall-index";
 import {
   conversationDirectories,
   conversationSearchRecord,
+  type LocalConversationSearchRecord,
 } from "./transcript-search";
 
 /**
@@ -72,6 +73,51 @@ function yieldToEventLoop(): Promise<void> {
   });
 }
 
+type DirectoryOutcome =
+  | { kind: "skipped" }
+  | { kind: "indexed"; records: number }
+  | { kind: "failed"; reason: string };
+
+/**
+ * One conversation directory, with every failure contained to it.
+ *
+ * A `conversation.json` that exists but cannot be parsed is a *failure*, not a
+ * skip: `skipped` means "there is no transcript here", and calling a damaged
+ * record that would tell the user their conversation is unrecallable when the fix
+ * is a repair, not patience.
+ */
+function indexOneDirectory(
+  conversationDir: string,
+  conversationKey: string,
+): DirectoryOutcome {
+  let conversation: LocalConversationSearchRecord | undefined;
+  try {
+    conversation = conversationSearchRecord(
+      readJsonFile(join(conversationDir, "conversation.json")),
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { kind: "failed", reason: `conversation.json: ${detail}` };
+  }
+  if (!conversation || !readSourceSignature(conversationDir)) {
+    // No transcript means there is nothing to recall from it; that is not a
+    // failure and must not be counted as one.
+    return { kind: "skipped" };
+  }
+
+  const rebuilt = rebuildConversationIndex({
+    conversationDir,
+    identity: {
+      conversationKey,
+      conversationId: conversation.id,
+      agentId: conversation.agent_id,
+    },
+  });
+  return "error" in rebuilt
+    ? { kind: "failed", reason: rebuilt.error }
+    : { kind: "indexed", records: rebuilt.sidecar.records.length };
+}
+
 export async function buildRecallCorpus(
   storageDir: string,
   options: RecallBuildOptions = {},
@@ -90,38 +136,23 @@ export async function buildRecallCorpus(
     elapsedMs: 0,
   };
 
-  let done = 0;
-  for (const conversationDir of directories) {
+  for (const [index, conversationDir] of directories.entries()) {
     const conversationKey = basename(conversationDir);
-    // The record reader is shared with the corpus loader, so the two cannot
-    // disagree about what counts as a conversation.
-    const conversation = conversationSearchRecord(
-      readJsonFile(join(conversationDir, "conversation.json")),
-    );
-    if (!conversation || !readSourceSignature(conversationDir)) {
-      // No transcript means there is nothing to recall from it; that is not a
-      // failure and must not be counted as one.
+    const outcome = indexOneDirectory(conversationDir, conversationKey);
+    if (outcome.kind === "skipped") {
       result.skipped += 1;
-      continue;
-    }
-    result.conversations += 1;
-
-    const rebuilt = rebuildConversationIndex({
-      conversationDir,
-      identity: {
-        conversationKey,
-        conversationId: conversation.id,
-        agentId: conversation.agent_id,
-      },
-    });
-    if ("error" in rebuilt) {
-      result.failures.push({ conversationKey, reason: rebuilt.error });
+    } else if (outcome.kind === "failed") {
+      result.failures.push({ conversationKey, reason: outcome.reason });
     } else {
+      result.conversations += 1;
       result.indexed += 1;
-      result.records += rebuilt.sidecar.records.length;
+      result.records += outcome.records;
     }
 
-    done += 1;
+    // Progress counts directories walked, not sidecars written: the caller draws a
+    // counter over the whole store, and a skipped or failed directory is still a
+    // directory it has finished with. The yield cadence follows the same number.
+    const done = index + 1;
     options.onProgress?.({ done, total: directories.length, conversationKey });
     if (yieldEvery > 0 && done % yieldEvery === 0) {
       await yieldToEventLoop();

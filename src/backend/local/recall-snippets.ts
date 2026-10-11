@@ -1,7 +1,7 @@
 import {
   type LocalTranscriptManifest,
-  readJsonFile,
-  readJsonlFile,
+  readJsonFileOrUndefined,
+  readJsonlFileTolerant,
   transcriptManifestPath,
   transcriptMessagesPath,
 } from "./local-transcript";
@@ -36,14 +36,18 @@ export type RecallTranscriptSnippet = {
  *
  * Reads through the workspace rather than the index: the index is a derived cache
  * and may be stale for the current conversation (which is never refreshed lazily),
- * while a snippet must show what is on disk now.
+ * while a snippet must show what is on disk now. The reads are the tolerant pair:
+ * a snippet is a read on the turn path, and a transcript with one interrupted line
+ * must still yield every message before it rather than none of them.
  */
 export function readRecallMessageTexts(
   conversationDir: string,
 ): RecallMessageText[] {
-  const rows = readJsonlFile<unknown>(transcriptMessagesPath(conversationDir));
+  const rows = readJsonlFileTolerant<unknown>(
+    transcriptMessagesPath(conversationDir),
+  );
   if (rows.length === 0) return [];
-  const manifest = readJsonFile<LocalTranscriptManifest>(
+  const manifest = readJsonFileOrUndefined<LocalTranscriptManifest>(
     transcriptManifestPath(conversationDir),
   );
   return recallMessageTexts(rows, transcriptFormat(manifest, rows));

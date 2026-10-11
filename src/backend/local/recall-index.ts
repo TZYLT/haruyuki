@@ -10,8 +10,8 @@ import { isRecord } from "@/utils/type-guards";
 import type { LocalMessage } from "./local-message";
 import {
   type LocalTranscriptManifest,
-  readJsonFile,
-  readJsonlFile,
+  readJsonFileOrUndefined,
+  readJsonlFileTolerant,
   transcriptManifestPath,
   transcriptMessagesPath,
 } from "./local-transcript";
@@ -235,15 +235,21 @@ export function recallMessageTexts(
  * Reads one conversation's transcript and produces its sidecar. Pure read: it
  * never writes, and an unreadable or unversioned transcript yields no records
  * rather than throwing.
+ *
+ * "Unreadable" is why the reads here are the tolerant pair: this runs over every
+ * conversation in the store, so a `messages.jsonl` with one interrupted line, or
+ * a `conversation.json` half-written by a killed process, must cost that
+ * conversation's data and nothing else. A manifest that cannot be parsed reads as
+ * absent, which `transcriptFormat` already handles by sniffing the rows.
  */
 export function ingestConversation(input: {
   conversationDir: string;
   identity: RecallIndexIdentity;
 }): RecallIndexSidecar {
-  const rows = readJsonlFile<unknown>(
+  const rows = readJsonlFileTolerant<unknown>(
     transcriptMessagesPath(input.conversationDir),
   );
-  const manifest = readJsonFile<LocalTranscriptManifest>(
+  const manifest = readJsonFileOrUndefined<LocalTranscriptManifest>(
     transcriptManifestPath(input.conversationDir),
   );
   const format = transcriptFormat(manifest, rows);
@@ -463,7 +469,7 @@ export function loadRecallCorpus(
     // a full re-ingest. A budget can only be honoured between them.
     if (options.shouldStop?.()) break;
     const conversation = conversationSearchRecord(
-      readJsonFile(join(conversationDir, "conversation.json")),
+      readJsonFileOrUndefined(join(conversationDir, "conversation.json")),
     );
     if (!conversation) continue;
     if (conversation.hidden && options.includeHidden !== true) continue;

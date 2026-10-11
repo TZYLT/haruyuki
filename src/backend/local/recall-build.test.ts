@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildRecallCorpus } from "@/backend/local/recall-build";
 import { recallIndexPath } from "@/backend/local/recall-index";
@@ -76,15 +76,49 @@ describe("buildRecallCorpus", () => {
     });
   });
 
-  test("reports progress once per indexed conversation", async () => {
+  test("reports progress once per directory walked, skips included", async () => {
     await withRecallFixture(async (fixture) => {
-      const seen: number[] = [];
-      const result = await buildRecallCorpus(fixture.storageDir, {
-        onProgress: (progress) => seen.push(progress.done),
-      });
-      expect(seen).toEqual(
-        Array.from({ length: result.conversations }, (_, index) => index + 1),
+      // A directory the build skips, so the counter has to reach its total without
+      // an index being written for it: a progress line that stops short of the total
+      // reads as a hang, and the caller has no other way to know it finished.
+      mkdirSync(
+        join(fixture.storageDir, "conversations", "not-a-conversation"),
+        { recursive: true },
       );
+
+      const seen: Array<{ done: number; total: number }> = [];
+      const result = await buildRecallCorpus(fixture.storageDir, {
+        onProgress: (progress) =>
+          seen.push({ done: progress.done, total: progress.total }),
+      });
+
+      const total = seen[0]?.total ?? 0;
+      expect(total).toBeGreaterThan(result.conversations);
+      expect(seen.map((entry) => entry.done)).toEqual(
+        Array.from({ length: total }, (_, index) => index + 1),
+      );
+      expect(seen.every((entry) => entry.total === total)).toBe(true);
+    });
+  });
+
+  test("a damaged conversation.json is reported, not skipped", async () => {
+    await withRecallFixture(async (fixture) => {
+      const historyDir = join(
+        fixture.storageDir,
+        "conversations",
+        fixture.historyDirectory,
+      );
+      writeFileSync(join(historyDir, "conversation.json"), "{ not json");
+
+      const result = await buildRecallCorpus(fixture.storageDir);
+
+      // The run completes and names the record it could not use: `skipped` would
+      // tell the user there is no transcript there, when what they have is a record
+      // that needs repairing.
+      expect(result.failures.map((failure) => failure.conversationKey)).toEqual(
+        [fixture.historyDirectory],
+      );
+      expect(result.failures[0]?.reason).toContain("conversation.json");
     });
   });
 

@@ -346,6 +346,60 @@ describe("conversation recall index", () => {
     });
   });
 
+  test("a damaged conversation.json costs that conversation and nothing else", async () => {
+    await withFixture(async ({ storageDir, alphaDir, betaDir }) => {
+      for (const [dir, conversationKey, conversationId] of [
+        [alphaDir, "alpha", "conv-alpha"],
+        [betaDir, "beta", "conv-beta"],
+      ] as const) {
+        rebuildConversationIndex({
+          conversationDir: dir,
+          identity: { conversationKey, conversationId, agentId: AGENT_ID },
+        });
+      }
+      // Present but unparsable: what a killed process leaves behind.
+      await writeFile(join(alphaDir, "conversation.json"), "{ not json");
+
+      const corpus = loadRecallCorpus(storageDir, { agentId: AGENT_ID });
+
+      // Beta is still searched. One damaged record must not become the whole
+      // store's problem, and the turn that called this must not have to care.
+      expect(
+        corpus.records.some((record) => record.conversationKey === "beta"),
+      ).toBe(true);
+      expect(
+        corpus.records.some((record) => record.conversationKey === "alpha"),
+      ).toBe(false);
+    });
+  });
+
+  test("a transcript with one interrupted line keeps the lines before it", async () => {
+    await withFixture(async ({ alphaDir }) => {
+      const messagesPath = join(alphaDir, "messages.jsonl");
+      const complete = await readFile(messagesPath, "utf8");
+      // An append that was cut off mid-line, which is the shape the strict reader
+      // would report as "this transcript has no messages at all".
+      await writeFile(messagesPath, `${complete}{"type":"message","mess`);
+
+      const rebuilt = rebuildConversationIndex({
+        conversationDir: alphaDir,
+        identity: {
+          conversationKey: "alpha",
+          conversationId: "conv-alpha",
+          agentId: AGENT_ID,
+        },
+      });
+
+      if (!("sidecar" in rebuilt)) {
+        throw new Error(`expected a sidecar, got: ${rebuilt.error}`);
+      }
+      expect(rebuilt.sidecar.records.length).toBeGreaterThan(0);
+      expect(rebuilt.sidecar.records.map((record) => record.id)).toContain(
+        "m-1",
+      );
+    });
+  });
+
   test("reports a corrupt index as unavailable and leaves it alone", async () => {
     await withFixture(async ({ alphaDir }) => {
       await writeFile(recallIndexPath(alphaDir), "{ not json");
