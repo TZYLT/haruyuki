@@ -81,7 +81,7 @@ bun run build        # 产出仓根 haruyuki.js（已 gitignore）
 node ./haruyuki.js   # 启动交互界面
 ```
 
-> 构建产物是**单文件 bundle**（约 21 MB），它把生产依赖内联其中；`--version` 应打印 `0.1.3 (Haruyuki)`（版本号取自 `package.json` 的 `version`，且是**构建期内联**——改了版本号必须重新构建才会生效）。
+> 构建产物是**单文件 bundle**（约 21 MB），它把生产依赖内联其中；`--version` 应打印 `0.2.0 (Haruyuki)`（版本号取自 `package.json` 的 `version`，且是**构建期内联**——改了版本号必须重新构建才会生效）。
 
 ### 方式二：npm 包（推荐）
 

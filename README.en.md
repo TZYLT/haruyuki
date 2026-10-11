@@ -108,7 +108,7 @@ node ./haruyuki.js   # start the interactive UI
 ```
 
 > The build output is a **single-file bundle** (~21 MB) with production dependencies inlined;
-> `--version` should print `0.1.3 (Haruyuki)`. The number comes from `package.json`'s `version`
+> `--version` should print `0.2.0 (Haruyuki)`. The number comes from `package.json`'s `version`
 > and is **inlined at build time**, so changing it requires a rebuild.
 
 ### Option 2 — the npm package (recommended)
