@@ -25,20 +25,22 @@ export type LocalTranscriptSearchBody = {
   include_hidden?: unknown;
 };
 
-type LocalConversationSearchRecord = {
+export type LocalConversationSearchRecord = {
   id: string;
   agent_id: string;
   hidden?: boolean;
 };
 
-type LocalTranscriptMessageFormat =
+export type LocalTranscriptMessageFormat =
   | typeof LOCAL_TRANSCRIPT_MESSAGE_FORMAT
   | typeof LOCAL_TRANSCRIPT_LEGACY_MESSAGE_FORMAT;
 
-type TranscriptMessageRow = {
+export type TranscriptMessageRow = {
   timestamp?: string;
   message: LocalMessage;
   sourceIndex: number;
+  /** The append entry this message came from. A legacy row is always a message. */
+  entryType: "message" | "compaction";
 };
 
 type SearchableStoredMessage = {
@@ -46,6 +48,17 @@ type SearchableStoredMessage = {
   normalizedText: string;
   tokens: string[];
   score: number;
+  isSearchEcho: boolean;
+};
+
+/**
+ * The minimum shape `rankMatches` reads. It is structural so that a second
+ * corpus (the conversation recall index) can be ranked by this same scorer
+ * instead of a copy of it.
+ */
+export type RankableSearchRecord = {
+  normalizedText: string;
+  tokens: readonly string[];
   isSearchEcho: boolean;
 };
 
@@ -74,7 +87,7 @@ function readJsonlFile(path: string): unknown[] {
   }
 }
 
-function conversationSearchRecord(
+export function conversationSearchRecord(
   value: unknown,
 ): LocalConversationSearchRecord | undefined {
   if (!isRecord(value)) return undefined;
@@ -98,7 +111,7 @@ function isLocalMessage(value: unknown): value is LocalMessage {
   );
 }
 
-function transcriptFormat(
+export function transcriptFormat(
   manifest: LocalTranscriptManifest | undefined,
   rows: readonly unknown[],
 ): LocalTranscriptMessageFormat | undefined {
@@ -124,7 +137,7 @@ function transcriptFormat(
   return undefined;
 }
 
-function transcriptMessageRows(
+export function transcriptMessageRows(
   rows: readonly unknown[],
   format: LocalTranscriptMessageFormat,
 ): TranscriptMessageRow[] {
@@ -138,6 +151,7 @@ function transcriptMessageRows(
         timestamp: row.metadata?.created_at,
         message: row,
         sourceIndex,
+        entryType: "message" as const,
       }));
   }
 
@@ -151,12 +165,13 @@ function transcriptMessageRows(
       timestamp: typeof row.timestamp === "string" ? row.timestamp : undefined,
       message,
       sourceIndex,
+      entryType: row.type === "compaction" ? "compaction" : "message",
     });
   });
   return messageRows;
 }
 
-function textFromContent(content: unknown): string {
+export function textFromContent(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
@@ -216,7 +231,7 @@ function searchableText(message: StoredMessage): string {
     .join("\n");
 }
 
-type ParsedQuery = {
+export type ParsedQuery = {
   terms: string[];
   phrases: string[];
 };
@@ -226,7 +241,7 @@ const CJK_RUN =
 const CJK_CHARACTER =
   /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}]/u;
 
-function tokenize(value: string): string[] {
+export function tokenize(value: string): string[] {
   const words =
     value
       .normalize("NFKC")
@@ -285,7 +300,7 @@ function matchesPhrase(text: string, phrase: string): boolean {
   return ` ${text} `.includes(`${left}${phrase}${right}`);
 }
 
-function parseQuery(query: string): ParsedQuery {
+export function parseQuery(query: string): ParsedQuery {
   const terms: string[] = [];
   const phrases: string[] = [];
   let buffer = "";
@@ -325,10 +340,10 @@ function parseQuery(query: string): ParsedQuery {
   };
 }
 
-function rankMatches(
-  records: SearchableStoredMessage[],
+export function rankMatches<T extends RankableSearchRecord>(
+  records: readonly T[],
   query: ParsedQuery,
-): SearchableStoredMessage[] {
+): Array<T & { score: number }> {
   const phraseMatches = records.filter((record) =>
     query.phrases.every((phrase) =>
       matchesPhrase(record.normalizedText, phrase),
@@ -519,7 +534,7 @@ function collectConversationMessages(input: {
     .filter((record) => record.tokens.length > 0);
 }
 
-function conversationDirectories(storageDir: string): string[] {
+export function conversationDirectories(storageDir: string): string[] {
   const conversationsDir = join(storageDir, "conversations");
   if (!existsSync(conversationsDir)) return [];
   try {
