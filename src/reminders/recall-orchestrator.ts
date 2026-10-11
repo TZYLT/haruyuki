@@ -147,10 +147,18 @@ export function selectRecallEntries(
 
   const perEntry = Math.max(0, Math.trunc(input.excerptCharacters));
   const total = Math.max(0, Math.trunc(input.totalCharacters));
-  const entries: RecallEntry[] = chosen.map((candidate) => ({
-    ...candidate,
-    text: truncateEnd(candidate.text, perEntry),
-  }));
+  // A character budget of `0` is a supported setting, and it means "no excerpt
+  // text" rather than "an entry with nothing in it". An empty entry is not a
+  // passage: it would put a header in the block, claim a passage in the summary
+  // line the user reads, and suppress its fingerprint for `dedupTurns` — all for
+  // text nobody ever sees. Dropping it here is what makes `entries.length > 0`
+  // mean "there is something to inject" everywhere downstream.
+  const entries: RecallEntry[] = chosen
+    .map((candidate) => ({
+      ...candidate,
+      text: truncateEnd(candidate.text, perEntry),
+    }))
+    .filter((entry) => entry.text.length > 0);
   // "Over budget: drop from the lowest score" — the entries are still in score
   // order, so the tail is the lowest-scoring end.
   while (entries.length > 1) {

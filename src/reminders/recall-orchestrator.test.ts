@@ -212,7 +212,9 @@ describe("budget", () => {
           source: "memory",
           file: "a",
           score: 2,
-          text: "aaaaaaaaaa",
+          // Longer than the whole budget: dropping to zero entries would be worse
+          // than sending one over-long excerpt, so the loop stops at one.
+          text: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         }),
         candidate({
           source: "memory",
@@ -223,6 +225,23 @@ describe("budget", () => {
       ],
     });
     expect(selection.entries.map((entry) => entry.file)).toEqual(["a"]);
+  });
+
+  test("a budget of zero injects nothing rather than empty entries", () => {
+    // `0` is a supported setting meaning "no excerpt text". An entry whose text was
+    // cut to nothing must not survive: it would claim a passage in the summary line
+    // and suppress its fingerprint for the whole dedup window without ever showing
+    // a reader anything.
+    const selection = selectRecallEntries({
+      ...base,
+      excerptCharacters: 0,
+      totalCharacters: 0,
+      candidates: [
+        candidate({ source: "transcript", file: "a", score: 9 }),
+        candidate({ source: "memory", file: "b", score: 8 }),
+      ],
+    });
+    expect(selection.entries).toEqual([]);
   });
 });
 
