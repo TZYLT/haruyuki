@@ -2,64 +2,48 @@
 /**
  * The single entry point for releasing Haruyuki to npm.
  *
- * Two packages ship together and their publish order is not optional:
+ * One package, one command name in the registry:
  *
- *   1. `haruyuki`  the real package — it carries the built `haruyuki.js` bundle and
- *                  declares both command names.
- *   2. `hryk`      a forwarding package — two README files and a manifest, no code.
- *                  It depends on `haruyuki` at the *exact* same version, so it cannot
- *                  be installed (or published usefully) until the main package is live.
+ *   node scripts/release.mjs --check              # read-only: run every preflight check
+ *   node scripts/release.mjs --check --skip-network   # … offline (registry and login skipped)
+ *   node scripts/release.mjs --publish            # checks -> confirm -> npm publish -> verify
  *
- * Everything a release needs is behind this one command. Human runs use the default
- * interactive confirmations; automation supplies the same confirmation through the
- * environment, so there is exactly one code path:
+ * Human runs confirm by typing the release token; automation supplies the same token
+ * through the environment, so there is exactly one code path:
  *
- *   node scripts/release-npm.mjs --dry-run          # read-only: checks + generated artifacts
- *   node scripts/release-npm.mjs --publish          # checks -> confirm -> publish -> verify
- *   node scripts/release-npm.mjs --verify           # verify already-published versions
+ *   RELEASE_CONFIRM_TOKEN=haruyuki@0.1.4 node scripts/release.mjs --publish
  *
- * Automation (no TTY): set RELEASE_CONFIRM_TOKEN to the token the interactive run would
- * have been asked to type ("haruyuki@0.1.3" for the first confirmation, "hryk@0.1.3" for
- * the second). A wrong, missing, or malformed token aborts before anything leaves the
- * machine — that is the deliberate backstop, replacing a `--yes` flag.
+ * A wrong, missing, or empty token aborts before anything leaves the machine. That is
+ * the deliberate backstop instead of a `--yes` flag.
  *
  * Nothing here pushes to git. Pushing, and the release tag, stay manual by policy.
+ *
+ * THERE IS NO SHORT-NAME PACKAGE. The CLI answers to both `haruyuki` and `hryk`, but
+ * that is a `bin` fact of this package only: npm generates the global command from the
+ * *package name* in the registry, so `npm install -g haruyuki` yields the `haruyuki`
+ * command and nothing else. A separate `hryk` package was designed, built and rejected
+ * by the registry (403, name too similar to existing packages); it is not coming back
+ * through the unscoped name. Do not reintroduce a forwarding-package flow here.
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const TEMPLATE_DIR = join(REPO_ROOT, "scripts", "release-npm");
-/**
- * Bilingual by design: each language is its own file, and the Chinese one is the
- * package default (`README.md`), matching the main package.
- */
-const README_TEMPLATES = [
-  { template: "README.md.template", output: "README.md" },
-  { template: "README.en.md.template", output: "README.en.md" },
-];
-const OUT_ROOT = join(TEMPLATE_DIR, "out");
-const FORWARD_DIR = join(OUT_ROOT, "hryk");
-const MAIN_PACKAGE_NAME = "haruyuki";
-const FORWARD_PACKAGE_NAME = "hryk";
-/** Both command names must be declared by both packages. */
+const PACKAGE_NAME = "haruyuki";
+/** Command names this package declares; both must resolve to the same bundle. */
 const COMMAND_NAMES = ["haruyuki", "hryk"];
-/** Present in the forwarding package's `files`; nothing else is allowed there. */
-const FORWARD_FILES = [...README_TEMPLATES.map((entry) => entry.output), "package.json"];
-/** The only untracked/ignored paths tolerated by the clean-tree check. */
-const IGNORED_PATH_PREFIXES = ["docs/", "SPEC-", "scripts/release-npm/out/"];
-/** Legal files that must ship with the main package. */
+const BIN_TARGET = "haruyuki.js";
+/** Legal files that must ship. */
 const LEGAL_FILES = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"];
-/** Build outputs the main package cannot ship without. */
+/** Build outputs the package cannot ship without. */
 const REQUIRED_ARTIFACTS = ["haruyuki.js", "image-resize-worker.js", "dist"];
+/** The only untracked/ignored paths tolerated by the clean-tree check. */
+const IGNORED_PATH_PREFIXES = ["docs/", "SPEC-"];
 const REGISTRY = "https://registry.npmjs.org/";
 const CONFIRM_TOKEN_ENV = "RELEASE_CONFIRM_TOKEN";
-/** Poll budget for "the main package is live before publishing the forwarding package". */
-const VISIBILITY_TIMEOUT_MS = 180_000;
-const VISIBILITY_INTERVAL_MS = 5_000;
 const HTTP_TIMEOUT_MS = 8_000;
 
 const checks = [];
@@ -119,10 +103,10 @@ function resolveNpmCommand() {
 
 const NPM = resolveNpmCommand();
 
-function runNpm(args, options = {}) {
+function runNpm(args) {
   try {
     return execFileSync(NPM.command, [...NPM.prefixArgs, ...args], {
-      cwd: options.cwd ?? REPO_ROOT,
+      cwd: REPO_ROOT,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -147,8 +131,8 @@ function runGit(args) {
  * document, so the payload is located by its first bracket rather than assumed to be
  * the whole stream.
  */
-function packDryRun(cwd) {
-  const output = runNpm(["pack", "--dry-run", "--json"], { cwd });
+function packDryRun() {
+  const output = runNpm(["pack", "--dry-run", "--json"]);
   const jsonStart = output.indexOf("[");
   if (jsonStart === -1) {
     return fail("could not find the JSON document in `npm pack --dry-run --json` output");
@@ -180,10 +164,7 @@ function fetchRegistryDocument(name) {
                 return;
               }
               if (response.statusCode !== 200) {
-                resolvePromise({
-                  state: "error",
-                  detail: `HTTP ${response.statusCode}`,
-                });
+                resolvePromise({ state: "error", detail: `HTTP ${response.statusCode}` });
                 return;
               }
               try {
@@ -224,53 +205,50 @@ function ask(question) {
  * supplying it in the environment. There is no "skip" input: the answer must equal the
  * token exactly.
  */
-async function confirm(step, token) {
+async function confirm(token) {
   const supplied = process.env[CONFIRM_TOKEN_ENV];
   if (supplied !== undefined) {
     if (supplied.trim() !== token) {
       return fail(
-        `${CONFIRM_TOKEN_ENV} does not match the required confirmation token for ${step}.\n` +
+        `${CONFIRM_TOKEN_ENV} does not match the required confirmation token.\n` +
           `  expected: ${token}\n  received: ${supplied.trim() === "" ? "(empty)" : "(different value)"}`,
       );
     }
-    ok(`confirmed ${step} via ${CONFIRM_TOKEN_ENV}`);
+    ok(`confirmed via ${CONFIRM_TOKEN_ENV}`);
     return;
   }
   if (!process.stdin.isTTY) {
     return fail(
-      `no TTY and ${CONFIRM_TOKEN_ENV} is unset, so ${step} cannot be confirmed.\n` +
+      `no TTY and ${CONFIRM_TOKEN_ENV} is unset, so the release cannot be confirmed.\n` +
         `  interactive:  re-run and type the token when asked\n` +
         `  automation:   set ${CONFIRM_TOKEN_ENV}=${token}`,
     );
   }
-  console.log(`\n  To confirm ${step}, type exactly:  ${token}`);
+  console.log(`\n  To confirm, type exactly:  ${token}`);
   const answer = await ask("  > ");
   if (answer !== token) {
-    return fail(`confirmation token mismatch for ${step} (received "${answer}")`);
+    return fail(`confirmation token mismatch (received "${answer}")`);
   }
-  ok(`confirmed ${step}`);
+  ok("confirmed");
 }
 
 function parseArguments(argv) {
-  const options = { mode: "dry-run", skipNetwork: false };
+  const options = { mode: "check", skipNetwork: false };
   for (const raw of argv) {
-    if (raw === "--publish") {
+    if (raw === "--check" || raw === "--dry-run") {
+      options.mode = "check";
+    } else if (raw === "--publish") {
       options.mode = "publish";
-    } else if (raw === "--dry-run") {
-      options.mode = "dry-run";
-    } else if (raw === "--verify") {
-      options.mode = "verify";
     } else if (raw === "--skip-network") {
       options.skipNetwork = true;
     } else if (raw === "--help" || raw === "-h") {
       console.log(
         [
-          "Usage: node scripts/release-npm.mjs [--dry-run | --publish | --verify] [--skip-network]",
+          "Usage: node scripts/release.mjs [--check | --publish] [--skip-network]",
           "",
-          "  --dry-run        (default) read-only checks, then generate the forwarding package",
-          "  --publish        checks -> confirm -> publish haruyuki, wait until live, confirm -> publish hryk -> verify",
-          "  --verify         verify that the current version of both packages is published",
-          "  --skip-network   skip the registry and login checks; dry-run only (a real publish needs both)",
+          "  --check          (default) run every preflight check; publishes nothing",
+          "  --publish        checks -> confirm -> npm publish -> verify what went live",
+          "  --skip-network   skip the registry and login checks; --check only",
           "",
           `  Automation sets ${CONFIRM_TOKEN_ENV} instead of typing the confirmation token.`,
         ].join("\n"),
@@ -280,9 +258,9 @@ function parseArguments(argv) {
       return fail(`unknown argument: ${raw}`);
     }
   }
-  if (options.skipNetwork && options.mode !== "dry-run") {
+  if (options.skipNetwork && options.mode !== "check") {
     return fail(
-      "--skip-network only applies to --dry-run: publishing requires a reachable registry and a valid login.",
+      "--skip-network only applies to --check: publishing requires a reachable registry and a valid login.",
     );
   }
   return options;
@@ -300,20 +278,18 @@ function checkRepoLocation() {
   }
   ok("package.json present", REPO_ROOT);
 
-  let branch = "";
   try {
-    branch = runGit(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+    const branch = runGit(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+    if (branch === "HEAD") {
+      bad("git branch", "detached HEAD; releases must come from a branch");
+    } else {
+      ok("git branch", branch);
+    }
   } catch {
-    return bad("git branch", "not a git repository, or git is unavailable");
-  }
-  if (branch === "HEAD") {
-    bad("git branch", "detached HEAD; releases must come from a branch");
-  } else {
-    ok("git branch", branch);
+    bad("git branch", "not a git repository, or git is unavailable");
   }
   try {
-    const head = runGit(["log", "-1", "--format=%h %s"]).trim();
-    ok("HEAD", head);
+    ok("HEAD", runGit(["log", "-1", "--format=%h %s"]).trim());
   } catch {
     bad("HEAD", "could not read the last commit");
   }
@@ -322,8 +298,8 @@ function checkRepoLocation() {
 
 function checkManifest(main) {
   heading("2. manifest");
-  if (main.name !== MAIN_PACKAGE_NAME) {
-    bad("name", `expected "${MAIN_PACKAGE_NAME}", found "${main.name}"`);
+  if (main.name !== PACKAGE_NAME) {
+    bad("name", `expected "${PACKAGE_NAME}", found "${main.name}"`);
   } else {
     ok("name", main.name);
   }
@@ -347,15 +323,12 @@ function checkManifest(main) {
   } else {
     bad("license", "missing");
   }
-  if (main.repository?.url) {
-    ok("repository", main.repository.url);
-  } else {
-    warn("repository", "missing; the npm page will have no source link");
-  }
-  if (main.author) {
-    ok("author", main.author);
-  } else {
-    warn("author", "missing");
+  for (const field of ["repository", "author"]) {
+    if (field === "repository" ? main.repository?.url : main[field]) {
+      ok(field);
+    } else {
+      warn(field, "missing");
+    }
   }
   if (main.engines?.node) {
     ok("engines.node", main.engines.node);
@@ -370,14 +343,18 @@ function checkManifest(main) {
   return undefined;
 }
 
+/**
+ * Both command names are a local `bin` fact: the registry only ever generates the
+ * command matching the package name, but the tarball and source checkouts get both.
+ */
 function checkBinEntries(main) {
   heading("3. command names");
   for (const name of COMMAND_NAMES) {
     const target = main.bin?.[name];
-    if (target === "haruyuki.js") {
+    if (target === BIN_TARGET) {
       ok(`bin["${name}"]`, target);
     } else {
-      bad(`bin["${name}"]`, `expected "haruyuki.js", found ${JSON.stringify(target ?? null)}`);
+      bad(`bin["${name}"]`, `expected "${BIN_TARGET}", found ${JSON.stringify(target ?? null)}`);
     }
   }
   const extra = Object.keys(main.bin ?? {}).filter((name) => !COMMAND_NAMES.includes(name));
@@ -478,7 +455,7 @@ function checkGitState(main) {
     .filter((path) => path.length > 0)
     .filter((path) => !IGNORED_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)));
   if (offenders.length === 0) {
-    ok("working tree clean", "ignoring docs/ and SPEC-*");
+    ok("working tree clean", `ignoring ${IGNORED_PATH_PREFIXES.join(", ")}`);
   } else {
     bad("working tree dirty", offenders.join(", "));
   }
@@ -501,7 +478,7 @@ function checkGitState(main) {
   return undefined;
 }
 
-/** Whether this exact version has been published already; also warns when the name is free. */
+/** Whether this exact version has been published already. */
 async function checkRegistryAvailability(main) {
   heading("8. registry");
   ok("registry", REGISTRY);
@@ -518,25 +495,12 @@ async function checkRegistryAvailability(main) {
     return undefined;
   }
   const published = Object.keys(result.document.versions ?? {});
-  const tag = result.document["dist-tags"]?.latest ?? "(none)";
-  ok(`${main.name} exists`, `latest = ${tag}, ${published.length} version(s) published`);
+  const latest = result.document["dist-tags"]?.latest ?? "(none)";
+  ok(`${main.name} exists`, `latest = ${latest}, ${published.length} version(s) published`);
   if (published.includes(main.version)) {
     bad(`version ${main.version} already published`, "bump the version before releasing");
   } else {
     ok(`version ${main.version} is free`);
-  }
-  const forward = await fetchRegistryDocument(FORWARD_PACKAGE_NAME);
-  if (forward.state === "error") {
-    bad(`${FORWARD_PACKAGE_NAME} lookup`, forward.detail);
-  } else if (forward.state === "absent") {
-    ok(`${FORWARD_PACKAGE_NAME} name is free`, "first publish of the short name");
-  } else {
-    const forwardVersions = Object.keys(forward.document.versions ?? {});
-    if (forwardVersions.includes(main.version)) {
-      bad(`${FORWARD_PACKAGE_NAME}@${main.version} already published`, "bump both versions");
-    } else {
-      ok(`${FORWARD_PACKAGE_NAME} exists`, `${forwardVersions.length} version(s) published`);
-    }
   }
   return undefined;
 }
@@ -557,142 +521,23 @@ function checkAuthentication() {
   return undefined;
 }
 
-// ---------------------------------------------------------------------------
-// Generated package
-// ---------------------------------------------------------------------------
-
-function buildForwardManifest(main) {
-  return {
-    name: FORWARD_PACKAGE_NAME,
-    version: main.version,
-    description: "The equivalent short name for haruyuki: installing this package installs haruyuki.",
-    // No source of its own — a manifest and the two READMEs, nothing else.
-    files: FORWARD_FILES,
-    bin: Object.fromEntries(
-      COMMAND_NAMES.map((name) => [name, `./node_modules/${main.name}/haruyuki.js`]),
-    ),
-    dependencies: { [main.name]: main.version },
-    repository: main.repository,
-    license: main.license,
-    author: main.author,
-    engines: main.engines,
-    publishConfig: main.publishConfig,
-  };
-}
-
-function generateForwardPackage(main) {
-  heading("10. forwarding package");
-  const readmes = README_TEMPLATES.map((entry) => {
-    const templatePath = join(TEMPLATE_DIR, entry.template);
-    if (!existsSync(templatePath)) {
-      return fail(`missing the README template at ${templatePath}`);
-    }
-    const template = readFileSync(templatePath, "utf8");
-    if (!template.includes("{{VERSION}}")) {
-      return fail(`${entry.template} must contain a {{VERSION}} placeholder`);
-    }
-    return {
-      output: entry.output,
-      contents: template
-        .replaceAll("{{VERSION}}", main.version)
-        .replaceAll("{{MAIN}}", main.name),
-    };
-  });
-
-  rmSync(FORWARD_DIR, { recursive: true, force: true });
-  mkdirSync(FORWARD_DIR, { recursive: true });
-  writeFileSync(
-    join(FORWARD_DIR, "package.json"),
-    `${JSON.stringify(buildForwardManifest(main), null, 2)}\n`,
-  );
-  for (const readme of readmes) {
-    writeFileSync(join(FORWARD_DIR, readme.output), readme.contents);
-  }
-  ok("generated", FORWARD_DIR);
-  return FORWARD_DIR;
-}
-
-function checkForwardManifest(main, forward) {
-  if (forward.version === main.version) {
-    ok("forwarding version matches main", forward.version);
-  } else {
-    bad("version mismatch", `main ${main.version} vs forwarding ${forward.version}`);
-  }
-  const declared = forward.dependencies?.[main.name];
-  if (declared === main.version && Object.keys(forward.dependencies ?? {}).length === 1) {
-    ok("exact dependency", `${main.name}@${declared}`);
-  } else {
-    bad("dependency", `expected exactly { "${main.name}": "${main.version}" }`);
-  }
-  const declaredFiles = [...(forward.files ?? [])].sort();
-  const expectedFiles = [...FORWARD_FILES].sort();
-  if (declaredFiles.join(",") === expectedFiles.join(",")) {
-    ok("files", expectedFiles.join(", "));
-  } else {
-    bad("files", `expected ${expectedFiles.join(", ")}; found ${declaredFiles.join(", ")}`);
-  }
-  const expectedBin = `./node_modules/${main.name}/haruyuki.js`;
-  const binOk = COMMAND_NAMES.every((name) => forward.bin?.[name] === expectedBin);
-  if (binOk) {
-    ok("bin", `${COMMAND_NAMES.join(", ")} -> ${expectedBin}`);
-  } else {
-    bad("bin", `expected both names to resolve to ${expectedBin}`);
-  }
-  return undefined;
-}
-
-function describeEntry(label, entry, manifest) {
-  heading(`${label}: ${entry.name}@${entry.version}`);
+function checkTarball(entry) {
+  heading("10. tarball");
   console.log(`  files          ${entry.entryCount}`);
   console.log(`  size           ${bytes(entry.size)} (unpacked ${bytes(entry.unpackedSize)})`);
   console.log(`  shasum         ${entry.shasum}`);
   console.log(`  integrity      ${entry.integrity}`);
-  console.log(`  bin            ${JSON.stringify(manifest.bin)}`);
   const paths = entry.files.map((file) => file.path);
   const leaked = paths.filter((path) => /^docs\/\d/.test(path));
-  console.log(`  internal docs  ${leaked.length}`);
-  if (leaked.length > 0) {
-    console.log(`                 ${leaked.join(", ")}`);
-  }
-}
-
-/** The generated package must ship exactly its declared files and nothing else. */
-function checkForwardTarball(entry) {
-  heading("11. forwarding tarball contents");
-  if (entry.entryCount !== FORWARD_FILES.length) {
-    bad(
-      "entry count",
-      `expected ${FORWARD_FILES.length}, found ${entry.entryCount}`,
-    );
-  } else {
-    ok("entry count", String(entry.entryCount));
-  }
-  const unexpected = entry.files
-    .map((file) => file.path)
-    .filter((path) => !FORWARD_FILES.includes(path));
-  if (unexpected.length > 0) {
-    bad("unexpected files", unexpected.join(", "));
-  } else {
-    ok("no unexpected files");
-  }
-  return undefined;
-}
-
-function checkMainTarball(entry) {
-  heading("12. main tarball sanity");
-  const leaked = entry.files
-    .map((file) => file.path)
-    .filter((path) => /^docs\/\d/.test(path));
   if (leaked.length === 0) {
     ok("no internal planning docs", "docs/ ships only examples");
   } else {
     bad("internal planning docs leaked", leaked.slice(0, 8).join(", "));
   }
-  const binary = entry.files.find((file) => file.path === "haruyuki.js");
-  if (binary) {
-    ok("haruyuki.js in tarball", bytes(binary.size));
+  if (paths.includes(BIN_TARGET)) {
+    ok(`${BIN_TARGET} in tarball`);
   } else {
-    bad("haruyuki.js missing from tarball", "the published package would not run");
+    bad(`${BIN_TARGET} missing from tarball`, "the published package would not run");
   }
   return undefined;
 }
@@ -701,73 +546,36 @@ function checkMainTarball(entry) {
 // Publish and verify
 // ---------------------------------------------------------------------------
 
-function publishPackage(cwd, name, version) {
-  heading(`publishing ${name}@${version}`);
-  runNpm(["publish", "--access", "public"], { cwd });
-  ok(`published ${name}@${version}`);
-}
-
-/** The forwarding package resolves an exact dependency, so the main package must be live first. */
-async function waitUntilVisible(name, version) {
-  heading(`waiting for ${name}@${version} to be visible`);
-  const deadline = Date.now() + VISIBILITY_TIMEOUT_MS;
-  let lastDetail = "not queryable";
-  while (Date.now() < deadline) {
-    const result = await fetchRegistryDocument(name);
-    if (result.state === "present" && result.document.versions?.[version]) {
-      ok(`${name}@${version} is live`);
-      return true;
-    }
-    if (result.state === "error") {
-      lastDetail = result.detail;
-    } else if (result.state === "present") {
-      lastDetail = "version not listed yet";
-    }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, VISIBILITY_INTERVAL_MS));
-  }
-  return fail(
-    `${name}@${version} did not become visible within ${VISIBILITY_TIMEOUT_MS / 1000}s (last: ${lastDetail}).\n` +
-      `  Do not publish the forwarding package yet — it would depend on a version that does not resolve.`,
-  );
-}
-
 async function verifyPublished(main) {
-  heading("verifying published versions");
-  for (const name of [MAIN_PACKAGE_NAME, FORWARD_PACKAGE_NAME]) {
-    const result = await fetchRegistryDocument(name);
-    if (result.state === "error") {
-      bad(`${name} lookup`, `${result.detail} — cannot confirm the release`);
-      continue;
-    }
-    if (result.state === "absent") {
-      bad(name, "not on the registry");
-      continue;
-    }
-    const version = result.document.versions?.[main.version];
-    if (!version) {
-      bad(`${name}@${main.version}`, "not published");
-      continue;
-    }
-    const latest = result.document["dist-tags"]?.latest;
-    ok(
-      `${name}@${main.version}`,
-      `tarball integrity ${version.dist?.integrity ?? "(unknown)"}, latest = ${latest ?? "(none)"}`,
-    );
+  heading("verifying what went live");
+  const result = await fetchRegistryDocument(main.name);
+  if (result.state === "error") {
+    return bad("registry lookup", `${result.detail} — cannot confirm the release`);
   }
+  if (result.state === "absent") {
+    return bad(main.name, "not on the registry");
+  }
+  const version = result.document.versions?.[main.version];
+  if (!version) {
+    return bad(`${main.name}@${main.version}`, "not published");
+  }
+  const latest = result.document["dist-tags"]?.latest;
+  ok(
+    `${main.name}@${main.version}`,
+    `tarball integrity ${version.dist?.integrity ?? "(unknown)"}, latest = ${latest ?? "(none)"}`,
+  );
   return undefined;
 }
-
-// ---------------------------------------------------------------------------
 
 function summarize() {
   const failures = checks.filter((check) => check.level === "fail");
   const warnings = checks.filter((check) => check.level === "warn");
   heading("summary");
-  console.log(`  ${checks.length - failures.length - warnings.length} passed, ${warnings.length} warnings, ${failures.length} failures`);
-  if (failures.length > 0) {
-    for (const failure of failures) {
-      console.log(`  [FAIL] ${failure.label}${failure.detail ? ` — ${failure.detail}` : ""}`);
-    }
+  console.log(
+    `  ${checks.length - failures.length - warnings.length} passed, ${warnings.length} warnings, ${failures.length} failures`,
+  );
+  for (const failure of failures) {
+    console.log(`  [FAIL] ${failure.label}${failure.detail ? ` — ${failure.detail}` : ""}`);
   }
   return failures.length;
 }
@@ -775,12 +583,6 @@ function summarize() {
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   console.log(`\nharuyuki release — mode: ${options.mode}`);
-
-  if (options.mode === "verify") {
-    const main = readJson(join(REPO_ROOT, "package.json"));
-    await verifyPublished(main);
-    process.exit(summarize() > 0 ? 1 : 0);
-  }
 
   const main = readJson(join(REPO_ROOT, "package.json"));
 
@@ -800,44 +602,23 @@ async function main() {
     await checkRegistryAvailability(main);
     checkAuthentication();
   }
-
-  // The forwarding package is generated before failure is declared, so its contents can
-  // be reviewed in the summary even when a check above failed.
-  const forwardDir = generateForwardPackage(main);
-  const forward = readJson(join(forwardDir, "package.json"));
-  checkForwardManifest(main, forward);
-
-  const mainEntry = packDryRun(REPO_ROOT);
-  const forwardEntry = packDryRun(forwardDir);
-  describeEntry(MAIN_PACKAGE_NAME, mainEntry, main);
-  describeEntry(FORWARD_PACKAGE_NAME, forwardEntry, forward);
-  checkForwardTarball(forwardEntry);
-  checkMainTarball(mainEntry);
+  checkTarball(packDryRun());
 
   const failures = summarize();
   if (failures > 0) {
     return fail(`${failures} check(s) failed; nothing was published.`);
   }
 
-  if (options.mode === "dry-run") {
-    heading("dry-run complete");
+  if (options.mode === "check") {
+    heading("check complete");
     console.log("  Nothing was published. Re-run with --publish to release.\n");
     return;
   }
 
-  const mainToken = `${main.name}@${main.version}`;
-  const forwardToken = `${forward.name}@${forward.version}`;
-  console.log("\n  Planned release, in this order:");
-  console.log(`    1. ${mainToken}   (then wait until it is live on the registry)`);
-  console.log(`    2. ${forwardToken}`);
-  await confirm(`step 1 (${mainToken})`, mainToken);
-
-  publishPackage(REPO_ROOT, main.name, main.version);
-  await waitUntilVisible(main.name, main.version);
-
-  await confirm(`step 2 (${forwardToken})`, forwardToken);
-  publishPackage(forwardDir, forward.name, forward.version);
-
+  await confirm(`${main.name}@${main.version}`);
+  heading(`publishing ${main.name}@${main.version}`);
+  runNpm(["publish", "--access", "public"]);
+  ok(`published ${main.name}@${main.version}`);
   await verifyPublished(main);
 
   const remaining = summarize();
@@ -846,9 +627,9 @@ async function main() {
   }
 
   heading("released");
-  console.log("  Both packages are published and verified. Still manual, by policy:");
-  console.log(`    git tag -a v${main.version} -m "..."   # suggest tagging the version-bump commit`);
-  console.log("    git push && git push --tags");
+  console.log("  Still manual, by policy:");
+  console.log(`    git push                 # the tagged commit`);
+  console.log(`    git push --tags          # v${main.version}`);
   console.log("");
 }
 

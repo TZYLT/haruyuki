@@ -122,6 +122,22 @@ npm install -g haruyuki@beta    # pre-release
 > Inc. release. It ships `LICENSE`, `NOTICE`, `THIRD-PARTY-NOTICES.md`, and `CONTRIBUTING.md` (the change
 > list).
 
+### The short name `hryk`
+
+The CLI answers to **both** `hryk` and `haruyuki`; the two are equivalent and behave identically, and
+user-facing text always prints the long name. Whether the short name is *available* depends on how you
+installed it:
+
+| How you installed | Commands you get |
+|---|---|
+| Built from source, or installed from the packaged tarball | `haruyuki` **and** `hryk` |
+| `npm install -g haruyuki` (the registry) | **`haruyuki` only** |
+
+npm generates a global command from the **package name in the registry**, and this package is named
+`haruyuki` there, so only the `haruyuki` shim is created. A separate `hryk` package was designed and
+built, but the registry **rejected the name as too similar to existing packages** (403, conflicting with
+`hoek` and others), so the short name is not offered through the registry.
+
 ## 4. Quick start
 
 - Connect a model API:

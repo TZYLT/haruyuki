@@ -38,7 +38,8 @@ USAGE
   haruyuki skills ...      List or delete installed agent skills
 
   hryk is an equivalent short name for haruyuki: every command above also works as
-  "hryk <args>". Examples use the long name.
+  "hryk <args>". It is available from a source checkout or the packaged tarball; npm
+  registry installs provide the haruyuki command only. Examples use the long name.
 
 OPTIONS
 ${renderCliOptionsHelp()}

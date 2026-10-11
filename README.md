@@ -93,6 +93,20 @@ npm install -g haruyuki@beta    # 预发布版
 > npm 上的 `haruyuki` 由本分支维护者发布，**不是** Letta, Inc. 的官方发行；包内已含 `LICENSE`、`NOTICE`、
 > `THIRD-PARTY-NOTICES.md` 与 `CONTRIBUTING.md`（改动清单）。
 
+### 短名 `hryk`
+
+命令行**同时**接受 `hryk` 与 `haruyuki`，两者等价、行为完全一致，用户可见文案里出现的始终是长名。
+但**可用性取决于安装方式**：
+
+| 安装方式 | 得到的命令 |
+|---|---|
+| 从源码构建，或从打包好的 tarball 安装 | `haruyuki` **和** `hryk` |
+| `npm install -g haruyuki`（注册表） | **只有 `haruyuki`** |
+
+原因：npm 的全局命令是根据**注册表里的包名**生成的，本包在注册表里的名字是 `haruyuki`，所以只生成
+`haruyuki` 一个 shim。独立的 `hryk` 包曾被设计并实现，但**被 npm 以包名过于相似为由拒绝**（403，与
+`hoek` 等既有包冲突），因此不通过注册表提供短名。
+
 
 ## 四、快速开始
 
