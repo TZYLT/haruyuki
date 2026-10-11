@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 const { execFileSync } = require("node:child_process");
-const { readFileSync, readdirSync } = require("node:fs");
+const { existsSync, readFileSync, readdirSync } = require("node:fs");
 const { availableParallelism } = require("node:os");
 const path = require("node:path");
 const { shardTestFiles } = require("./test-sharding.cjs");
@@ -10,6 +10,40 @@ const {
   planUnitTests,
   readPullRequestShas,
 } = require("./unit-test-impact.cjs");
+
+/**
+ * The `bun` executable to run the suite with.
+ *
+ * `execFileSync("bun")` goes through PATH on POSIX, but on Windows the installed
+ * command is the npm shim `bun.cmd`, and Node refuses to launch a batch file
+ * without a shell — a shell would then re-quote every path filter we pass, which
+ * is how a suite silently runs fewer files than it selected. So find the
+ * executable the shim wraps instead. `HARUYUKI_BUN_EXECUTABLE` overrides this for
+ * an install it cannot guess (a standalone `bun.exe` elsewhere, a package manager
+ * shim, a CI image).
+ */
+function resolveBunExecutable() {
+  const override = process.env.HARUYUKI_BUN_EXECUTABLE;
+  if (override) return override;
+  if (process.platform !== "win32") return "bun";
+
+  const pathValue = process.env.PATH ?? process.env.Path ?? "";
+  for (const dir of pathValue.split(path.delimiter)) {
+    if (!dir) continue;
+    // A standalone install puts `bun.exe` on PATH; the npm shim puts it one
+    // `node_modules` level below the directory that holds `bun.cmd`.
+    const candidates = [
+      path.join(dir, "bun.exe"),
+      path.join(dir, "node_modules", "bun", "bin", "bun.exe"),
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return "bun";
+}
+
+const BUN_EXECUTABLE = resolveBunExecutable();
 
 // Unit test directories — bun discovers *.test.ts / *.test.tsx within each.
 // Listed explicitly so we skip src/integration-tests (API-gated).
@@ -110,7 +144,7 @@ for (const entry of isolatedTests) {
 
 function runTests(files, timeoutMs, env = {}, extraArgs = []) {
   execFileSync(
-    "bun",
+    BUN_EXECUTABLE,
     ["test", ...files, "--timeout", String(timeoutMs), ...extraArgs],
     {
       stdio: "inherit",
