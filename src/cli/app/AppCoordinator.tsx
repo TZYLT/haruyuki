@@ -2033,6 +2033,7 @@ export function App({
         if (!ln) continue;
         if (
           ln.kind === "user" ||
+          ln.kind === "recall" ||
           ln.kind === "error" ||
           ln.kind === "status" ||
           ln.kind === "trajectory_summary"

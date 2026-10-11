@@ -496,3 +496,83 @@ test("repeated transcript repaints replace Ink static output", async () => {
   instance.unmount();
   instance.cleanup();
 });
+
+/**
+ * The row for the turn being submitted: the one the user is watching when the
+ * injection happens. It is a row of its own (`kind: "recall"`) rather than a part
+ * of the user bubble, and the block it carries is longer than
+ * `CLIP_CHAR_LIMIT_TEXT` — the size a real three-passage injection has, and the
+ * size whose absence in the older fixtures hid the clipping bug that made such a
+ * row render as user prose instead.
+ */
+test("a live recall row follows its own tier", async () => {
+  const entries: RecallEntry[] = [1, 2, 3].map((n) => ({
+    source: "memory" as const,
+    fingerprint: `memory:reference/notes.md:${n}`,
+    file: "reference/notes.md",
+    startLine: n,
+    endLine: n + 2,
+    text: "a recalled passage long enough to overflow the clip ".repeat(8),
+    score: 4 - n,
+  }));
+  const block = formatRecallReminder({
+    entries,
+    status: "injected",
+    diagnostics: { threshold: 1, candidates: 3, sources: [] },
+  });
+  if (block === null) throw new Error("the writer produced nothing");
+  expect(block.length).toBeGreaterThan(500);
+
+  setSystemRemindersVisible(false);
+  setRecallDisplay("summary");
+  const stdout = new CaptureStream() as CaptureStream & NodeJS.WriteStream;
+  const instance = render(
+    <StaticTranscript
+      renderEpoch={0}
+      items={[{ kind: "recall", id: "recall-1", text: block }]}
+      columns={100}
+      statusLinePrompt=">"
+      showCompactionsEnabled={true}
+      precomputedDiffs={new Map()}
+    />,
+    {
+      stdout,
+      debug: false,
+      patchConsole: false,
+      exitOnCtrlC: false,
+    },
+  );
+
+  await waitForRender();
+  const summaryOutput = stripAnsi(stdout.chunks.join(""));
+  expect(summaryOutput).toContain("↩ recalled 3 passages");
+  expect(summaryOutput).toContain("3 memory passages");
+  expect(summaryOutput).not.toContain("a recalled passage long enough");
+
+  // Ctrl+R reaches a row of this kind too, even with every other reminder hidden.
+  const expandedStart = stdout.chunks.length;
+  toggleSystemReminderDisplay();
+  await waitForRender();
+  expect(stripAnsi(stdout.chunks.slice(expandedStart).join(""))).toContain(
+    "a recalled passage long enough",
+  );
+
+  // `silent` hides the row, expanded or not.
+  const silentStart = stdout.chunks.length;
+  setRecallDisplay("silent");
+  await waitForRender();
+  const silentOutput = stripAnsi(stdout.chunks.slice(silentStart).join(""));
+  expect(silentOutput).not.toContain("↩ recalled");
+  expect(silentOutput).not.toContain("a recalled passage long enough");
+
+  // `full` shows the text itself, with nothing left to expand.
+  const fullStart = stdout.chunks.length;
+  setRecallDisplay("full");
+  await waitForRender();
+  expect(stripAnsi(stdout.chunks.slice(fullStart).join(""))).toContain(
+    "a recalled passage long enough",
+  );
+
+  instance.unmount();
+  instance.cleanup();
+});

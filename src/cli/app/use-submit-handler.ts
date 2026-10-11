@@ -134,7 +134,12 @@ import {
   shouldSlashCommandBypassQueue,
 } from "./command-routing";
 import { buildTextParts } from "./content-parts";
-import { appendOptimisticUserLine, createClientOtid, uid } from "./ids";
+import {
+  appendOptimisticUserLine,
+  appendRecallLine,
+  createClientOtid,
+  uid,
+} from "./ids";
 import { prepareSessionExit } from "./session";
 import {
   handleCompactCommand,
@@ -3191,6 +3196,12 @@ ${SYSTEM_REMINDER_CLOSE}
       const transcriptStartLineIndex = userTextForInput
         ? Math.max(0, toLines(buffersRef.current).length - 1)
         : null;
+
+      // Feature ②'s row for this turn. The injection exists only now, and the
+      // optimistic user row is already committed, so it gets a row of its own —
+      // appended after `transcriptStartLineIndex` above, which must keep pointing
+      // at the user's line.
+      appendRecallLine(buffersRef.current, sharedReminderParts);
 
       // Check for pending approvals before sending message (skip if we already have
       // a queued approval response to send first).

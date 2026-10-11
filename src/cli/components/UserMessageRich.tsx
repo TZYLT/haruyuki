@@ -414,4 +414,36 @@ export const LiveUserMessage = memo(
 
 LiveUserMessage.displayName = "LiveUserMessage";
 
+/**
+ * One recall injection as its own transcript row.
+ *
+ * The turn being submitted gets a row of its own rather than a part inside the user
+ * bubble: the optimistic user row is appended before any reminder is built (so the
+ * message appears at once) and `<Static>` never re-renders a row it has already
+ * printed, so the block cannot be folded into it afterwards. This row keeps the raw
+ * block and applies the tier at render time through the same call the user bubble
+ * makes — which is what still answers Ctrl+R after the row has been committed.
+ */
+export const RecallBlockMessage = memo(function RecallBlockMessage({
+  text,
+}: {
+  text: string;
+}) {
+  const display = useSyncExternalStore(
+    subscribeToSystemReminderDisplay,
+    getRecallDisplay,
+  );
+  const expanded = useSyncExternalStore(
+    subscribeToSystemReminderDisplay,
+    getSystemRemindersExpanded,
+  );
+  const shown = formatRecallBlockForDisplay({ text, display, expanded });
+  if (shown === null) return null;
+  return (
+    <Box>
+      <Text>{shown}</Text>
+    </Box>
+  );
+});
+
 UserMessage.displayName = "UserMessage";

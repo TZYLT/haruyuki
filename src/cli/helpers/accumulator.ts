@@ -148,6 +148,20 @@ export type Line =
       otid?: string; // client-generated correlation id echoed back by the server
     }
   | {
+      /**
+       * Feature ②'s own row: the injection the current turn carries.
+       *
+       * It keeps the raw block and lets the renderer apply the display tier, which
+       * is what still answers Ctrl+R once the row is committed — `<Static>` never
+       * re-renders a row it has printed, so a tier baked in at build time could
+       * never change, and the block cannot be folded into the user row either
+       * (that row is appended before any reminder is built).
+       */
+      kind: "recall";
+      id: string;
+      text: string;
+    }
+  | {
       kind: "reasoning";
       id: string;
       text: string;
@@ -1579,7 +1593,7 @@ export function linesToTranscript(lines: Line[]): string {
         parts.push(`<error>${line.text}</error>`);
         break;
       default:
-        // Skip status, separator, command, event, trajectory_summary, bash_command lines
+        // Skip status, separator, command, event, trajectory_summary, bash_command, recall lines
         break;
     }
   }

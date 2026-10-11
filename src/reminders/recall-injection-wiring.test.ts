@@ -75,4 +75,30 @@ describe("recall injection wiring", () => {
     expect(source).toContain("userInputText?: string;");
     expect(source).toContain("userInputText: params.userInputText,");
   });
+
+  test("the TUI shows the turn's injection as its own committed row", () => {
+    const source = sourceOf("../cli/app/use-submit-handler.ts");
+    const append = source.indexOf("appendRecallLine(");
+    expect(append).toBeGreaterThan(-1);
+    // The user row has to exist first, and `transcriptStartLineIndex` has to have
+    // been taken already: appending before that would move the index off the user's
+    // line and into the recall row.
+    expect(source.indexOf("appendOptimisticUserLine(")).toBeLessThan(append);
+    expect(source.indexOf("transcriptStartLineIndex")).toBeLessThan(append);
+  });
+
+  test("the recall row commits without waiting for a phase", () => {
+    // Only the kinds listed here are promoted to the transcript without a `phase`;
+    // anything else would sit in the buffers and never be printed.
+    const source = sourceOf("../cli/app/AppCoordinator.tsx");
+    const list = source.indexOf('ln.kind === "user" ||');
+    expect(list).toBeGreaterThan(-1);
+    expect(source.slice(list, list + 300)).toContain('ln.kind === "recall" ||');
+  });
+
+  test("the transcript renders the recall row", () => {
+    expect(sourceOf("../cli/app/StaticTranscript.tsx")).toContain(
+      'item.kind === "recall"',
+    );
+  });
 });

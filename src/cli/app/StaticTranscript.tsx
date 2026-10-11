@@ -20,7 +20,10 @@ import {
   subscribeToThinkingDisplay,
   subscribeToTranscriptDisplayRepaint,
 } from "@/cli/components/transcript-display-state";
-import { UserMessage } from "@/cli/components/UserMessageRich";
+import {
+  RecallBlockMessage,
+  UserMessage,
+} from "@/cli/components/UserMessageRich";
 import { WelcomeScreen } from "@/cli/components/WelcomeScreen";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import { releaseCommittedDiffPayloads } from "./approval-diffs";
@@ -111,6 +114,8 @@ export function StaticTranscript({
                   systemRemindersVisible={systemRemindersVisible}
                   systemRemindersExpanded={systemRemindersExpanded}
                 />
+              ) : item.kind === "recall" ? (
+                <RecallBlockMessage text={item.text} />
               ) : item.kind === "reasoning" ? (
                 <ReasoningMessage line={item} expanded={thinkingExpanded} />
               ) : item.kind === "assistant" ? (
