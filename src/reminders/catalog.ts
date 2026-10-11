@@ -123,11 +123,13 @@ export const SHARED_REMINDER_CATALOG: ReadonlyArray<SharedReminderDefinition> =
       ],
     },
     // Last on purpose: the catalog's order is the order of the parts prepended to
-    // the user's content, and this is the only one that is *about* the words in
-    // that content, so it sits closest to them.
+    // the user's content, and this is the only entry in *this* group that is about
+    // the words in that content, so it sits closest to them. (The per-turn paths
+    // add their own parts after the shared ones — hooks, bash output, preloaded
+    // skills — so this is the last part recall controls, not the last part sent.)
     //
     // No `subagent` mode. Recalled context is for a turn the user asked for; a
-    // subagent prompt is somebody else's job description (《26》§6.4).
+    // subagent prompt is somebody else's job description.
     {
       id: "recall",
       description: "Recalled passages from past conversations and memory files",

@@ -30,8 +30,15 @@ import type {
 
 export type RecallSourceInput = {
   storageDir: string;
-  /** `undefined` when the active agent has no memory workspace. */
-  memoryDir?: string | undefined;
+  /**
+   * The active agent's memory workspace.
+   *
+   * Required, not optional: the only caller always has a path
+   * (`getLocalBackendMemoryFilesystemRoot` joins one from the agent id), and a
+   * source that is switched off is left out of the list entirely rather than being
+   * built and told it has nowhere to look.
+   */
+  memoryDir: string;
   /** `N`: message ids still in the context, so not recallable. */
   excludedMessageIds: ReadonlySet<string>;
   candidateLimit: number;
@@ -180,17 +187,6 @@ function memorySource(input: RecallSourceInput): RecallSourcePort {
   return {
     id: "memory",
     search(request): RecallSourceOutcome {
-      if (!input.memoryDir) {
-        return {
-          candidates: [],
-          diagnostic: {
-            source: "memory",
-            status: "unavailable",
-            candidates: 0,
-            reason: "the active agent has no memory workspace",
-          },
-        };
-      }
       try {
         const result = searchMemoryFiles(
           input.memoryDir,

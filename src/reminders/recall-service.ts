@@ -55,9 +55,13 @@ export type RecallRequest = {
    * keeps one (`state.turnCount`, incremented once per user turn), and deriving a
    * durable equivalent would mean either counting a transcript on the send path or
    * writing `conversation.json` every turn just to bump a number. The in-memory
-   * counter's only failure mode is that a fresh process starts at zero, which makes
-   * the window *over*-suppress for at most `dedupTurns` turns after a restart —
-   * never under-suppress.
+   * counter's only failure mode is that it starts at zero in a fresh process, and in
+   * the TUI it is also reset when the user switches conversations, so an entry the
+   * window recorded earlier reads as "in the future" and stays suppressed until the
+   * counter climbs past it: over-suppression for as long as the earlier episode's
+   * turn count, never under-suppression. That direction is deliberate — the
+   * alternative (discarding entries above the current counter) trades it for a
+   * possible duplicate injection after every restart.
    */
   currentTurn: number;
   options?: Partial<RecallOptions>;
@@ -137,9 +141,11 @@ export async function runRecall(
     };
   }
 
-  // One budget for the whole turn, created before the store reads so that even a
-  // slow scope assembly is bounded. The sources get the predicate rather than the
-  // object: they only ever ask, they never own the clock.
+  // One budget for the whole turn, created before the store reads so that the
+  // searches below are bounded. It does not bound the scope assembly: the
+  // in-context read is a single awaited store call with no cancellation, and the
+  // query is parsed before this line runs. The sources get the predicate rather than
+  // the object: they only ever ask, they never own the clock.
   const deadline = request.deadline ?? createRecallDeadline(options.timeoutMs);
 
   // Everything before the search loop runs inside one guard: these are the only
@@ -166,13 +172,10 @@ export async function runRecall(
             keepTurns: options.dedupTurns,
           }).suppressed;
 
-    const memoryDir =
-      request.memoryEnabled === false
-        ? undefined
-        : getLocalBackendMemoryFilesystemRoot(
-            request.agentId,
-            request.backend.getLocalStorageDir(),
-          );
+    const memoryDir = getLocalBackendMemoryFilesystemRoot(
+      request.agentId,
+      request.backend.getLocalStorageDir(),
+    );
     const built = buildRecallSources({
       storageDir: request.backend.getLocalStorageDir(),
       memoryDir,

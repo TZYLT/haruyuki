@@ -221,9 +221,13 @@ function capTerms(
 }
 
 /**
- * The string form of a parsed query, for a source whose entry point still takes
- * text. Round-trips through `parseQuery`: a window is a 2- or 3-character Han run,
- * which `tokenize` keeps whole, and a phrase is quoted.
+ * The string form of a parsed query: phrases quoted, terms space-joined.
+ *
+ * No production caller today — the recall path hands both sources the parsed form.
+ * It is kept because it is what makes "the two sources agree about what the user
+ * asked" a property rather than a coincidence: `searchMemoryFiles` still accepts a
+ * plain string, so this is the seam for a text-only entry point, and the round trip
+ * through `parseQuery` is asserted in the tests.
  */
 export function recallQueryText(query: RecallQueryTerms): string {
   const parts = query.phrases.map((phrase) => `"${phrase}"`);

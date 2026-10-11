@@ -42,8 +42,9 @@ export function appendOptimisticUserLine(
  * A row of its own rather than part of the user bubble: `appendOptimisticUserLine`
  * runs before any reminder is built, and `<Static>` never re-renders a row it has
  * printed, so the block cannot be folded into that row once the injection exists.
- * Appending here puts the row directly under the message it belongs to; on a later
- * restart the same block is read back from the message itself.
+ * Appending here puts the row under the message it belongs to — below any
+ * task-notification rows the turn also appends; on a later restart the same block
+ * is read back from the message itself.
  */
 export function appendRecallLine(
   buffers: Buffers,
