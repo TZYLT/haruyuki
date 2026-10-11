@@ -101,7 +101,7 @@ Requirements: **Bun ≥ 1.3.2** (to build) and **Node ≥ 22.19** (to run the bu
 
 ```bash
 git clone <this repository>
-cd LettaCodeBetter
+cd Haruyuki
 bun install
 bun run build        # produces haruyuki.js at the repo root (gitignored)
 node ./haruyuki.js   # start the interactive UI

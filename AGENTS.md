@@ -309,6 +309,15 @@ directory first. Otherwise the run reads and mutates your real
 - **grep exits 1 on no matches** — pre-commit hooks use `|| true` on grep pipes to prevent false failures on clean commits.
 - **macOS case-insensitive FS** — `existsSync("bash.ts")` returns `true` when `Bash.ts` exists. Rename scripts that use `existsSync` to check kebab-case targets will silently skip single-word PascalCase files. Use `git mv` for renames.
 - **Native modules can behave differently under Bun and Node.** The published package runs the bundled `haruyuki.js` under Node (>= 22.19), while `bun run dev` runs the source under Bun. Example: `node-pty` is loaded directly under Node but through a Node bridge process under Bun, because its native handles do not integrate reliably with Bun's event loop (`src/tools/impl/shell-runner.ts`). Test runtime-sensitive code on both paths.
+- **`bun run build` inlines `__dirname` for bundled CommonJS deps.** `typescript`
+  is a devDependency that must be inlined (it is not in the package `files`
+  list), and the bundler bakes the build machine's path into it: after a build,
+  `grep 'node_modules.typescript.lib' haruyuki.js` returns a literal
+  `var __dirname = "<build machine>/node_modules/typescript/lib"`. That value
+  only feeds `ts.sys`'s default-lib lookup, and the mod engine calls
+  `ts.transpileModule` (`src/mods/mod-engine.ts:460`), which never needs it — so
+  it is harmless today. Do **not** "fix" it by marking `typescript` external:
+  the published package would then lose mod transpilation entirely.
 - **`setTimeout(fn, 0)` fires on the next tick, not never.** For "no timeout" behavior, check the timeout value before scheduling the timer instead of passing 0.
 - **Extend `@letta-ai/letta-client` types instead of redeclaring them.** Use the SDK's `ToolCall`, `StopReasonType`, and similar wire types directly; do not duplicate wire shapes or cast with `as any`.
 - **Package subpath entrypoints use relative imports and dedicated entry files.** Library entries (`src/agent-presets.ts`, `src/channels-*.ts`, `src/app-server-client.ts`) are bundled separately and their emitted `.d.ts` files go through an alias rewrite in `build.js`; anything reachable from a browser-targeted entry must stay free of node builtins and backend/provider imports. Consumers on `moduleResolution: "node"` resolve subpath types through `typesVersions` in `package.json`, so new subpaths need entries there too.
@@ -940,8 +949,9 @@ to accept the default message without opening an editor.
   user-owned repos, NOT org repos unless org approves.
 - `ghp_` (classic PAT): works for everything including `git push` to org repos.
   This is the right type for pushing to the fork repository, which is
-  `TZYLT/letta-chat-better` (remote name `letta-chat-better`). The upstream
-  `letta-ai/letta-code` remote is read-only reference material here.
+  `TZYLT/haruyuki` (remote name `haruyuki`). The old `TZYLT/letta-chat-better`
+  name still resolves through GitHub's rename redirect, but do not push to it.
+  The upstream `letta-ai/letta-code` remote is read-only reference material here.
 - Push URL: `git push https://<user>:<token>@github.com/<org>/<repo>.git <branch> --force`
 
 ### Letta API notes apply only if you call the hosted API

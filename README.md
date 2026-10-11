@@ -75,7 +75,7 @@ Haruyuki 把 agent 的记忆、身份与行为当作**可以长期演进的资�
 
 ```bash
 git clone <本仓库地址>
-cd LettaCodeBetter
+cd Haruyuki
 bun install
 bun run build        # 产出仓根 haruyuki.js（已 gitignore）
 node ./haruyuki.js   # 启动交互界面
