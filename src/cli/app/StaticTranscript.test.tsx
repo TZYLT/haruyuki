@@ -3,12 +3,16 @@ import { Writable } from "node:stream";
 import { Box, render, Text } from "ink";
 import stripAnsi from "strip-ansi";
 import {
+  getSystemRemindersExpanded,
+  setRecallDisplay,
   setSystemRemindersVisible,
   setThinkingExpanded,
   toggleSystemReminderDisplay,
   toggleThinkingDisplay,
 } from "@/cli/components/transcript-display-state";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
+import type { RecallDecision, RecallEntry } from "@/reminders/recall-port";
+import { formatRecallReminder } from "@/reminders/recall-reminder";
 import { StaticTranscript } from "./StaticTranscript";
 import type { StaticItem } from "./types";
 
@@ -35,6 +39,8 @@ async function waitForRender(): Promise<void> {
 afterEach(() => {
   setSystemRemindersVisible(false);
   setThinkingExpanded(false);
+  // Feature ②'s tier is module state too, and the tests below change it.
+  setRecallDisplay("summary");
 });
 
 test("system reminder display changes repaint committed transcript rows", async () => {
@@ -91,6 +97,116 @@ test("system reminder display changes repaint committed transcript rows", async 
   expect(stripAnsi(stdout.chunks.slice(recollapsedStart).join(""))).toContain(
     "▸ System reminder · 2 lines (ctrl+r to expand)",
   );
+
+  instance.unmount();
+  instance.cleanup();
+});
+
+/**
+ * Feature ②'s block on a committed row: the three tiers, and the fact that they
+ * are independent of the reminder-visibility toggle. `summary` is the default and
+ * must show while reminders are hidden; `silent` must hide the block even when
+ * they are visible.
+ */
+test("recall blocks follow their own display tier", async () => {
+  const entries: RecallEntry[] = [
+    {
+      source: "transcript",
+      fingerprint: "transcript:conv-a:m1",
+      file: "conv-a",
+      conversationKey: "conv-a",
+      messageId: "m1",
+      timestamp: "2026-10-11T09:00:00.000Z",
+      text: "the ledger is reconciled daily",
+      score: 4,
+    },
+    {
+      source: "memory",
+      fingerprint: "memory:reference/notes.md",
+      file: "reference/notes.md",
+      startLine: 3,
+      endLine: 5,
+      text: "memory says the same thing",
+      score: 3,
+    },
+  ];
+  const decision: RecallDecision = {
+    entries,
+    status: "injected",
+    diagnostics: { threshold: 1, candidates: 2, sources: [] },
+  };
+  const block = formatRecallReminder(decision) ?? "";
+  expect(block).toContain("<recall-injected");
+
+  setSystemRemindersVisible(false);
+  setRecallDisplay("summary");
+  const stdout = new CaptureStream() as CaptureStream & NodeJS.WriteStream;
+  const item: StaticItem = {
+    kind: "user",
+    id: "user-recall",
+    text: `${block}\n\nVisible user question`,
+  };
+  const instance = render(
+    <StaticTranscript
+      renderEpoch={0}
+      items={[item]}
+      columns={100}
+      statusLinePrompt=">"
+      showCompactionsEnabled={true}
+      precomputedDiffs={new Map()}
+    />,
+    {
+      stdout,
+      debug: false,
+      patchConsole: false,
+      exitOnCtrlC: false,
+    },
+  );
+
+  await waitForRender();
+  const summaryOutput = stripAnsi(stdout.chunks.join(""));
+  // The default tier, shown even though reminders are hidden.
+  expect(summaryOutput).toContain("↩ recalled 2 passages");
+  expect(summaryOutput).toContain("1 earlier conversation");
+  expect(summaryOutput).toContain("1 memory passage");
+  // The hint wraps at 100 columns, so only the part before the wrap is asserted.
+  expect(summaryOutput).toContain("(ctrl+r to");
+  expect(summaryOutput).not.toContain("the ledger is reconciled daily");
+  expect(summaryOutput).toContain("Visible user question");
+
+  // Ctrl+R expands the summary into the passages it stands for, even though the
+  // reminder-visibility toggle is still off.
+  const expandedStart = stdout.chunks.length;
+  toggleSystemReminderDisplay();
+  await waitForRender();
+  const expandedOutput = stripAnsi(stdout.chunks.slice(expandedStart).join(""));
+  expect(expandedOutput).toContain("(ctrl+r to");
+  expect(expandedOutput).toContain("the ledger is reconciled daily");
+
+  // `full` shows the text with nothing to expand.
+  const fullStart = stdout.chunks.length;
+  setRecallDisplay("full");
+  await waitForRender();
+  const fullOutput = stripAnsi(stdout.chunks.slice(fullStart).join(""));
+  expect(fullOutput).toContain("the ledger is reconciled daily");
+  expect(fullOutput).not.toContain("ctrl+r");
+
+  // `silent` hides the block even with reminders switched on.
+  setSystemRemindersVisible(true);
+  const silentStart = stdout.chunks.length;
+  setRecallDisplay("silent");
+  await waitForRender();
+  const silentOutput = stripAnsi(stdout.chunks.slice(silentStart).join(""));
+  expect(silentOutput).not.toContain("recalled 2 passages");
+  expect(silentOutput).not.toContain("the ledger is reconciled daily");
+  expect(silentOutput).toContain("Visible user question");
+
+  // Ctrl+R's gate: with the block hidden there is nothing to expand, so the
+  // keystroke is inert rather than flipping shared state no one can see.
+  setSystemRemindersVisible(false);
+  const expansionBefore = getSystemRemindersExpanded();
+  toggleSystemReminderDisplay();
+  expect(getSystemRemindersExpanded()).toBe(expansionBefore);
 
   instance.unmount();
   instance.cleanup();

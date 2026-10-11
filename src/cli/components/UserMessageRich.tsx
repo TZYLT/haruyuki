@@ -8,10 +8,13 @@ import {
   SYSTEM_REMINDER_CLOSE,
   SYSTEM_REMINDER_OPEN,
 } from "@/constants";
+import { formatRecallBlockForDisplay } from "@/reminders/recall-display";
+import { isRecallReminderText } from "@/reminders/recall-reminder";
 import { extractTaskNotificationsForDisplay } from "@/utils/task-notifications";
 import { colors } from "./colors";
 import { Text } from "./Text";
 import {
+  getRecallDisplay,
   getSystemRemindersExpanded,
   getSystemRemindersVisible,
   subscribeToSystemReminderDisplay,
@@ -299,6 +302,14 @@ export const UserMessage = memo(
     systemRemindersExpanded?: boolean;
   }) => {
     const trackedColumns = useTerminalWidth();
+    // Feature ②'s tier is display state like the reminder toggle beside it, so it
+    // is read from the store rather than drilled in as a prop: Ctrl+R's gate lives
+    // outside React and has to see the same value. Read before the early return
+    // below — a hook may not sit behind one.
+    const recallDisplay = useSyncExternalStore(
+      subscribeToSystemReminderDisplay,
+      getRecallDisplay,
+    );
     const columns = getCurrentStdoutColumns() ?? trackedColumns;
     const promptPrefix = `${prompt || CLI_GLYPHS.prompt} `;
     const prefixWidth = inkStringWidth(promptPrefix);
@@ -318,24 +329,46 @@ export const UserMessage = memo(
     const blocks = splitSystemReminderBlocks(displayText);
 
     const allLines: RenderedBlockLine[] = [];
-
-    for (const block of blocks) {
-      if (!block.text.trim()) continue;
-      if (block.isSystemReminder && !systemRemindersVisible) continue;
+    const pushBlock = (text: string, highlighted: boolean) => {
       if (allLines.length > 0) {
         allLines.push({ text: "", highlighted: false });
       }
-      const blockLines = renderBlock(
-        block.isSystemReminder
-          ? formatSystemReminderBlock(block.text, systemRemindersExpanded)
-          : block.text,
-        contentWidth,
-        columns,
-        !block.isSystemReminder,
-        promptPrefix,
-        continuationPrefix,
+      allLines.push(
+        ...renderBlock(
+          text,
+          contentWidth,
+          columns,
+          highlighted,
+          promptPrefix,
+          continuationPrefix,
+        ),
       );
-      allLines.push(...blockLines);
+    };
+
+    for (const block of blocks) {
+      if (!block.text.trim()) continue;
+      if (!block.isSystemReminder) {
+        pushBlock(block.text, true);
+        continue;
+      }
+      // Feature ②'s own three tiers, deliberately independent of the
+      // reminder-visibility toggle: `summary` is the default and has to show even
+      // when every other reminder is hidden, and `silent` has to hide the block
+      // even when they are visible (《26》§6.7).
+      if (isRecallReminderText(block.text)) {
+        const recall = formatRecallBlockForDisplay({
+          text: block.text,
+          display: recallDisplay,
+          expanded: systemRemindersExpanded,
+        });
+        if (recall !== null) pushBlock(recall, false);
+        continue;
+      }
+      if (!systemRemindersVisible) continue;
+      pushBlock(
+        formatSystemReminderBlock(block.text, systemRemindersExpanded),
+        false,
+      );
     }
 
     if (allLines.length === 0) return null;

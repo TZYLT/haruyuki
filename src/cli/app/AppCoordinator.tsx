@@ -60,6 +60,7 @@ import {
 import type { BtwState } from "@/cli/components/BtwPane";
 import type { ModelSelectorSelection } from "@/cli/components/ModelSelector";
 import { TerminalTitleWriter } from "@/cli/components/TerminalTitleWriter";
+import { setRecallDisplay } from "@/cli/components/transcript-display-state";
 import {
   appendStreamingOutput,
   type Buffers,
@@ -154,6 +155,7 @@ import type {
   QueueRuntime,
   TaskNotificationQueueItem,
 } from "@/queue/queue-runtime";
+import { readRecallSettings } from "@/recall-settings";
 import {
   createSharedReminderState,
   enqueueCommandIoReminder,
@@ -457,6 +459,13 @@ export function App({
       setCurrentAgentId(agentId);
     }
   }, [agentId]);
+
+  // Seed the transcript's recall display tier from the saved setting, once. The
+  // store is what the renderer and Ctrl+R's gate both read; the `/recall` command
+  // and the settings picker keep it in step after this (feature ②).
+  useEffect(() => {
+    setRecallDisplay(readRecallSettings().display);
+  }, []);
 
   // Whether a stream is in flight (disables input)
   // Uses synced state to keep ref in sync for reliable async checks

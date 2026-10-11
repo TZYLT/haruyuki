@@ -14,6 +14,7 @@ import type { DreamCommandScope } from "@/agent/reflection-runs";
 import { type Backend, getBackend } from "@/backend";
 import { LocalBackend } from "@/backend/local/local-backend";
 import { buildRecallCorpus } from "@/backend/local/recall-build";
+import { setRecallDisplay } from "@/cli/components/transcript-display-state";
 import {
   type ResolvedRecallSettings,
   readRecallSettings,
@@ -304,6 +305,11 @@ export async function handleRecallCommand(
       settingsManager.updateSettings(command.updates);
     }
     const updated = readRecallSettings();
+    // The transcript reads its tier from the display store rather than from
+    // settings on every render, so a change has to be pushed to it — the same thing
+    // `/system-reminders` does for its own toggle. A headless process never renders
+    // it and the write is inert.
+    setRecallDisplay(updated.display);
     const what =
       command.kind === "set"
         ? `Updated ${command.label}.`

@@ -22,6 +22,7 @@ import { getBackend } from "@/backend";
 import { formatRecallSettingsLine } from "@/cli/commands/recall";
 import type { CompactionSelection } from "@/cli/components/CompactionSelector";
 import type { ModelSelectorSelection } from "@/cli/components/ModelSelector";
+import { setRecallDisplay } from "@/cli/components/transcript-display-state";
 import {
   type ContextTracker,
   resetContextHistory,
@@ -1335,6 +1336,10 @@ export function useConfigurationHandlers(ctx: ConfigurationHandlersContext) {
         commandRunner.start("/recall", "Saving recall settings...");
       try {
         settingsManager.updateSettings(updates);
+        // Keep the display store in step with the saved tier: the transcript reads
+        // it on every render, and the keyboard handler reads it to decide whether
+        // Ctrl+R has anything to expand.
+        setRecallDisplay(readRecallSettings().display);
         setActiveOverlay(null);
         cmd.finish(
           `Updated.\n  ${formatRecallSettingsLine(readRecallSettings())}`,

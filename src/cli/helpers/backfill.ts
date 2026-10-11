@@ -11,6 +11,7 @@ import {
   SYSTEM_REMINDER_CLOSE,
   SYSTEM_REMINDER_OPEN,
 } from "@/constants";
+import { isRecallReminderText } from "@/reminders/recall-reminder";
 import { extractTaskNotificationsForDisplay } from "@/utils/task-notifications";
 import type { Buffers } from "./accumulator";
 import { extractCompactionSummary } from "./compaction-utils";
@@ -57,7 +58,11 @@ function removeSystemContextBlocks(text: string): string {
           `${SYSTEM_REMINDER_OPEN}[\\s\\S]*?${SYSTEM_REMINDER_CLOSE}`,
           "g",
         ),
-        "",
+        // Feature ②'s block is the one exception: its marker line is what the
+        // display layer turns into a summary, and stripping it here would leave
+        // history with no trace of what was recalled (《26》§6.7). The renderer
+        // decides per tier whether to show it — `silent` still shows nothing.
+        (match) => (isRecallReminderText(match) ? match : ""),
       )
       .replace(
         new RegExp(`${SYSTEM_ALERT_OPEN}[\\s\\S]*?${SYSTEM_ALERT_CLOSE}`, "g"),
