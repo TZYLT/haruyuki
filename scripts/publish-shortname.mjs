@@ -21,14 +21,25 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const TEMPLATE_PATH = join(REPO_ROOT, "scripts", "publish-shortname", "README.template.md");
-const OUT_ROOT = join(REPO_ROOT, "scripts", "publish-shortname", "out");
+const TEMPLATE_DIR = join(REPO_ROOT, "scripts", "publish-shortname");
+/**
+ * Bilingual by design: each language is its own file, and the Chinese one is the
+ * package default (`README.md`), matching the main package.
+ */
+const README_TEMPLATES = [
+  { template: "README.md.template", output: "README.md" },
+  { template: "README.en.md.template", output: "README.en.md" },
+];
+const OUT_ROOT = join(TEMPLATE_DIR, "out");
 const FORWARD_DIR = join(OUT_ROOT, "hryk");
 const FORWARD_PACKAGE_NAME = "hryk";
 /** Both command names must be declared by both packages — see the short-name route doc. */
 const COMMAND_NAMES = ["haruyuki", "hryk"];
 /** Present in the forwarding package's `files`; nothing else is allowed there. */
-const FORWARD_FILES = ["README.md", "package.json"];
+const FORWARD_FILES = [
+  ...README_TEMPLATES.map((entry) => entry.output),
+  "package.json",
+];
 /** The only untracked/ignored paths tolerated by the publish-mode tree check. */
 const IGNORED_PATH_PREFIXES = ["docs/", "SPEC-", "scripts/publish-shortname/out/"];
 
@@ -187,7 +198,7 @@ function buildForwardManifest(main) {
     name: FORWARD_PACKAGE_NAME,
     version: main.version,
     description: `The equivalent short name for haruyuki: installing this package installs haruyuki.`,
-    // No source of its own — a manifest and a README, nothing else.
+    // No source of its own — a manifest and the two READMEs, nothing else.
     files: FORWARD_FILES,
     bin: Object.fromEntries(
       COMMAND_NAMES.map((name) => [name, `./node_modules/${main.name}/haruyuki.js`]),
@@ -202,16 +213,22 @@ function buildForwardManifest(main) {
 }
 
 function generateForwardPackage(main) {
-  if (!existsSync(TEMPLATE_PATH)) {
-    return fail(`missing the README template at ${TEMPLATE_PATH}`);
-  }
-  const template = readFileSync(TEMPLATE_PATH, "utf8");
-  if (!template.includes("{{VERSION}}")) {
-    return fail("the README template must contain a {{VERSION}} placeholder");
-  }
-  const readme = template
-    .replaceAll("{{VERSION}}", main.version)
-    .replaceAll("{{MAIN}}", main.name);
+  const readmes = README_TEMPLATES.map((entry) => {
+    const templatePath = join(TEMPLATE_DIR, entry.template);
+    if (!existsSync(templatePath)) {
+      return fail(`missing the README template at ${templatePath}`);
+    }
+    const template = readFileSync(templatePath, "utf8");
+    if (!template.includes("{{VERSION}}")) {
+      return fail(`${entry.template} must contain a {{VERSION}} placeholder`);
+    }
+    return {
+      output: entry.output,
+      contents: template
+        .replaceAll("{{VERSION}}", main.version)
+        .replaceAll("{{MAIN}}", main.name),
+    };
+  });
 
   rmSync(FORWARD_DIR, { recursive: true, force: true });
   mkdirSync(FORWARD_DIR, { recursive: true });
@@ -219,7 +236,9 @@ function generateForwardPackage(main) {
     join(FORWARD_DIR, "package.json"),
     `${JSON.stringify(buildForwardManifest(main), null, 2)}\n`,
   );
-  writeFileSync(join(FORWARD_DIR, "README.md"), readme);
+  for (const readme of readmes) {
+    writeFileSync(join(FORWARD_DIR, readme.output), readme.contents);
+  }
   return FORWARD_DIR;
 }
 

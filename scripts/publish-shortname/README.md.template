@@ -1,0 +1,51 @@
+# hryk
+
+[English](README.en.md) · **简体中文**
+
+`hryk` 是 [`haruyuki`](https://www.npmjs.com/package/haruyuki) 的**等价短名包**。
+
+本包**不含任何自己的代码**——它只是一份转发清单，依赖主体包，因此**装它就等于装了 `haruyuki` 本身**，
+两个命令名运行的是同一个程序。
+
+## 安装
+
+```bash
+npm install -g hryk      # 短名
+npm install -g haruyuki  # 长名
+```
+
+装任意一个，都会同时得到**两个**命令：`hryk` 与 `haruyuki`。
+
+## 使用
+
+敲哪个名字行为都一样——**用户可见文案里出现的始终是长名**。
+
+```bash
+hryk --version           # {{VERSION}} (Haruyuki)
+haruyuki --version       # {{VERSION}} (Haruyuki)
+
+hryk --new               # 新建会话
+haruyuki --agent <id>    # 打开指定 agent
+```
+
+## 版本
+
+本包版本 `{{VERSION}}` 与 `{{MAIN}}@{{VERSION}}` **精确锁定**，短名不可能拉到不匹配的主体包。
+每次发布，两个包永远同版本号。
+
+## 升级
+
+```bash
+npm install -g hryk@latest
+```
+
+## 文档与数据
+
+文档、配置与数据都在主体包：
+
+- 用法与配置：见 [`haruyuki` 的 README](https://www.npmjs.com/package/haruyuki)
+- 本地数据目录：`~/.haruyuki`（两个命令名共用同一个）
+
+## 许可证
+
+Apache-2.0，与主体包一致。
