@@ -19,10 +19,9 @@ import {
   type PersonalityId,
 } from "@/agent/personality-presets";
 import { getBackend } from "@/backend";
-import { formatRecallSettingsLine } from "@/cli/commands/recall";
+import { applyRecallSettingsChange } from "@/cli/commands/recall";
 import type { CompactionSelection } from "@/cli/components/CompactionSelector";
 import type { ModelSelectorSelection } from "@/cli/components/ModelSelector";
-import { setRecallDisplay } from "@/cli/components/transcript-display-state";
 import {
   type ContextTracker,
   resetContextHistory,
@@ -36,7 +35,7 @@ import { formatPersonalitySwappedMessage } from "@/cli/helpers/personality-pendi
 import { experimentManager } from "@/experiments/manager";
 import type { ExperimentId } from "@/experiments/types";
 import { OPENAI_CODEX_PROVIDER_NAME } from "@/providers/openai-codex-provider";
-import { readRecallSettings } from "@/recall-settings";
+import { formatRecallSettingsLine } from "@/recall-settings";
 import { type Settings, settingsManager } from "@/settings-manager";
 import { getToolNames } from "@/tools/manager";
 import type { ToolsetName, ToolsetPreference } from "@/tools/toolset";
@@ -1335,16 +1334,12 @@ export function useConfigurationHandlers(ctx: ConfigurationHandlersContext) {
         consumeOverlayCommand("recall") ??
         commandRunner.start("/recall", "Saving recall settings...");
       try {
-        settingsManager.updateSettings(updates);
-        // Keep the display store in step with the saved tier: the transcript reads
-        // it on every render, and the keyboard handler reads it to decide whether
-        // Ctrl+R has anything to expand.
-        setRecallDisplay(readRecallSettings().display);
+        // The shared write, not `updateSettings`: re-enabling recall here has to
+        // clear the breaker exactly as `/recall on` does, and the transcript's
+        // display store has to move with the tier.
+        const updated = applyRecallSettingsChange(updates);
         setActiveOverlay(null);
-        cmd.finish(
-          `Updated.\n  ${formatRecallSettingsLine(readRecallSettings())}`,
-          true,
-        );
+        cmd.finish(`Updated.\n  ${formatRecallSettingsLine(updated)}`, true);
       } catch (error) {
         cmd.fail(
           `Failed to save recall settings: ${

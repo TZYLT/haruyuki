@@ -17,6 +17,8 @@ import {
   handleRecallCommand,
   parseRecallCommand,
   RECALL_COMMAND_USAGE,
+  RECALL_LOCAL_ONLY,
+  RECALL_PROBE_NEEDS_AGENT,
   type RecallCommandDeps,
 } from "@/cli/commands/recall";
 import { settingsManager } from "@/settings-manager";
@@ -57,6 +59,17 @@ function printUsage(): void {
       "    running it cannot change what the next turn injects.",
     ].join("\n"),
   );
+}
+
+/** The first value that is not blank: `""` is a mistyped flag, not a scope. */
+function firstNonBlank(
+  ...values: Array<string | null | undefined>
+): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
 }
 
 function parseRecallArgs(argv: string[]) {
@@ -106,33 +119,55 @@ export async function runRecallSubcommand(
     return 1;
   }
 
+  const requestedAgent = firstNonBlank(
+    parsed.values.agent,
+    process.env.HARUYUKI_AGENT_ID,
+    process.env.AGENT_ID,
+    settingsManager.getSettings().lastAgent,
+  );
+  const conversationId = firstNonBlank(
+    parsed.values.conversation,
+    process.env.CONVERSATION_ID,
+  );
+
+  const needsStore =
+    command.kind === "status" ||
+    command.kind === "build" ||
+    command.kind === "probe";
   const backend = deps.backend ?? getBackend();
-  if (!(backend instanceof LocalBackend)) {
-    console.error(
-      "Passive recall is local-backend only: it searches this machine's transcripts and memory files.",
-    );
+  // Only the kinds that read the store need a local backend: every knob is a global
+  // setting, and a script flipping `display` should not need a working store.
+  if (needsStore && !(backend instanceof LocalBackend)) {
+    console.error(RECALL_LOCAL_ONLY);
     return 1;
   }
 
-  const agentId =
-    parsed.values.agent ??
-    process.env.HARUYUKI_AGENT_ID ??
-    process.env.AGENT_ID ??
-    settingsManager.getSettings().lastAgent ??
-    undefined;
-  const conversationId =
-    parsed.values.conversation ?? process.env.CONVERSATION_ID ?? undefined;
-
   // No resolved agent means "no scope", which `status` reports as the whole store
-  // and `now` refuses with a message. Passing an empty id would work by accident
+  // and `now` refuses. Passing an empty id would work by accident
   // (`loadRecallCorpus` treats a falsy filter as no filter) and hide that choice.
-  const output = await handleRecallCommand(
-    positionals,
-    agentId === undefined
-      ? undefined
-      : { agentId, conversationId: conversationId ?? null },
-    { backend },
-  );
+  if (command.kind === "probe" && requestedAgent === undefined) {
+    console.error(RECALL_PROBE_NEEDS_AGENT);
+    return 1;
+  }
+
+  let output: string;
+  try {
+    output = await handleRecallCommand(
+      positionals,
+      requestedAgent === undefined
+        ? undefined
+        : { agentId: requestedAgent, conversationId: conversationId ?? null },
+      { backend },
+    );
+  } catch (error) {
+    // `build` walks every transcript and `status` loads the whole corpus: an I/O
+    // failure has to leave the process with a message and a failure exit code, not
+    // an unhandled rejection.
+    console.error(
+      `Error: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return 1;
+  }
   console.log(output);
   return 0;
 }

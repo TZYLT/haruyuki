@@ -11,14 +11,16 @@ import { __testSetBackend } from "@/backend";
 import { FakeHeadlessBackend } from "@/backend/dev/fake-headless-backend";
 import { recallIndexPath } from "@/backend/local/recall-index";
 import {
-  formatRecallSettingsLine,
   handleRecallCommand,
   parseRecallCommand,
   parseRecallCount,
   parseRecallRatio,
   RECALL_COMMAND_USAGE,
 } from "@/cli/commands/recall";
-import { readRecallSettings } from "@/recall-settings";
+import {
+  formatRecallSettingsLine,
+  readRecallSettings,
+} from "@/recall-settings";
 import {
   RECALL_BREAKER_THRESHOLD,
   readRecallRuntimeStatus,

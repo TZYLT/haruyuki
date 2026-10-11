@@ -3200,8 +3200,8 @@ ${SYSTEM_REMINDER_CLOSE}
       // Feature ②'s row for this turn. The injection exists only now, and the
       // optimistic user row is already committed, so it gets a row of its own —
       // appended after `transcriptStartLineIndex` above, which must keep pointing
-      // at the user's line.
-      appendRecallLine(buffersRef.current, sharedReminderParts);
+      // at the user's line. The id is kept: the turn can still be cancelled.
+      const recallId = appendRecallLine(buffersRef.current, reminderParts);
 
       // Check for pending approvals before sending message (skip if we already have
       // a queued approval response to send first).
@@ -3219,14 +3219,13 @@ ${SYSTEM_REMINDER_CLOSE}
             userCancelledRef.current ||
             abortControllerRef.current?.signal.aborted
           ) {
-            // User hit ESC during the check - abort and clean up
-            if (optimisticUserLineId) {
-              buffersRef.current.byId.delete(optimisticUserLineId);
-              const orderIndex =
-                buffersRef.current.order.indexOf(optimisticUserLineId);
-              if (orderIndex !== -1) {
-                buffersRef.current.order.splice(orderIndex, 1);
-              }
+            // User hit ESC during the check - abort and clean up. The recall row
+            // belongs to this turn too, so it goes with the user's line.
+            for (const lineId of [optimisticUserLineId, recallId]) {
+              if (!lineId) continue;
+              buffersRef.current.byId.delete(lineId);
+              const at = buffersRef.current.order.indexOf(lineId);
+              if (at !== -1) buffersRef.current.order.splice(at, 1);
             }
             setStreaming(false);
             refreshDerived();

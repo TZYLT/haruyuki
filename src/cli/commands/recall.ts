@@ -16,14 +16,13 @@ import { LocalBackend } from "@/backend/local/local-backend";
 import { buildRecallCorpus } from "@/backend/local/recall-build";
 import { setRecallDisplay } from "@/cli/components/transcript-display-state";
 import {
+  formatRecallSettingsLine,
   type ResolvedRecallSettings,
   readRecallSettings,
+  recallOptionsFromSettings,
 } from "@/recall-settings";
-import {
-  isRecallDisplay,
-  type RecallDisplay,
-} from "@/reminders/recall-display";
-import type { RecallDiversity } from "@/reminders/recall-port";
+import { isRecallDisplay } from "@/reminders/recall-display";
+import { isRecallDiversity } from "@/reminders/recall-port";
 import { formatRecallProbeLines } from "@/reminders/recall-probe";
 import { resetRecallRuntime } from "@/reminders/recall-runtime";
 import { runRecall } from "@/reminders/recall-service";
@@ -68,8 +67,6 @@ export type RecallCommand =
   | { kind: "enable" }
   | { kind: "disable" };
 
-const DIVERSITIES: readonly RecallDiversity[] = ["none", "file", "split"];
-
 /**
  * A non-negative whole number, or `null` when the text is not one.
  *
@@ -104,6 +101,17 @@ function error(message: string): RecallCommand {
   return { kind: "error", message };
 }
 
+/**
+ * The value of a one-value knob, or `undefined` when it is missing or has company.
+ *
+ * A trailing word is refused rather than ignored, which is what `on`, `off`,
+ * `status`, `build` and `chars` already do: `/recall timeout 500 junk` looking
+ * like it worked leaves the user believing they set a knob they did not.
+ */
+function oneValue(rest: string[]): string | undefined {
+  return rest.length === 1 ? rest[0] : undefined;
+}
+
 export function parseRecallCommand(args: string[]): RecallCommand {
   const [head, ...rest] = args;
   if (head === undefined || head === "help") return { kind: "usage" };
@@ -132,7 +140,7 @@ export function parseRecallCommand(args: string[]): RecallCommand {
         : { kind: "probe", query };
     }
     case "timeout": {
-      const value = parseRecallCount(rest[0]);
+      const value = parseRecallCount(oneValue(rest));
       return value === null
         ? error(
             "`/recall timeout` needs milliseconds: /recall timeout 1000 (0 = no limit).",
@@ -144,7 +152,7 @@ export function parseRecallCommand(args: string[]): RecallCommand {
           };
     }
     case "dedup": {
-      const value = parseRecallCount(rest[0]);
+      const value = parseRecallCount(oneValue(rest));
       return value === null
         ? error(
             "`/recall dedup` needs a number of turns: /recall dedup 10 (0 = no window).",
@@ -156,7 +164,7 @@ export function parseRecallCommand(args: string[]): RecallCommand {
           };
     }
     case "limit": {
-      const value = parseRecallCount(rest[0]);
+      const value = parseRecallCount(oneValue(rest));
       return value === null
         ? error(
             "`/recall limit` needs a number of passages: /recall limit 3 (0 = none).",
@@ -164,7 +172,7 @@ export function parseRecallCommand(args: string[]): RecallCommand {
         : { kind: "set", label: "limit", updates: { recallLimit: value } };
     }
     case "excerpt": {
-      const value = parseRecallCount(rest[0]);
+      const value = parseRecallCount(oneValue(rest));
       return value === null
         ? error(
             "`/recall excerpt` needs a line count: /recall excerpt 2 (0 = the hit line only).",
@@ -176,7 +184,7 @@ export function parseRecallCommand(args: string[]): RecallCommand {
           };
     }
     case "ratio": {
-      const value = parseRecallRatio(rest[0]);
+      const value = parseRecallRatio(oneValue(rest));
       return value === null
         ? error(
             "`/recall ratio` needs a number from 0 to 1: /recall ratio 0.35.",
@@ -188,22 +196,22 @@ export function parseRecallCommand(args: string[]): RecallCommand {
           };
     }
     case "diversity": {
-      const value = rest[0];
-      return DIVERSITIES.includes(value as RecallDiversity)
+      const value = oneValue(rest);
+      return isRecallDiversity(value)
         ? {
             kind: "set",
             label: "diversity",
-            updates: { recallDiversity: value as RecallDiversity },
+            updates: { recallDiversity: value },
           }
         : error("`/recall diversity` needs one of: none, file, split.");
     }
     case "display": {
-      const value = rest[0];
+      const value = oneValue(rest);
       return isRecallDisplay(value)
         ? {
             kind: "set",
             label: "display",
-            updates: { recallDisplay: value as RecallDisplay },
+            updates: { recallDisplay: value },
           }
         : error("`/recall display` needs one of: silent, summary, full.");
     }
@@ -244,17 +252,13 @@ export function parseRecallCommand(args: string[]): RecallCommand {
   }
 }
 
-/** One line naming every effective knob; used by the receipt and by `status`. */
-export function formatRecallSettingsLine(
-  settings: ResolvedRecallSettings,
-): string {
-  return `limit ${settings.limit} · excerpt ${settings.excerptCharacters}/${settings.totalCharacters} chars · ratio ${settings.minScoreRatio} · diversity ${settings.diversity} · dedup ${settings.dedupTurns} turns · timeout ${
-    settings.timeoutMs === 0 ? "none" : `${settings.timeoutMs}ms`
-  } · display ${settings.display}`;
-}
-
 const RECALL_LOCAL_ONLY =
   "Passive recall is local-backend only: it searches this machine's transcripts and memory files.";
+
+/** A probe has to search *somewhere*; the message is shared with the CLI subcommand. */
+const RECALL_PROBE_NEEDS_AGENT = "A recall probe needs an active agent.";
+
+export { RECALL_LOCAL_ONLY, RECALL_PROBE_NEEDS_AGENT };
 
 export interface RecallCommandDeps {
   backend?: Backend;
@@ -267,6 +271,30 @@ function requireSettings(): string | null {
   } catch {
     return "Settings are not loaded yet.";
   }
+}
+
+/**
+ * Write recall settings the way every surface must.
+ *
+ * Three things move together and a surface that writes only the first leaves the
+ * other two behind: the settings record, the display store the transcript reads on
+ * every render, and the in-memory breaker. The breaker matters because `/recall on`
+ * is the only recovery from a trip (the trip is deliberately not persisted), so
+ * "on" has to mean "clear the trip" wherever it is said — the picker is the same
+ * promise as the command.
+ */
+export function applyRecallSettingsChange(
+  updates: Partial<Settings>,
+): ResolvedRecallSettings {
+  settingsManager.updateSettings(updates);
+  if (updates.recallEnabled === true) resetRecallRuntime();
+  const updated = readRecallSettings();
+  // The transcript reads its tier from the display store rather than from settings
+  // on every render, so a change has to be pushed to it — the same thing
+  // `/system-reminders` does for its own toggle. A headless process never renders
+  // it and the write is inert.
+  setRecallDisplay(updated.display);
+  return updated;
 }
 
 /**
@@ -295,21 +323,13 @@ export async function handleRecallCommand(
   ) {
     const unloaded = requireSettings();
     if (unloaded) return unloaded;
-    if (command.kind === "enable") {
-      settingsManager.updateSettings({ recallEnabled: true });
-      // The trip is in-memory, and only `/recall on` clears it (《26》§6.6).
-      resetRecallRuntime();
-    } else if (command.kind === "disable") {
-      settingsManager.updateSettings({ recallEnabled: false });
-    } else {
-      settingsManager.updateSettings(command.updates);
-    }
-    const updated = readRecallSettings();
-    // The transcript reads its tier from the display store rather than from
-    // settings on every render, so a change has to be pushed to it — the same thing
-    // `/system-reminders` does for its own toggle. A headless process never renders
-    // it and the write is inert.
-    setRecallDisplay(updated.display);
+    const updated = applyRecallSettingsChange(
+      command.kind === "set"
+        ? command.updates
+        : // `/recall on` also clears the breaker; the helper is what makes that
+          // true for every surface rather than just this one.
+          { recallEnabled: command.kind === "enable" },
+    );
     const what =
       command.kind === "set"
         ? `Updated ${command.label}.`
@@ -356,7 +376,7 @@ export async function handleRecallCommand(
   // `probe`: the manual trial run. It answers "what can recall find for this
   // query", so nothing is suppressed and nothing is recorded — see `runRecall`'s
   // `dryRun`.
-  if (!scope?.agentId) return "A recall probe needs an active agent.";
+  if (!scope?.agentId) return RECALL_PROBE_NEEDS_AGENT;
   const probeSettings = readRecallSettings();
   const decision = await runRecall({
     backend,
@@ -366,14 +386,10 @@ export async function handleRecallCommand(
     // Unused under `dryRun`: neither the window read nor the write happens.
     currentTurn: 0,
     dryRun: true,
+    // One builder for a full option record, so a new tunable cannot be honoured by
+    // the turn path and silently defaulted here.
     options: {
-      limit: probeSettings.limit,
-      excerptCharacters: probeSettings.excerptCharacters,
-      totalCharacters: probeSettings.totalCharacters,
-      minScoreRatio: probeSettings.minScoreRatio,
-      diversity: probeSettings.diversity,
-      excerptLines: probeSettings.excerptLines,
-      timeoutMs: probeSettings.timeoutMs,
+      ...recallOptionsFromSettings(probeSettings),
       // The window is what the probe exists to look past.
       dedupTurns: 0,
     },
