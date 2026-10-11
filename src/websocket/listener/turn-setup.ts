@@ -25,6 +25,7 @@ import { INTERACTIVE_USER_INPUT_TOOL_NAMES } from "@/tools/interactive-policy";
 import { prepareToolExecutionContextForScope } from "@/tools/toolset";
 import { debugWarn, isDebugEnabled } from "@/utils/debug";
 import { detectShellContext } from "@/utils/shell-context";
+import { extractTaskNotificationsForDisplay } from "@/utils/task-notifications";
 import { publishChannelRuntimeToolsForTurn } from "./channel-runtime-tools";
 import { getInboundImageFailureModes } from "./image-policy";
 import { consumeInterruptQueue } from "./interrupts";
@@ -88,7 +89,14 @@ function firstUserInputText(
     const content = "content" in message ? message.content : undefined;
     if (content === undefined || content === null) continue;
     const text = extractTelemetryInputText(content).trim();
-    if (text.length > 0) return text;
+    if (text.length === 0) continue;
+    // The queue flattens a task notification into the same user-role shape as a
+    // real message, so the same rule the TUI uses applies here: the notification
+    // is context the harness wrote, and it is not something the user is asking
+    // for. A message that is nothing but a notification leaves this turn with no
+    // words of its own.
+    const own = extractTaskNotificationsForDisplay(text).cleanedText.trim();
+    if (own.length > 0) return own;
   }
   return undefined;
 }

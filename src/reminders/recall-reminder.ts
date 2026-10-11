@@ -6,12 +6,13 @@ import type { RecallDecision, RecallEntry } from "./recall-port";
  * display layer reads back.
  *
  * The form lives here, not in the display code, because the marker is a contract
- * between two subsystems that never call each other. M4 writes the block into a
- * user message's content; M6 has to find it again in the transcript, where
- * `removeSystemContextBlocks` (`src/cli/helpers/backfill.ts`) strips every
- * `<system-reminder>` body on sight. Keeping the writer and the reader on one
- * constant is what makes "the marker survives" a property of the code rather than
- * a coincidence — {@link parseRecallMarker} is the read half.
+ * between two subsystems that never call each other: M4 writes the block into a
+ * user message's content, M6 has to find it again in the transcript. The transcript
+ * echo strips every other `<system-reminder>` body — `removeSystemContextBlocks` in
+ * `src/cli/helpers/backfill.ts` — and keeps this one whole precisely so the display
+ * layer can read the marker back out of it. Keeping the writer and the reader on one
+ * constant is what makes "the marker survives the trip through history" a property
+ * of the code rather than a coincidence; {@link parseRecallMarker} is the read half.
  *
  * The block is a reminder part, never a system message: every automated
  * notification in this harness is a user-role `<system-reminder>` (AGENTS.md,
@@ -82,6 +83,24 @@ export function recallEntryHeader(entry: RecallEntry): string {
 }
 
 /**
+ * A passage, with anything that would end the envelope taken out of it.
+ *
+ * The block is an envelope: one closing tag ends it, and everything after that
+ * point renders as ordinary user prose. A memory excerpt is raw file text — the
+ * memory workspace is written by the agent itself — so a passage that happens to
+ * contain the closing tag is reachable, and it would spill the rest of the turn
+ * out of the reminder. Transcript text is already stripped of reminder blocks at
+ * ingest, so in practice this only ever rewrites a memory excerpt.
+ *
+ * Only the closing tag needs neutralising: the nesting parser looks for the first
+ * close after an open, so an opening tag inside the text is inert once no close
+ * can be forged.
+ */
+function neutraliseReminderTags(text: string): string {
+  return text.split(SYSTEM_REMINDER_CLOSE).join("<\\/system-reminder>");
+}
+
+/**
  * The injection for `decision`, or `null` when there is nothing to inject.
  *
  * Pure and total: the caller has already paid for the search, so a formatting
@@ -104,7 +123,11 @@ export function formatRecallReminder(decision: RecallDecision): string | null {
     INTRO,
   ];
   entries.forEach((entry, index) => {
-    lines.push("", `[${index + 1}] ${recallEntryHeader(entry)}`, entry.text);
+    lines.push(
+      "",
+      `[${index + 1}] ${recallEntryHeader(entry)}`,
+      neutraliseReminderTags(entry.text),
+    );
   });
   lines.push(SYSTEM_REMINDER_CLOSE);
   return lines.join("\n");
