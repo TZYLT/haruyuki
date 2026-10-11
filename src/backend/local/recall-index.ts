@@ -15,7 +15,10 @@ import {
   transcriptManifestPath,
   transcriptMessagesPath,
 } from "./local-transcript";
-import type { RankableSearchRecord } from "./transcript-search";
+import type {
+  RankableSearchRecord,
+  SearchStopSignal,
+} from "./transcript-search";
 import {
   conversationDirectories,
   conversationSearchRecord,
@@ -140,6 +143,13 @@ export type LoadRecallCorpusOptions = {
   includeHidden?: boolean;
   /** `false` never writes an index; the caller only wants to read or report. */
   maintain?: boolean;
+  /**
+   * Cooperative time budget (feature ②). Loading walks every conversation
+   * directory — a `conversation.json` read, a signature stat, and a sidecar read
+   * each — so it is checked once per conversation; a truncated load returns the
+   * records it has already collected.
+   */
+  shouldStop?: SearchStopSignal;
 };
 
 const REMINDER_BLOCK = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
@@ -449,6 +459,9 @@ export function loadRecallCorpus(
   let conversations = 0;
 
   for (const conversationDir of conversationDirectories(storageDir)) {
+    // A conversation is the unit of work here: three file touches and, on drift,
+    // a full re-ingest. A budget can only be honoured between them.
+    if (options.shouldStop?.()) break;
     const conversation = conversationSearchRecord(
       readJsonFile(join(conversationDir, "conversation.json")),
     );

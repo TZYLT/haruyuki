@@ -20,6 +20,10 @@ import {
   findLastAssistantText,
   toLines,
 } from "@/cli/helpers/accumulator";
+import {
+  formatRecallNoticeLine,
+  takePendingRecallNotice,
+} from "@/reminders/recall-runtime";
 import { telemetry } from "@/telemetry";
 import { trackBoundaryError } from "@/telemetry/error-reporting";
 import type { StopReasonType } from "@/types/protocol_v2";
@@ -238,6 +242,20 @@ async function handleIncomingMessageInner(
       onStatusChange,
       connectionId,
     });
+    // Feature ②: the reminder engine parks one line when recall degraded, ran out
+    // of budget, or tripped its breaker. This layer is the one holding the socket,
+    // so it is the one that can put the line in front of the user. Claiming it
+    // clears it, so a retried turn cannot print twice.
+    const recallNotice = takePendingRecallNotice(runtime.reminderState);
+    if (recallNotice) {
+      emitRecoverableStatusNotice(socket, runtime, {
+        kind: "recall_degraded",
+        message: formatRecallNoticeLine(recallNotice),
+        level: "info",
+        agentId,
+        conversationId,
+      });
+    }
     if (setup.kind === "interrupted") {
       finishTurn({
         stopReason: "cancelled",

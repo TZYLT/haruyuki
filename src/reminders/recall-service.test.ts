@@ -144,4 +144,50 @@ describe("runRecall", () => {
       ).toBeUndefined();
     });
   });
+
+  test("a spent budget returns what it found and says it was cut short", async () => {
+    await withRecallFixture(async (fixture) => {
+      // An already-expired budget is what a slow turn's second source sees. The
+      // deadline is injected rather than simulated because `Date.now` cannot be
+      // made to advance inside one synchronous run.
+      const decision = await runRecall({
+        backend: fixture.backend,
+        agentId: fixture.agentId,
+        conversationId: fixture.currentConversationId,
+        userText: QUERY,
+        currentTurn: 1,
+        deadline: { timeoutMs: 1_000, expired: () => true },
+      });
+
+      expect(decision.timedOut).toBe(true);
+      // Not one entry: both sources stop before they read anything, and the
+      // deadline is reported as the reason rather than as an empty corpus.
+      expect(decision.entries).toEqual([]);
+      expect(decision.diagnostics.sources).toHaveLength(2);
+      expect(
+        decision.diagnostics.sources.every(
+          (source) => source.status === "degraded",
+        ),
+      ).toBe(true);
+      for (const source of decision.diagnostics.sources) {
+        expect(source.reason).toContain("deadline expired");
+      }
+      expect(decision.reason).toContain("deadline expired");
+    });
+  });
+
+  test("a budget of zero is unlimited, not instant", async () => {
+    await withRecallFixture(async (fixture) => {
+      const decision = await runRecall({
+        backend: fixture.backend,
+        agentId: fixture.agentId,
+        conversationId: fixture.currentConversationId,
+        userText: QUERY,
+        currentTurn: 1,
+        options: { limit: 5, timeoutMs: 0 },
+      });
+      expect(decision.timedOut).toBeUndefined();
+      expect(decision.status).toBe("injected");
+    });
+  });
 });

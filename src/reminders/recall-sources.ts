@@ -6,12 +6,16 @@ import {
   readRecallMessageTexts,
   transcriptRecallSnippet,
 } from "@/backend/local/recall-snippets";
-import { rankMatches } from "@/backend/local/transcript-search";
+import {
+  rankMatches,
+  type SearchStopSignal,
+} from "@/backend/local/transcript-search";
 import type {
   RecallCandidate,
   RecallSourceId,
   RecallSourceOutcome,
   RecallSourcePort,
+  RecallSourceStatus,
 } from "./recall-port";
 
 /**
@@ -33,18 +37,25 @@ export type RecallSourceInput = {
   candidateLimit: number;
   neighbors: number;
   excerptLines: number;
+  /**
+   * The turn's cooperative time budget. A source that is stopped part-way
+   * reports `degraded` instead of `searched`/`empty`, because a truncated scan
+   * and a complete one that happened to score nothing mean different things.
+   */
+  shouldStop?: SearchStopSignal;
 };
 
 function outcome(
   source: RecallSourceId,
   candidates: RecallCandidate[],
   reason?: string,
+  status?: RecallSourceStatus,
 ): RecallSourceOutcome {
   return {
     candidates,
     diagnostic: {
       source,
-      status: candidates.length > 0 ? "searched" : "empty",
+      status: status ?? (candidates.length > 0 ? "searched" : "empty"),
       candidates: candidates.length,
       ...(reason === undefined ? {} : { reason }),
     },
@@ -79,6 +90,7 @@ function transcriptSource(input: RecallSourceInput): RecallSourcePort {
         const corpus = loadRecallCorpus(input.storageDir, {
           agentId: request.scope.agentId,
           currentConversationId: request.scope.currentConversationId,
+          shouldStop: input.shouldStop,
         });
         const searchable = corpus.records.filter(
           (record) =>
@@ -87,10 +99,14 @@ function transcriptSource(input: RecallSourceInput): RecallSourcePort {
               input.excludedMessageIds.has(record.messageId)
             ),
         );
-        const ranked = rankMatches(searchable, {
-          terms: [...request.terms.terms],
-          phrases: [...request.terms.phrases],
-        })
+        const ranked = rankMatches(
+          searchable,
+          {
+            terms: [...request.terms.terms],
+            phrases: [...request.terms.phrases],
+          },
+          { shouldStop: input.shouldStop },
+        )
           .sort(
             (left, right) =>
               right.score - left.score ||
@@ -102,6 +118,7 @@ function transcriptSource(input: RecallSourceInput): RecallSourcePort {
         const textsByConversation = new Map<string, RecallMessageText[]>();
         const candidates: RecallCandidate[] = [];
         for (const record of ranked) {
+          if (input.shouldStop?.()) break;
           let texts = textsByConversation.get(record.conversationKey);
           if (!texts) {
             texts = readRecallMessageTexts(
@@ -130,12 +147,26 @@ function transcriptSource(input: RecallSourceInput): RecallSourcePort {
         }
 
         const unavailable = corpus.unavailable.length;
+        const reasons: string[] = [];
+        if (unavailable > 0) {
+          reasons.push(`${unavailable} conversation(s) had no usable index`);
+        }
+        const degraded = input.shouldStop?.() === true;
+        if (degraded) reasons.push("the recall deadline expired");
+        // "No index anywhere in scope" is the source being unable to run, not an
+        // empty corpus: nothing was searched. It is the state a fresh install is
+        // in, and the only signal `/recall build` is the fix for, so it must not
+        // be flattened into "nothing matched".
+        const indexless =
+          !degraded &&
+          candidates.length === 0 &&
+          corpus.records.length === 0 &&
+          unavailable > 0;
         return outcome(
           "transcript",
           candidates,
-          unavailable > 0
-            ? `${unavailable} conversation(s) had no usable index`
-            : undefined,
+          reasons.length > 0 ? reasons.join("; ") : undefined,
+          degraded ? "degraded" : indexless ? "unavailable" : undefined,
         );
       } catch (error) {
         return failed("transcript", error);
@@ -167,7 +198,11 @@ function memorySource(input: RecallSourceInput): RecallSourcePort {
             terms: [...request.terms.terms],
             phrases: [...request.terms.phrases],
           },
-          { excerptLines: input.excerptLines, limit: input.candidateLimit },
+          {
+            excerptLines: input.excerptLines,
+            limit: input.candidateLimit,
+            shouldStop: input.shouldStop,
+          },
         );
         const candidates: RecallCandidate[] = result.entries.map((entry) => ({
           source: "memory" as const,
@@ -181,12 +216,19 @@ function memorySource(input: RecallSourceInput): RecallSourcePort {
           text: entry.text,
           score: entry.score,
         }));
+        const degraded = input.shouldStop?.() === true;
+        const reasons: string[] = [];
+        if (result.stats.skippedFiles > 0) {
+          reasons.push(
+            `${result.stats.skippedFiles} file(s) were not readable text`,
+          );
+        }
+        if (degraded) reasons.push("the recall deadline expired");
         return outcome(
           "memory",
           candidates,
-          result.stats.skippedFiles > 0
-            ? `${result.stats.skippedFiles} file(s) were not readable text`
-            : undefined,
+          reasons.length > 0 ? reasons.join("; ") : undefined,
+          degraded ? "degraded" : undefined,
         );
       } catch (error) {
         return failed("memory", error);

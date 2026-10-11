@@ -244,6 +244,17 @@ export type ParsedQuery = {
   phrases: string[];
 };
 
+/**
+ * A cooperative stop signal for the long synchronous walks in this module.
+ *
+ * Scoring a full index is a single unbroken loop, so a caller with a time budget
+ * can only be served by checking between iterations (feature ②, 《27》M5-1). The
+ * signal is a bare predicate rather than a type owned by the recall feature
+ * because this module must stay free of any dependency on who is asking; a
+ * caller with no budget simply omits it, and every existing caller does.
+ */
+export type SearchStopSignal = () => boolean;
+
 const CJK_RUN =
   /^[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}]+$/u;
 const CJK_CHARACTER =
@@ -421,7 +432,9 @@ export function parseQuery(query: string): ParsedQuery {
 export function rankMatches<T extends RankableSearchRecord>(
   records: readonly T[],
   query: ParsedQuery,
+  options: { shouldStop?: SearchStopSignal } = {},
 ): Array<T & { score: number }> {
+  const shouldStop = options.shouldStop;
   const phraseMatches = records.filter((record) =>
     query.phrases.every((phrase) =>
       matchesPhrase(record.normalizedText, phrase),
@@ -438,6 +451,9 @@ export function rankMatches<T extends RankableSearchRecord>(
   const corpus = historicalRecords.length > 0 ? historicalRecords : records;
   const documentFrequency = new Map<string, number>();
   for (const term of query.terms) {
+    // Document frequency walks the whole corpus once per term — the second
+    // largest cost after scoring itself, so it gets a checkpoint too.
+    if (shouldStop?.()) break;
     documentFrequency.set(
       term,
       corpus.filter((record) => hasTerm(record, term)).length,
@@ -449,7 +465,12 @@ export function rankMatches<T extends RankableSearchRecord>(
   const k1 = 1.2;
   const b = 0.75;
 
-  return candidates.map((record) => {
+  const scored: Array<T & { score: number }> = [];
+  for (const record of candidates) {
+    // Stopping here returns the scores computed so far: a truncated ranking is
+    // still a ranking, and the caller has already decided what to do with a
+    // partial result (it marks the run degraded and injects what it has).
+    if (shouldStop?.()) break;
     let score = 0;
     for (const term of query.terms) {
       const frequency = termOccurrences(record, term);
@@ -469,8 +490,9 @@ export function rankMatches<T extends RankableSearchRecord>(
     // Quotes remain strict filters and receive a boost so exact phrasing wins
     // when mixed with optional unquoted terms.
     score += query.phrases.length * 2;
-    return { ...record, score: score * (record.isSearchEcho ? 0.1 : 1) };
-  });
+    scored.push({ ...record, score: score * (record.isSearchEcho ? 0.1 : 1) });
+  }
+  return scored;
 }
 
 function dateInRange(

@@ -167,8 +167,13 @@ import {
 } from "./reminders/engine";
 import { runPostTurnMemorySync } from "./reminders/memory-git-sync";
 import {
+  formatRecallNoticeLine,
+  takePendingRecallNotice,
+} from "./reminders/recall-runtime";
+import {
   createSharedReminderState,
   enqueueMemoryGitSyncReminder,
+  type SharedReminderState,
 } from "./reminders/state";
 import { getCurrentWorkingDirectory } from "./runtime-context";
 import { settingsManager, shouldPersistSessionState } from "./settings-manager";
@@ -292,6 +297,20 @@ function trackTelemetryUserInputFromContent(
     return;
   }
   telemetry.trackUserInput(inputText, "user", modelId);
+}
+
+/**
+ * Feature ②: print the recall degradation/timeout/breaker line, if the turn left
+ * one.
+ *
+ * Headless has no transcript to attach it to and no UI to park it in, so stderr
+ * is the outlet: it is where every other non-fatal turn notice goes (the
+ * conversation-busy retry above, for one), and it stays out of stdout, which
+ * carries the result a script is parsing.
+ */
+function reportRecallNoticeToStderr(state: SharedReminderState): void {
+  const notice = takePendingRecallNotice(state);
+  if (notice) console.error(formatRecallNoticeLine(notice));
 }
 
 function shouldTrackTelemetryForQueuedMessage(
@@ -1779,6 +1798,7 @@ export async function handleHeadlessCommand(
       // subagent mode never reaches this provider at all.
       userInputText: isAgentLaunch || values["from-agent"] ? undefined : prompt,
     });
+    reportRecallNoticeToStderr(sharedReminderState);
     for (const part of sharedReminderParts) {
       pushPart(part.text);
     }
@@ -4080,6 +4100,7 @@ async function runBidirectionalMode(
             ) ?? "",
           ),
         });
+        reportRecallNoticeToStderr(sharedReminderState);
         const turnStartModContext = createHeadlessModContext({
           agent,
           conversationId,

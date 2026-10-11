@@ -16,6 +16,13 @@ import {
   isRecallReminderText,
   parseRecallMarker,
 } from "@/reminders/recall-reminder";
+import {
+  RECALL_BREAKER_THRESHOLD,
+  readRecallRuntimeStatus,
+  recallBreakerTripped,
+  recordRecallDecision,
+  resetRecallRuntime,
+} from "@/reminders/recall-runtime";
 import { runRecall } from "@/reminders/recall-service";
 import { createSharedReminderState } from "@/reminders/state";
 import { settingsManager } from "@/settings-manager";
@@ -180,6 +187,10 @@ describe("the recall reminder provider", () => {
   });
 
   afterEach(async () => {
+    // The breaker is process-wide module state and Bun shares a module registry
+    // across test files in one worker, so a test that trips it would otherwise
+    // switch recall off for every file that runs after this one.
+    resetRecallRuntime();
     __testSetBackend(null);
     await settingsManager.reset();
     await rm(testHomeDir, { recursive: true, force: true });
@@ -336,6 +347,121 @@ describe("the recall reminder provider", () => {
     expect(decision.entries).toEqual([]);
     expect(decision.reason).toContain("unreadable conversation record");
   });
+
+  test("parks one index-missing line without losing the memory source", async () => {
+    await withRecallFixture(async (fixture) => {
+      // No sidecars at all: the state a fresh install is in, where the transcript
+      // source can only report `unavailable` while the memory scan still works.
+      for (const conversationDir of [
+        await conversationDirFor(
+          fixture.storageDir,
+          fixture.currentConversationId,
+        ),
+        join(fixture.storageDir, "conversations", fixture.historyDirectory),
+      ]) {
+        await rm(join(conversationDir, "recall-index.json"), { force: true });
+      }
+
+      __testSetBackend(fixture.backend);
+      const state = createSharedReminderState();
+      const context = () =>
+        recallContext({
+          agentId: fixture.agentId,
+          conversationId: fixture.currentConversationId,
+          state,
+          userInputText: RECALL_FIXTURE_QUERY,
+        });
+
+      // Degradation is not failure: what the memory source found is still
+      // injected, and the user is told once why the transcript side is silent.
+      state.turnCount = 1;
+      const text = await sharedReminderProviders.recall(context());
+      expect(text).not.toBeNull();
+      expect(parseRecallMarker(text ?? "")?.memory).toBeGreaterThan(0);
+      expect(state.pendingRecallNotice).toEqual({ kind: "index-missing" });
+      expect(readRecallRuntimeStatus().consecutiveFailures).toBe(0);
+
+      // The condition persists until `build` runs, so the line does not.
+      state.pendingRecallNotice = null;
+      state.turnCount = 2;
+      await sharedReminderProviders.recall(context());
+      expect(state.pendingRecallNotice).toBeNull();
+    });
+  });
+
+  test("counts a real failure and hands the reason to the user", async () => {
+    await withRecallFixture(async (fixture) => {
+      class UnreadableScopeBackend extends LocalBackend {
+        override async getInContextMessageIds(): Promise<string[]> {
+          throw new Error("conversation record is unreadable");
+        }
+      }
+      __testSetBackend(
+        new UnreadableScopeBackend({
+          storageDir: fixture.storageDir,
+          executionMode: "deterministic",
+        }),
+      );
+      const state = createSharedReminderState();
+      state.turnCount = 1;
+
+      expect(
+        await sharedReminderProviders.recall(
+          recallContext({
+            agentId: fixture.agentId,
+            conversationId: fixture.currentConversationId,
+            state,
+            userInputText: RECALL_FIXTURE_QUERY,
+          }),
+        ),
+      ).toBeNull();
+      expect(state.pendingRecallNotice).toEqual({
+        kind: "failed",
+        reason: "conversation record is unreadable",
+      });
+      expect(readRecallRuntimeStatus().consecutiveFailures).toBe(1);
+      expect(readRecallRuntimeStatus().lastFailureReason).toBe(
+        "conversation record is unreadable",
+      );
+    });
+  });
+
+  test("does not search at all once the breaker has tripped", async () => {
+    await withRecallFixture(async (fixture) => {
+      __testSetBackend(fixture.backend);
+      for (let index = 0; index < RECALL_BREAKER_THRESHOLD; index += 1) {
+        recordRecallDecision({
+          entries: [],
+          status: "failed",
+          reason: "boom",
+          diagnostics: { threshold: 0, candidates: 0, sources: [] },
+        });
+      }
+      expect(recallBreakerTripped()).toBe(true);
+
+      const state = createSharedReminderState();
+      state.turnCount = 1;
+      const text = await sharedReminderProviders.recall(
+        recallContext({
+          agentId: fixture.agentId,
+          conversationId: fixture.currentConversationId,
+          state,
+          userInputText: RECALL_FIXTURE_QUERY,
+        }),
+      );
+
+      // Silent, and not a second time: the trip was already reported for this
+      // state, and a tripped breaker must cost nothing per turn.
+      expect(text).toBeNull();
+      expect(state.pendingRecallNotice).toBeNull();
+      expect(
+        await readInjectedWindow(
+          fixture.storageDir,
+          fixture.currentConversationId,
+        ),
+      ).toBeUndefined();
+    });
+  });
 });
 
 describe("the recall reminder in the engine", () => {
@@ -343,6 +469,9 @@ describe("the recall reminder in the engine", () => {
   let testHomeDir: string;
 
   beforeEach(async () => {
+    // Fresh breaker for the same reason the provider block resets it in
+    // `afterEach`: module state outlives this file.
+    resetRecallRuntime();
     await settingsManager.reset();
     testHomeDir = await mkdtemp(join(tmpdir(), "haru-recall-engine-"));
     process.env.HOME = testHomeDir;
@@ -350,6 +479,7 @@ describe("the recall reminder in the engine", () => {
   });
 
   afterEach(async () => {
+    resetRecallRuntime();
     __testSetBackend(null);
     await settingsManager.reset();
     await rm(testHomeDir, { recursive: true, force: true });

@@ -6,6 +6,7 @@ import {
 } from "@/agent/context";
 import { __testSetBackend } from "@/backend";
 import { DEFAULT_PERMISSION_MODE } from "@/permissions/mode";
+import { resetRecallRuntime } from "@/reminders/recall-runtime";
 import { settingsManager } from "@/settings-manager";
 import {
   RECALL_FIXTURE_QUERY,
@@ -110,6 +111,9 @@ test("turn setup recalls against the inbound user's own words", async () => {
 
     try {
       await settingsManager.initialize();
+      // The breaker is process-wide module state shared by every test file in a
+      // worker; a file that tripped it must not switch recall off for this one.
+      resetRecallRuntime();
 
       // A turn whose words do not match anything recalls nothing. This is what
       // makes the next assertion about the *inbound text* rather than about the
@@ -124,6 +128,7 @@ test("turn setup recalls against the inbound user's own words", async () => {
       // Injection is a pure prepend: the user's own message is still there.
       expect(injected).toContain(RECALL_FIXTURE_QUERY);
     } finally {
+      resetRecallRuntime();
       disposeListenerModAdapter(listener);
       __listenerWarmupTestUtils.resetWarmupDepsForTests();
       __listenerModAdapterTestUtils.resetForTests();

@@ -1,4 +1,5 @@
 import { getLocalBackendMemoryFilesystemRoot } from "@/backend/local/paths";
+import { createRecallDeadline, type RecallDeadline } from "./recall-deadline";
 import { selectRecallEntries } from "./recall-orchestrator";
 import {
   RECALL_DEFAULTS,
@@ -33,6 +34,12 @@ import { buildRecallSources } from "./recall-sources";
  * Nothing in here throws. A source that fails contributes no candidates and one
  * diagnostic line; the turn continues. That is invariant I7: recall may never be
  * the reason a message does not get sent.
+ *
+ * A turn that runs out of its budget returns what it has and says so: the
+ * decision carries `timedOut`, and any source that was cut short reports
+ * `degraded` instead of `searched`. Both are the caller's signal, not this
+ * function's policy — the breaker and the user-visible line live in
+ * `recall-runtime.ts`.
  */
 
 export type RecallRequest = {
@@ -57,6 +64,13 @@ export type RecallRequest = {
   queryOptions?: Partial<RecallQueryOptions>;
   /** Defaults to on; `false` keeps the transcript source only. */
   memoryEnabled?: boolean;
+  /**
+   * An already-started budget. Omitted by the turn path, which lets
+   * `options.timeoutMs` define one; supplied by callers that want to share a
+   * budget — and by tests, which cannot make `Date.now` advance inside one
+   * synchronous run.
+   */
+  deadline?: RecallDeadline;
 };
 
 function resolveOptions(options?: Partial<RecallOptions>): RecallOptions {
@@ -77,6 +91,9 @@ function resolveOptions(options?: Partial<RecallOptions>): RecallOptions {
     candidateLimit: Math.max(1, Math.trunc(resolved.candidateLimit)),
     neighbors: Math.max(0, Math.trunc(resolved.neighbors)),
     excerptLines: Math.max(0, Math.trunc(resolved.excerptLines)),
+    // `0` survives because it means "no budget"; the deadline itself rejects
+    // everything else unusable, so there is no second fallback here.
+    timeoutMs: Math.max(0, Math.trunc(resolved.timeoutMs)),
   };
 }
 
@@ -107,6 +124,11 @@ export async function runRecall(
       diagnostics: emptyDiagnostics(0, 0, noSources),
     };
   }
+
+  // One budget for the whole turn, created before the store reads so that even a
+  // slow scope assembly is bounded. The sources get the predicate rather than the
+  // object: they only ever ask, they never own the clock.
+  const deadline = request.deadline ?? createRecallDeadline(options.timeoutMs);
 
   // Everything before the search loop runs inside one guard: these are the only
   // steps that read the store, and the promise at the top of this file has to hold
@@ -143,6 +165,7 @@ export async function runRecall(
       candidateLimit: options.candidateLimit,
       neighbors: options.neighbors,
       excerptLines: options.excerptLines,
+      shouldStop: () => deadline.expired(),
     });
     // A source switched off by the caller is not a degradation: it is left out
     // entirely rather than reported as unavailable, which is reserved for "the source
@@ -215,42 +238,51 @@ export async function runRecall(
     candidates.length,
     diagnostics,
   );
+  // The status cascade answers "what did the turn produce"; the deadline flag
+  // answers "was the turn cut short". They are independent, so the flag is
+  // applied once, on the way out, rather than repeated in every branch.
+  let decision: RecallDecision;
   if (selection.entries.length > 0) {
-    return {
+    decision = {
       entries: selection.entries,
       status: "injected",
       diagnostics: settled,
     };
-  }
-  if (
+  } else if (
     diagnostics.length > 0 &&
     diagnostics.every((d) => d.status === "failed")
   ) {
-    return {
+    decision = {
       entries: [],
       status: "failed",
       reason: diagnostics[0]?.reason,
       diagnostics: settled,
     };
-  }
-  if (
+  } else if (
     diagnostics.length > 0 &&
     diagnostics.every((d) => d.status === "unavailable")
   ) {
-    return {
+    decision = {
       entries: [],
       status: "unavailable",
       reason: diagnostics[0]?.reason,
       diagnostics: settled,
     };
-  }
-  if (candidates.length > 0 && selection.deduped === candidates.length) {
-    return {
+  } else if (candidates.length > 0 && selection.deduped === candidates.length) {
+    decision = {
       entries: [],
       status: "suppressed",
       reason: "everything that matched was injected inside the dedup window",
       diagnostics: settled,
     };
+  } else {
+    decision = { entries: [], status: "no-match", diagnostics: settled };
   }
-  return { entries: [], status: "no-match", diagnostics: settled };
+
+  if (!deadline.expired()) return decision;
+  return {
+    ...decision,
+    timedOut: true,
+    reason: decision.reason ?? "the recall deadline expired",
+  };
 }

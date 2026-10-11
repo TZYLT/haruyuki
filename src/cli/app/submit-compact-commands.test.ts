@@ -811,3 +811,50 @@ describe("the topic nudge line (D-114)", () => {
     expect(h.reminderState.pendingTopicNudge).not.toBeNull();
   });
 });
+
+/**
+ * Feature ②: the user's half of a recall degradation, timeout, or breaker trip.
+ * Same contract as the topic nudge above — the provider parks the notice while
+ * the turn is being built, and the send path prints it once and clears it.
+ */
+describe("the recall notice line (feature ②)", () => {
+  test("prints a parked degradation once and clears it", async () => {
+    const local = await localConversation(2);
+    const h = harness({
+      conversationId: local.conversationId,
+      agentId: local.agentId,
+      contextWindow: 10_000,
+      contextTokens: 100,
+    });
+    h.reminderState.pendingRecallNotice = { kind: "index-missing" };
+
+    expect(await offerTrimBeforeSend(h.ctx, async () => {})).toBe(false);
+    expect(h.commands).toHaveLength(1);
+    expect(h.commands[0]?.output).toContain("/recall build");
+    expect(h.reminderState.pendingRecallNotice).toBeNull();
+
+    // Nothing parked: the next send says nothing at all.
+    await offerTrimBeforeSend(h.ctx, async () => {});
+    expect(h.commands).toHaveLength(1);
+  });
+
+  test("names the trip and how to undo it", async () => {
+    const local = await localConversation(2);
+    const h = harness({
+      conversationId: local.conversationId,
+      agentId: local.agentId,
+      contextWindow: 10_000,
+      contextTokens: 100,
+    });
+    h.reminderState.pendingRecallNotice = {
+      kind: "tripped",
+      failures: 3,
+      reason: "the recall deadline expired",
+    };
+
+    expect(await offerTrimBeforeSend(h.ctx, async () => {})).toBe(false);
+    expect(h.commands[0]?.output).toContain("3 turns in a row");
+    expect(h.commands[0]?.output).toContain("/recall on");
+    expect(h.reminderState.pendingRecallNotice).toBeNull();
+  });
+});

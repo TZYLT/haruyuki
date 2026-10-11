@@ -1,6 +1,7 @@
 import type { ContextTracker } from "@/cli/helpers/context-tracker";
 import type { TopicNudgeNotice } from "@/cli/helpers/topic-nudge";
 import type { PermissionMode } from "@/permissions/mode";
+import type { RecallNotice } from "./recall-runtime";
 
 const MAX_PENDING_INTERACTION_REMINDERS = 25;
 
@@ -57,6 +58,14 @@ export interface SharedReminderState {
    * that can show the user their half, and it clears the field once printed.
    */
   pendingTopicNudge: TopicNudgeNotice | null;
+  /**
+   * A recall degradation, timeout, or breaker trip (feature ②). Same contract as
+   * the topic nudge above: the provider parks the notice while it builds the
+   * turn, and whichever surface can print a line to the user clears it. This is
+   * per conversation because that is the lifetime of a shared reminder state,
+   * while the breaker itself is process-wide.
+   */
+  pendingRecallNotice: RecallNotice | null;
 }
 
 export function createSharedReminderState(): SharedReminderState {
@@ -79,6 +88,7 @@ export function createSharedReminderState(): SharedReminderState {
     pendingToolsetChangeReminders: [],
     hasNotifiedLowDiskSpace: false,
     pendingTopicNudge: null,
+    pendingRecallNotice: null,
   };
 }
 

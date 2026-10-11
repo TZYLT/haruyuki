@@ -50,6 +50,10 @@ import {
   setTopicTrimRequest,
 } from "@/cli/helpers/topic-trim-request";
 import { runPreCompactHooks } from "@/hooks";
+import {
+  formatRecallNoticeLine,
+  takePendingRecallNotice,
+} from "@/reminders/recall-runtime";
 import type { SharedReminderState } from "@/reminders/state";
 import { shouldAdvertiseTopicMarking } from "@/settings-tool-gates";
 import { readTopicSettings } from "@/topic-settings";
@@ -110,6 +114,7 @@ export async function offerTrimBeforeSend(
   // The cloud backend owns its own context management: no picker, no hints.
   if (!(backend instanceof LocalBackend)) return false;
   reportPendingTopicNudge(ctx);
+  reportPendingRecallNotice(ctx);
   const conversationId = ctx.conversationIdRef.current;
   const contextWindow = ctx.effectiveContextWindowSize;
   const contextTokens = ctx.contextTrackerRef.current.lastContextTokens;
@@ -200,6 +205,20 @@ export function reportPendingTopicNudge(ctx: CompactCommandContext): void {
   if (!notice) return;
   ctx.sharedReminderStateRef.current.pendingTopicNudge = null;
   reportHint(ctx, formatTopicNudgeHint(notice));
+}
+
+/**
+ * The user's half of a recall degradation, timeout, or breaker trip (feature ②).
+ *
+ * Same contract as the topic nudge above, and deliberately the same mechanism:
+ * the provider parks one notice on the shared reminder state while the turn's
+ * message is being built, and whoever can print a line claims it. Claiming
+ * clears it, so a turn that is retried does not print twice.
+ */
+export function reportPendingRecallNotice(ctx: CompactCommandContext): void {
+  const notice = takePendingRecallNotice(ctx.sharedReminderStateRef.current);
+  if (!notice) return;
+  reportHint(ctx, formatRecallNoticeLine(notice));
 }
 
 /**

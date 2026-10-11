@@ -52,6 +52,14 @@ export type RecallOptions = {
   dedupTurns: number;
   /** Per-source candidate pool, before merging. */
   candidateLimit: number;
+  /**
+   * Wall-clock budget for one turn; `0` disables the budget (《26》§6.5).
+   *
+   * Not a knob the orchestrator reads — the service turns it into a
+   * {@link RecallDeadline} and the sources consult that — but it belongs here
+   * with the other tunables so M6 can overlay one settings record on all of them.
+   */
+  timeoutMs: number;
 };
 
 export const RECALL_DEFAULTS: RecallOptions = {
@@ -64,6 +72,7 @@ export const RECALL_DEFAULTS: RecallOptions = {
   excerptLines: 2,
   dedupTurns: 10,
   candidateLimit: 12,
+  timeoutMs: 1000,
 };
 
 /** The query, already reduced to terms. Sources never see the raw sentence. */
@@ -116,7 +125,13 @@ export type RecallSourceStatus =
   /** The source could not run at all (missing workspace, unreadable store). */
   | "unavailable"
   /** The source threw; the turn continues without it. */
-  | "failed";
+  | "failed"
+  /**
+   * The source ran out of budget part-way through. Whatever it had found is
+   * kept — a truncated search is a weaker answer, not a missing one — but the
+   * caller must not read "only two hits" as "only two hits exist".
+   */
+  | "degraded";
 
 export type RecallSourceDiagnostic = {
   source: RecallSourceId;
@@ -189,6 +204,16 @@ export type RecallDecision = {
   entries: RecallEntry[];
   status: RecallStatus;
   reason?: string;
+  /**
+   * The budget ran out before the search finished (《27》M5-1).
+   *
+   * Orthogonal to `status` on purpose: a timed-out turn that still produced
+   * entries is `injected` *and* `timedOut`, while one that produced none is
+   * `no-match` *and* `timedOut`. Only this flag decides whether the turn counts
+   * against the breaker and whether the user sees a line, so it must not be
+   * inferred from the status.
+   */
+  timedOut?: boolean;
   diagnostics: {
     /** Absolute score floor that was applied this turn. */
     threshold: number;

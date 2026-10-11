@@ -12,6 +12,7 @@ import {
   parseQuery,
   type RankableSearchRecord,
   rankMatches,
+  type SearchStopSignal,
   termFrequency,
   tokenize,
 } from "./transcript-search";
@@ -114,6 +115,12 @@ export type MemorySearchOptions = {
   excerptLines?: number;
   limit?: number;
   minScore?: number;
+  /**
+   * Cooperative time budget (feature ②). The scan reads every workspace file,
+   * so it is checked once per file; a truncated scan returns what it has read.
+   * Omitted by callers with no budget, which is every caller but recall.
+   */
+  shouldStop?: SearchStopSignal;
 };
 
 export type MemoryRecallFile = {
@@ -389,6 +396,9 @@ export function searchMemoryFiles(
   const records: MemoryRecord[] = [];
   const linesByPath = new Map<string, readonly string[]>();
   for (const file of collectRecallFiles(memoryDir)) {
+    // The checkpoint the memory source's cost is concentrated in: one
+    // `readFileSync` per workspace file.
+    if (options.shouldStop?.()) break;
     const document = readMemoryDocument(file, stats);
     if (!document) continue;
     linesByPath.set(file.path, document.lines);
@@ -399,7 +409,9 @@ export function searchMemoryFiles(
   const minScore = options.minScore ?? 0;
   const excerptLines = options.excerptLines ?? MEMORY_EXCERPT_LINES;
 
-  const ranked = rankMatches(records, parsedQuery)
+  const ranked = rankMatches(records, parsedQuery, {
+    shouldStop: options.shouldStop,
+  })
     .filter((record) => record.score >= minScore)
     .sort(
       (left, right) =>

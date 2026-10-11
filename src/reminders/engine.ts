@@ -21,6 +21,7 @@ import {
 } from "./catalog";
 import { evaluateDiskSpaceReminder } from "./disk-space";
 import { formatRecallReminder } from "./recall-reminder";
+import { recallBreakerTripped, recordRecallDecision } from "./recall-runtime";
 import type { SessionContextReason, SharedReminderState } from "./state";
 
 export interface AgentReminderContext {
@@ -526,6 +527,10 @@ async function buildRecallReminder(
   const userText = context.userInputText?.trim();
   const conversationId = context.agent.conversationId;
   if (!userText || !conversationId) return null;
+  // The breaker is checked before any work: once tripped, the feature must cost
+  // nothing per turn — re-running the search to rediscover the failure is
+  // exactly what tripping it was meant to stop.
+  if (recallBreakerTripped()) return null;
 
   try {
     const [{ getBackend }, { LocalBackend }, { runRecall }] = await Promise.all(
@@ -551,8 +556,13 @@ async function buildRecallReminder(
     });
     debugLog(
       "recall",
-      `status=${decision.status} entries=${decision.entries.length} candidates=${decision.diagnostics.candidates} threshold=${decision.diagnostics.threshold.toFixed(3)}`,
+      `status=${decision.status} entries=${decision.entries.length} candidates=${decision.diagnostics.candidates} threshold=${decision.diagnostics.threshold.toFixed(3)}${decision.timedOut ? " timedOut" : ""}`,
     );
+    // Recorded before the injection test below: a turn that timed out with
+    // nothing to show is still a failure the breaker counts, and a turn with no
+    // match is still the success that resets it.
+    const notice = recordRecallDecision(decision);
+    if (notice) context.state.pendingRecallNotice = notice;
     if (decision.status !== "injected") return null;
     return formatRecallReminder(decision);
   } catch (error) {

@@ -24,7 +24,10 @@ import {
 import type { ListenerTransport } from "./transport";
 import type { ConversationRuntime, ListenerRuntime } from "./types";
 
-export type RecoverableStatusNoticeKind = "stale_approval_conflict_recovery";
+export type RecoverableStatusNoticeKind =
+  | "stale_approval_conflict_recovery"
+  /** Feature ②: recall degraded, timed out, or switched itself off. */
+  | "recall_degraded";
 export type RecoverableRetryNoticeKind = "transient_provider_retry";
 
 type LifecycleNoticeVisibility = "debug_only" | "transcript";
@@ -49,6 +52,11 @@ export function getRecoverableStatusNoticeVisibility(
   switch (kind) {
     case "stale_approval_conflict_recovery":
       return "debug_only";
+    // Recall's line is informational and belongs in the transcript: the turn
+    // went out without the passages the user expected, and only they can decide
+    // whether that matters.
+    case "recall_degraded":
+      return "transcript";
     default:
       return "transcript";
   }
