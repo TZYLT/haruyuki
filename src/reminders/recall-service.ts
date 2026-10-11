@@ -71,6 +71,18 @@ export type RecallRequest = {
    * synchronous run.
    */
   deadline?: RecallDeadline;
+  /**
+   * The manual probe (`/recall now`): search, but neither read the dedup window
+   * nor write to it.
+   *
+   * The window is a statement about a *turn*, and a probe is not one. Reading it
+   * would answer "what would the next turn inject" (usually "nothing, you just
+   * saw it"), and writing to it would suppress those passages from the real turn
+   * the probe was meant to inform. Both are wrong for the question being asked, so
+   * the probe sees the corpus unfiltered and leaves no trace. `currentTurn` is
+   * unused on this path, which is why the probe passes a placeholder.
+   */
+  dryRun?: boolean;
 };
 
 function resolveOptions(options?: Partial<RecallOptions>): RecallOptions {
@@ -144,12 +156,15 @@ export async function runRecall(
         request.agentId,
       ),
     );
-    suppressed = request.backend.settleRecallDedup({
-      conversationId: request.conversationId,
-      agentId: request.agentId,
-      currentTurn: request.currentTurn,
-      keepTurns: options.dedupTurns,
-    }).suppressed;
+    suppressed =
+      request.dryRun === true
+        ? new Set<string>()
+        : request.backend.settleRecallDedup({
+            conversationId: request.conversationId,
+            agentId: request.agentId,
+            currentTurn: request.currentTurn,
+            keepTurns: options.dedupTurns,
+          }).suppressed;
 
     const memoryDir =
       request.memoryEnabled === false
@@ -219,7 +234,7 @@ export async function runRecall(
     suppressed,
   });
 
-  if (selection.entries.length > 0) {
+  if (selection.entries.length > 0 && request.dryRun !== true) {
     const injected: Record<string, number> = {};
     for (const entry of selection.entries) {
       injected[entry.fingerprint] = request.currentTurn;

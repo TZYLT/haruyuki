@@ -32,6 +32,13 @@ describe("subcommand router", () => {
     expect(await runSubcommand(["steps", "--help"])).toBe(0);
   });
 
+  test("routes recall help with early backend selection", async () => {
+    // The subcommand reads the local store, so the backend mode has to be resolved
+    // before it runs — the same reason `messages` and `memory` are listed.
+    expect(subcommandNeedsEarlyBackendMode("recall")).toBe(true);
+    expect(await runSubcommand(["recall", "--help"])).toBe(0);
+  });
+
   test("routes connect subcommand", async () => {
     const exitCode = await runSubcommand(["connect", "help"]);
     expect(exitCode).toBe(0);

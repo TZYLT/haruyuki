@@ -8,6 +8,7 @@ import { runMemorySubcommand } from "./memory";
 import { runMessagesSubcommand } from "./messages";
 import { runModelSubcommand } from "./model";
 import { runModsSubcommand } from "./mods";
+import { runRecallSubcommand } from "./recall";
 import { runSecretSubcommand } from "./secret";
 import { runServerSubcommand } from "./server";
 import { runInstallSubcommand, runSkillsSubcommand } from "./skills";
@@ -37,6 +38,7 @@ export function subcommandNeedsEarlyBackendMode(
     case "model":
     case "models":
     case "mods":
+    case "recall":
     case "secret":
     case "server":
     case "skills":
@@ -77,6 +79,8 @@ export async function runSubcommand(argv: string[]): Promise<number | null> {
       return runMcpSubcommand(rest);
     case "mods":
       return runModsSubcommand(rest);
+    case "recall":
+      return runRecallSubcommand(rest);
     case "secret":
       return runSecretSubcommand(rest);
     case "server":

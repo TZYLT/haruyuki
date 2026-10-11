@@ -8,6 +8,7 @@ import {
 import { renderWorkflowTree } from "@/cli/helpers/workflow-display";
 import { listWorkflowExecutions } from "@/tools/workflow/execution-registry";
 import { handleMemoryRepositoryCommand } from "./memory-repository";
+import { handleRecallCommand } from "./recall";
 import { handleSecretCommand } from "./secret";
 import { handleSystemRemindersCommand } from "./system-reminders";
 import { handleTopicCommand } from "./topic";
@@ -622,6 +623,11 @@ export const commands: Record<string, Command> = {
     desc: "List the topic blocks of the current context",
     args: "[--all]",
     handler: (args, scope) => handleTopicsCommand(args, scope),
+  },
+  "/recall": {
+    desc: "Configure passive recall of earlier conversations and memory",
+    args: "[setting] [value]",
+    handler: (args, scope) => handleRecallCommand(args, scope),
   },
   "/set-max-context": {
     desc: "Alias for /context-limit",

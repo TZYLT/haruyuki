@@ -19,6 +19,7 @@ import {
   type PersonalityId,
 } from "@/agent/personality-presets";
 import { getBackend } from "@/backend";
+import { formatRecallSettingsLine } from "@/cli/commands/recall";
 import type { CompactionSelection } from "@/cli/components/CompactionSelector";
 import type { ModelSelectorSelection } from "@/cli/components/ModelSelector";
 import {
@@ -34,7 +35,8 @@ import { formatPersonalitySwappedMessage } from "@/cli/helpers/personality-pendi
 import { experimentManager } from "@/experiments/manager";
 import type { ExperimentId } from "@/experiments/types";
 import { OPENAI_CODEX_PROVIDER_NAME } from "@/providers/openai-codex-provider";
-import { settingsManager } from "@/settings-manager";
+import { readRecallSettings } from "@/recall-settings";
+import { type Settings, settingsManager } from "@/settings-manager";
 import { getToolNames } from "@/tools/manager";
 import type { ToolsetName, ToolsetPreference } from "@/tools/toolset";
 import { formatToolsetName } from "@/tools/toolset-labels";
@@ -1317,12 +1319,45 @@ export function useConfigurationHandlers(ctx: ConfigurationHandlersContext) {
     ],
   );
 
+  /**
+   * Feature ②'s settings picker.
+   *
+   * Unlike the compaction and toolset pickers this writes a local preference and
+   * nothing else, so there is nothing to queue behind a running turn and no
+   * agent-side state to reconcile: the write is synchronous and the overlay closes
+   * with the receipt. The receipt is the whole effective parameter line, because
+   * every knob is clamped and the user needs to see what their input became.
+   */
+  const handleRecallOverlaySave = useCallback(
+    (updates: Partial<Settings>) => {
+      const cmd =
+        consumeOverlayCommand("recall") ??
+        commandRunner.start("/recall", "Saving recall settings...");
+      try {
+        settingsManager.updateSettings(updates);
+        setActiveOverlay(null);
+        cmd.finish(
+          `Updated.\n  ${formatRecallSettingsLine(readRecallSettings())}`,
+          true,
+        );
+      } catch (error) {
+        cmd.fail(
+          `Failed to save recall settings: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    },
+    [commandRunner, consumeOverlayCommand, setActiveOverlay],
+  );
+
   return {
     handleModelSelect,
     handleSystemPromptSelect,
     handlePersonalitySelect,
     handleSleeptimeModeSelect,
     handleCompactionModeSelect,
+    handleRecallOverlaySave,
     handleToolsetSelect,
     handleExperimentSelect,
     handleExperimentsConfirm,

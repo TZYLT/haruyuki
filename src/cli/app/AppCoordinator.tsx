@@ -4142,6 +4142,7 @@ export function App({
     handlePersonalitySelect,
     handleSleeptimeModeSelect,
     handleCompactionModeSelect,
+    handleRecallOverlaySave,
     handleToolsetSelect,
     handleExperimentSelect,
     handleExperimentsConfirm,
@@ -4790,6 +4791,7 @@ export function App({
         handlePermissionModeChange={handlePermissionModeChange}
         handlePersonalitySelect={handlePersonalitySelect}
         handleProfileEscapeCancel={handleProfileEscapeCancel}
+        handleRecallOverlaySave={handleRecallOverlaySave}
         handleSleeptimeModeSelect={handleSleeptimeModeSelect}
         handleSystemPromptSelect={handleSystemPromptSelect}
         handleToolsetSelect={handleToolsetSelect}

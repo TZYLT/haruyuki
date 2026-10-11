@@ -58,6 +58,7 @@ export type ActiveOverlay =
   | "worktree-diff"
   | "sleeptime"
   | "compaction"
+  | "recall"
   | "toolset"
   | "system"
   | "personality"

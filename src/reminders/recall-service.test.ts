@@ -190,4 +190,51 @@ describe("runRecall", () => {
       expect(decision.status).toBe("injected");
     });
   });
+
+  test("a probe neither reads the dedup window nor writes to it", async () => {
+    await withRecallFixture(async (fixture) => {
+      const base = {
+        backend: fixture.backend,
+        agentId: fixture.agentId,
+        conversationId: fixture.currentConversationId,
+        userText: QUERY,
+        options: { limit: 5 },
+      };
+
+      const first = await runRecall({ ...base, currentTurn: 1 });
+      expect(first.status).toBe("injected");
+      const count = first.entries.length;
+
+      // Inside the window a real turn is suppressed...
+      expect((await runRecall({ ...base, currentTurn: 2 })).status).toBe(
+        "suppressed",
+      );
+      // ... while the probe still answers the question it was asked, because it
+      // never consults the window.
+      const probeInside = await runRecall({
+        ...base,
+        currentTurn: 2,
+        dryRun: true,
+      });
+      expect(probeInside.status).toBe("injected");
+      expect(probeInside.entries).toHaveLength(count);
+
+      // Outside the window, a probe must not become the injection it was probing
+      // for: a real turn at the same turn number still injects afterwards.
+      const probe = await runRecall({ ...base, currentTurn: 12, dryRun: true });
+      expect(probe.status).toBe("injected");
+      expect((await runRecall({ ...base, currentTurn: 12 })).status).toBe(
+        "injected",
+      );
+
+      // And a second probe at that turn does not see the first one as "already
+      // shown", which is what reading its own write would have caused.
+      const probeAgain = await runRecall({
+        ...base,
+        currentTurn: 13,
+        dryRun: true,
+      });
+      expect(probeAgain.status).toBe("injected");
+    });
+  });
 });

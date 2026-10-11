@@ -896,6 +896,18 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           return { submitted: true };
         }
 
+        // Feature ②: a bare /recall opens the settings picker; `/recall <setting>`
+        // and every other subcommand fall through to the registry handler.
+        if (trimmed === "/recall") {
+          openOverlay(
+            "recall",
+            "/recall",
+            "Opening recall settings...",
+            "Recall settings dismissed",
+          );
+          return { submitted: true };
+        }
+
         // Special handling for /toolset command - opens selector
         if (trimmed === "/toolset") {
           openOverlay(

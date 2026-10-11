@@ -54,8 +54,12 @@ function markerLine(marker: RecallMarker): string {
  * time where the source has one. A transcript message carries its timestamp; a
  * memory excerpt carries its line span instead, because a memory file has no
  * per-passage time.
+ *
+ * Exported because the manual probe (`/recall now`) lists the same passages: two
+ * renderings of one entry that could drift apart would be two answers to "where
+ * did this come from".
  */
-function entryHeader(entry: RecallEntry): string {
+export function recallEntryHeader(entry: RecallEntry): string {
   if (entry.source === "transcript") {
     const fields = ["transcript"];
     if (entry.conversationKey) {
@@ -100,7 +104,7 @@ export function formatRecallReminder(decision: RecallDecision): string | null {
     INTRO,
   ];
   entries.forEach((entry, index) => {
-    lines.push("", `[${index + 1}] ${entryHeader(entry)}`, entry.text);
+    lines.push("", `[${index + 1}] ${recallEntryHeader(entry)}`, entry.text);
   });
   lines.push(SYSTEM_REMINDER_CLOSE);
   return lines.join("\n");

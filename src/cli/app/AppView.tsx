@@ -46,6 +46,7 @@ import { PersonalitySelector } from "@/cli/components/PersonalitySelector";
 import { PinDialog } from "@/cli/components/PinDialog";
 import { ProviderSelector } from "@/cli/components/ProviderSelector";
 import { LiveReasoningMessage } from "@/cli/components/ReasoningMessageRich";
+import { RecallOverlay } from "@/cli/components/RecallOverlay";
 import { SkillsDialog } from "@/cli/components/SkillsDialog";
 import { SleeptimeSelector } from "@/cli/components/SleeptimeSelector";
 import { StatusMessage } from "@/cli/components/StatusMessage";
@@ -88,6 +89,7 @@ import { experimentManager } from "@/experiments/manager";
 import type { ExperimentId } from "@/experiments/types";
 import type { ApprovalContext } from "@/permissions/analyzer";
 import type { PermissionMode } from "@/permissions/mode";
+import { readRecallSettings } from "@/recall-settings";
 import { settingsManager } from "@/settings-manager";
 import type { ToolsetName, ToolsetPreference } from "@/tools/toolset";
 import type { QueuedMessage } from "@/utils/message-queue-bridge";
@@ -193,6 +195,9 @@ type AppViewProps = {
     selection: import("@/cli/components/CompactionSelector").CompactionSelection,
     commandId?: string | null,
   ) => Promise<void>;
+  handleRecallOverlaySave: (
+    updates: Partial<import("@/settings-manager").Settings>,
+  ) => void;
   handleCreateNewAgent: (
     name: string,
     opts?: {
@@ -396,6 +401,7 @@ export function AppView(props: AppViewProps) {
     handlePermissionModeChange,
     handlePersonalitySelect,
     handleProfileEscapeCancel,
+    handleRecallOverlaySave,
     handleSleeptimeModeSelect,
     handleSystemPromptSelect,
     handleToolsetSelect,
@@ -814,6 +820,14 @@ export function AppView(props: AppViewProps) {
               <CompactionOverlay
                 settings={agentState?.compaction_settings}
                 onSave={handleCompactionModeSelect}
+                onCancel={closeOverlay}
+              />
+            )}
+
+            {activeOverlay === "recall" && (
+              <RecallOverlay
+                settings={readRecallSettings()}
+                onSave={handleRecallOverlaySave}
                 onCancel={closeOverlay}
               />
             )}
