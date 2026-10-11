@@ -259,10 +259,21 @@ function termFrequency(tokens: readonly string[], term: string): number {
   if (CJK_RUN.test(term)) {
     // These scripts commonly omit word separators. Preserve substring recall
     // within a run without restoring Latin token-suffix matches.
-    return tokens.reduce(
-      (count, token) => count + token.split(term).length - 1,
-      0,
-    );
+    //
+    // `token.split(term).length - 1` counts the same non-overlapping
+    // occurrences, but allocates one array per token, and this is the CJK
+    // search's hot path: every corpus record is scanned once per query term to
+    // build the document frequencies. The index scan is measurably faster on
+    // the real transcript corpus and returns identical counts.
+    let count = 0;
+    for (const token of tokens) {
+      let index = token.indexOf(term);
+      while (index !== -1) {
+        count += 1;
+        index = token.indexOf(term, index + term.length);
+      }
+    }
+    return count;
   }
   return tokens.reduce((count, token) => count + Number(token === term), 0);
 }

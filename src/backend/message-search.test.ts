@@ -569,6 +569,108 @@ describe("message search backend routing", () => {
     }
   });
 
+  // Guards the CJK branch of the BM25 term frequency. Unsegmented scripts have
+  // no word separators, so recall relies on substring counts; those counts must
+  // stay non-overlapping and must never span a token boundary.
+  test("counts unsegmented CJK substring matches per token without overlaps", async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), "local-message-search-"));
+    try {
+      const at = (second: number): { created_at: string } => ({
+        created_at: `2026-01-01T00:00:${String(second).padStart(2, "0")}.000Z`,
+      });
+      await writeLegacySearchTranscript({
+        storageDir,
+        directory: "cjk-substring",
+        conversationId: "conv-cjk-substring",
+        messages: [
+          {
+            id: "substring-twice",
+            role: "user",
+            content: "记忆库记忆库",
+            timestamp: 1,
+            metadata: at(1),
+          },
+          {
+            id: "substring-once",
+            role: "user",
+            content: "记忆库",
+            timestamp: 2,
+            metadata: at(2),
+          },
+          {
+            id: "substring-suffix",
+            role: "user",
+            content: "记忆库房",
+            timestamp: 3,
+            metadata: at(3),
+          },
+          {
+            id: "overlap-longer",
+            role: "user",
+            content: "记忆记忆记忆",
+            timestamp: 4,
+            metadata: at(4),
+          },
+          {
+            id: "overlap-shorter",
+            role: "user",
+            content: "记忆记忆",
+            timestamp: 5,
+            metadata: at(5),
+          },
+          {
+            id: "whitespace-split",
+            role: "user",
+            content: "记 忆",
+            timestamp: 6,
+            metadata: at(6),
+          },
+        ],
+      });
+
+      const ranked = (query: string): (string | null | undefined)[] =>
+        searchLocalTranscriptMessages(storageDir, {
+          query,
+          agent_id: "agent-search",
+          limit: 10,
+        }).map((result) => result.message_id);
+
+      // Twice beats once; the two single-substring records tie on both score and
+      // term count and fall back to newest-first.
+      expect(ranked("记忆库")).toEqual([
+        "substring-twice",
+        "substring-suffix",
+        "substring-once",
+      ]);
+
+      // `记忆记忆` occurs once, not twice, in `记忆记忆记忆`, because matches may
+      // not overlap. Both records then tie on score and term count, so
+      // newest-first decides. Counting overlaps would rank `overlap-longer`
+      // first instead.
+      expect(ranked("记忆记忆")).toEqual(["overlap-shorter", "overlap-longer"]);
+
+      // A whitespace-separated run is two tokens, and a token boundary is not a
+      // substring match. Joining tokens before counting would match it.
+      expect(ranked("记忆")).toEqual([
+        "overlap-longer",
+        "overlap-shorter",
+        "substring-twice",
+        "substring-suffix",
+        "substring-once",
+      ]);
+
+      // Quoted CJK phrases match inside a run too, and respect the same
+      // boundary.
+      expect(ranked('"记忆库"')).toEqual([
+        "substring-suffix",
+        "substring-once",
+        "substring-twice",
+      ]);
+    } finally {
+      await rm(storageDir, { recursive: true, force: true });
+    }
+  });
+
   test("search echoes do not alter historical BM25 corpus statistics", async () => {
     const storageDir = await mkdtemp(join(tmpdir(), "local-message-search-"));
     try {
