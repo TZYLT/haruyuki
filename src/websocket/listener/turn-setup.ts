@@ -19,6 +19,7 @@ import {
 } from "@/reminders/engine";
 import { buildListenReminderContext } from "@/reminders/listen-context";
 import { trackBoundaryError } from "@/telemetry/error-reporting";
+import { extractTelemetryInputText } from "@/telemetry/input";
 import { replaceClientPreferences } from "@/tools/client-preferences";
 import { INTERACTIVE_USER_INPUT_TOOL_NAMES } from "@/tools/interactive-policy";
 import { prepareToolExecutionContextForScope } from "@/tools/toolset";
@@ -68,6 +69,29 @@ export type ListenerTurnSetupResult =
       preparedToolContext: PreparedToolContext;
       overrideModel?: string;
     };
+
+/**
+ * The user's own words for this turn, or `undefined` when the turn has none.
+ *
+ * Feature ② searches with these (`SharedReminderContext.userInputText`), and the
+ * scan deliberately runs over the *inbound* messages rather than `messagesToSend`:
+ * that array may carry the interrupt-recovery alert and queued approval results
+ * ahead of the real message, and neither is something the user is asking for. An
+ * approval-only turn therefore has no input to recall against — which is also why
+ * the text has to be non-empty to count.
+ */
+function firstUserInputText(
+  messages: IncomingMessage["messages"],
+): string | undefined {
+  for (const message of messages) {
+    if (!("role" in message) || message.role !== "user") continue;
+    const content = "content" in message ? message.content : undefined;
+    if (content === undefined || content === null) continue;
+    const text = extractTelemetryInputText(content).trim();
+    if (text.length > 0) return text;
+  }
+  return undefined;
+}
 
 export async function prepareListenerTurn(params: {
   msg: IncomingMessage;
@@ -204,6 +228,7 @@ export async function prepareListenerTurn(params: {
           state: runtime.reminderState,
           workingDirectory,
           shellContext: detectShellContext(),
+          userInputText: firstUserInputText(msg.messages),
         }),
       );
       if (isInterrupted()) {

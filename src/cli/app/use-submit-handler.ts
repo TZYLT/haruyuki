@@ -3141,6 +3141,9 @@ ${SYSTEM_REMINDER_CLOSE}
         systemInfoReminderEnabled,
         skillSources: getSkillSources(),
         shellContext: detectShellContext(),
+        // Already free of task notifications: `userTextForInput` comes from
+        // `extractTaskNotificationsForDisplay` (feature ②, 《26》§6.4).
+        userInputText: userTextForInput,
       });
       for (const part of sharedReminderParts) {
         reminderParts.push(part);

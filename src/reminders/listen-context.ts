@@ -15,6 +15,8 @@ interface BuildListenReminderContextParams {
   sessionContextReason?: SessionContextReason;
   /** Shell context detected at startup, if available. */
   shellContext?: ShellContext;
+  /** The user's own words for this turn (feature ②); see `SharedReminderContext`. */
+  userInputText?: string;
 }
 
 export function buildListenReminderContext(
@@ -36,5 +38,6 @@ export function buildListenReminderContext(
     sessionContextSource: "listen",
     sessionContextReason: params.sessionContextReason,
     shellContext: params.shellContext,
+    userInputText: params.userInputText,
   };
 }

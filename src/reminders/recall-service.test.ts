@@ -1,17 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type {
-  AgentCreateBody,
-  ConversationCreateBody,
-  ConversationMessageCreateBody,
-} from "@/backend";
-import { LocalBackend } from "@/backend/local";
-import { getLocalBackendMemoryFilesystemRoot } from "@/backend/local/paths";
-import { rebuildConversationIndex } from "@/backend/local/recall-index";
-import { conversationDirectories } from "@/backend/local/transcript-search";
 import { runRecall } from "@/reminders/recall-service";
+import {
+  RECALL_FIXTURE_QUERY as QUERY,
+  withRecallFixture,
+} from "@/test-utils/recall-fixture";
 
 /**
  * The M3 acceptance: on a fixture conversation, assert exactly what would be
@@ -20,151 +12,9 @@ import { runRecall } from "@/reminders/recall-service";
  * sidecar, and the real memory workspace.
  */
 
-const HISTORY_TEXT = "财务系统的记账方式是每日对账";
-const QUERY = "财务系统是怎么记账的";
-
-async function drain(stream: AsyncIterable<unknown>): Promise<void> {
-  for await (const _chunk of stream) {
-    // drain
-  }
-}
-
-function createBody(
-  text: string,
-  agentId: string,
-): ConversationMessageCreateBody {
-  return {
-    messages: [{ role: "user", content: text }],
-    streaming: true,
-    stream_tokens: true,
-    include_pings: true,
-    background: true,
-    client_tools: [],
-    client_skills: [],
-    agent_id: agentId,
-  } as unknown as ConversationMessageCreateBody;
-}
-
-/** The directory name the store gave a conversation, read back from disk. */
-async function conversationDirFor(
-  storageDir: string,
-  conversationId: string,
-): Promise<string> {
-  for (const dir of conversationDirectories(storageDir)) {
-    const record = JSON.parse(
-      await readFile(join(dir, "conversation.json"), "utf8"),
-    ) as { id?: string; agent_id?: string };
-    if (record.id === conversationId) {
-      return dir;
-    }
-  }
-  throw new Error(`no conversation directory for ${conversationId}`);
-}
-
-async function buildIndex(
-  storageDir: string,
-  conversationId: string,
-): Promise<void> {
-  const conversationDir = await conversationDirFor(storageDir, conversationId);
-  const record = JSON.parse(
-    await readFile(join(conversationDir, "conversation.json"), "utf8"),
-  ) as { id: string; agent_id: string };
-  const result = rebuildConversationIndex({
-    conversationDir,
-    identity: {
-      conversationKey: conversationDir.split(/[\\/]/).at(-1) ?? "",
-      conversationId: record.id,
-      agentId: record.agent_id,
-    },
-  });
-  if ("error" in result) throw new Error(result.error);
-}
-
-async function writeMemoryFile(
-  storageDir: string,
-  agentId: string,
-  path: string,
-  content: string,
-): Promise<void> {
-  const memoryDir = getLocalBackendMemoryFilesystemRoot(agentId, storageDir);
-  const target = join(memoryDir, ...path.split("/"));
-  await mkdir(join(target, ".."), { recursive: true });
-  await writeFile(target, content);
-}
-
-type Fixture = {
-  storageDir: string;
-  backend: LocalBackend;
-  agentId: string;
-  currentConversationId: string;
-  historyDirectory: string;
-};
-
-async function withFixture(
-  run: (fixture: Fixture) => Promise<void>,
-  options: { memory?: boolean } = {},
-): Promise<void> {
-  const storageDir = await mkdtemp(join(tmpdir(), "haru-recall-service-"));
-  try {
-    const backend = new LocalBackend({
-      storageDir,
-      executionMode: "deterministic",
-    });
-    const agent = await backend.createAgent({
-      name: "Recall Agent",
-      model: "openai/gpt-test",
-    } as AgentCreateBody);
-    const history = await backend.createConversation({
-      agent_id: agent.id,
-    } as ConversationCreateBody);
-    await drain(
-      await backend.createConversationMessageStream(
-        history.id,
-        createBody(HISTORY_TEXT, agent.id),
-      ),
-    );
-
-    // A second conversation stands in for the one the turn runs in. Its own
-    // message has to be *in* the corpus for the `N` filter to be what excludes it.
-    const current = await backend.createConversation({
-      agent_id: agent.id,
-    } as ConversationCreateBody);
-    await drain(
-      await backend.createConversationMessageStream(
-        current.id,
-        createBody(`${QUERY} 顺便也说说记账`, agent.id),
-      ),
-    );
-
-    await buildIndex(storageDir, history.id);
-    await buildIndex(storageDir, current.id);
-    if (options.memory !== false) {
-      await writeMemoryFile(storageDir, agent.id, "MEMORY.md", "root index\n");
-      await writeMemoryFile(
-        storageDir,
-        agent.id,
-        "reference/notes.md",
-        "# 记账\n\n财务系统的记账口径在 reference 里，每日对账一次。\n",
-      );
-    }
-    await run({
-      storageDir,
-      backend,
-      agentId: agent.id,
-      currentConversationId: current.id,
-      historyDirectory:
-        (await conversationDirFor(storageDir, history.id))
-          .split(/[\\/]/)
-          .at(-1) ?? "",
-    });
-  } finally {
-    await rm(storageDir, { recursive: true, force: true });
-  }
-}
-
 describe("runRecall", () => {
   test("injects history and memory, and never the current conversation's message", async () => {
-    await withFixture(async (fixture) => {
+    await withRecallFixture(async (fixture) => {
       const decision = await runRecall({
         backend: fixture.backend,
         agentId: fixture.agentId,
@@ -200,7 +50,7 @@ describe("runRecall", () => {
   });
 
   test("keeps every entry inside the character budget", async () => {
-    await withFixture(async (fixture) => {
+    await withRecallFixture(async (fixture) => {
       const decision = await runRecall({
         backend: fixture.backend,
         agentId: fixture.agentId,
@@ -222,7 +72,7 @@ describe("runRecall", () => {
   });
 
   test("does not repeat what the window already covers", async () => {
-    await withFixture(async (fixture) => {
+    await withRecallFixture(async (fixture) => {
       const first = await runRecall({
         backend: fixture.backend,
         agentId: fixture.agentId,
@@ -259,7 +109,7 @@ describe("runRecall", () => {
   });
 
   test("a turn with no searchable terms injects nothing and writes nothing", async () => {
-    await withFixture(async (fixture) => {
+    await withRecallFixture(async (fixture) => {
       const decision = await runRecall({
         backend: fixture.backend,
         agentId: fixture.agentId,
@@ -273,7 +123,7 @@ describe("runRecall", () => {
   });
 
   test("memory can be switched off without losing the transcript source", async () => {
-    await withFixture(async (fixture) => {
+    await withRecallFixture(async (fixture) => {
       const decision = await runRecall({
         backend: fixture.backend,
         agentId: fixture.agentId,

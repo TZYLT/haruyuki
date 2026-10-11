@@ -20,6 +20,7 @@ import {
   type SharedReminderMode,
 } from "./catalog";
 import { evaluateDiskSpaceReminder } from "./disk-space";
+import { formatRecallReminder } from "./recall-reminder";
 import type { SessionContextReason, SharedReminderState } from "./state";
 
 export interface AgentReminderContext {
@@ -45,6 +46,18 @@ export interface SharedReminderContext {
   sessionContextReason?: SessionContextReason;
   /** Shell context detected at startup, if available. */
   shellContext?: ShellContext;
+  /**
+   * The user's own words for this turn, with harness notifications already
+   * removed (feature ②, 《26》§6.4).
+   *
+   * Optional because only the three interactive submit paths have such a thing: a
+   * subagent turn, a channel turn, and every test that builds a context inline do
+   * not, and a provider that needs it must treat its absence as "nothing to do"
+   * rather than as an error. Each path is responsible for stripping anything the
+   * harness put in the turn's content — a task notification or a cron prompt is
+   * not the user asking for something.
+   */
+  userInputText?: string;
 }
 
 export type ReminderTextPart = { type: "text"; text: string };
@@ -492,6 +505,65 @@ async function buildTopicNudgeReminder(
   }
 }
 
+/**
+ * Feature ②: put recalled passages from this agent's own past conversations and
+ * memory files in front of the model, ahead of the user's message.
+ *
+ * Same shape as the topic nudge above, and for the same reasons: the feature is
+ * local-backend only, the decision belongs to the backend, and none of it may be
+ * visible to the turn. The `try` is load-bearing — `buildSharedReminderParts` runs
+ * providers without a catch of its own, so a provider that throws here takes the
+ * user's message down with it. A refusal is therefore always `null`: this turn
+ * simply goes out without recall.
+ *
+ * Nothing is written when nothing is recalled: {@link runRecall} is the only writer
+ * of the dedup window, and it records fingerprints only after a budget has accepted
+ * them.
+ */
+async function buildRecallReminder(
+  context: SharedReminderContext,
+): Promise<string | null> {
+  const userText = context.userInputText?.trim();
+  const conversationId = context.agent.conversationId;
+  if (!userText || !conversationId) return null;
+
+  try {
+    const [{ getBackend }, { LocalBackend }, { runRecall }] = await Promise.all(
+      [
+        import("@/backend"),
+        import("@/backend/local/local-backend"),
+        import("./recall-service"),
+      ],
+    );
+    const backend = getBackend();
+    if (!(backend instanceof LocalBackend)) return null;
+
+    const decision = await runRecall({
+      backend,
+      agentId: context.agent.id,
+      conversationId,
+      userText,
+      // The engine bumps this once per user turn, immediately before the providers
+      // run, so it is already the per-conversation monotonic counter the dedup
+      // window is defined against — supplying a second counter would only give the
+      // two a chance to disagree.
+      currentTurn: context.state.turnCount,
+    });
+    debugLog(
+      "recall",
+      `status=${decision.status} entries=${decision.entries.length} candidates=${decision.diagnostics.candidates} threshold=${decision.diagnostics.threshold.toFixed(3)}`,
+    );
+    if (decision.status !== "injected") return null;
+    return formatRecallReminder(decision);
+  } catch (error) {
+    debugLog(
+      "recall",
+      `Failed to build the recall reminder: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
+  }
+}
+
 export const sharedReminderProviders: Record<
   SharedReminderId,
   SharedReminderProvider
@@ -507,6 +579,7 @@ export const sharedReminderProviders: Record<
   "toolset-change": buildToolsetChangeReminder,
   "disk-space": buildDiskSpaceReminder,
   "topic-nudge": buildTopicNudgeReminder,
+  recall: buildRecallReminder,
 };
 
 export function assertSharedReminderCoverage(): void {

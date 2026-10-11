@@ -16,7 +16,8 @@ export type SharedReminderId =
   | "command-io"
   | "toolset-change"
   | "disk-space"
-  | "topic-nudge";
+  | "topic-nudge"
+  | "recall";
 
 export interface SharedReminderDefinition {
   id: SharedReminderId;
@@ -114,6 +115,22 @@ export const SHARED_REMINDER_CATALOG: ReadonlyArray<SharedReminderDefinition> =
     {
       id: "topic-nudge",
       description: "One-shot reminder to mark a topic boundary (local backend)",
+      modes: [
+        "interactive",
+        "headless-one-shot",
+        "headless-bidirectional",
+        "listen",
+      ],
+    },
+    // Last on purpose: the catalog's order is the order of the parts prepended to
+    // the user's content, and this is the only one that is *about* the words in
+    // that content, so it sits closest to them.
+    //
+    // No `subagent` mode. Recalled context is for a turn the user asked for; a
+    // subagent prompt is somebody else's job description (《26》§6.4).
+    {
+      id: "recall",
+      description: "Recalled passages from past conversations and memory files",
       modes: [
         "interactive",
         "headless-one-shot",

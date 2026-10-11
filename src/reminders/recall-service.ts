@@ -7,6 +7,7 @@ import {
   type RecallDecision,
   type RecallOptions,
   type RecallSourceDiagnostic,
+  type RecallSourcePort,
 } from "./recall-port";
 import {
   RECALL_QUERY_DEFAULTS,
@@ -107,41 +108,57 @@ export async function runRecall(
     };
   }
 
-  const excludedMessageIds = new Set(
-    await request.backend.getInContextMessageIds(
-      request.conversationId,
-      request.agentId,
-    ),
-  );
-  const { suppressed } = request.backend.settleRecallDedup({
-    conversationId: request.conversationId,
-    agentId: request.agentId,
-    currentTurn: request.currentTurn,
-    keepTurns: options.dedupTurns,
-  });
+  // Everything before the search loop runs inside one guard: these are the only
+  // steps that read the store, and the promise at the top of this file has to hold
+  // for them too. A corrupt conversation record must not be the reason a user's
+  // message does not get sent.
+  let excludedMessageIds: ReadonlySet<string>;
+  let suppressed: ReadonlySet<string>;
+  let sources: RecallSourcePort[];
+  try {
+    excludedMessageIds = new Set(
+      await request.backend.getInContextMessageIds(
+        request.conversationId,
+        request.agentId,
+      ),
+    );
+    suppressed = request.backend.settleRecallDedup({
+      conversationId: request.conversationId,
+      agentId: request.agentId,
+      currentTurn: request.currentTurn,
+      keepTurns: options.dedupTurns,
+    }).suppressed;
 
-  const memoryDir =
-    request.memoryEnabled === false
-      ? undefined
-      : getLocalBackendMemoryFilesystemRoot(
-          request.agentId,
-          request.backend.getLocalStorageDir(),
-        );
-  const built = buildRecallSources({
-    storageDir: request.backend.getLocalStorageDir(),
-    memoryDir,
-    excludedMessageIds,
-    candidateLimit: options.candidateLimit,
-    neighbors: options.neighbors,
-    excerptLines: options.excerptLines,
-  });
-  // A source switched off by the caller is not a degradation: it is left out
-  // entirely rather than reported as unavailable, which is reserved for "the source
-  // exists but could not be searched".
-  const sources =
-    request.memoryEnabled === false
-      ? built.filter((source) => source.id !== "memory")
-      : built;
+    const memoryDir =
+      request.memoryEnabled === false
+        ? undefined
+        : getLocalBackendMemoryFilesystemRoot(
+            request.agentId,
+            request.backend.getLocalStorageDir(),
+          );
+    const built = buildRecallSources({
+      storageDir: request.backend.getLocalStorageDir(),
+      memoryDir,
+      excludedMessageIds,
+      candidateLimit: options.candidateLimit,
+      neighbors: options.neighbors,
+      excerptLines: options.excerptLines,
+    });
+    // A source switched off by the caller is not a degradation: it is left out
+    // entirely rather than reported as unavailable, which is reserved for "the source
+    // exists but could not be searched".
+    sources =
+      request.memoryEnabled === false
+        ? built.filter((source) => source.id !== "memory")
+        : built;
+  } catch (error) {
+    return {
+      entries: [],
+      status: "failed",
+      reason: error instanceof Error ? error.message : String(error),
+      diagnostics: emptyDiagnostics(0, 0, noSources),
+    };
+  }
 
   const candidates: RecallCandidate[] = [];
   const diagnostics: RecallSourceDiagnostic[] = [];

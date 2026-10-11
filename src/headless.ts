@@ -1774,6 +1774,10 @@ export async function handleHeadlessCommand(
       workingDirectory: getCurrentWorkingDirectory(),
       skillSources: resolvedSkillSources,
       shellContext: detectShellContext(),
+      // Feature ② recalls against the user's own words. An agent-launched one-shot
+      // prompt is agent-to-agent traffic, not a user turn (《26》§6.4), and the
+      // subagent mode never reaches this provider at all.
+      userInputText: isAgentLaunch || values["from-agent"] ? undefined : prompt,
     });
     for (const part of sharedReminderParts) {
       pushPart(part.text);
@@ -4067,6 +4071,14 @@ async function runBidirectionalMode(
           systemInfoReminderEnabled,
           workingDirectory: getCurrentWorkingDirectory(),
           skillSources,
+          // Only the queued inputs that came from the user are the user's words;
+          // a cron prompt or a task notification is not (《26》§6.4). Recall runs on
+          // those parts alone, or not at all.
+          userInputText: extractTelemetryInputText(
+            mergeBidirectionalQueuedInput(
+              queuedInputs.filter((input) => input.kind === "user"),
+            ) ?? "",
+          ),
         });
         const turnStartModContext = createHeadlessModContext({
           agent,
