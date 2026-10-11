@@ -44,6 +44,35 @@ function clip(s: string, limit: number): string {
 }
 
 /**
+ * Clip user prose to the display limit, leaving a recall block whole.
+ *
+ * A reminder block only reaches this point when `removeSystemContextBlocks`
+ * preserved it, which is feature ②'s alone. Truncating one costs more than the
+ * length it saves: the cut removes the closing tag, and
+ * `splitSystemReminderBlocks` then classifies the whole remainder as user prose
+ * (`closeIdx === -1`), so the renderer never reaches its recall branch and the
+ * `↩ recalled` line is missing at every tier. The block needs no display limit in
+ * any case — the writer already bounds it with `recallTotalCharacters`.
+ */
+function clipUserText(text: string): string {
+  const pattern = new RegExp(
+    `${SYSTEM_REMINDER_OPEN}[\\s\\S]*?${SYSTEM_REMINDER_CLOSE}`,
+    "g",
+  );
+  let out = "";
+  let cursor = 0;
+  let match = pattern.exec(text);
+  while (match !== null) {
+    const at = match.index;
+    out += clip(text.slice(cursor, at), CLIP_CHAR_LIMIT_TEXT);
+    out += match[0];
+    cursor = at + match[0].length;
+    match = pattern.exec(text);
+  }
+  return out + clip(text.slice(cursor), CLIP_CHAR_LIMIT_TEXT);
+}
+
+/**
  * Normalize line endings: convert \r\n and \r to \n
  */
 function normalizeLineEndings(s: string): string {
@@ -93,7 +122,7 @@ function renderUserContentParts(
   // Parts are joined with newlines so each appears as a separate line
   if (typeof parts === "string") {
     const normalized = normalizeLineEndings(parts);
-    return clip(removeSystemContextBlocks(normalized), CLIP_CHAR_LIMIT_TEXT);
+    return clipUserText(removeSystemContextBlocks(normalized));
   }
 
   const rendered: string[] = [];
@@ -104,7 +133,7 @@ function renderUserContentParts(
       const normalized = normalizeLineEndings(text);
       const withoutSystemReminders = removeSystemContextBlocks(normalized);
       if (!withoutSystemReminders) continue;
-      rendered.push(clip(withoutSystemReminders, CLIP_CHAR_LIMIT_TEXT));
+      rendered.push(clipUserText(withoutSystemReminders));
     } else if (p.type === "image") {
       rendered.push("[Image]");
     }

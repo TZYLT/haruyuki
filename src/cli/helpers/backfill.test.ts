@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { Message } from "@letta-ai/letta-client/resources/agents/messages";
+import { splitSystemReminderBlocks } from "@/cli/components/UserMessageRich";
 import { createBuffers } from "@/cli/helpers/accumulator";
 import { backfillBuffers } from "@/cli/helpers/backfill";
+import { formatRecallBlockForDisplay } from "@/reminders/recall-display";
 import type { RecallDecision, RecallEntry } from "@/reminders/recall-port";
-import { formatRecallReminder } from "@/reminders/recall-reminder";
+import {
+  formatRecallReminder,
+  isRecallReminderText,
+} from "@/reminders/recall-reminder";
 
 /**
  * History is re-read from the store, and every reminder block is stripped from the
@@ -81,5 +86,71 @@ describe("backfilling a user message", () => {
     expect(text).toContain("recall-injected");
     expect(text).not.toContain("Session context");
     expect(text).toContain("the user's question");
+  });
+});
+
+/**
+ * The fixture above is deliberately tiny, and an injection shorter than the clip
+ * cannot show what the clip does to one. A real injection is ~1.4k characters —
+ * three passages plus their headers — which is longer than
+ * `CLIP_CHAR_LIMIT_TEXT`. Truncating it cuts the closing `</system-reminder>` off,
+ * and `splitSystemReminderBlocks` then classifies the whole remainder as user
+ * prose (`closeIdx === -1`), so `UserMessage`'s recall branch never runs and no
+ * `↩ recalled` line is ever rendered at any tier.
+ */
+function longRecallBlock(): string {
+  const entries: RecallEntry[] = [1, 2, 3].map((n) => ({
+    source: "transcript" as const,
+    fingerprint: `transcript:conv-${n}:m${n}`,
+    file: `conv-${n}`,
+    conversationKey: `conv-${n}`,
+    messageId: `m${n}`,
+    timestamp: "2026-10-11T09:00:00.000Z",
+    text: "a passage of recalled text long enough to overflow the clip ".repeat(
+      10,
+    ),
+    score: 5 - n,
+  }));
+  const block = formatRecallReminder({
+    entries,
+    status: "injected",
+    diagnostics: { threshold: 1, candidates: 3, sources: [] },
+  });
+  if (block === null) throw new Error("the writer produced nothing");
+  return block;
+}
+
+describe("a recall block longer than the display clip", () => {
+  test("the fixture really is longer than the clip", () => {
+    expect(longRecallBlock().length).toBeGreaterThan(500);
+  });
+
+  test("keeps its closing tag, so the renderer still sees a reminder", () => {
+    const text = backfilledUserText(
+      `${longRecallBlock()}\n\nthe user's question`,
+    );
+    expect(text).toContain("</system-reminder>");
+    const blocks = splitSystemReminderBlocks(text ?? "");
+    const recall = blocks.filter((block) => isRecallReminderText(block.text));
+    expect(recall).toHaveLength(1);
+    expect(recall[0]?.isSystemReminder).toBe(true);
+  });
+
+  test("renders the summary line the default tier promises", () => {
+    const text = backfilledUserText(
+      `${longRecallBlock()}\n\nthe user's question`,
+    );
+    const recall = splitSystemReminderBlocks(text ?? "").find((block) =>
+      isRecallReminderText(block.text),
+    );
+    if (recall === undefined) {
+      throw new Error("the recall block did not survive backfill");
+    }
+    const shown = formatRecallBlockForDisplay({
+      text: recall.text,
+      display: "summary",
+      expanded: false,
+    });
+    expect(shown).toContain("↩ recalled 3 passages");
   });
 });
