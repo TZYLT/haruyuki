@@ -10,6 +10,10 @@ import { formatTopicNudgeReminder } from "@/cli/helpers/topic-nudge";
 import { SYSTEM_REMINDER_CLOSE, SYSTEM_REMINDER_OPEN } from "@/constants";
 import { experimentManager } from "@/experiments/manager";
 import { permissionMode } from "@/permissions/mode";
+import {
+  readRecallSettings,
+  recallOptionsFromSettings,
+} from "@/recall-settings";
 import { settingsManager } from "@/settings-manager";
 import { shouldAdvertiseTopicMarking } from "@/settings-tool-gates";
 import { debugLog } from "@/utils/debug";
@@ -527,6 +531,10 @@ async function buildRecallReminder(
   const userText = context.userInputText?.trim();
   const conversationId = context.agent.conversationId;
   if (!userText || !conversationId) return null;
+  // Settings first: `/recall off` must mean the turn never searches, and reading
+  // the breaker after it would let a stale trip keep a re-enabled feature off.
+  const settings = readRecallSettings();
+  if (!settings.enabled) return null;
   // The breaker is checked before any work: once tripped, the feature must cost
   // nothing per turn — re-running the search to rediscover the failure is
   // exactly what tripping it was meant to stop.
@@ -553,6 +561,7 @@ async function buildRecallReminder(
       // window is defined against — supplying a second counter would only give the
       // two a chance to disagree.
       currentTurn: context.state.turnCount,
+      options: recallOptionsFromSettings(settings),
     });
     debugLog(
       "recall",

@@ -426,6 +426,32 @@ describe("the recall reminder provider", () => {
     });
   });
 
+  test("follows the settings, and off means off", async () => {
+    await withRecallFixture(async (fixture) => {
+      __testSetBackend(fixture.backend);
+      const state = createSharedReminderState();
+      state.turnCount = 1;
+      const context = () =>
+        recallContext({
+          agentId: fixture.agentId,
+          conversationId: fixture.currentConversationId,
+          state,
+          userInputText: RECALL_FIXTURE_QUERY,
+        });
+
+      // `limit` is the observable knob: the marker counts what was injected.
+      settingsManager.updateSettings({ recallLimit: 1 });
+      const text = await sharedReminderProviders.recall(context());
+      expect(parseRecallMarker(text ?? "")?.items).toBe(1);
+
+      // `/recall off` must stop the search, not just hide the result. A second
+      // call at a turn outside the window would inject again if it still ran.
+      settingsManager.updateSettings({ recallEnabled: false });
+      state.turnCount = 20;
+      expect(await sharedReminderProviders.recall(context())).toBeNull();
+    });
+  });
+
   test("does not search at all once the breaker has tripped", async () => {
     await withRecallFixture(async (fixture) => {
       __testSetBackend(fixture.backend);
