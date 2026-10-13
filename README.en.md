@@ -182,7 +182,7 @@ something or want to contribute, a pull request is very welcome.
 **To do:**
 - [x] Prefix freezing → raise cache hit rate and cut cost substantially
 - [x] Topic markers → freer context trimming
-- [ ] Passive memory recall → improve answer accuracy while saving a little cost
+- [ ] Passive memory recall → improve answer accuracy (the effect on cost, short or long term, is not yet clear)
 - [ ] Single-conversation mode → a continuous, unified conversation experience
 - [ ] Repackage the GUI → a clean, fast graphical interface
 - [ ] Network access and a web UI
@@ -203,7 +203,7 @@ older in time**, and they record what changed **relative to the original project
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
 | `0.2.1` | - | Fixes known problems and updates the documentation |
-| `0.2.0` | + | **Passive recall**: every question searches your past conversations and memory files and brings the relevant passages into the current turn, so answers fit your history better — though it costs a little more |
+| `0.2.0` | + | **Passive recall**: every question searches your past conversations and memory files and brings the relevant passages into the current turn, so answers fit your history better; the effect on cost, short or long term, is not yet clear |
 | `0.1.3` | + | Adds `hryk` as a shortcut input, fully equivalent to `haruyuki` |
 | `0.1.2` | - | Internal changes only, following the repository rename; nothing a user would notice |
 | `0.1.1` | + | Fixes known problems around compression, and generates the command list so it can never go stale |
