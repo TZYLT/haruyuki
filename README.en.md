@@ -159,6 +159,10 @@ haruyuki -p "describe yourself in one sentence" --output-format json   # headles
 Inside an interactive session, start with `/help`, `/init` (initialise memory), `/model` (switch model),
 `/skills`, and `/doctor`.
 
+**To learn how to use it**: have the agent use the bundled `haruyuki-guide` skill. It explains how
+this build works and why, reading the reference documents shipped with it rather than guessing from
+memory.
+
 [Common commands reference (Chinese)](https://github.com/TZYLT/haruyuki/blob/main/docs/commands.zh-CN.md)
 
 ## 5. Platform notes and known limitations
@@ -184,6 +188,30 @@ something or want to contribute, a pull request is very welcome.
 - [ ] Network access and a web UI
 - [ ] Downstream polish (voice synthesis, character art, and so on)
 - [ ] Stable personality and conversational style
+
+### Version history at a glance
+
+The itemised detail, with the reasons behind each change, is in [`CHANGELOG.md`](CHANGELOG.md).
+**A `-` means that version number has no matching package on npm** — either it was never published,
+or the change was not mature enough to be worth using. So the table doubles as a growth chart: the
+rows you can actually install today are the ones with a package.
+
+The last four rows are the **`-better` lineage**: after the split this project first kept upstream's
+version numbers and only later restarted at `0.1.0`. Those numbers are **larger than `0.1.0` but
+older in time**, and they record what changed **relative to the original project**.
+
+| Version | On npm | What changed, and why you would care |
+|---|---|---|
+| `0.2.1` | - | Fixes known problems and updates the documentation |
+| `0.2.0` | + | **Passive recall**: every question searches your past conversations and memory files and brings the relevant passages into the current turn, so answers fit your history better — though it costs a little more |
+| `0.1.3` | + | Adds `hryk` as a shortcut input, fully equivalent to `haruyuki` |
+| `0.1.2` | - | Internal changes only, following the repository rename; nothing a user would notice |
+| `0.1.1` | + | Fixes known problems around compression, and generates the command list so it can never go stale |
+| `0.1.0` | - | **Becoming independent**: renamed to Haruyuki, config directory and environment variables renamed, cloud features removed — from this point the project is fully local and independent. |
+| `0.36.2-better` | - | Cuts the cloud links and telemetry for good: no more sending feedback or error reports to the original project's cloud service. |
+| `0.36.1-better` | - | Fixes a change to one model setting wiping the other settings for that conversation |
+| `0.36.0-better` | - | **Topic trimming** replaces upstream's proportional auto-compaction: every path that rewrote history automatically is removed, and you choose where context is cut at a topic boundary, squeezing the cost a little further |
+| `0.35.0-better` | - | The first release: **prefix freezing** — within a session nothing recompiles or appends behind an already-sent context, so the same context is never billed twice, cutting cost substantially |
 
 ## 7. Your data, logs, and privacy
 

@@ -1,5 +1,9 @@
 # 开发说明
 
+> **English readers:** this document is Chinese only for now. In practice a capable LLM translates
+> the change list below well enough to be useful; if anything is unclear, or you need a dependable
+> answer, please open an issue or write to the author directly. Sorry for the inconvenience.
+>
 > **本文件既是内部开发纪律，也是对外公开的改动清单。** 本仓库**有意不配 CI**：`.github/` 只放治理文件
 > （issue 模板 ＋ PR 模板），门禁＝pre-commit hook ＋ `bun run check` ＋ 发版预检；理由与"清洁环境验证"
 > 的替代做法见 **§G**。

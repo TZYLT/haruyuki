@@ -42,8 +42,6 @@ const BIN_TARGET = "haruyuki.js";
 const LEGAL_FILES = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"];
 /** Build outputs the package cannot ship without. */
 const REQUIRED_ARTIFACTS = ["haruyuki.js", "image-resize-worker.js", "dist"];
-/** The only untracked/ignored paths tolerated by the clean-tree check. */
-const IGNORED_PATH_PREFIXES = ["docs/", "SPEC-"];
 const REGISTRY = "https://registry.npmjs.org/";
 const CONFIRM_TOKEN_ENV = "RELEASE_CONFIRM_TOKEN";
 const HTTP_TIMEOUT_MS = 8_000;
@@ -461,10 +459,9 @@ function checkGitState(main) {
     // Renames and copies are printed as "old -> new"; both sides matter.
     .flatMap((entry) => entry.split(" -> "))
     .map((path) => (path.startsWith('"') && path.endsWith('"') ? path.slice(1, -1) : path))
-    .filter((path) => path.length > 0)
-    .filter((path) => !IGNORED_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)));
+    .filter((path) => path.length > 0);
   if (offenders.length === 0) {
-    ok("working tree clean", `ignoring ${IGNORED_PATH_PREFIXES.join(", ")}`);
+    ok("working tree clean");
   } else {
     bad("working tree dirty", offenders.join(", "));
   }
