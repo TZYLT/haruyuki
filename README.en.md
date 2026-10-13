@@ -159,7 +159,7 @@ haruyuki -p "describe yourself in one sentence" --output-format json   # headles
 Inside an interactive session, start with `/help`, `/init` (initialise memory), `/model` (switch model),
 `/skills`, and `/doctor`.
 
-[Common commands reference (Chinese)](常用命令说明.md)
+[Common commands reference (Chinese)](https://github.com/TZYLT/haruyuki/blob/main/docs/commands.zh-CN.md)
 
 ## 5. Platform notes and known limitations
 
@@ -193,7 +193,7 @@ something or want to contribute, a pull request is very welcome.
 - Crash/boundary-error logs and `/feedback` reports are written to local files (`~/.haruyuki/logs/`).
 - `haruyuki memory backup` takes a snapshot before you touch memory, and the memory directory is itself a
   git repository, so every change has a commit — see
-  [the common commands reference (Chinese)](常用命令说明.md).
+  [the common commands reference (Chinese)](https://github.com/TZYLT/haruyuki/blob/main/docs/commands.zh-CN.md).
 - The eight `LETTA_*` environment variables shared with upstream only affect the reading of **local paths
   and provider credentials**; they cause no outbound calls.
 

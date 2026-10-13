@@ -128,7 +128,7 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 
 交互会话里先试这几条：`/help`、`/init`（初始化记忆）、`/model`（换模型）、`/skills`、`/doctor`。
 
-[点这里跳转-常用命令说明.md](常用命令说明.md)
+[常用命令参考](https://github.com/TZYLT/haruyuki/blob/main/docs/commands.zh-CN.md)
 
 ## 五、平台与已知限制
 
@@ -157,7 +157,7 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 
 - 所有 agent 状态、记忆与 transcript 都在 `~/.haruyuki`（或 `HARUYUKI_HOME` 指向的位置）与你自己的 provider 账号里；本项目**绝不上报遥测**，也绝不把诊断内容发给第三方。
 - 崩溃/边界错误日志、`/feedback` 报告都写本地文件（`~/.haruyuki/logs/`）。
-- `haruyuki memory backup` 可在动记忆前留快照；记忆目录本身是 git 仓，任何改动都有提交记录，详见 [点这里跳转-常用命令说明.md](常用命令说明.md)。
+- `haruyuki memory backup` 可在动记忆前留快照；记忆目录本身是 git 仓，任何改动都有提交记录，详见 [常用命令参考](https://github.com/TZYLT/haruyuki/blob/main/docs/commands.zh-CN.md)。
 - 与上游共用的 8 个 `LETTA_*` 环境变量只影响**本地路径与 provider 凭据**的读取，不产生出站调用。
 
 
