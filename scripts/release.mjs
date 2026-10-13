@@ -27,7 +27,8 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -45,6 +46,8 @@ const REQUIRED_ARTIFACTS = ["haruyuki.js", "image-resize-worker.js", "dist"];
 const REGISTRY = "https://registry.npmjs.org/";
 const CONFIRM_TOKEN_ENV = "RELEASE_CONFIRM_TOKEN";
 const HTTP_TIMEOUT_MS = 8_000;
+/** The bundle is one large file; a cold `node haruyuki.js --version` is sub-second but generous headroom costs nothing. */
+const SMOKE_TIMEOUT_MS = 120_000;
 
 const checks = [];
 
@@ -415,7 +418,7 @@ function checkFilesWhitelist(main) {
   return undefined;
 }
 
-function checkBuildArtifacts() {
+function checkBuildArtifacts(main) {
   heading("5. build artifacts");
   for (const artifact of REQUIRED_ARTIFACTS) {
     const absolute = join(REPO_ROOT, artifact);
@@ -428,6 +431,42 @@ function checkBuildArtifacts() {
     } catch {
       ok(artifact, "directory");
     }
+  }
+
+  // Existing is not the same as runnable, and runnable is not the same as current:
+  // `build.js` inlines the version, so a bundle built before the last version bump
+  // still exists and still reports the old string. Running it is the only way to
+  // catch "bumped but not rebuilt" before the tarball ships.
+  // Startup also writes a settings file, so the smoke run gets a throwaway harness
+  // root instead of touching the maintainer's real one.
+  const smokeHome = mkdtempSync(join(tmpdir(), "haruyuki-release-smoke-"));
+  try {
+    const output = execFileSync(process.execPath, [join(REPO_ROOT, BIN_TARGET), "--version"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: { ...process.env, HARUYUKI_HOME: smokeHome },
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: SMOKE_TIMEOUT_MS,
+    });
+    const reported = output
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .pop();
+    const expected = `${main.version} (Haruyuki)`;
+    if (reported?.includes(expected)) {
+      ok(`${BIN_TARGET} --version`, reported);
+    } else {
+      bad(
+        `${BIN_TARGET} --version`,
+        `expected "${expected}", got ${JSON.stringify(reported ?? "")} — rebuild with: bun run build`,
+      );
+    }
+  } catch (error) {
+    const detail = String(error.stderr ?? "").trim() || String(error.message ?? error);
+    bad(`${BIN_TARGET} --version`, `the bundle did not run: ${detail}`);
+  } finally {
+    rmSync(smokeHome, { recursive: true, force: true });
   }
   return undefined;
 }
@@ -610,7 +649,7 @@ async function main() {
   checkManifest(main);
   checkBinEntries(main);
   checkFilesWhitelist(main);
-  checkBuildArtifacts();
+  checkBuildArtifacts(main);
   checkLegalFiles();
   checkGitState(main);
   if (options.skipNetwork) {
