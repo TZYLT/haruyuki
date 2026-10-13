@@ -4,6 +4,23 @@
   "lettaStartupLogProtocol": 1,
   "description": "Haruyuki is a local-first terminal runtime for stateful, long-lived agents.",
   "author": "TZYLT <TZY143@126.com>",
+  "keywords": [
+    "ai",
+    "agent",
+    "agent-runtime",
+    "llm",
+    "cli",
+    "tui",
+    "terminal",
+    "local-first",
+    "self-hosted",
+    "memory",
+    "memgpt",
+    "letta",
+    "context-management",
+    "anthropic",
+    "openai"
+  ],
   "type": "module",
   "packageManager": "bun@1.3.14",
   "bin": {
@@ -16,6 +33,7 @@
     "README.md",
     "README.en.md",
     "CONTRIBUTING.md",
+    "CHANGELOG.md",
     "THIRD-PARTY-NOTICES.md",
     "haruyuki.js",
     "image-resize-worker.js",
@@ -53,9 +71,7 @@
     "dist/channels-telegram.js",
     "dist/channels-telegram.js.map",
     "dist/types",
-    "docs/examples",
-    "dist/agent-presets-*.js",
-    "dist/agent-presets-*.js.map"
+    "docs/examples"
   ],
   "exports": {
     ".": "./haruyuki.js",
