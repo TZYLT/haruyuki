@@ -20,7 +20,9 @@
 ## 环境要求
 
 - bun **1.3.14**（`engines` 要求 >= 1.3.2；**lockfile** 以 1.3.14 为基线）
-- Node **>= 22.19.0**
+- Node **>= 22.19.0**（`.node-version` 固定 **22.19.0**，认这个文件的工具会自动选版本）
+- **构建要 Bun，运行只要 Node**：`package.json` 里的 `engines.bun` 是**非标准字段** ——
+  npm 只理解 `engines.node`，所以这条约束**不会产生任何安装期提示或警告**，只有读了本节才知道。
 - 本机现状：bun 1.3.14（npm 渠道安装）、Node v22.19.0
   （**不写盘符与安装目录**：本文件随包发布，具体路径属构建机信息）
 
@@ -36,6 +38,9 @@ bun run check                    # 本地护栏（14 项）：循环依赖 / 分
                                  # 前缀冻结应用点 / 测试隔离 / 测试覆盖 /
                                  # skill frontmatter / 内置 skill 脚本 / biome / tsc
 bun run build                    # 构建：根目录 haruyuki.js（已 gitignore）+ dist/app-server-client.*
+
+bun run release:check            # 发版前的只读预检（＝ node scripts/release.mjs --check）
+                                 # 离线加 --skip-network；完整步骤见 §发布流程
 
 bun test <file>                  # 单文件单测
 node scripts/run-unit-tests.cjs  # 全量单测（并行；HARUYUKI_TEST_PARALLEL=0 走串行）
@@ -67,10 +72,48 @@ node scripts/generate-tutor-avatar.cjs          # → assets/tutor-profile.png
 10. **AI 使用的溯源（也是版权举证）**：借助 AI 生成 / 大改时，在提交信息里记下**模型 + 关键提示要点 + 人工改动要点**。
     这是 `NOTICE` §1 版权主张的**证据基础**（证明"人类智力贡献"真实存在），同时也是"未逐字复制他人表达"的抗辩材料。
     与本仓已定的品牌/文档纪律（不得抄上游文档正文）配套使用。
-11. **发布到 npm**：包名 `haruyuki`、`publishConfig.access: public`、`prepublishOnly` 会跑 `bun run build`。
-    发布顺序：`npm publish --tag beta` → 验证 → `npm dist-tag add haruyuki@<ver> latest`；**先 beta 后 latest**。
-    每次发布前确认 `LICENSE`/`NOTICE`/`THIRD-PARTY-NOTICES.md`/`README*`/`CONTRIBUTING.md` 都在 `files` 里，
-    且 `npm pack --dry-run` 中仍有 **0** 份内部规划文档。
+11. **发布到 npm**：只走 **§发布流程** 那一套，**不在这里重复步骤**。硬前提由预检自动核对：
+    包名 `haruyuki`、`publishConfig.access: public`、`prepublishOnly` 跑 `bun run build`、
+    `LICENSE`/`NOTICE`/`THIRD-PARTY-NOTICES.md`/`README*`/`CONTRIBUTING.md` 都在 `files` 里，
+    且打包列表里**内部规划文档为 0**、文件内容里**没有构建机路径**。
+
+## 发布流程
+
+> **谁执行**：维护者本人（纪律 1：AI 不推送；`publish` 与 `push` 同样由本人确认）。
+> **一条命令的只读预检**：`bun run release:check`（＝ `node scripts/release.mjs --check`；离线加 `--skip-network`）。
+
+1. **前置**：`bun run check` 14/14；受影响的定向测试跑过；**工作树干净** —— 预检对任何未提交改动**直接报红**
+   （这是刻意的：发版应来自已提交状态）。
+2. **写 `CHANGELOG.md`**：把顶部的 `[未发布]` 一节填成本次的内容（面向用户：改了什么、为什么）。
+3. **bump 版本号（单独一个提交）**：
+   - `package.json` 的 `version`；
+   - `bun run build` —— **必须重建**：`haruyuki.js` 里的版本号是**构建期内联**的，不重建就会把旧版本号发出去。
+     预检第 5 项会跑一次 `node haruyuki.js --version` 并断言它等于 `package.json` 的 `version`，漏掉重建会被拦下；
+   - 两份 README 里**写死的** `--version` 字样与体积数字（`README.md` / `README.en.md` 都有）；
+   - `README.md` 的版本变动清单里那一行：npm 标记 `-` → `+`；
+   - `CHANGELOG.md` 的 `[未发布]` 更名为 `[x.y.z]`。
+4. **打 tag**：`git tag -a v<x.y.z> -m "..."`。预检会核对 `HEAD` 上有 `v<version>` 这个 tag，
+   没打就报 `HEAD is not tagged`。
+5. **预检**：`bun run release:check`。必须 **0 failures**；剩下的 warnings 要能**逐条解释**
+   （例如离线 `--skip-network` 会带来两条 "skipped"）。
+6. **发布**：
+   ```bash
+   npm publish --tag beta                       # 1) 先挂 beta
+   npm view haruyuki@<x.y.z> version            # 2) 确认真的上去了
+   npm dist-tag add haruyuki@<x.y.z> latest     # 3) 再 promote 到 latest
+   ```
+   **为什么先 beta 后 latest**：`latest` 是所有 `npm install -g haruyuki`（以及 `npx haruyuki`）拿到的版本，
+   而 npm 的发布**不能撤回**（只能 `deprecate`）。先挂 `beta`，"发出去但有问题"的窗口里就只有显式装 beta 的人；
+   验证通过再 promote。现状即证据：npm 上 `beta` 与 `latest` 现在同指 `0.2.0`。
+   ⚠️ **另一条路径与它不一致**：`bun run release:publish`（＝ `release.mjs --publish`）跑的是
+   `npm publish --access public`，**直发 `latest`**，没有 beta 缓冲。想守上面的顺序就用手工三步。
+7. **推远端**：`git push` ＋ `git push --tags`（纪律 1：由本人执行；`release.mjs` **从不** push）。
+8. **写 GitHub Release**：正文从 `CHANGELOG.md` 的对应小节取（改了什么 / 为什么），挂到该 tag 上。
+   分家前的 4 个 `-better` tag 也各补一条，正文一句话说明"**分家前历史，不适用于当前版本序列**"——
+   否则看 tag 列表的人会以为 `0.36.2` 比 `0.2` 新。
+
+> **不 `unpublish`、不 `deprecate` 已发布的版本**：`0.2.0` 曾把构建机路径打进产物，处置是**只发下一个版本**
+> （`0.2.1`），而不是撤回 —— 撤回会打断已经装过它的人。同一原则适用于以后任何一次出错。
 
 ## 架构与分层
 
