@@ -357,10 +357,6 @@ directory first. Otherwise the run reads and mutates your real
   `justfile` and the remote-log-tree logic were removed at the split (commit
   `4fe26381`). This repo ships the CLI and a local app-server protocol that
   compatible clients consume; do not reintroduce desktop build steps here.
-- **`bin/letta.js` is dead upstream residue.** It spawns prebuilt
-  `letta-<platform>` binaries this fork neither builds nor ships, and nothing
-  references it — `package.json` `bin` points at `haruyuki.js`. Do not treat it
-  as an entrypoint.
 - **Harness paths come from `src/utils/app-paths.ts`.** Never spell `.haruyuki` (or
   a path under it) as a literal in new code. Use `appHomeRoot()` for the harness
   root, `appHomePath([APP_SUBDIRS.x, ...])` for a path inside it,
