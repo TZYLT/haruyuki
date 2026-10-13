@@ -2,8 +2,15 @@
 
 This file explains how to work effectively in this repo. It covers the rules enforced by the local check suite (`bun run check`) and the pre-commit hook, **why each rule exists**, and the workflow conventions that keep the codebase healthy and agent-navigable.
 
-**This fork has no CI.** `.github/` was removed when it split from upstream, so
-the pre-commit hook and `bun run check` are the only gates. Run both.
+**This fork runs no CI, on purpose.** `.github/` carries governance files only (issue and PR
+templates); there is no workflow. The pre-commit hook and `bun run check` are the gates, plus the
+release preflight. The reasons are recorded in `CONTRIBUTING.md` §G — briefly: this is a
+single-maintainer fork whose default workflow is committing (including WIP) straight to `main`,
+so a `push`-triggered workflow would sit red most of the time, which is worse than having none.
+Do not add a workflow without re-opening that decision.
+
+To check what a **fresh clone** sees (the one thing CI would have added), run from an empty temp
+directory: `git clone <repo-url> clone && cd clone && bun install --frozen-lockfile && bun run check`.
 
 ---
 

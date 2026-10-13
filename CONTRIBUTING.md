@@ -1,6 +1,8 @@
 # 开发说明
 
-> **本文件既是内部开发纪律，也是对外公开的改动清单。** 本仓库已移除 `.github/`（无 CI），
+> **本文件既是内部开发纪律，也是对外公开的改动清单。** 本仓库**有意不配 CI**：`.github/` 只放治理文件
+> （issue 模板 ＋ PR 模板），门禁＝pre-commit hook ＋ `bun run check` ＋ 发版预检；理由与"清洁环境验证"
+> 的替代做法见 **§G**。
 > 「纪律」一节是维护者自己的约束；下游读者关心的是 §相对上游的改动清单 —— 那里逐项记录了本分支与上游的差异。
 >
 > 定位：本项目自 letta-code **v0.34.2** 起与原项目**彻底分家**——不合并上游、不做 cherry-pick、新功能自研；
@@ -175,6 +177,9 @@ node scripts/generate-tutor-avatar.cjs          # → assets/tutor-profile.png
 | `typescript` 的位置 | 由 `devDependencies` 改为 **`dependencies`**，并在 `build.js` 标记 `external` | Bun 把内联的 CommonJS 依赖包进 `__commonJS`，会把**构建机绝对路径**烧进产物；`haruyuki@0.2.0` 因此泄漏了维护者的仓库路径。无声明式开关可用（`define` 对生成的垫片无效、`root` 只影响多入口命名，均已实测）。代价＝装机量约 +14 MiB 解包 / +2.75 MiB 下载，README 已披露 |
 | `files` 增加 `!scripts/.haruyuki` | 取反排除 | **`files` 优先于 `.npmignore` 与 `.gitignore`**：白名单目录内的被忽略文件照样进包（三种情况实测）。`scripts/.haruyuki/settings.local.json` 因此一度进入打包列表，它含家目录路径与本地 agent/会话 id。`files` 支持取反（实测 4 种写法） |
 | 新增 `scripts/check-build-leaks.mjs`，接入 `release.mjs` 第 10 项 | 发布**闸门**（阻断，不改产物） | 原有泄漏扫描是**路径级**（只拦 `^docs/\d`），看不见字节里的内容。该脚本扫"机器身份"（构建根、Windows 用户目录、绝对 `node_modules`）与"本地状态路径"，并刻意**只打机器身份**以免误伤产品自带的合法绝对路径（如 `C:\Program Files\...` 启动器回退） |
+| **有意不配 CI** | 门禁＝pre-commit hook ＋ `bun run check` ＋ 发版预检；"清洁环境验证"改为**手工一次**：在空临时目录 `git clone <repo>` → `bun install --frozen-lockfile` → `bun run check` | 单人维护；默认工作方式是**直接在 `main` 上提交（含 WIP）再 push**，因此 `push` 触发的 workflow 会**长期标红** —— 那正是"红＝没人看"，比没有 CI 更伤。CI 唯一独有的收益是"全新检出仍通过"，而它一次临时 clone 就能覆盖；其余收益（他人 PR 的自动反馈）在可预见期内不成立（PR 少、多为熟人）。**若将来真有稳定的外部贡献，再重新裁定** |
+| `SECURITY.md` / issue 模板 / PR 模板（`.github/`） | 治理文件，**零维护** | 此前没有安全报告渠道（只能开公开 issue）；提 bug 不给版本/平台/入口；PR 作者不知道 `bun run check` 是必须的。三者都是**一次性文件、不产生持续负担**，直接降低"收报告时要追问"的成本 —— 符合"方便他人贡献"的取舍 |
+| **不做 `dependabot.yml`** | 依赖更新不由 bot 自动开 PR；安全告警改为**仓库设置里单独开启**（有仪表盘与通知，但不进 PR 流） | 它会**每周固定产生 PR**，对已是单人维护的项目是纯新增负担；与上一条"不给自己找事"同一取舍 |
 
 ---
 

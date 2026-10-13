@@ -1,0 +1,55 @@
+name: Feature request / 功能建议
+description: Propose a capability this project does not have. / 提出本项目还没有的能力。
+title: "[feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This fork split from `letta-code` on purpose and does **not** merge upstream, so a
+        feature that upstream added will not arrive by itself. Saying what problem you have
+        is more useful than naming a mechanism.
+
+        本分支与原项目**刻意分家**、不合并上游，所以"上游已经有了"不会自动进来。
+        说清你要解决的问题，比指定某个实现方式更有用。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题 (The problem)
+      description: What are you trying to do that you cannot do today? Concrete is better than general.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你设想的做法 (Proposed approach)
+      description: Optional. If you have a mechanism in mind, describe it — but the problem above is what will be judged.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 试过的替代方案 (Alternatives tried)
+      description: Anything you tried that almost worked, and why it did not.
+    validations:
+      required: false
+  - type: dropdown
+    id: cost
+    attributes:
+      label: 与"成本优先"的关系 (Relation to the cost-first goal)
+      description: Every feature in this project is weighed against token cost and local-first operation.
+      options:
+        - It reduces cost or keeps it neutral
+        - It adds cost only when explicitly enabled
+        - It adds cost by default (explain why that is acceptable)
+        - Not sure
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: 提交前确认 (Before submitting)
+      options:
+        - label: I searched the existing issues and the CONTRIBUTING change list for this.
+          required: true

@@ -1,0 +1,16 @@
+# Issue chooser. Keep this list short: every link here exists to absorb a
+# question that would otherwise become an issue the maintainer has to re-route.
+blank_issues_enabled: false
+contact_links:
+  - name: Q&A / usage questions (read the README first)
+    url: https://github.com/TZYLT/haruyuki#readme
+    about: What the project is, what it does not do (no cloud, no telemetry), and how to install it.
+  - name: Platform and known limitations
+    url: https://github.com/TZYLT/haruyuki/blob/main/README.md
+    about: Several differences are documented design limits, not bugs — e.g. Windows has no kernel sandbox, automatic reflection is off by default.
+  - name: How this fork differs from upstream
+    url: https://github.com/TZYLT/haruyuki/blob/main/CONTRIBUTING.md
+    about: The itemised change list, with a reason for each change. Read this before requesting something that upstream has.
+  - name: Security reports
+    url: https://github.com/TZYLT/haruyuki/blob/main/SECURITY.md
+    about: Do not open a public issue for a vulnerability — SECURITY.md says how to report privately, and which design limits are not bugs.

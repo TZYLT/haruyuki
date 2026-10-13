@@ -1,0 +1,118 @@
+name: Bug report / 缺陷报告
+description: Something is broken or behaves unexpectedly. / 有东西坏了，或行为不符预期。
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Most of what follows exists because this project has
+        **strong platform differences** and is **local-first** — without the version,
+        the platform and the backend, the report usually cannot be acted on.
+
+        感谢反馈。下面这些字段之所以是必填，是因为本项目**平台差异很大**且**完全本地运行** ——
+        没有版本、平台与后端模式，报告通常无法复现。
+  - type: input
+    id: version
+    attributes:
+      label: haruyuki --version 的输出 (version output)
+      description: Run `haruyuki --version` and paste the whole line, e.g. `0.2.0 (Haruyuki)`.
+      placeholder: 0.2.0 (Haruyuki)
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node 版本 (Node version)
+      description: Run `node --version`. The published package requires Node >= 22.19.0.
+      placeholder: v22.19.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统 (Operating system)
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Other (say which in the description)
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: 安装方式 (How it was installed)
+      options:
+        - npm install -g haruyuki
+        - Built from source (`bun install` + `bun run build`)
+        - Ran from source (`bun run dev`)
+        - Other (say which in the description)
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: 在哪个入口出现 (Which entry point)
+      description: This project has three orchestration paths that do NOT share everything.
+      options:
+        - Interactive TUI (the default `haruyuki`)
+        - Headless mode
+        - Local app-server / listener (`haruyuki server`)
+        - Channels (Slack / Telegram / Signal)
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: 后端模式 (Backend)
+      description: Run `haruyuki --backend` if unsure; this fork is local-only.
+      options:
+        - local (default)
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么 (What happened)
+      description: What you expected, and what happened instead. Screenshots are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 (Steps to reproduce)
+      description: Exact commands or keystrokes. If it needs a specific conversation state, say so.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志 (Relevant logs)
+      description: |
+        Logs stay on your machine: `~/.haruyuki/logs/` (or `HARUYUKI_HOME/logs/`).
+        **Please read them before pasting** — they can contain your paths and prompts.
+        日志在本地，贴之前请先自己看一眼，里面可能含你的路径与提示词。
+      render: text
+    validations:
+      required: false
+  - type: input
+    id: guide
+    attributes:
+      label: 相关文档章节 (Relevant guide section)
+      description: The in-session guide has a reference index; `haruyuki-guide` skills point at the same files. Paste a section name if one applies.
+      placeholder: e.g. "settings-and-paths" / "context-and-compaction"
+    validations:
+      required: false
+  - type: checkboxes
+    id: search
+    attributes:
+      label: 提交前确认 (Before submitting)
+      options:
+        - label: I searched the existing issues for the same problem.
+          required: true
+        - label: I read the "platform and known limitations" section of the README.
+          required: true
