@@ -21,7 +21,9 @@
   这是"构建产物不再内嵌构建机绝对路径"的代价：产物从 21.0 MiB 降到 13.6 MiB，但安装会多出 typescript 依赖（约 +14 MiB 解包）。README 已披露安装体积取舍。
 - `package.json` 新增 `release:check` / `release:publish` 两个脚本别名，`CONTRIBUTING.md` 新增「发布流程」一节。
   此前发布步骤只活在 `scripts/release.mjs` 的源码里，而 `CONTRIBUTING.md` 那唯一一句还与脚本**不一致**
-  （一处写"先 beta 后 latest"，脚本却直发 latest）；现以 `beta` 优先为准，并写明理由与两者的差异。
+  （一处写"先 beta 后 latest"，脚本却 `npm publish --access public` 直发 `latest`）。现改为：
+  `release:publish` **只发到 `beta`**，验证后再由人手动 `npm dist-tag add haruyuki@<版本> latest` ——
+  脚本**不碰 `latest`**，因为"这个 beta 到底试过没有"它判定不了。
 - 发版预检新增一项"构建产物真的能跑、且报的是当前版本"：执行 `node haruyuki.js --version` 并断言它等于
   `package.json` 的 `version`。`haruyuki.js` 里的版本号是**构建期内联**的，此前"bump 了但忘了重建"会一路
   发出去，现在会被预检拦下；该冒烟运行使用临时家目录，不触碰真实的 `~/.haruyuki`。

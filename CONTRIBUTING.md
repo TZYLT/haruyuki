@@ -96,19 +96,20 @@ node scripts/generate-tutor-avatar.cjs          # → assets/tutor-profile.png
    没打就报 `HEAD is not tagged`。
 5. **预检**：`bun run release:check`。必须 **0 failures**；剩下的 warnings 要能**逐条解释**
    （例如离线 `--skip-network` 会带来两条 "skipped"）。
-6. **发布**：
+6. **发布到 beta**：`bun run release:publish`（＝ `release.mjs --publish`）。它会跑预检 → 要求确认令牌
+   → `npm publish --tag beta` → 验证 registry 上确实有这个版本且落在 `beta` 上。**它不碰 `latest`。**
+7. **试过之后，手动 promote**：脚本**有意不做**这一步。
    ```bash
-   npm publish --tag beta                       # 1) 先挂 beta
-   npm view haruyuki@<x.y.z> version            # 2) 确认真的上去了
-   npm dist-tag add haruyuki@<x.y.z> latest     # 3) 再 promote 到 latest
+   npm install -g haruyuki@beta                 # 真的试一下
+   npm dist-tag add haruyuki@<x.y.z> latest     # 满意了再把 latest 移过去
    ```
-   **为什么先 beta 后 latest**：`latest` 是所有 `npm install -g haruyuki`（以及 `npx haruyuki`）拿到的版本，
-   而 npm 的发布**不能撤回**（只能 `deprecate`）。先挂 `beta`，"发出去但有问题"的窗口里就只有显式装 beta 的人；
-   验证通过再 promote。现状即证据：npm 上 `beta` 与 `latest` 现在同指 `0.2.0`。
-   ⚠️ **另一条路径与它不一致**：`bun run release:publish`（＝ `release.mjs --publish`）跑的是
-   `npm publish --access public`，**直发 `latest`**，没有 beta 缓冲。想守上面的顺序就用手工三步。
-7. **推远端**：`git push` ＋ `git push --tags`（纪律 1：由本人执行；`release.mjs` **从不** push）。
-8. **写 GitHub Release**：正文从 `CHANGELOG.md` 的对应小节取（改了什么 / 为什么），挂到该 tag 上。
+   **为什么这一步是手动的**：`latest` 是所有 `npm install -g haruyuki`（以及 `npx haruyuki`）拿到的版本，
+   而 npm 的发布**不能撤回**（只能 `deprecate`）。先挂 `beta`，"发出去但有问题"的窗口里就只有显式装 beta 的人。
+   而这个开关的触发条件是"**beta 到底试过没有**"——脚本判定不了，所以它和打 tag、`git push` 同级：**由人来做**。
+   放进脚本只会把"publish 完顺手 promote"变成一条命令，beta 这个窗口就成了摆设。
+   现状即证据：npm 上 `beta` 与 `latest` 现在同指 `0.2.0`（上一次走完这两步的结果）。
+8. **推远端**：`git push` ＋ `git push --tags`（纪律 1：由本人执行；`release.mjs` **从不** push）。
+9. **写 GitHub Release**：正文从 `CHANGELOG.md` 的对应小节取（改了什么 / 为什么），挂到该 tag 上。
    分家前的 4 个 `-better` tag 也各补一条，正文一句话说明"**分家前历史，不适用于当前版本序列**"——
    否则看 tag 列表的人会以为 `0.36.2` 比 `0.2` 新。
 

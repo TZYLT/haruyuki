@@ -6,7 +6,15 @@
  *
  *   node scripts/release.mjs --check              # read-only: run every preflight check
  *   node scripts/release.mjs --check --skip-network   # … offline (registry and login skipped)
- *   node scripts/release.mjs --publish            # checks -> confirm -> npm publish -> verify
+ *   node scripts/release.mjs --publish            # checks -> confirm -> npm publish --tag beta -> verify
+ *
+ * Publishing puts the version on the `beta` dist-tag only, so a bad release reaches the
+ * people who asked for beta and nobody else. Moving `latest` is deliberately not in
+ * this script - it is the irreversible public switch, it belongs later (once that beta
+ * has actually been tried), and leaving it a hand-run command is what keeps the window
+ * from being decorative:
+ *
+ *   npm dist-tag add haruyuki@<version> latest
  *
  * Human runs confirm by typing the release token; automation supplies the same token
  * through the environment, so there is exactly one code path:
@@ -16,7 +24,8 @@
  * A wrong, missing, or empty token aborts before anything leaves the machine. That is
  * the deliberate backstop instead of a `--yes` flag.
  *
- * Nothing here pushes to git. Pushing, and the release tag, stay manual by policy.
+ * Nothing here pushes to git, and nothing here moves `latest`. Pushing, the release tag
+ * and the `latest` dist-tag stay manual by policy.
  *
  * THERE IS NO SHORT-NAME PACKAGE. The CLI answers to both `haruyuki` and `hryk`, but
  * that is a `bin` fact of this package only: npm generates the global command from the
@@ -250,10 +259,11 @@ function parseArguments(argv) {
           "Usage: node scripts/release.mjs [--check | --publish] [--skip-network]",
           "",
           "  --check          (default) run every preflight check; publishes nothing",
-          "  --publish        checks -> confirm -> npm publish -> verify what went live",
+          "  --publish        checks -> confirm -> npm publish --tag beta -> verify",
           "  --skip-network   skip the registry and login checks; --check only",
           "",
           `  Automation sets ${CONFIRM_TOKEN_ENV} instead of typing the confirmation token.`,
+          "  Moving `latest` is not in this script: npm dist-tag add <name>@<version> latest",
         ].join("\n"),
       );
       process.exit(0);
@@ -605,6 +615,12 @@ function checkTarball(entry) {
 // Publish and verify
 // ---------------------------------------------------------------------------
 
+/**
+ * Confirm the version actually went live, and where it went live. The publish step
+ * targets `beta` on purpose, so "the version exists" and "`latest` resolves to it" are
+ * different facts: this asserts the first and prints both dist-tags, so the second is
+ * visible rather than assumed.
+ */
 async function verifyPublished(main) {
   heading("verifying what went live");
   const result = await fetchRegistryDocument(main.name);
@@ -618,11 +634,20 @@ async function verifyPublished(main) {
   if (!version) {
     return bad(`${main.name}@${main.version}`, "not published");
   }
-  const latest = result.document["dist-tags"]?.latest;
+  const distTags = result.document["dist-tags"] ?? {};
   ok(
     `${main.name}@${main.version}`,
-    `tarball integrity ${version.dist?.integrity ?? "(unknown)"}, latest = ${latest ?? "(none)"}`,
+    `tarball integrity ${version.dist?.integrity ?? "(unknown)"}`,
   );
+  ok(
+    "dist-tags",
+    Object.entries(distTags)
+      .map(([tag, value]) => `${tag}=${value}`)
+      .join(", ") || "(none)",
+  );
+  if (distTags.beta !== main.version) {
+    bad("dist-tag beta", `expected ${main.version}, found ${distTags.beta ?? "(absent)"}`);
+  }
   return undefined;
 }
 
@@ -675,9 +700,9 @@ async function main() {
   }
 
   await confirm(`${main.name}@${main.version}`);
-  heading(`publishing ${main.name}@${main.version}`);
-  runNpm(["publish", "--access", "public"]);
-  ok(`published ${main.name}@${main.version}`);
+  heading(`publishing ${main.name}@${main.version} to the beta dist-tag`);
+  runNpm(["publish", "--access", "public", "--tag", "beta"]);
+  ok(`published ${main.name}@${main.version} to beta`);
   await verifyPublished(main);
 
   const remaining = summarize();
@@ -685,9 +710,15 @@ async function main() {
     return fail(`${remaining} check(s) failed after publishing; inspect the output above.`);
   }
 
-  heading("released");
-  console.log("  Still manual, by policy:");
-  console.log(`    git push                 # the tagged commit`);
+  heading("published to beta");
+  console.log(
+    `  ${main.name}@${main.version} is live, but \`latest\` still points at the previous version.`,
+  );
+  console.log("  Still manual, by policy. Try it first, then flip the switch yourself:");
+  console.log(`    npm install -g ${main.name}@beta`);
+  console.log(`    npm dist-tag add ${main.name}@${main.version} latest`);
+  console.log("  And when that is done:");
+  console.log("    git push                 # the tagged commit");
   console.log(`    git push --tags          # v${main.version}`);
   console.log("");
 }
