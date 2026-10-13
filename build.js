@@ -108,8 +108,16 @@ await Bun.build({
   // @shikijs/langs stays external so lazily-imported grammars (LET-13149)
   // resolve from node_modules on demand instead of being inlined eagerly into
   // the single-file bundle.
+  // `typescript` stays external so the mod engine's transpiler is NOT inlined.
+  // Bun wraps an inlined CommonJS dependency in `__commonJS`, which bakes
+  // `__dirname`/`__filename` as the BUILD MACHINE's absolute path — that is how
+  // `haruyuki@0.2.0` shipped the maintainer's repository path. It is a real
+  // dependency of the published CLI (mods are transpiled at runtime), so it
+  // belongs in `dependencies`; `scripts/check-build-leaks.mjs` fails the release
+  // if a machine path ever reappears in a packed file.
   external: [
     "ws",
+    "typescript",
     "@vscode/ripgrep",
     "node-pty",
     "grammy",

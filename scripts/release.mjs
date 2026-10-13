@@ -31,6 +31,8 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { scanForBuildLeaks } from "./check-build-leaks.mjs";
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_NAME = "haruyuki";
 /** Command names this package declares; both must resolve to the same bundle. */
@@ -377,8 +379,12 @@ function checkFilesWhitelist(main) {
   }
   const missing = [];
   const emptyDirs = [];
+  // `!pattern` entries are exclusions, not paths to stat. npm applies them to the
+  // whitelist, which is the only way to drop a file that lives inside a
+  // whitelisted directory (`.npmignore` and `.gitignore` lose to `files`).
+  const exclusions = entries.filter((entry) => entry.startsWith("!"));
   for (const entry of entries) {
-    if (entry.includes("*") || entry.includes("?")) {
+    if (entry.startsWith("!") || entry.includes("*") || entry.includes("?")) {
       continue;
     }
     const absolute = join(REPO_ROOT, entry);
@@ -401,6 +407,9 @@ function checkFilesWhitelist(main) {
   }
   if (emptyDirs.length > 0) {
     bad("empty directories", emptyDirs.join(", "));
+  }
+  if (exclusions.length > 0) {
+    ok("exclusions", exclusions.join(", "));
   }
   for (const entry of entries.filter((value) => value.includes("*"))) {
     warn("glob entry", `${entry} — not checked statically`);
@@ -533,6 +542,20 @@ function checkTarball(entry) {
     ok("no internal planning docs", "docs/ ships only examples");
   } else {
     bad("internal planning docs leaked", leaked.slice(0, 8).join(", "));
+  }
+  // Path-level checks above cannot see a machine path baked into a file's bytes;
+  // `haruyuki@0.2.0` shipped the maintainer's repo root inside `haruyuki.js`.
+  const machineLeaks = scanForBuildLeaks({ repoRoot: REPO_ROOT, paths });
+  if (machineLeaks.length === 0) {
+    ok("no build-machine paths in file contents", `${paths.length} packed file(s) scanned`);
+  } else {
+    bad(
+      "build-machine path leaked into the package",
+      machineLeaks
+        .slice(0, 4)
+        .map((finding) => `${finding.path} [${finding.pattern}]`)
+        .join(", "),
+    );
   }
   if (paths.includes(BIN_TARGET)) {
     ok(`${BIN_TARGET} in tarball`);

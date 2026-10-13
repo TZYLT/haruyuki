@@ -15,7 +15,8 @@
 
 - bun **1.3.14**（`engines` 要求 >= 1.3.2；**lockfile** 以 1.3.14 为基线）
 - Node **>= 22.19.0**
-- 本机现状：bun 1.3.14（npm 渠道安装）、Node v22.19.0（`D:\nodejs`）
+- 本机现状：bun 1.3.14（npm 渠道安装）、Node v22.19.0
+  （**不写盘符与安装目录**：本文件随包发布，具体路径属构建机信息）
 
 ## 常用命令
 
@@ -164,6 +165,16 @@ node scripts/generate-tutor-avatar.cjs          # → assets/tutor-profile.png
 | 不给源码文件逐个加"已修改"头 | §4(b) 只要求"醒目声明"，仓库级 `NOTICE` ＋ README 专节即通行做法（若逐个改头，2000+ 文件全是噪声 diff） |
 | 不重命名那 8 个 `LETTA_*` 名 | 见 §C（会静默破坏 SDK 与记忆围栏） |
 | 不合并上游 / 不 cherry-pick | 已分家；上游 release 仅供参考 |
+
+### G. 打包与发布面的自有加固
+
+> 不是"相对上游的功能差异"，而是**发布出去的东西不可撤回**，所以单列。每条都对应一次实测缺陷或一次机制验证。
+
+| 改动 | 处置 | 为什么 |
+|---|---|---|
+| `typescript` 的位置 | 由 `devDependencies` 改为 **`dependencies`**，并在 `build.js` 标记 `external` | Bun 把内联的 CommonJS 依赖包进 `__commonJS`，会把**构建机绝对路径**烧进产物；`haruyuki@0.2.0` 因此泄漏了维护者的仓库路径。无声明式开关可用（`define` 对生成的垫片无效、`root` 只影响多入口命名，均已实测）。代价＝装机量约 +14 MiB 解包 / +2.75 MiB 下载，README 已披露 |
+| `files` 增加 `!scripts/.haruyuki` | 取反排除 | **`files` 优先于 `.npmignore` 与 `.gitignore`**：白名单目录内的被忽略文件照样进包（三种情况实测）。`scripts/.haruyuki/settings.local.json` 因此一度进入打包列表，它含家目录路径与本地 agent/会话 id。`files` 支持取反（实测 4 种写法） |
+| 新增 `scripts/check-build-leaks.mjs`，接入 `release.mjs` 第 10 项 | 发布**闸门**（阻断，不改产物） | 原有泄漏扫描是**路径级**（只拦 `^docs/\d`），看不见字节里的内容。该脚本扫"机器身份"（构建根、Windows 用户目录、绝对 `node_modules`）与"本地状态路径"，并刻意**只打机器身份**以免误伤产品自带的合法绝对路径（如 `C:\Program Files\...` 启动器回退） |
 
 ---
 
