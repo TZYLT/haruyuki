@@ -18,6 +18,16 @@ __pycache__/
 # Haruyuki file index exclusions (auto-created per-project, not for repo)
 .haruyukiignore
 
+# Internal planning documents: kept in the working tree, never committed.
+# They record the maintainer's reasoning, and 15 of them contain that machine's
+# absolute paths (plus harness paths and agent/conversation ids). A single
+# `git add docs` would publish all of it, and GitHub history is permanent.
+# Ignored here so the tool refuses it instead of relying on anyone remembering;
+# `docs/examples/**` and `docs/commands.zh-CN.md` are shipped assets and stay
+# tracked (gitignore never affects already-tracked files).
+docs/[0-9][0-9]-*.md
+SPEC-*.md
+
 # Generated Husky hook machinery (including worktree hook links)
 /.husky/_
 

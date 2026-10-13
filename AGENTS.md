@@ -548,10 +548,20 @@ existing tests creates unnecessary diff noise.
 - **Review signal:** any PR that bulk-renames entity names in existing tests
   when the rename isn't the PR's purpose.
 
-### Spec Files Are Internal
+### Spec Files and Planning Docs Are Internal
 
-`SPEC-*.md` files in the repo root are internal working documents, not PR
-content. Leave them untracked; don't include in commits.
+`SPEC-*.md` in the repo root and the numbered `docs/NN-*.md` planning documents are the
+maintainer's working notes, not PR content, and not something a clone needs. Both are listed in
+`.gitignore` for that reason — and the reason is not tidiness: they record the maintainer's
+reasoning, and several of them contain that machine's absolute paths, harness paths and
+agent/conversation ids, so committing them publishes all of it and GitHub history is permanent.
+
+- Never `git add` them, never `git add -A` without checking, and never "help" by committing them.
+- `docs/examples/**` (the mod examples) and `docs/commands.zh-CN.md` (the command manual) are
+  shipped assets, are tracked, and are **not** covered by the ignore rules. Do not move them to
+  match the pattern.
+- If a change seems to need a planning note committed, it belongs in `CONTRIBUTING.md`
+  (the itemised change list) instead.
 
 ### Vendored Ink Patches (Red Zone)
 
