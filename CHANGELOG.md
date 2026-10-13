@@ -8,15 +8,23 @@
 > **版本号谱系说明**：本 fork 早期使用 `0.35.0-better` … `0.36.2-better` 命名；分家后**重起为 `0.1.0`**（见 `0.1.0` 条目）。
 > 因此语义化排序上 `0.36.x-better` 早于 `0.1.0`，这是**刻意的重编号**，不是版本回退。
 
-## [未发布] — 下一个版本（0.2.1）
+## [0.2.1] - 2026-10-13
 
 ### 新增
 - `package.json` 补 `keywords`：此前为空数组，导致在 npm 上按任何关键词都搜不到本包。
 - 本文件 `CHANGELOG.md`。
+- `.node-version`（`22.19.0`）：此前只有 `engines.node` 声明，用错 Node 版本的贡献者得到的是**运行时**错误，
+  而不是安装期的版本提示。
 
 ### 变更
 - `typescript` 由 `devDependencies` 改为 **`dependencies`**，并在 `build.js` 中标记 `external`。
-  这是"构建产物不再内嵌构建机绝对路径"的代价：产物从 22.1 MB 降到 13.9 MB，但安装会多出 typescript 依赖（约 +14 MiB 解包）。README 已披露安装体积取舍。
+  这是"构建产物不再内嵌构建机绝对路径"的代价：产物从 21.0 MiB 降到 13.6 MiB，但安装会多出 typescript 依赖（约 +14 MiB 解包）。README 已披露安装体积取舍。
+- `package.json` 新增 `release:check` / `release:publish` 两个脚本别名，`CONTRIBUTING.md` 新增「发布流程」一节。
+  此前发布步骤只活在 `scripts/release.mjs` 的源码里，而 `CONTRIBUTING.md` 那唯一一句还与脚本**不一致**
+  （一处写"先 beta 后 latest"，脚本却直发 latest）；现以 `beta` 优先为准，并写明理由与两者的差异。
+- 发版预检新增一项"构建产物真的能跑、且报的是当前版本"：执行 `node haruyuki.js --version` 并断言它等于
+  `package.json` 的 `version`。`haruyuki.js` 里的版本号是**构建期内联**的，此前"bump 了但忘了重建"会一路
+  发出去，现在会被预检拦下；该冒烟运行使用临时家目录，不触碰真实的 `~/.haruyuki`。
 
 ### 修复
 - **构建产物泄漏构建机绝对路径**：`haruyuki@0.2.0` 的 `haruyuki.js` 内含
@@ -30,6 +38,9 @@
 ### 移除
 - `package.json` `files` 中两条冗余 glob（`dist/agent-presets-*.js`、`dist/agent-presets-*.js.map`）——
   同目录已有具名条目，这两条只会让发布预检每次都输出一条可忽略的 warning。
+- `bin/letta.js`：它 spawn 的是本仓**既不构建也不发布**的 `letta-<platform>` 预编译二进制，而 `package.json`
+  的 `bin` 指向 `haruyuki.js`、`files` 里从来没有 `bin/` —— 它只出现在源码克隆里，徒增"入口到底在哪"的误读。
+  删除后 `AGENTS.md` 里描述它的那条 gotcha 一并移除。
 
 ### 发布闸门
 - 新增 `scripts/check-build-leaks.mjs`：读取 `npm pack` 会发布的每个文本文件，拒绝"机器身份"串

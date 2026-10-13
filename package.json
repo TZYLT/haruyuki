@@ -1,6 +1,6 @@
 {
   "name": "haruyuki",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "lettaStartupLogProtocol": 1,
   "description": "Haruyuki is a local-first terminal runtime for stateful, long-lived agents.",
   "author": "TZYLT <TZY143@126.com>",

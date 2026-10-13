@@ -107,8 +107,8 @@ bun run build        # produces haruyuki.js at the repo root (gitignored)
 node ./haruyuki.js   # start the interactive UI
 ```
 
-> The build output is a **single-file bundle** (~21 MB) with production dependencies inlined;
-> `--version` should print `0.2.0 (Haruyuki)`. The number comes from `package.json`'s `version`
+> The build output is a **single-file bundle** (~13.6 MiB) with production dependencies inlined;
+> `--version` should print `0.2.1 (Haruyuki)`. The number comes from `package.json`'s `version`
 > and is **inlined at build time**, so changing it requires a rebuild.
 
 ### Option 2 — the npm package (recommended)
@@ -202,7 +202,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
-| `0.2.1` | - | Fixes known problems and updates the documentation |
+| `0.2.1` | + | Fixes known problems and updates the documentation |
 | `0.2.0` | + | **Passive recall**: every question searches your past conversations and memory files and brings the relevant passages into the current turn, so answers fit your history better; the effect on cost, short or long term, is not yet clear |
 | `0.1.3` | + | Adds `hryk` as a shortcut input, fully equivalent to `haruyuki` |
 | `0.1.2` | - | Internal changes only, following the repository rename; nothing a user would notice |
