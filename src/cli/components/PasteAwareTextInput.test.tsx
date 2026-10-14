@@ -182,4 +182,21 @@ describe("PasteAwareTextInput multi-read input commits (#4493)", () => {
     expect(observed.caret).toBe(3);
     expect(observed.renderedCaret).toBe(3);
   });
+
+  test("keeps both large pastes when two arrive in one tick", async () => {
+    const first = Array.from({ length: 8 }, (_, i) => `first-${i}`).join("\n");
+    const second = Array.from({ length: 8 }, (_, i) => `second-${i}`).join(
+      "\n",
+    );
+    const observed = await typeInReads([
+      [`\u001b[200~${first}\u001b[201~`, `\u001b[200~${second}\u001b[201~`],
+    ]);
+    const placeholders =
+      observed.value.match(/\[Pasted text #\d+ \+\d+ lines\]/g) ?? [];
+    expect(placeholders).toHaveLength(2);
+    // Order is preserved: the first paste sits before the second.
+    expect(observed.value.indexOf("[Pasted text")).toBeLessThan(
+      observed.value.lastIndexOf("[Pasted text"),
+    );
+  });
 });
