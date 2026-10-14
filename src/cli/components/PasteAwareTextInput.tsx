@@ -304,71 +304,80 @@ export function PasteAwareTextInput({
     { isActive: focus },
   );
 
-  // Bracketed paste is delivered on Ink 7's separate 'paste' channel. usePaste
-  // also enables bracketed paste mode while active, so pasted text arrives as a
-  // single string rather than individual key presses (see src/cli/AGENTS.md).
-  usePaste(
-    (text) => {
-      lastPasteDetectedAtRef.current = Date.now();
-      const payload = typeof text === "string" ? text : "";
-      // Translate any image payloads in the paste (OSC 1337, data URLs, paths).
-      const translated = translatePasteForImages(payload);
-      const insertPastedText = (value: string) => {
-        const at = Math.max(
-          0,
-          Math.min(caretOffsetRef.current, displayValue.length),
-        );
-        const isLarge = countLines(value) > 5 || value.length > 500;
-        if (isLarge) {
-          const pasteId = allocatePaste(value);
-          const placeholder = `[Pasted text #${pasteId} +${countLines(value)} lines]`;
-          const newDisplay =
-            displayValue.slice(0, at) + placeholder + displayValue.slice(at);
-          const newActual =
-            actualValue.slice(0, at) + value + actualValue.slice(at);
-          setDisplayValue(newDisplay);
-          setActualValue(newActual);
-          onChange(newDisplay);
-          const nextCaret = at + placeholder.length;
-          setNudgeCursorOffset(nextCaret);
-          caretOffsetRef.current = nextCaret;
-        } else {
-          const displayText = sanitizeForDisplay(value);
-          const newDisplay =
-            displayValue.slice(0, at) + displayText + displayValue.slice(at);
-          const newActual =
-            actualValue.slice(0, at) + value + actualValue.slice(at);
-          setDisplayValue(newDisplay);
-          setActualValue(newActual);
-          onChange(newDisplay);
-          const nextCaret = at + displayText.length;
-          setNudgeCursorOffset(nextCaret);
-          caretOffsetRef.current = nextCaret;
-        }
-      };
+  // Bracketed paste is delivered on Ink 7's separate 'paste' channel. Ink ties
+  // bracketed paste mode (`\x1b[?2004h`) to having a `usePaste` listener, so
+  // this stays active for the whole app lifetime: gating it on the composer's
+  // focus left pastes unbracketed while unfocused (overlay open / turn running),
+  // and they then arrived as many raw input events (literal newlines, no
+  // placeholder). The old Ink patch kept the mode on unconditionally.
+  usePaste((text) => {
+    if (typeof text !== "string") {
+      return;
+    }
+    if (!focusRef.current) {
+      // Composer unfocused: hand the paste to the focused component as a
+      // normal input event so overlays still receive it.
+      internal_eventEmitter?.emit("input", text);
+      return;
+    }
+    lastPasteDetectedAtRef.current = Date.now();
+    const payload = text;
+    // Translate any image payloads in the paste (OSC 1337, data URLs, paths).
+    const translated = translatePasteForImages(payload);
+    const insertPastedText = (value: string) => {
+      const at = Math.max(
+        0,
+        Math.min(caretOffsetRef.current, displayValue.length),
+      );
+      const isLarge = countLines(value) > 5 || value.length > 500;
+      if (isLarge) {
+        const pasteId = allocatePaste(value);
+        const placeholder = `[Pasted text #${pasteId} +${countLines(value)} lines]`;
+        const newDisplay =
+          displayValue.slice(0, at) + placeholder + displayValue.slice(at);
+        const newActual =
+          actualValue.slice(0, at) + value + actualValue.slice(at);
+        setDisplayValue(newDisplay);
+        setActualValue(newActual);
+        onChange(newDisplay);
+        const nextCaret = at + placeholder.length;
+        setNudgeCursorOffset(nextCaret);
+        caretOffsetRef.current = nextCaret;
+      } else {
+        const displayText = sanitizeForDisplay(value);
+        const newDisplay =
+          displayValue.slice(0, at) + displayText + displayValue.slice(at);
+        const newActual =
+          actualValue.slice(0, at) + value + actualValue.slice(at);
+        setDisplayValue(newDisplay);
+        setActualValue(newActual);
+        onChange(newDisplay);
+        const nextCaret = at + displayText.length;
+        setNudgeCursorOffset(nextCaret);
+        caretOffsetRef.current = nextCaret;
+      }
+    };
 
-      // Image-only clipboard paste carries no text; fall back to the macOS
-      // clipboard image import (same as the Ctrl+V path).
-      if ((!translated || translated.length === 0) && payload.length === 0) {
-        void (async () => {
-          const clipResult = await tryImportClipboardImageMac();
-          if (clipResult) {
-            if ("error" in clipResult) {
-              onPasteErrorRef.current?.(clipResult.error);
-              return;
-            }
-            insertPastedText(clipResult.placeholder);
+    // Image-only clipboard paste carries no text; fall back to the macOS
+    // clipboard image import (same as the Ctrl+V path).
+    if ((!translated || translated.length === 0) && payload.length === 0) {
+      void (async () => {
+        const clipResult = await tryImportClipboardImageMac();
+        if (clipResult) {
+          if ("error" in clipResult) {
+            onPasteErrorRef.current?.(clipResult.error);
+            return;
           }
-        })();
-        return;
-      }
+          insertPastedText(clipResult.placeholder);
+        }
+      })();
+      return;
+    }
 
-      if (translated && translated.length > 0) {
-        insertPastedText(translated);
-      }
-    },
-    { isActive: focus },
-  );
+    if (translated && translated.length > 0) {
+      insertPastedText(translated);
+    }
+  });
 
   // Store callbacks in refs to avoid stale closures in event handlers
   const onChangeRef = useRef(onChange);
