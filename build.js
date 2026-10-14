@@ -61,6 +61,28 @@ function rewriteDeclarationAliases(typesRoot) {
   }
 }
 
+// Ink loads its React DevTools hook from `devtools.js`, reached through a
+// dynamic `import('./devtools.js')` that is guarded at runtime by
+// `import.meta.resolve('react-devtools-core')`. `react-devtools-core` is an
+// optional peer that this CLI does not ship, so the bundler would otherwise
+// fail to resolve it. Stub the import to an inert module: devtools stays
+// disabled in the shipped bundle (the previous vendored no-op achieved the same
+// thing by replacing Ink's file), and nothing is inlined as an eager runtime
+// dependency.
+const stubOptionalDevtools = {
+  name: "stub-react-devtools-core",
+  setup(build) {
+    build.onResolve({ filter: /^react-devtools-core$/ }, () => ({
+      path: "react-devtools-core",
+      namespace: "haruyuki-stub",
+    }));
+    build.onLoad({ filter: /.*/, namespace: "haruyuki-stub" }, () => ({
+      contents: "export default { initialize() {}, connectToDevTools() {} };",
+      loader: "js",
+    }));
+  },
+};
+
 // Read version from package.json
 const pkg = JSON.parse(readFileSync(join(__dirname, "package.json"), "utf-8"));
 const version = pkg.version;
@@ -126,6 +148,7 @@ await Bun.build({
     "@shikijs/langs",
     "@shikijs/langs/*",
   ],
+  plugins: [stubOptionalDevtools],
   features: features,
 });
 

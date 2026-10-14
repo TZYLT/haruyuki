@@ -628,22 +628,13 @@ async function main(): Promise<void> {
   const terminalThemePromise = !isHeadless
     ? initTerminalTheme().catch(() => undefined)
     : Promise.resolve(undefined);
-  // Terminal preflight must happen before Ink takes over stdin. Start it as
-  // early as possible so OSC/Kitty handshakes are hidden behind auth checks,
-  // argument validation, and module loading instead of sitting in front of
-  // first render.
+  // Terminal preflight must happen before Ink takes over stdin. Only the theme
+  // probe remains here: the Kitty keyboard protocol is now owned by Ink 7
+  // (the `kittyKeyboard` render option below), which queries the terminal,
+  // consumes its own query replies, and disables the protocol on teardown.
+  // That replaces the previous in-house kitty detector.
   const terminalPreflightPromise = !isHeadless
-    ? (async () => {
-        await terminalThemePromise;
-        try {
-          const { detectAndEnableKittyProtocol } = await import(
-            "@/cli/utils/kitty-protocol-detector"
-          );
-          await detectAndEnableKittyProtocol();
-        } catch {
-          // Best-effort: if this fails, the app still runs (Option+Enter remains supported).
-        }
-      })()
+    ? terminalThemePromise
     : Promise.resolve(undefined);
   const apiKey = process.env.LETTA_API_KEY || settings.env?.LETTA_API_KEY;
   const baseURL =
@@ -2039,6 +2030,14 @@ async function main(): Promise<void> {
     }),
     {
       exitOnCtrlC: false, // We handle CTRL-C manually with double-press guard
+      // Kitty keyboard protocol (flag 1: disambiguate escape codes). Ink owns
+      // detection and teardown; "enabled" force-enables on TTYs, matching the
+      // previous in-house detector's best-effort behavior instead of requiring
+      // a query reply. HARUYUKI_DISABLE_KITTY=1 remains the escape hatch.
+      kittyKeyboard: {
+        mode:
+          process.env.HARUYUKI_DISABLE_KITTY === "1" ? "disabled" : "enabled",
+      },
     },
   );
 }

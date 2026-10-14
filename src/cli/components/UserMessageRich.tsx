@@ -381,7 +381,7 @@ export const UserMessage = memo(
             key={index}
             backgroundColor={line.highlighted ? background : undefined}
             color={line.highlighted ? textColor : undefined}
-            wrap={line.highlighted ? "end" : "wrap"}
+            wrap={line.highlighted ? "truncate-end" : "wrap"}
           >
             {line.text}
           </Text>

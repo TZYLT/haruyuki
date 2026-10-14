@@ -5,8 +5,7 @@
 // 4. Resolves placeholders on submit
 
 // Import useInput from vendored Ink for bracketed paste support
-import { useInput, useStdin } from "ink";
-import RawTextInput from "ink-text-input";
+import { useInput, usePaste, useStdin } from "ink";
 import { useEffect, useRef, useState } from "react";
 import {
   translatePasteForImages,
@@ -16,6 +15,7 @@ import {
   allocatePaste,
   resolvePlaceholders,
 } from "@/cli/helpers/paste-registry";
+import { TextInput } from "./TextInput";
 
 // Global timestamp for forward delete coordination
 // Use globalThis to ensure singleton across bundle
@@ -132,7 +132,12 @@ export function PasteAwareTextInput({
   onBackspaceAtEmpty,
   onPasteError,
 }: PasteAwareTextInputProps) {
-  const { internal_eventEmitter } = useStdin();
+  // Ink 7 narrows `useStdin()`'s public type to `PublicProps`; the runtime
+  // context still carries `internal_eventEmitter`. Access it through a local
+  // type instead of a second raw stdin listener (see src/cli/AGENTS.md).
+  const { internal_eventEmitter } = useStdin() as unknown as {
+    internal_eventEmitter?: import("node:events").EventEmitter;
+  };
   const [displayValue, setDisplayValue] = useState(value);
   // The sync effect below skips renders that already display `value`, so
   // resolve placeholders for the initial value here instead of on mount.
@@ -162,16 +167,6 @@ export function PasteAwareTextInput({
       caretOffsetRef.current = cursorPosition;
     }
   }, [cursorPosition]);
-
-  const TextInputAny = RawTextInput as unknown as React.ComponentType<{
-    value: string;
-    onChange: (value: string) => void;
-    onSubmit?: (value: string) => void;
-    placeholder?: string;
-    focus?: boolean;
-    externalCursorOffset?: number;
-    onCursorOffsetChange?: (n: number) => void;
-  }>;
 
   // Sync external value changes (treat incoming value as DISPLAY value)
   useEffect(() => {
@@ -263,72 +258,8 @@ export function PasteAwareTextInput({
         return;
       }
 
-      // Handle bracketed paste events emitted by vendored Ink
-      const isPasted = (key as unknown as { isPasted?: boolean })?.isPasted;
-      if (isPasted) {
-        lastPasteDetectedAtRef.current = Date.now();
-
-        const payload = typeof input === "string" ? input : "";
-        // Translate any image payloads in the paste (OSC 1337, data URLs, file paths)
-        const translated = translatePasteForImages(payload);
-
-        // Helper to insert translated content
-        const insertTranslated = (text: string) => {
-          const at = Math.max(
-            0,
-            Math.min(caretOffsetRef.current, displayValue.length),
-          );
-          const isLarge = countLines(text) > 5 || text.length > 500;
-          if (isLarge) {
-            const pasteId = allocatePaste(text);
-            const placeholder = `[Pasted text #${pasteId} +${countLines(text)} lines]`;
-            const newDisplay =
-              displayValue.slice(0, at) + placeholder + displayValue.slice(at);
-            const newActual =
-              actualValue.slice(0, at) + text + actualValue.slice(at);
-            setDisplayValue(newDisplay);
-            setActualValue(newActual);
-            onChange(newDisplay);
-            const nextCaret = at + placeholder.length;
-            setNudgeCursorOffset(nextCaret);
-            caretOffsetRef.current = nextCaret;
-          } else {
-            const displayText = sanitizeForDisplay(text);
-            const newDisplay =
-              displayValue.slice(0, at) + displayText + displayValue.slice(at);
-            const newActual =
-              actualValue.slice(0, at) + text + actualValue.slice(at);
-            setDisplayValue(newDisplay);
-            setActualValue(newActual);
-            onChange(newDisplay);
-            const nextCaret = at + displayText.length;
-            setNudgeCursorOffset(nextCaret);
-            caretOffsetRef.current = nextCaret;
-          }
-        };
-
-        // If paste event carried no text (common for image-only clipboard), try macOS import
-        if ((!translated || translated.length === 0) && payload.length === 0) {
-          // Fire async handler
-          (async () => {
-            const clipResult = await tryImportClipboardImageMac();
-            if (clipResult) {
-              if ("error" in clipResult) {
-                onPasteErrorRef.current?.(clipResult.error);
-                return;
-              }
-              insertTranslated(clipResult.placeholder);
-            }
-          })();
-          return;
-        }
-
-        if (translated && translated.length > 0) {
-          insertTranslated(translated);
-          return;
-        }
-        // If nothing to insert, fall through
-      }
+      // Bracketed paste is handled on Ink's separate 'paste' channel (usePaste
+      // below). It never reaches this handler while usePaste is active.
 
       if (
         (key.meta && (input === "v" || input === "V")) ||
@@ -368,6 +299,72 @@ export function PasteAwareTextInput({
       if ((key.backspace || key.delete) && displayValueRef.current === "") {
         onBackspaceAtEmptyRef.current?.();
         return;
+      }
+    },
+    { isActive: focus },
+  );
+
+  // Bracketed paste is delivered on Ink 7's separate 'paste' channel. usePaste
+  // also enables bracketed paste mode while active, so pasted text arrives as a
+  // single string rather than individual key presses (see src/cli/AGENTS.md).
+  usePaste(
+    (text) => {
+      lastPasteDetectedAtRef.current = Date.now();
+      const payload = typeof text === "string" ? text : "";
+      // Translate any image payloads in the paste (OSC 1337, data URLs, paths).
+      const translated = translatePasteForImages(payload);
+      const insertPastedText = (value: string) => {
+        const at = Math.max(
+          0,
+          Math.min(caretOffsetRef.current, displayValue.length),
+        );
+        const isLarge = countLines(value) > 5 || value.length > 500;
+        if (isLarge) {
+          const pasteId = allocatePaste(value);
+          const placeholder = `[Pasted text #${pasteId} +${countLines(value)} lines]`;
+          const newDisplay =
+            displayValue.slice(0, at) + placeholder + displayValue.slice(at);
+          const newActual =
+            actualValue.slice(0, at) + value + actualValue.slice(at);
+          setDisplayValue(newDisplay);
+          setActualValue(newActual);
+          onChange(newDisplay);
+          const nextCaret = at + placeholder.length;
+          setNudgeCursorOffset(nextCaret);
+          caretOffsetRef.current = nextCaret;
+        } else {
+          const displayText = sanitizeForDisplay(value);
+          const newDisplay =
+            displayValue.slice(0, at) + displayText + displayValue.slice(at);
+          const newActual =
+            actualValue.slice(0, at) + value + actualValue.slice(at);
+          setDisplayValue(newDisplay);
+          setActualValue(newActual);
+          onChange(newDisplay);
+          const nextCaret = at + displayText.length;
+          setNudgeCursorOffset(nextCaret);
+          caretOffsetRef.current = nextCaret;
+        }
+      };
+
+      // Image-only clipboard paste carries no text; fall back to the macOS
+      // clipboard image import (same as the Ctrl+V path).
+      if ((!translated || translated.length === 0) && payload.length === 0) {
+        void (async () => {
+          const clipResult = await tryImportClipboardImageMac();
+          if (clipResult) {
+            if ("error" in clipResult) {
+              onPasteErrorRef.current?.(clipResult.error);
+              return;
+            }
+            insertPastedText(clipResult.placeholder);
+          }
+        })();
+        return;
+      }
+
+      if (translated && translated.length > 0) {
+        insertPastedText(translated);
       }
     },
     { isActive: focus },
@@ -732,7 +729,7 @@ export function PasteAwareTextInput({
   }, [nudgeCursorOffset]);
 
   return (
-    <TextInputAny
+    <TextInput
       value={displayValue}
       externalCursorOffset={nudgeCursorOffset}
       onCursorOffsetChange={(n: number) => {
