@@ -354,10 +354,7 @@ function fullRunReason(change) {
   if (filePath.startsWith("scripts/")) {
     return `${filePath} is unclassified test or build infrastructure`;
   }
-  if (
-    filePath.startsWith(".github/workflows/") ||
-    filePath.startsWith("vendor/")
-  ) {
+  if (filePath.startsWith(".github/workflows/")) {
     return `${filePath} is unclassified workflow or runtime infrastructure`;
   }
   return null;

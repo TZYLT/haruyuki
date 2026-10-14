@@ -113,10 +113,9 @@ Third-party material redistributed in these artifacts is listed with its license
 terms, copyright lines, and permission notices in THIRD-PARTY-NOTICES.md. That
 file covers three kinds of source:
 
-  * the patched, vendored copies of Ink and ink-text-input, and every package
-    inlined into the built single-file bundle;
-  * the inlined third-party code that is not an npm dependency and not under
-    vendor/ (the Markdown parser bundled in the memory viewer template);
+  * every package inlined into the built single-file bundle;
+  * the inlined third-party code that is not an npm dependency (the Markdown
+    parser bundled in the memory viewer template);
   * non-npm third-party expression shipped in the source tree — currently the
     external system prompts under src/agent/prompts/ that this fork collects for
     benchmarking. Those files originate with Anthropic's Claude Code (via the

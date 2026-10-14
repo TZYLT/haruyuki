@@ -450,9 +450,10 @@ screen, causing duplicate/triple output.
 - Do not render the same output through both buffers (`commandRunner`) and
   `setStaticItems`.
 - The accepted exception is an intentional transcript repaint on a display
-  toggle (PR #4032): clear the screen first (`CLEAR_SCREEN_AND_HOME`), or use
-  vendored Ink's atomic `repaintStaticOutput`. A key change without a preceding
-  clear is a double-print risk.
+  toggle: clear the screen first (`CLEAR_SCREEN_AND_HOME`), or rely on Ink's own
+  `<Static>`-identity reset (`handleStaticChange` clears the retained static
+  output before the new instance renders). A key change without either is a
+  double-print risk.
 
 ### Tool Call Desync
 
@@ -559,18 +560,21 @@ agent/conversation ids, so committing them publishes all of it and GitHub histor
 - If a change seems to need a planning note committed, it belongs in `CONTRIBUTING.md`
   (the itemised change list) instead.
 
-### Vendored Ink Patches (Red Zone)
+### No Upstream Patching (Ink)
 
-`vendor/ink/` and `vendor/ink-text-input/` contain patched Ink runtime
-internals. `scripts/postinstall-patches.js` applies these at install time by
-exact string match.
+The fork no longer vendors or string-patches Ink. `vendor/` and
+`scripts/postinstall-patches.js` were removed when the TUI moved to Ink 7. The
+behaviors those patches provided are now either native Ink 7 features (Kitty
+keyboard protocol via the `kittyKeyboard` render option, bracketed paste via
+`usePaste`, `<Static>`-identity reset, overflow handling, `log-update`
+clear/sync) or owned code.
 
-- Any PR touching `vendor/ink/build/*` or `scripts/postinstall-patches.js` is a
-  red zone: patches are fragile to Ink version bumps, semantically invisible to
-  normal review, and coordinated across multiple runtime files.
-- Verify the exact matched strings still exist and the throw-on-missing guard is
-  preserved.
-- After editing vendor files, must run build for changes to take effect.
+- Do not string-patch `node_modules/ink`, and do not re-vendor upstream files.
+  The one build-time accommodation is the `react-devtools-core` stub in
+  `build.js` (Ink loads devtools through a guarded dynamic import).
+- Prefer Ink's public seams: `render()` options and the exported hooks. The only
+  private API still used is `internal_eventEmitter` on `useStdin()` (raw escape
+  sequences in `PasteAwareTextInput`).
 
 ---
 

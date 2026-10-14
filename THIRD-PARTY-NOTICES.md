@@ -2,8 +2,8 @@
 
 > 本文件由 `node scripts/generate-third-party-notices.cjs` 生成，**请勿手工编辑**。
 > 覆盖范围：`package.json` 的 `dependencies` ＋ `optionalDependencies` 的**传递闭包**
-> （当前 311 个包，其中 299 个读取到许可文件）＋ `vendor/` 内的补丁副本
-> ＋ **非 npm 来源**的第三方表达（见 §4，清单在 `scripts/non-npm-third-party-sources.json`）。
+> （当前 308 个包，其中 298 个读取到许可文件）
+> ＋ **非 npm 来源**的第三方表达（见 §3，清单在 `scripts/non-npm-third-party-sources.json`）。
 > `devDependencies` 不随包分发，故未列入。
 > 法律声明与商标信息见同目录的 `NOTICE`；本包的整体许可为 Apache-2.0（见 `LICENSE`）。
 
@@ -12,55 +12,13 @@
 | 类别 | 是否随本包分发 | 说明 |
 |---|---|---|
 | `haruyuki.js` / `dist/**` 内联的 npm 依赖 | 是 | 单文件打包把生产依赖内联进产物，见 `build.js` 的 `external` 白名单 |
-| `vendor/ink`、`vendor/ink-text-input` | 是 | 本地打补丁的第三方源码，见 §2 |
 | `src/skills/builtin/self-configuration/LICENSE` | 是 | 上游随技能附带的 MIT 文本（Copyright (c) 2026 Letta, Inc.），原样保留 |
-| 非 npm 来源的第三方表达（`src/agent/prompts/source_*.md`） | 是 | 为基准对照收录的外部系统提示词，见 §4 |
+| 非 npm 来源的第三方表达（`src/agent/prompts/source_*.md`） | 是 | 为基准对照收录的外部系统提示词，见 §3 |
 | `node_modules` 中的 `devDependencies` | 否 | 仅开发期使用，不进入发布产物 |
 
 许可证原文一律**逐字保留英文原文**，不作翻译或改写。
 
-## 2. `vendor/` 内的第三方代码（含本地补丁）
-
-以下目录是从上游发行版复制进来、并由 `scripts/postinstall-patches.js` 打补丁的第三方源码。
-它们**随本包发布**（`package.json` 的 `files` 含 `vendor`），因此各自的许可证原文随目录一并保留。
-
-### ink 5.2.1 — MIT
-
-- Copyright (c) Vadym Demedes <vadimdemedes@hey.com> (github.com/vadimdemedes)
-
-本地修改：仅由 `scripts/postinstall-patches.js` 按精确字符串匹配施加的小补丁。
-
-```text
-MIT License
-
-Copyright (c) Vadym Demedes <vadimdemedes@hey.com> (github.com/vadimdemedes)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-```
-
-### ink-text-input 5.0.1 — MIT
-
-- Copyright (c) Vadym Demedes <vadimdemedes@hey.com> (github.com/vadimdemedes)
-
-本地修改：仅由 `scripts/postinstall-patches.js` 按精确字符串匹配施加的小补丁。
-
-```text
-MIT License
-
-Copyright (c) Vadym Demedes <vadimdemedes@hey.com> (github.com/vadimdemedes)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-```
-
-## 3. 打包内联的 npm 依赖
+## 2. 打包内联的 npm 依赖
 
 下表按各包 `package.json` 声明的许可证分组。每组的「许可原文」是组内使用最多的一份**逐字**文本；
 **每个包的版权行都单独列出** —— 这正是 MIT / BSD / ISC 要求随分发保留的部分。
@@ -70,9 +28,133 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 | 包 | 版本 | 版权行 | 备注 |
 |---|---|---|---|
-| `type-fest` | 3.13.1 | — | 无许可文件 |
+| `type-fest` | 4.41.0 | — |  |
 
-> ⚠️ 这些包未附许可文件，仅按 `package.json` 的 `license` 字段登记：`type-fest`
+**(MIT OR CC0-1.0) 许可原文**（组内 1 个包使用此文本）
+
+```text
+Creative Commons Legal Code
+
+CC0 1.0 Universal
+
+    CREATIVE COMMONS CORPORATION IS NOT A LAW FIRM AND DOES NOT PROVIDE
+    LEGAL SERVICES. DISTRIBUTION OF THIS DOCUMENT DOES NOT CREATE AN
+    ATTORNEY-CLIENT RELATIONSHIP. CREATIVE COMMONS PROVIDES THIS
+    INFORMATION ON AN "AS-IS" BASIS. CREATIVE COMMONS MAKES NO WARRANTIES
+    REGARDING THE USE OF THIS DOCUMENT OR THE INFORMATION OR WORKS
+    PROVIDED HEREUNDER, AND DISCLAIMS LIABILITY FOR DAMAGES RESULTING FROM
+    THE USE OF THIS DOCUMENT OR THE INFORMATION OR WORKS PROVIDED
+    HEREUNDER.
+
+Statement of Purpose
+
+The laws of most jurisdictions throughout the world automatically confer
+exclusive Copyright and Related Rights (defined below) upon the creator
+and subsequent owner(s) (each and all, an "owner") of an original work of
+authorship and/or a database (each, a "Work").
+
+Certain owners wish to permanently relinquish those rights to a Work for
+the purpose of contributing to a commons of creative, cultural and
+scientific works ("Commons") that the public can reliably and without fear
+of later claims of infringement build upon, modify, incorporate in other
+works, reuse and redistribute as freely as possible in any form whatsoever
+and for any purposes, including without limitation commercial purposes.
+These owners may contribute to the Commons to promote the ideal of a free
+culture and the further production of creative, cultural and scientific
+works, or to gain reputation or greater distribution for their Work in
+part through the use and efforts of others.
+
+For these and/or other purposes and motivations, and without any
+expectation of additional consideration or compensation, the person
+associating CC0 with a Work (the "Affirmer"), to the extent that he or she
+is an owner of Copyright and Related Rights in the Work, voluntarily
+elects to apply CC0 to the Work and publicly distribute the Work under its
+terms, with knowledge of his or her Copyright and Related Rights in the
+Work and the meaning and intended legal effect of CC0 on those rights.
+
+1. Copyright and Related Rights. A Work made available under CC0 may be
+protected by copyright and related or neighboring rights ("Copyright and
+Related Rights"). Copyright and Related Rights include, but are not
+limited to, the following:
+
+  i. the right to reproduce, adapt, distribute, perform, display,
+     communicate, and translate a Work;
+ ii. moral rights retained by the original author(s) and/or performer(s);
+iii. publicity and privacy rights pertaining to a person's image or
+     likeness depicted in a Work;
+ iv. rights protecting against unfair competition in regards to a Work,
+     subject to the limitations in paragraph 4(a), below;
+  v. rights protecting the extraction, dissemination, use and reuse of data
+     in a Work;
+ vi. database rights (such as those arising under Directive 96/9/EC of the
+     European Parliament and of the Council of 11 March 1996 on the legal
+     protection of databases, and under any national implementation
+     thereof, including any amended or successor version of such
+     directive); and
+vii. other similar, equivalent or corresponding rights throughout the
+     world based on applicable law or treaty, and any national
+     implementations thereof.
+
+2. Waiver. To the greatest extent permitted by, but not in contravention
+of, applicable law, Affirmer hereby overtly, fully, permanently,
+irrevocably and unconditionally waives, abandons, and surrenders all of
+Affirmer's Copyright and Related Rights and associated claims and causes
+of action, whether now known or unknown (including existing as well as
+future claims and causes of action), in the Work (i) in all territories
+worldwide, (ii) for the maximum duration provided by applicable law or
+treaty (including future time extensions), (iii) in any current or future
+medium and for any number of copies, and (iv) for any purpose whatsoever,
+including without limitation commercial, advertising or promotional
+purposes (the "Waiver"). Affirmer makes the Waiver for the benefit of each
+member of the public at large and to the detriment of Affirmer's heirs and
+successors, fully intending that such Waiver shall not be subject to
+revocation, rescission, cancellation, termination, or any other legal or
+equitable action to disrupt the quiet enjoyment of the Work by the public
+as contemplated by Affirmer's express Statement of Purpose.
+
+3. Public License Fallback. Should any part of the Waiver for any reason
+be judged legally invalid or ineffective under applicable law, then the
+Waiver shall be preserved to the maximum extent permitted taking into
+account Affirmer's express Statement of Purpose. In addition, to the
+extent the Waiver is so judged Affirmer hereby grants to each affected
+person a royalty-free, non transferable, non sublicensable, non exclusive,
+irrevocable and unconditional license to exercise Affirmer's Copyright and
+Related Rights in the Work (i) in all territories worldwide, (ii) for the
+maximum duration provided by applicable law or treaty (including future
+time extensions), (iii) in any current or future medium and for any number
+of copies, and (iv) for any purpose whatsoever, including without
+limitation commercial, advertising or promotional purposes (the
+"License"). The License shall be deemed effective as of the date CC0 was
+applied by Affirmer to the Work. Should any part of the License for any
+reason be judged legally invalid or ineffective under applicable law, such
+partial invalidity or ineffectiveness shall not invalidate the remainder
+of the License, and in such case Affirmer hereby affirms that he or she
+will not (i) exercise any of his or her remaining Copyright and Related
+Rights in the Work or (ii) assert any associated claims and causes of
+action with respect to the Work, in either case contrary to Affirmer's
+express Statement of Purpose.
+
+4. Limitations and Disclaimers.
+
+ a. No trademark or patent rights held by Affirmer are waived, abandoned,
+    surrendered, licensed or otherwise affected by this document.
+ b. Affirmer offers the Work as-is and makes no representations or
+    warranties of any kind concerning the Work, express, implied,
+    statutory or otherwise, including without limitation warranties of
+    title, merchantability, fitness for a particular purpose, non
+    infringement, or the absence of latent or other defects, accuracy, or
+    the present or absence of errors, whether or not discoverable, all to
+    the greatest extent permissible under applicable law.
+ c. Affirmer disclaims responsibility for clearing rights of other persons
+    that may apply to the Work or any use thereof, including without
+    limitation any person's Copyright and Related Rights in the Work.
+    Further, Affirmer disclaims responsibility for obtaining any necessary
+    consents, permissions or other rights required for any use of the
+    Work.
+ d. Affirmer understands and acknowledges that Creative Commons is not a
+    party to this document and has no duty or obligation with respect to
+    this CC0 or use of the Work.
+```
 
 ### 0BSD — 1 个包
 
@@ -293,7 +375,7 @@ CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 ```
 
-### Apache-2.0 — 50 个包
+### Apache-2.0 — 51 个包
 
 | 包 | 版本 | 版权行 | 备注 |
 |---|---|---|---|
@@ -347,6 +429,7 @@ specific language governing permissions and limitations under the License.
 | `long` | 5.3.2 | Daniel Wirtz <dcode@dcode.io> | 文本有变体 |
 | `openai` | 6.48.0 | Copyright 2026 OpenAI | 文本有变体 |
 | `sharp` | 0.34.5 | Lovell Fuller <npm@lovell.info> | 文本有变体 |
+| `typescript` | 5.9.3 | Microsoft Corp. | 文本有变体 |
 
 **Apache-2.0 许可原文**（组内 29 个包使用此文本）
 
@@ -552,7 +635,7 @@ Apache License
    limitations under the License.
 ```
 
-> 另有 5 种文本变体（共 18 个包，见上表「文本有变体」），以各包目录内的 `LICENSE` 为准。
+> 另有 6 种文本变体（共 19 个包，见上表「文本有变体」），以各包目录内的 `LICENSE` 为准。
 
 > ⚠️ 这些包未附许可文件，仅按 `package.json` 的 `license` 字段登记：`@aws-sdk/credential-provider-http`、`@aws-sdk/credential-provider-login`、`@aws-sdk/nested-clients`
 
@@ -735,11 +818,11 @@ OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 ```
 
-### MIT — 225 个包
+### MIT — 221 个包
 
 | 包 | 版本 | 版权行 | 备注 |
 |---|---|---|---|
-| `@alcalzone/ansi-tokenize` | 0.1.3 | — | 无许可文件 |
+| `@alcalzone/ansi-tokenize` | 0.3.1 | Copyright (c) 2020-2026 AlCalzone |  |
 | `@anthropic-ai/sdk` | 0.124.0 | Copyright 2023 Anthropic, PBC. |  |
 | `@babel/runtime` | 7.29.2 | Copyright (c) 2014-present Sebastian McKenzie and other contributors |  |
 | `@earendil-works/pi-ai` | 0.99.1 | Mario Zechner | 无许可文件 |
@@ -770,7 +853,7 @@ PERFORMANCE OF THIS SOFTWARE.
 | `agent-base` | 7.1.4 | Copyright (c) 2013 Nathan Rajlich <nathan@tootallnate.net> | 文本有变体 |
 | `ajv` | 8.20.0 | Copyright (c) 2015-2021 Evgeny Poberezkin |  |
 | `ajv-formats` | 3.0.1 | Copyright (c) 2020 Evgeny Poberezkin |  |
-| `ansi-escapes` | 7.1.1 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
+| `ansi-escapes` | 7.3.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `ansi-regex` | 6.2.2 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `ansi-styles` | 6.2.3 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `auto-bind` | 5.0.1 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
@@ -787,9 +870,9 @@ PERFORMANCE OF THIS SOFTWARE.
 | `chalk` | 5.6.2 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `character-entities-html4` | 2.1.0 | Copyright (c) 2015 Titus Wormer <tituswormer@gmail.com> | 文本有变体 |
 | `character-entities-legacy` | 3.0.0 | Copyright (c) 2015 Titus Wormer <tituswormer@gmail.com> | 文本有变体 |
-| `cli-boxes` | 3.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
+| `cli-boxes` | 4.0.1 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `cli-cursor` | 4.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
-| `cli-truncate` | 4.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
+| `cli-truncate` | 6.1.1 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `code-excerpt` | 4.0.0 | Copyright (c) Vadim Demedes <vdemedes@gmail.com> (github.com/vadimdemedes) |  |
 | `comma-separated-tokens` | 2.0.3 | Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com> | 文本有变体 |
 | `content-disposition` | 1.1.0 | Copyright (c) 2014-2017 Douglas Christopher Wilson | 文本有变体 |
@@ -809,13 +892,12 @@ PERFORMANCE OF THIS SOFTWARE.
 | `devlop` | 1.1.0 | Copyright (c) 2023 Titus Wormer <tituswormer@gmail.com> | 文本有变体 |
 | `dunder-proto` | 1.0.1 | Copyright (c) 2024 ECMAScript Shims |  |
 | `ee-first` | 1.1.1 | Copyright (c) 2014 Jonathan Ong me@jongleberry.com |  |
-| `emoji-regex` | 10.6.0 | Copyright Mathias Bynens <https://mathiasbynens.be/> |  |
 | `encodeurl` | 2.0.0 | Copyright (c) 2016 Douglas Christopher Wilson | 文本有变体 |
 | `environment` | 1.1.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `es-define-property` | 1.0.1 | Copyright (c) 2024 Jordan Harband |  |
 | `es-errors` | 1.3.0 | Copyright (c) 2024 Jordan Harband |  |
 | `es-object-atoms` | 1.1.1 | Copyright (c) 2024 Jordan Harband |  |
-| `es-toolkit` | 1.41.0 | Copyright (c) 2024 Viva Republica, Inc / Copyright OpenJS Foundation and other contributors | 文本有变体 |
+| `es-toolkit` | 1.52.0 | Copyright (c) 2024 Viva Republica, Inc. |  |
 | `escape-html` | 1.0.3 | Copyright (c) 2012-2013 TJ Holowaychuk / Copyright (c) 2015 Andreas Lubbe / Copyright (c) 2015 Tiancheng "Timothy" Gu | 文本有变体 |
 | `escape-string-regexp` | 2.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com) |  |
 | `etag` | 1.8.1 | Copyright (c) 2014-2016 Douglas Christopher Wilson | 文本有变体 |
@@ -830,7 +912,7 @@ PERFORMANCE OF THIS SOFTWARE.
 | `forwarded` | 0.2.0 | Copyright (c) 2014-2017 Douglas Christopher Wilson | 文本有变体 |
 | `fresh` | 2.0.0 | Copyright (c) 2012 TJ Holowaychuk <tj@vision-media.ca> / Copyright (c) 2016-2017 Douglas Christopher Wilson <doug@somethingdoug.com> | 文本有变体 |
 | `function-bind` | 1.1.2 | Copyright (c) 2013 Raynos. |  |
-| `get-east-asian-width` | 1.4.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
+| `get-east-asian-width` | 1.7.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `get-intrinsic` | 1.3.0 | Copyright (c) 2020 Jordan Harband |  |
 | `get-proto` | 1.0.1 | Copyright (c) 2025 Jordan Harband |  |
 | `gopd` | 1.2.0 | Copyright (c) 2022 Jordan Harband |  |
@@ -846,24 +928,22 @@ PERFORMANCE OF THIS SOFTWARE.
 | `https-proxy-agent` | 7.0.6 | Copyright (c) 2013 Nathan Rajlich <nathan@tootallnate.net> | 文本有变体 |
 | `iconv-lite` | 0.7.2 | Copyright (c) 2011 Alexander Shtuchkin |  |
 | `indent-string` | 5.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
-| `ink` | 5.2.1 | Copyright (c) Vadym Demedes <vadimdemedes@hey.com> (github.com/vadimdemedes) |  |
-| `ink-link` | 4.1.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
+| `ink` | 7.1.1 | Copyright (c) Vadym Demedes <vadimdemedes@hey.com> (https://github.com/vadimdemedes) / Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
+| `ink-link` | 5.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `ip-address` | 10.3.1 | Copyright (C) 2011 by Beau Gunderson |  |
 | `ipaddr.js` | 1.9.1 | Copyright (C) 2011-2017 whitequark <whitequark@whitequark.org> |  |
 | `is-docker` | 3.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
-| `is-fullwidth-code-point` | 4.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
-| `is-in-ci` | 1.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
+| `is-fullwidth-code-point` | 5.1.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
+| `is-in-ci` | 2.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `is-inside-container` | 1.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `is-promise` | 4.0.0 | Copyright (c) 2014 Forbes Lindesay |  |
 | `is-wsl` | 3.1.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `jose` | 6.2.4 | Copyright (c) 2018 Filip Skokan |  |
-| `js-tokens` | 4.0.0 | Copyright (c) 2014, 2015, 2016, 2017, 2018 Simon Lydell |  |
 | `json-bigint` | 1.0.0 | Copyright (c) 2013 Andrey Sidorov |  |
 | `json-schema-to-ts` | 3.1.1 | Copyright (c) 2020 Thomas Aribart |  |
 | `json-schema-traverse` | 1.0.0 | Copyright (c) 2017 Evgeny Poberezkin |  |
 | `jwa` | 2.0.1 | Copyright (c) 2013 Brian J. Brennan |  |
 | `jws` | 4.0.1 | Copyright (c) 2013 Brian J. Brennan |  |
-| `loose-envify` | 1.4.0 | Copyright (c) 2015 Andres Suarez <zertosh@gmail.com> |  |
 | `lru_map` | 0.4.1 | Rasmus Andersson <me@rsms.me> | 无许可文件 |
 | `luxon` | 3.7.2 | Copyright 2019 JS Foundation and other contributors |  |
 | `math-intrinsics` | 1.1.0 | Copyright (c) 2024 ECMAScript Shims |  |
@@ -898,16 +978,14 @@ PERFORMANCE OF THIS SOFTWARE.
 | `path-to-regexp` | 8.4.2 | Copyright (c) 2014 Blake Embrey (hello@blakeembrey.com) |  |
 | `pend` | 1.2.0 | Copyright (c) 2014 Andrew Kelley |  |
 | `pkce-challenge` | 5.0.1 | Copyright (c) 2019 |  |
-| `prop-types` | 15.8.1 | Copyright (c) 2013-present, Facebook, Inc. |  |
 | `property-information` | 7.1.0 | Copyright (c) Titus Wormer <mailto:tituswormer@gmail.com> | 文本有变体 |
 | `proxy-addr` | 2.0.7 | Copyright (c) 2014-2016 Douglas Christopher Wilson | 文本有变体 |
 | `proxy-agent-negotiate` | 1.1.0 | Nathan Rajlich <nathan@tootallnate.net> (http://n8.io/) | 无许可文件 |
 | `proxy-from-env` | 1.1.0 | Copyright (C) 2016-2018 Rob Wu <rob@robwu.nl> |  |
 | `range-parser` | 1.2.1 | Copyright (c) 2012-2014 TJ Holowaychuk <tj@vision-media.ca> / Copyright (c) 2015-2016 Douglas Christopher Wilson <doug@somethingdoug.com | 文本有变体 |
 | `raw-body` | 3.0.2 | Copyright (c) 2013-2014 Jonathan Ong <me@jongleberry.com> / Copyright (c) 2014-2022 Douglas Christopher Wilson <doug@somethingdoug.com> |  |
-| `react` | 18.2.0 | Copyright (c) Facebook, Inc. and its affiliates. |  |
-| `react-is` | 16.13.1 | Copyright (c) Facebook, Inc. and its affiliates. |  |
-| `react-reconciler` | 0.29.2 | Copyright (c) Facebook, Inc. and its affiliates. |  |
+| `react` | 19.2.8 | Copyright (c) Meta Platforms, Inc. and affiliates. |  |
+| `react-reconciler` | 0.33.0 | Copyright (c) Meta Platforms, Inc. and affiliates. |  |
 | `regex` | 6.1.0 | Copyright (c) 2025 Steven Levithan |  |
 | `regex-recursion` | 6.0.2 | Copyright (c) 2025 Steven Levithan |  |
 | `regex-utilities` | 2.3.0 | Copyright (c) 2024 Steven Levithan |  |
@@ -918,7 +996,7 @@ PERFORMANCE OF THIS SOFTWARE.
 | `run-applescript` | 7.1.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `safe-buffer` | 5.1.2 | Copyright (c) Feross Aboukhadijeh |  |
 | `safer-buffer` | 2.1.2 | Copyright (c) 2018 Nikita Skovoroda <chalkerx@gmail.com> |  |
-| `scheduler` | 0.23.2 | Copyright (c) Facebook, Inc. and its affiliates. |  |
+| `scheduler` | 0.27.0 | Copyright (c) Meta Platforms, Inc. and affiliates. |  |
 | `send` | 1.2.1 | Copyright (c) 2012 TJ Holowaychuk / Copyright (c) 2014-2022 Douglas Christopher Wilson | 文本有变体 |
 | `serve-static` | 2.2.1 | Copyright (c) 2010 Sencha Inc. / Copyright (c) 2011 LearnBoost / Copyright (c) 2011 TJ Holowaychuk | 文本有变体 |
 | `shebang-command` | 2.0.0 | Copyright (c) Kevin Mårtensson <kevinmartensson@gmail.com> (github.com/kevva) |  |
@@ -928,17 +1006,18 @@ PERFORMANCE OF THIS SOFTWARE.
 | `side-channel-list` | 1.0.1 | Copyright (c) 2024 Jordan Harband |  |
 | `side-channel-map` | 1.0.1 | Copyright (c) 2024 Jordan Harband |  |
 | `side-channel-weakmap` | 1.0.2 | Copyright (c) 2019 Jordan Harband |  |
-| `slice-ansi` | 7.1.2 | Copyright (c) DC <threedeecee@gmail.com> / Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
+| `slice-ansi` | 9.0.1 | Copyright (c) DC <threedeecee@gmail.com> / Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `space-separated-tokens` | 2.0.2 | Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com> | 文本有变体 |
 | `stack-utils` | 2.0.6 | Copyright (c) 2016-2022 Isaac Z. Schlueter <i@izs.me>, James Talmage <james@talmage.io> (github.com/jamestalmage), and Contributors |  |
 | `standardwebhooks` | 1.1.1 | Standard Webhooks | 无许可文件 |
 | `statuses` | 2.0.2 | Copyright (c) 2014 Jonathan Ong <me@jongleberry.com> / Copyright (c) 2016 Douglas Christopher Wilson <doug@somethingdoug.com> |  |
-| `string-width` | 7.2.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
+| `string-width` | 8.3.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `stringify-entities` | 4.0.4 | Copyright (c) 2015 Titus Wormer <mailto:tituswormer@gmail.com> | 文本有变体 |
 | `strip-ansi` | 7.2.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `supports-color` | 7.2.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com) |  |
-| `supports-hyperlinks` | 2.3.0 | Copyright (c) James Talmage <james@talmage.io> (github.com/jamestalmage) |  |
-| `terminal-link` | 3.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
+| `supports-hyperlinks` | 4.6.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) / Copyright (c) James Talmage <james@talmage.io> (https://github.com/jamestalmage) |  |
+| `terminal-link` | 5.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
+| `terminal-size` | 4.0.1 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `toidentifier` | 1.0.1 | Copyright (c) 2016 Douglas Christopher Wilson <doug@somethingdoug.com> |  |
 | `tr46` | 0.0.3 | Sebastian Mayr <npm@smayr.name> | 无许可文件 |
 | `trim-lines` | 3.0.1 | Copyright (c) 2015 Titus Wormer <mailto:tituswormer@gmail.com> | 文本有变体 |
@@ -956,8 +1035,8 @@ PERFORMANCE OF THIS SOFTWARE.
 | `vfile` | 6.0.3 | Copyright (c) 2015 Titus Wormer <tituswormer@gmail.com> | 文本有变体 |
 | `vfile-message` | 4.0.3 | Copyright (c) Titus Wormer <tituswormer@gmail.com> | 文本有变体 |
 | `whatwg-url` | 5.0.0 | Copyright (c) 2015–2016 Sebastian Mayr |  |
-| `widest-line` | 5.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
-| `wrap-ansi` | 9.0.2 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
+| `widest-line` | 6.0.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
+| `wrap-ansi` | 10.0.2 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `ws` | 8.19.0 | Copyright (c) 2011 Einar Otto Stangvik <einaros@gmail.com> / Copyright (c) 2013 Arnout Kazemier and contributors / Copyright (c) 2016 Luigi Pinca and contributors |  |
 | `wsl-utils` | 0.1.0 | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |  |
 | `yauzl` | 2.10.0 | Copyright (c) 2014 Josh Wolfe |  |
@@ -965,19 +1044,33 @@ PERFORMANCE OF THIS SOFTWARE.
 | `zod` | 4.4.3 | Copyright (c) 2025 Colin McDonnell |  |
 | `zwitch` | 2.0.4 | Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com> | 文本有变体 |
 
-**MIT 许可原文**（组内 140 个包使用此文本）
+**MIT 许可原文**（组内 138 个包使用此文本）
 
 ```text
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+MIT License
 
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
 
-> 另有 15 种文本变体（共 77 个包，见上表「文本有变体」），以各包目录内的 `LICENSE` 为准。
+> 另有 14 种文本变体（共 76 个包，见上表「文本有变体」），以各包目录内的 `LICENSE` 为准。
 
-> ⚠️ 这些包未附许可文件，仅按 `package.json` 的 `license` 字段登记：`@alcalzone/ansi-tokenize`、`@earendil-works/pi-ai`、`@earendil-works/pi-telemetry`、`lru_map`、`proxy-agent-negotiate`、`standardwebhooks`、`tr46`、`yoga-layout`
+> ⚠️ 这些包未附许可文件，仅按 `package.json` 的 `license` 字段登记：`@earendil-works/pi-ai`、`@earendil-works/pi-telemetry`、`lru_map`、`proxy-agent-negotiate`、`standardwebhooks`、`tr46`、`yoga-layout`
 
 ### Unlicense — 1 个包
 
@@ -1014,9 +1107,9 @@ OTHER DEALINGS IN THE SOFTWARE.
 For more information, please refer to <http://unlicense.org>
 ```
 
-## 4. 非 npm 来源的第三方内容
+## 3. 非 npm 来源的第三方内容
 
-以下表达**随本包分发**，但既不在 npm 依赖闭包、也不在 `vendor/` 里，
+以下表达**随本包分发**，但不在 npm 依赖闭包内，
 因此上面的依赖遍历**结构上扫不到**它们。清单维护在
 `scripts/non-npm-third-party-sources.json`（许可原文逐字保留）。
 
@@ -1084,7 +1177,7 @@ SOFTWARE.
 （google-gemini/gemini-cli ships the standard Apache License 2.0 text, identical to the LICENSE file in this repository）
 ，此处不再重复贴出。
 
-## 5. 依赖闭包中的上游包
+## 4. 依赖闭包中的上游包
 
 以下包由 Letta, Inc. 作为**独立 npm 包**发布，本项目的依赖闭包会安装它们（未内联进 `haruyuki.js`）：
 
@@ -1096,9 +1189,53 @@ SOFTWARE.
 它们的资产（包括上游自己的品牌图片与截图）由各自的发布者分发，**不属于本项目的分发物**；
 本项目不复制、不重新打包这些资产，`npm pack` 的清单里也不含它们。
 
-## 6. NOTICE 文件扫描（Apache-2.0 §4(d)）
+## 5. NOTICE 文件扫描（Apache-2.0 §4(d)）
 
-闭包内**没有任何包附带 `NOTICE` 文件**，因此本次分发没有需要向下传递的第三方 NOTICE 声明。
+Apache-2.0 要求：若被分发的第三方包里带有 `NOTICE` 文件，其内容也必须随本包传递。本闭包中命中：
+
+### es-toolkit@1.52.0
+
+```text
+es-toolkit
+
+Parts of the test suite and compatibility layer in es-toolkit/compat are
+derived from Lodash (https://github.com/lodash/lodash).
+
+Lodash copyright notice and MIT permission notice:
+
+Copyright OpenJS Foundation and other contributors <https://openjsf.org/>
+
+Based on Underscore.js, copyright Jeremy Ashkenas,
+DocumentCloud and Investigative Reporters & Editors <http://underscorejs.org/>
+
+This software consists of voluntary contributions made by many
+individuals. For exact contribution history, see the revision history
+available at https://github.com/lodash/lodash
+
+The following license applies to all parts of this software except as
+documented below:
+
+====
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
 
 ## 7. 已知缺口
 

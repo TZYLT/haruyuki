@@ -19,13 +19,7 @@
       }
     }
   },
-  "files": { "experimentalScannerIgnores": ["vendor/**"] },
   "overrides": [
-    {
-      "includes": ["vendor/**"],
-      "linter": { "enabled": false },
-      "formatter": { "enabled": false }
-    },
     {
       "includes": ["**/*.d.ts"],
       "linter": {

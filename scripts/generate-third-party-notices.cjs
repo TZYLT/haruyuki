@@ -179,44 +179,6 @@ function collectClosure(rootPkg) {
   return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function vendoredEntry(dirName) {
-  const dir = path.join(ROOT, "vendor", dirName);
-  const manifest = path.join(NODE_MODULES, dirName, "package.json");
-  const version = fs.existsSync(manifest)
-    ? readJson(manifest).version
-    : "(version not recorded)";
-  const text = licenseText(dir);
-  return {
-    name: dirName,
-    version,
-    license: "MIT",
-    text,
-    copyright: copyrightLines(text, {}),
-  };
-}
-
-function renderVendored(entries) {
-  const lines = [
-    "## 2. `vendor/` 内的第三方代码（含本地补丁）",
-    "",
-    "以下目录是从上游发行版复制进来、并由 `scripts/postinstall-patches.js` 打补丁的第三方源码。",
-    "它们**随本包发布**（`package.json` 的 `files` 含 `vendor`），因此各自的许可证原文随目录一并保留。",
-    "",
-  ];
-  for (const entry of entries) {
-    lines.push(`### ${entry.name} ${entry.version} — ${entry.license}`, "");
-    if (entry.copyright.length > 0) {
-      for (const line of entry.copyright) {
-        lines.push(`- ${line}`);
-      }
-      lines.push("");
-    }
-    lines.push("本地修改：仅由 `scripts/postinstall-patches.js` 按精确字符串匹配施加的小补丁。", "");
-    lines.push("```text", entry.text || "(license text not found)", "```", "");
-  }
-  return lines;
-}
-
 function renderDependencies(packages) {
   const byLicense = new Map();
   for (const entry of packages) {
@@ -227,7 +189,7 @@ function renderDependencies(packages) {
     byLicense.get(id).push(entry);
   }
   const lines = [
-    "## 3. 打包内联的 npm 依赖",
+    "## 2. 打包内联的 npm 依赖",
     "",
     "下表按各包 `package.json` 声明的许可证分组。每组的「许可原文」是组内使用最多的一份**逐字**文本；",
     "**每个包的版权行都单独列出** —— 这正是 MIT / BSD / ISC 要求随分发保留的部分。",
@@ -308,14 +270,14 @@ function renderDependencies(packages) {
 function renderNonNpmSources() {
   const manifestPath = path.join(ROOT, "scripts", "non-npm-third-party-sources.json");
   if (!fs.existsSync(manifestPath)) {
-    return ["## 4. 非 npm 来源的第三方内容", "", "（清单缺失）", ""];
+    return ["## 3. 非 npm 来源的第三方内容", "", "（清单缺失）", ""];
   }
   const manifest = readJson(manifestPath);
   const entries = manifest.sources ?? [];
   const lines = [
-    "## 4. 非 npm 来源的第三方内容",
+    "## 3. 非 npm 来源的第三方内容",
     "",
-    "以下表达**随本包分发**，但既不在 npm 依赖闭包、也不在 `vendor/` 里，",
+    "以下表达**随本包分发**，但不在 npm 依赖闭包内，",
     "因此上面的依赖遍历**结构上扫不到**它们。清单维护在",
     "`scripts/non-npm-third-party-sources.json`（许可原文逐字保留）。",
     "",
@@ -364,7 +326,6 @@ function renderNonNpmSources() {
 function main() {
   const rootPkg = readJson(path.join(ROOT, "package.json"));
   const packages = collectClosure(rootPkg);
-  const vendored = [vendoredEntry("ink"), vendoredEntry("ink-text-input")];
   const missing = packages.filter((entry) => entry.missing).map((e) => e.name);
   const withText = packages.filter((entry) => entry.text).length;
 
@@ -373,8 +334,8 @@ function main() {
     "",
     "> 本文件由 `node scripts/generate-third-party-notices.cjs` 生成，**请勿手工编辑**。",
     "> 覆盖范围：`package.json` 的 `dependencies` ＋ `optionalDependencies` 的**传递闭包**",
-    `> （当前 ${packages.length} 个包，其中 ${withText} 个读取到许可文件）＋ \`vendor/\` 内的补丁副本`,
-    "> ＋ **非 npm 来源**的第三方表达（见 §4，清单在 `scripts/non-npm-third-party-sources.json`）。",
+    `> （当前 ${packages.length} 个包，其中 ${withText} 个读取到许可文件）`,
+    "> ＋ **非 npm 来源**的第三方表达（见 §3，清单在 `scripts/non-npm-third-party-sources.json`）。",
     "> `devDependencies` 不随包分发，故未列入。",
     "> 法律声明与商标信息见同目录的 `NOTICE`；本包的整体许可为 Apache-2.0（见 `LICENSE`）。",
     "",
@@ -383,9 +344,8 @@ function main() {
     "| 类别 | 是否随本包分发 | 说明 |",
     "|---|---|---|",
     "| `haruyuki.js` / `dist/**` 内联的 npm 依赖 | 是 | 单文件打包把生产依赖内联进产物，见 `build.js` 的 `external` 白名单 |",
-    "| `vendor/ink`、`vendor/ink-text-input` | 是 | 本地打补丁的第三方源码，见 §2 |",
     "| `src/skills/builtin/self-configuration/LICENSE` | 是 | 上游随技能附带的 MIT 文本（Copyright (c) 2026 Letta, Inc.），原样保留 |",
-    "| 非 npm 来源的第三方表达（`src/agent/prompts/source_*.md`） | 是 | 为基准对照收录的外部系统提示词，见 §4 |",
+    "| 非 npm 来源的第三方表达（`src/agent/prompts/source_*.md`） | 是 | 为基准对照收录的外部系统提示词，见 §3 |",
     "| `node_modules` 中的 `devDependencies` | 否 | 仅开发期使用，不进入发布产物 |",
     "",
     "许可证原文一律**逐字保留英文原文**，不作翻译或改写。",
@@ -398,10 +358,9 @@ function main() {
   );
 
   const body = [
-    ...renderVendored(vendored),
     ...renderDependencies(packages),
     ...renderNonNpmSources(),
-    "## 5. 依赖闭包中的上游包",
+    "## 4. 依赖闭包中的上游包",
     "",
   ];
 
@@ -419,7 +378,7 @@ function main() {
     body.push("闭包内没有 `@letta-ai/*` 包。", "");
   }
 
-  body.push("## 6. NOTICE 文件扫描（Apache-2.0 §4(d)）", "");
+  body.push("## 5. NOTICE 文件扫描（Apache-2.0 §4(d)）", "");
   if (notices.length > 0) {
     body.push(
       "Apache-2.0 要求：若被分发的第三方包里带有 `NOTICE` 文件，其内容也必须随本包传递。本闭包中命中：",

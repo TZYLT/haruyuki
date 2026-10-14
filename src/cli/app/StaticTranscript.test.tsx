@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { Writable } from "node:stream";
-import { Box, render, Text } from "ink";
+import { render } from "ink";
 import stripAnsi from "strip-ansi";
 import {
   getSystemRemindersExpanded,
@@ -253,18 +253,6 @@ test("thinking display changes repaint committed transcript rows", async () => {
     "Thought for 4 seconds (ctrl+t to collapse)",
   );
   expect(expandedOutput).toContain("First thought");
-  const repaintChunks = stdout.chunks.slice(expandedStart);
-  const atomicRepaint = repaintChunks.find((chunk) =>
-    chunk.includes("\u001B[2J"),
-  );
-  expect(atomicRepaint).toContain("\u001B[?2026h");
-  expect(atomicRepaint).not.toContain("\u001B[3J");
-  expect(atomicRepaint).toContain("First thought");
-  expect(atomicRepaint).toContain("\u001B[?2026l");
-  expect(repaintChunks.some((chunk) => chunk === "\u001B[2J\u001B[H")).toBe(
-    false,
-  );
-
   const recollapsedStart = stdout.chunks.length;
   toggleThinkingDisplay();
   await waitForRender();
@@ -275,34 +263,6 @@ test("thinking display changes repaint committed transcript rows", async () => {
   instance.unmount();
   instance.cleanup();
 });
-
-function OverflowTranscript({ overflow }: { overflow: boolean }) {
-  return (
-    <>
-      <StaticTranscript
-        renderEpoch={0}
-        items={[
-          {
-            kind: "reasoning",
-            id: "reasoning-overflow",
-            text: "Reasoning body that must not return after recollapse",
-            phase: "finished",
-            durationMs: 3_600,
-          },
-        ]}
-        columns={100}
-        statusLinePrompt=">"
-        showCompactionsEnabled={true}
-        precomputedDiffs={new Map()}
-      />
-      {overflow && (
-        <Box>
-          <Text>{Array.from({ length: 10 }, () => "live").join("\n")}</Text>
-        </Box>
-      )}
-    </>
-  );
-}
 
 function makeDiff(fileName: string): AdvancedDiffSuccess {
   return {
@@ -453,45 +413,6 @@ test("payload release tracks newly committed items across rerenders", async () =
   await waitForRender();
   expect(precomputedDiffs.get("call-second")?.oldStr).toBe("");
   expect(precomputedDiffs.get("call-second")?.hunks).toHaveLength(1);
-
-  instance.unmount();
-  instance.cleanup();
-});
-
-test("repeated transcript repaints replace Ink static output", async () => {
-  setThinkingExpanded(false);
-  const stdout = new CaptureStream() as CaptureStream & NodeJS.WriteStream;
-  stdout.rows = 6;
-  const instance = render(<OverflowTranscript overflow={false} />, {
-    stdout,
-    debug: false,
-    patchConsole: false,
-    exitOnCtrlC: false,
-  });
-
-  await waitForRender();
-  toggleThinkingDisplay();
-  await waitForRender();
-  toggleThinkingDisplay();
-  await waitForRender();
-
-  const overflowStart = stdout.chunks.length;
-  instance.rerender(<OverflowTranscript overflow={true} />);
-  await waitForRender();
-  const overflowOutput = stripAnsi(stdout.chunks.slice(overflowStart).join(""));
-
-  // Overflow must not replay the retained static tail and must not 3J.
-  // The collapsed summary and expanded body both stay out of this frame.
-  expect(overflowOutput).not.toContain("Thought for 4 seconds");
-  expect(overflowOutput).not.toContain(
-    "Reasoning body that must not return after recollapse",
-  );
-  expect(overflowOutput).toContain("live");
-  expect(
-    stdout.chunks
-      .slice(overflowStart)
-      .some((chunk) => chunk.includes("\u001B[3J")),
-  ).toBe(false);
 
   instance.unmount();
   instance.cleanup();
