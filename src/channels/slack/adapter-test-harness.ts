@@ -329,7 +329,15 @@ mock.module("./runtime", () => ({
   }),
 }));
 
+// Preserve every export of the real module: `mock.module` replaces the module for
+// the whole worker, so a partial factory breaks later files that import a symbol
+// this factory omits (attachment-download.ts imports
+// `materializeSlackAttachment`, which only the real module has). Importing the
+// real module here is side-effect-free — it reads no config and opens no client.
+const realMedia = await import("./media");
+
 mock.module("./media", () => ({
+  ...realMedia,
   readSlackAttachmentFile: async () => Buffer.alloc(0),
   resolveSlackChannelHistory: resolveSlackChannelHistoryMock,
   resolveSlackCurrentMessageAttachments:
