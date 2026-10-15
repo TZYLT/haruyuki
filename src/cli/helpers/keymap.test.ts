@@ -3,9 +3,11 @@ import {
   chordsEqual,
   isNamedKey,
   type KeyChord,
+  resolveBinding,
 } from "@/cli/helpers/input-keys";
 import {
   APP_KEY_CHORDS,
+  LEADER_KEY_CHORDS,
   RESERVED_FUTURE_CHORDS,
   RESERVED_TEXT_CHORDS,
   registeredKeyChords,
@@ -79,5 +81,39 @@ describe("keymap", () => {
       { key: "o", ctrl: true },
     ]);
     expect(APP_KEY_CHORDS.toggleSubagents).toEqual([{ key: "g", ctrl: true }]);
+  });
+
+  test("the leader's help answers to every encoding of Shift+/", () => {
+    // The first report from real hardware was "[Ctrl+X] then ? opens the slash
+    // command panel instead": `?` is Shift+/ on a US layout, and a terminal in
+    // the Kitty protocol reports that as a *modified slash*, not as `?`, so a
+    // chord spelled `{ key: "?" }` alone never fired and the key fell through to
+    // the input — which opened `/` autocomplete. All three encodings are bound.
+    //
+    // Plain `?` with shift absent covers classic terminals, `?` with the shift
+    // flag covers terminals that report the composed character, and `/` with
+    // shift covers the Kitty form.
+    const encodings = [
+      { input: "?", key: {} },
+      { input: "?", key: { shift: true } },
+      { input: "/", key: { shift: true } },
+    ];
+    const unresolved = encodings
+      .filter(
+        (event) =>
+          !resolveBinding(
+            [
+              {
+                id: "leader.help",
+                leader: true,
+                chords: LEADER_KEY_CHORDS.help,
+                run: () => {},
+              },
+            ],
+            event as never,
+          ),
+      )
+      .map((event) => `${event.input} shift=${event.key.shift === true}`);
+    expect(unresolved).toEqual([]);
   });
 });

@@ -16,6 +16,7 @@ import {
   getViewportScrollRequest,
   getViewportScrollVersion,
   jumpTranscriptToNewest,
+  jumpTranscriptToOldest,
   reportViewportPosition,
   scrollTranscriptPage,
   setViewportRows,
@@ -132,6 +133,13 @@ export function ViewportTranscript(props: AppViewProps) {
           chords: APP_KEY_CHORDS.scrollToNewest,
           run: () => {
             jumpTranscriptToNewest();
+          },
+        },
+        {
+          id: "transcript.scrollToOldest",
+          chords: APP_KEY_CHORDS.scrollToOldest,
+          run: () => {
+            jumpTranscriptToOldest();
           },
         },
       ],

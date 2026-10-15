@@ -58,6 +58,10 @@ const EXACT_SEQUENCES: ReadonlyMap<string, SequenceShape> = new Map([
   [`${ESC}[3~`, { input: "", key: { delete: true } }],
   [`${ESC}[5~`, { input: "", key: { pageUp: true } }],
   [`${ESC}[6~`, { input: "", key: { pageDown: true } }],
+  // Shift+PageUp / Shift+PageDown: the classic form, and the pair the transcript
+  // scrolls to either end of the history with.
+  [`${ESC}[5;2~`, { input: "", key: { pageUp: true, shift: true } }],
+  [`${ESC}[6;2~`, { input: "", key: { pageDown: true, shift: true } }],
   [`${ESC}[H`, { input: "", key: { home: true } }],
   [`${ESC}[1~`, { input: "", key: { home: true } }],
   [`${ESC}OH`, { input: "", key: { home: true } }],

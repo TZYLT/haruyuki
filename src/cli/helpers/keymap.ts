@@ -38,11 +38,14 @@ export const APP_KEY_CHORDS = {
   /**
    * Jump to the newest row and resume following.
    *
-   * Ctrl+D held the queue's hold/release toggle; that path never fired on a local
-   * agent (`deferModeSupported` is false for every `agent-local-*` id), so the key
-   * is reclaimed for this.
+   * Ctrl+D was the first choice and is gone: this machine's GPU vendor registers
+   * it as a global hotkey, so the key never reaches the terminal. Shift+PageDown
+   * is the pair a pager would use, and the alternate screen keeps the terminal
+   * from taking it for its own scrollback.
    */
-  scrollToNewest: [{ key: "d", ctrl: true }],
+  scrollToNewest: [{ key: "pageDown", shift: true }],
+  /** Jump to the oldest loaded row (the far end of the history). */
+  scrollToOldest: [{ key: "pageUp", shift: true }],
 } as const satisfies Record<string, KeyChordList>;
 
 /**
@@ -152,8 +155,15 @@ export const RESERVED_TEXT_CHORDS: KeyChordList = [
 export const LEADER_KEY_CHORDS = {
   /** Arm the leader prefix: the next key is a command. */
   activate: [{ key: "x", ctrl: true }],
-  /** List what the prefix can do. */
-  help: [{ key: "?" }],
+  /**
+   * List what the prefix can do.
+   *
+   * Three chords, one key: `?` is Shift+/ on most layouts, and terminals report
+   * that as a modified `/` (Kitty protocol) or as a plain `?` (classic mode, with
+   * or without the shift flag). The first entry is the one the hint prints; the
+   * rest are the same keystroke in another encoding.
+   */
+  help: [{ key: "?" }, { key: "?", shift: true }, { key: "/", shift: true }],
 } as const satisfies Record<string, KeyChordList>;
 
 /** Reserved by later milestones so no M3 binding can claim them by accident. */

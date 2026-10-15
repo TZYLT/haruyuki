@@ -105,6 +105,8 @@ const CORPUS = [
   `${ESC}[D`,
   `${ESC}[5~`,
   `${ESC}[6~`,
+  `${ESC}[5;2~`,
+  `${ESC}[6;2~`,
   `${ESC}[H`,
   `${ESC}[F`,
   `${ESC}[1~`,
@@ -131,16 +133,18 @@ const CORPUS = [
  */
 const MUST_BE_SHIELDED = [
   "\u0003", // Ctrl+C
-  "\u0004", // Ctrl+D (jump to newest)
   "\u0007", // Ctrl+G (subagent group)
   "\u000f", // Ctrl+O (shell output)
   "\u0012", // Ctrl+R
   "\u0014", // Ctrl+T
+  "\u0018", // Ctrl+X (leader prefix)
   "\u001a", // Ctrl+Z
   "\t", // Tab
   `${ESC}[3~`, // fn+Delete
   `${ESC}[5~`, // PageUp
   `${ESC}[6~`, // PageDown
+  `${ESC}[5;2~`, // Shift+PageUp (jump to the oldest row)
+  `${ESC}[6;2~`, // Shift+PageDown (jump to the newest row)
   "\u007f", // Backspace
   `${ESC}`, // Escape
 ];

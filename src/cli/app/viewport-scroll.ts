@@ -85,6 +85,19 @@ export function jumpTranscriptToNewest(): void {
 }
 
 /**
+ * Jump to the oldest loaded row.
+ *
+ * The offset is deliberately absurd rather than "the total": the window clamps
+ * it to the history's extent and reports back what it actually showed, and that
+ * is the only place the total is known — it is what the lazy walk measures.
+ */
+export function jumpTranscriptToOldest(): void {
+  request = { kind: "rows", rows: Number.MAX_SAFE_INTEGER };
+  reported = null;
+  publish();
+}
+
+/**
  * Called by the viewport once it has rendered, with the position it actually
  * shows (the window's bottom item and the rows of it below the viewport).
  *

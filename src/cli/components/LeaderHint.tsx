@@ -26,10 +26,21 @@ import {
  * the table from the command registry.
  */
 
+/**
+ * The keystroke to print for an entry.
+ *
+ * A binding may answer to several encodings of *one* key (the leader's help is
+ * `?`, which terminals send as `?` or as a modified `/`), so the hint shows the
+ * first — the one a person would press — and not the encoding list.
+ */
+function printKeys(keys: readonly string[]): string {
+  return keys[0] ?? "?";
+}
+
 function summarise(entries: ReturnType<typeof leaderEntries>): string {
   return entries
     .map((entry) => {
-      const keys = entry.keys.join("/");
+      const keys = printKeys(entry.keys);
       return entry.label ? `${keys} ${entry.label}` : keys;
     })
     .join(" · ");
@@ -66,7 +77,7 @@ export function LeaderHint() {
     <Box flexDirection="column">
       {entries.map((entry) => (
         <Text key={entry.id} dimColor>
-          {prefix} {entry.keys.join("/")} —{" "}
+          {prefix} {printKeys(entry.keys)} —{" "}
           <Text color={colors.text.dim}>{entry.label ?? entry.id}</Text>
         </Text>
       ))}
