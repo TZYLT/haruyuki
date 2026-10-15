@@ -1,5 +1,6 @@
 import { Box, useInput } from "ink";
 import { memo, useMemo, useState } from "react";
+import { taskApprovalPromptRows } from "@/cli/helpers/approval-layout";
 import {
   countPreviewRows,
   fitPreviewLines,
@@ -32,14 +33,6 @@ type Props = {
 
 // Horizontal line character for Claude Code style
 const SOLID_LINE = "─";
-
-// Rows the live area needs besides the summary and prompt while this dialog
-// is shown: rule, header, spacers, options with spacer, hint with spacer, the
-// live-item margin above and the collapsed input margin below, plus slack for
-// wrapped option text. Task approvals never get AppCoordinator's eager
-// preview commit, so the prompt must keep the whole dialog on screen.
-const APPROVAL_CHROME_ROWS = 15;
-const MIN_PROMPT_ROWS = 3;
 
 /**
  * InlineTaskApproval - Renders Task tool approval UI inline with pretty formatting
@@ -153,15 +146,14 @@ export const InlineTaskApproval = memo(
 
       // Show as much of the prompt as fits, from the start: a live area
       // taller than the terminal is clipped to its bottom rows, which would
-      // hide the header and the task being approved.
+      // hide the header and the task being approved. The budget is shared with
+      // the transcript row model (`@/cli/helpers/approval-layout`).
       const summary = `${subagentType}${isBackground ? " [background]" : ""} — ${description}${model ? ` (${model})` : ""}`;
       const truncatedPrompt = fitPreviewLines(
         prompt.split("\n"),
-        Math.max(
-          MIN_PROMPT_ROWS,
-          terminalRows -
-            APPROVAL_CHROME_ROWS -
-            countPreviewRows(summary.split("\n"), contentWidth),
+        taskApprovalPromptRows(
+          terminalRows,
+          countPreviewRows(summary.split("\n"), contentWidth),
         ),
         contentWidth,
       ).join("\n");

@@ -2,6 +2,7 @@ import { Box } from "ink";
 import { memo, useEffect, useState } from "react";
 import type { StreamingState } from "@/cli/helpers/accumulator";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
+import { streamingOutputLayout } from "@/cli/helpers/shell-output";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { Text } from "./Text";
 
@@ -26,8 +27,12 @@ export const StreamingOutputDisplay = memo(
     }, []);
 
     const elapsed = Math.floor((Date.now() - streaming.startTime) / 1000);
-    const { tailLines, totalLineCount } = streaming;
-    const hiddenCount = Math.max(0, totalLineCount - tailLines.length);
+    // Which lines are visible is shared with the transcript row model.
+    const {
+      first: firstLine,
+      rest,
+      hiddenCount,
+    } = streamingOutputLayout(streaming);
     const contentWidth = Math.max(10, columns - 5);
 
     const clipToWidth = (text: string): string => {
@@ -40,7 +45,6 @@ export const StreamingOutputDisplay = memo(
       return `${text.slice(0, contentWidth - 1)}…`;
     };
 
-    const firstLine = tailLines[0];
     const interruptHint = showInterruptHint ? " (esc to interrupt)" : "";
     if (!firstLine) {
       return (
@@ -65,7 +69,7 @@ export const StreamingOutputDisplay = memo(
           </Text>
         </Box>
         {/* Remaining lines with indent (5 spaces to align with content after bracket) */}
-        {tailLines.slice(1).map((line, i) => (
+        {rest.map((line, i) => (
           <Text
             // biome-ignore lint/suspicious/noArrayIndexKey: Lines are positional output, stable order within render
             key={i}

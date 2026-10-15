@@ -1,16 +1,11 @@
 import { Box } from "ink";
 import { memo, type ReactNode } from "react";
 import { getSubagentByToolCallId } from "@/agent/subagent-state.js";
-import { parseAskUserQuestionReceipt } from "@/ask-user-question";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
-import {
-  formatArgsDisplay,
-  parsePatchInput,
-  parsePatchOperations,
-} from "@/cli/helpers/format-args-display.js";
+import { parsePatchOperations } from "@/cli/helpers/format-args-display.js";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
+import { resolveToolCallDisplay } from "@/cli/helpers/tool-call-display";
 import {
-  getDisplayToolName,
   isFileEditTool,
   isFileReadTool,
   isFileWriteTool,
@@ -20,7 +15,6 @@ import {
   isPlanTool,
   isSearchTool,
   isShellOutputTool,
-  isShellTool,
   isTaskCrudTool,
   isTaskTool,
   isTodoTool,
@@ -119,12 +113,6 @@ export const ToolCallMessage = memo(
     try {
       // Parse and format the tool call
       const rawName = line.name ?? "?";
-      const argsText =
-        typeof line.argsText === "string"
-          ? line.argsText
-          : line.argsText == null
-            ? ""
-            : JSON.stringify(line.argsText);
 
       // Task tool rendering decision:
       // - Cancelled/rejected: render as error tool call (won't appear in SubagentGroupDisplay)
@@ -147,147 +135,34 @@ export const ToolCallMessage = memo(
         // Finished Task tools render here (both success and error)
       }
 
-      // Apply tool name remapping
-      let displayName = getDisplayToolName(rawName);
+      // The display decision chain (patch kind → question state → shell
+      // semantics → width truncation) is shared with the transcript row model.
+      const display = resolveToolCallDisplay({
+        name: line.name,
+        argsText: line.argsText,
+        unifiedExecCommandDisplay: line.unifiedExecCommandDisplay,
+        resultText: line.resultText,
+        phase: line.phase,
+        resultOk: line.resultOk,
+        isStreaming,
+        columns,
+      });
+      const displayName = display.displayName;
 
-      // For Patch tools, override display name based on patch content
-      // (Add → Write, Update → Update, Delete → Delete)
-      if (isPatchTool(rawName)) {
-        try {
-          const parsedArgs = JSON.parse(argsText);
-          if (parsedArgs.input) {
-            const patchInfo = parsePatchInput(parsedArgs.input);
-            if (patchInfo) {
-              if (patchInfo.kind === "add") displayName = "Write";
-              else if (patchInfo.kind === "update") displayName = "Update";
-              else if (patchInfo.kind === "delete") displayName = "Delete";
-            }
-          }
-        } catch {
-          // Keep default "Patch" name if parsing fails
-        }
-      }
-
-      // For AskUserQuestion, show friendly header only after completion
-      if (isQuestionTool(rawName)) {
-        if (line.phase === "finished" && line.resultOk !== false) {
-          displayName = parseAskUserQuestionReceipt(line.resultText)
-            ? "Questions posted"
-            : "User answered Haruyuki's questions:";
-        } else {
-          displayName = "Asking user questions...";
-        }
-      }
-
-      const rightWidth = Math.max(0, columns - 2); // gutter is 2 cols
-
-      // Determine args display:
-      // - Question tool: hide args (shown in result instead)
-      // - Still streaming + phase "ready": args may be incomplete, show ellipsis
-      // - Phase "running"/"finished" or stream done: args complete, show formatted
-      let args: ReactNode = null;
-      let shellCommand: string | null = null;
-      let shellSemanticKind: "read" | "list" | "search" | "run" | null = null;
-      let hasShellDescription = false;
-      if (!isQuestionTool(rawName)) {
-        const parseArgs = (): {
-          formatted: ReturnType<typeof formatArgsDisplay> | null;
-          parseable: boolean;
-        } => {
-          if (!argsText.trim()) {
-            return { formatted: null, parseable: true };
-          }
-          try {
-            const formatted = formatArgsDisplay(argsText, rawName, {
-              unifiedExecCommandDisplay: line.unifiedExecCommandDisplay,
-              suppressUnifiedExecInteractionLabel:
-                rawName === "write_stdin" &&
-                line.phase === "finished" &&
-                line.resultOk === false,
-            });
-            return { formatted, parseable: true };
-          } catch {
-            return { formatted: null, parseable: false };
-          }
-        };
-
-        // Args are complete once running/finished, stream done, or JSON is parseable.
-        const { formatted, parseable } = parseArgs();
-        const argsComplete =
-          parseable ||
-          line.phase === "running" ||
-          line.phase === "finished" ||
-          !isStreaming;
-
-        if (!argsComplete) {
-          args = "(…)";
-        } else {
-          const formattedArgs =
-            formatted ??
-            formatArgsDisplay(argsText, rawName, {
-              unifiedExecCommandDisplay: line.unifiedExecCommandDisplay,
-              suppressUnifiedExecInteractionLabel:
-                rawName === "write_stdin" &&
-                line.phase === "finished" &&
-                line.resultOk === false,
-            });
-          if (formattedArgs.shellSemantic) {
-            shellSemanticKind = formattedArgs.shellSemantic.kind;
-            displayName = formattedArgs.shellSemantic.label;
-            hasShellDescription =
-              typeof formattedArgs.parsed.description === "string" &&
-              formattedArgs.parsed.description.trim().length > 0;
-            if (
-              formattedArgs.shellSemantic.kind === "run" &&
-              !hasShellDescription
-            ) {
-              shellCommand = formattedArgs.shellSemantic.rawCommand;
-            }
-          } else if (formattedArgs.displayName) {
-            displayName = formattedArgs.displayName;
-          }
-          // Normalize newlines to spaces to prevent forced line breaks
-          const normalizedDisplay = formattedArgs.display.replace(/\n/g, " ");
-          // For max 2 lines: boxWidth * 2, minus parens (2) and margin (2)
-          const argsBoxWidth = rightWidth - displayName.length;
-          const maxArgsChars = Math.max(0, argsBoxWidth * 2 - 4);
-
-          const needsTruncation = normalizedDisplay.length > maxArgsChars;
-          const truncatedDisplay = needsTruncation
-            ? `${normalizedDisplay.slice(0, maxArgsChars - 1)}…`
-            : normalizedDisplay;
-          args = colorizeArgs(truncatedDisplay);
-        }
-      }
-
-      if (
-        !shellCommand &&
-        isShellTool(rawName) &&
-        argsText.trim() &&
-        !hasShellDescription &&
-        (shellSemanticKind === null || shellSemanticKind === "run")
-      ) {
-        try {
-          const parsedArgs = JSON.parse(argsText);
-          if (typeof parsedArgs.cmd === "string") {
-            shellCommand = parsedArgs.cmd;
-          } else if (typeof parsedArgs.command === "string") {
-            shellCommand = parsedArgs.command;
-          } else if (Array.isArray(parsedArgs.command)) {
-            shellCommand = parsedArgs.command.join(" ");
-          }
-        } catch {
-          // Keep shellCommand null and fall back to plain args rendering.
-        }
-      }
+      // Question tools hide their args (shown in the result instead); shell
+      // commands are rendered highlighted. Both decisions come from the shared
+      // display resolution above.
+      const args: ReactNode =
+        !display.hidesArgs && display.argsDisplayText !== null
+          ? colorizeArgs(display.argsDisplayText)
+          : null;
 
       // Pre-compute shell command highlighting for first-line + continuation rendering
       let shellFirstLineSpans: StyledSpan[] | null = null;
       let shellContinuationLines: StyledSpan[][] = [];
-      if (shellCommand) {
-        const highlightedLines = highlightCommand(shellCommand);
-        const nameWidth = displayName.length + 1; // +1 for space separator
-        const commandMaxColumns = Math.max(10, rightWidth - nameWidth);
+      if (display.shellCommand) {
+        const highlightedLines = highlightCommand(display.shellCommand);
+        const commandMaxColumns = display.shellCommandMaxColumns;
         // Filter out empty lines (e.g. trailing newline from shiki tokenizer)
         const nonEmptyLines = highlightedLines.filter((spans) =>
           spans.some((s) => s.text.length > 0),

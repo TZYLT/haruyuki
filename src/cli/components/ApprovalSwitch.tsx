@@ -1,4 +1,10 @@
 import { memo } from "react";
+import {
+  getBashApprovalInfo,
+  getFileEditApprovalInfo,
+  getTaskApprovalInfo,
+  isCommandMonitorApproval,
+} from "@/cli/helpers/approval-info";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import type { ApprovalRequest } from "@/cli/helpers/stream";
 import {
@@ -12,32 +18,6 @@ import { InlineBashApproval } from "./InlineBashApproval";
 import { InlineFileEditApproval } from "./InlineFileEditApproval";
 import { InlineGenericApproval } from "./InlineGenericApproval";
 import { InlineTaskApproval } from "./InlineTaskApproval";
-
-// Types for parsed tool data
-type BashInfo = {
-  toolName: string;
-  command: string;
-  description?: string;
-};
-
-type FileEditInfo = {
-  toolName: string;
-  filePath: string;
-  content?: string;
-  oldString?: string;
-  newString?: string;
-  replaceAll?: boolean;
-  patchInput?: string;
-  toolCallId?: string;
-};
-
-type TaskInfo = {
-  subagentType: string;
-  description: string;
-  prompt: string;
-  model?: string;
-  isBackground?: boolean;
-};
 
 type Props = {
   approval: ApprovalRequest;
@@ -61,118 +41,14 @@ type Props = {
   allDiffs?: Map<string, AdvancedDiffSuccess>;
 };
 
-// Parse bash info from approval args
-function getBashInfo(approval: ApprovalRequest): BashInfo | null {
-  try {
-    const args = JSON.parse(approval.toolArgs || "{}");
-    const t = approval.toolName.toLowerCase();
-
-    let command = "";
-    let description = "";
-
-    if (t === "exec_command") {
-      command = typeof args.cmd === "string" ? args.cmd : "(no command)";
-      description =
-        typeof args.description === "string" ? args.description : "";
-    } else if (t === "write_stdin") {
-      const sessionId =
-        typeof args.session_id === "string" ||
-        typeof args.session_id === "number"
-          ? String(args.session_id)
-          : "unknown";
-      command = `write_stdin ${sessionId}`;
-      description =
-        typeof args.chars === "string" && args.chars.length > 0
-          ? "Write input to running shell session"
-          : "Poll running shell session";
-    } else {
-      // Bash uses command string and description
-      command =
-        typeof args.command === "string" ? args.command : "(no command)";
-      description =
-        typeof args.description === "string" ? args.description : "";
-    }
-
-    return {
-      toolName: approval.toolName,
-      command,
-      description,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function isCommandMonitorApproval(approval: ApprovalRequest): boolean {
-  if (approval.toolName !== "Monitor") return false;
-  try {
-    const args = JSON.parse(approval.toolArgs || "{}");
-    return typeof args.command === "string";
-  } catch {
-    return false;
-  }
-}
-
-// Parse file edit info from approval args
-function getFileEditInfo(approval: ApprovalRequest): FileEditInfo | null {
-  try {
-    const args = JSON.parse(approval.toolArgs || "{}");
-
-    // For patch tools, use the input field
-    if (isPatchTool(approval.toolName)) {
-      return {
-        toolName: approval.toolName,
-        filePath: "", // Patch can have multiple files
-        patchInput: args.input as string | undefined,
-        toolCallId: approval.toolCallId,
-      };
-    }
-
-    // For regular file edit/write tools
-    return {
-      toolName: approval.toolName,
-      filePath: String(args.file_path || ""),
-      content: args.content as string | undefined,
-      oldString: args.old_string as string | undefined,
-      newString: args.new_string as string | undefined,
-      replaceAll: args.replace_all as boolean | undefined,
-      toolCallId: approval.toolCallId,
-    };
-  } catch {
-    return null;
-  }
-}
-
-// Parse task info from approval args
-function getTaskInfo(approval: ApprovalRequest): TaskInfo | null {
-  try {
-    const args = JSON.parse(approval.toolArgs || "{}");
-    return {
-      subagentType:
-        typeof args.subagent_type === "string" ? args.subagent_type : "unknown",
-      description:
-        typeof args.description === "string"
-          ? args.description
-          : "(no description)",
-      prompt: typeof args.prompt === "string" ? args.prompt : "(no prompt)",
-      model: typeof args.model === "string" ? args.model : undefined,
-      isBackground: true,
-    };
-  } catch {
-    return {
-      subagentType: "unknown",
-      description: "(parse error)",
-      prompt: "(parse error)",
-    };
-  }
-}
-
 /**
  * ApprovalSwitch - Unified approval component that renders the appropriate
  * specialized approval UI based on tool type.
  *
  * This consolidates the approval rendering logic that was previously duplicated
- * in the transcript rendering and fallback UI paths.
+ * in the transcript rendering and fallback UI paths. The dispatch and the args
+ * parsing live in `@/cli/helpers/approval-info`, shared with the transcript row
+ * model so the measured height matches the approval that is on screen.
  */
 export const ApprovalSwitch = memo(
   ({
@@ -197,7 +73,7 @@ export const ApprovalSwitch = memo(
       isFileWriteTool(toolName) ||
       isPatchTool(toolName)
     ) {
-      const fileEditInfo = getFileEditInfo(approval);
+      const fileEditInfo = getFileEditApprovalInfo(approval);
       if (fileEditInfo) {
         return (
           <InlineFileEditApproval
@@ -220,7 +96,7 @@ export const ApprovalSwitch = memo(
 
     // Shell/Bash tools → InlineBashApproval
     if (isShellTool(toolName) || isCommandMonitorApproval(approval)) {
-      const bashInfo = getBashInfo(approval);
+      const bashInfo = getBashApprovalInfo(approval);
       if (bashInfo) {
         return (
           <InlineBashApproval
@@ -241,7 +117,7 @@ export const ApprovalSwitch = memo(
 
     // Task tool → InlineTaskApproval
     if (isTaskTool(toolName)) {
-      const taskInfo = getTaskInfo(approval);
+      const taskInfo = getTaskApprovalInfo(approval);
       if (taskInfo) {
         return (
           <InlineTaskApproval

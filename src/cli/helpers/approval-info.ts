@@ -1,0 +1,179 @@
+/**
+ * Approval request parsing, shared by `ApprovalSwitch` and the transcript row
+ * model.
+ *
+ * `ApprovalSwitch` picks one of four inline approval UIs from the tool name and
+ * parses the tool args for the chosen one. The full-screen shell renders exactly
+ * the same approval for the current request (and compact stubs for the rest), so
+ * it needs the same decision *and* the same parsed fields to predict the row
+ * count. Both read this module; a second copy of the dispatch would let the
+ * viewport window disagree with the approval that is actually on screen.
+ */
+
+import type { ApprovalRequest } from "@/cli/helpers/stream";
+import {
+  isFileEditTool,
+  isFileWriteTool,
+  isPatchTool,
+  isShellTool,
+  isTaskTool,
+} from "@/cli/helpers/tool-name-mapping.js";
+
+export interface BashApprovalInfo {
+  toolName: string;
+  command: string;
+  description?: string;
+}
+
+export interface FileEditApprovalInfo {
+  toolName: string;
+  filePath: string;
+  content?: string;
+  oldString?: string;
+  newString?: string;
+  replaceAll?: boolean;
+  patchInput?: string;
+  toolCallId?: string;
+}
+
+export interface TaskApprovalInfo {
+  subagentType: string;
+  description: string;
+  prompt: string;
+  model?: string;
+  isBackground?: boolean;
+}
+
+/** Which inline approval UI a request maps to. */
+export type ApprovalKind = "fileEdit" | "shell" | "task" | "generic";
+
+export function isCommandMonitorApproval(approval: ApprovalRequest): boolean {
+  if (approval.toolName !== "Monitor") return false;
+  try {
+    const args = JSON.parse(approval.toolArgs || "{}");
+    return typeof args.command === "string";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The UI family for a request. Mirrors `ApprovalSwitch`'s dispatch order:
+ * file edit/write/patch, then shell (or a command Monitor), then Task, then the
+ * generic fallback.
+ */
+export function resolveApprovalKind(approval: ApprovalRequest): ApprovalKind {
+  const toolName = approval.toolName;
+  if (
+    isFileEditTool(toolName) ||
+    isFileWriteTool(toolName) ||
+    isPatchTool(toolName)
+  ) {
+    if (getFileEditApprovalInfo(approval)) return "fileEdit";
+  }
+  if (isShellTool(toolName) || isCommandMonitorApproval(approval)) {
+    if (getBashApprovalInfo(approval)) return "shell";
+  }
+  if (isTaskTool(toolName)) {
+    if (getTaskApprovalInfo(approval)) return "task";
+  }
+  return "generic";
+}
+
+/** Parse bash info from approval args. */
+export function getBashApprovalInfo(
+  approval: ApprovalRequest,
+): BashApprovalInfo | null {
+  try {
+    const args = JSON.parse(approval.toolArgs || "{}");
+    const t = approval.toolName.toLowerCase();
+
+    let command = "";
+    let description = "";
+
+    if (t === "exec_command") {
+      command = typeof args.cmd === "string" ? args.cmd : "(no command)";
+      description =
+        typeof args.description === "string" ? args.description : "";
+    } else if (t === "write_stdin") {
+      const sessionId =
+        typeof args.session_id === "string" ||
+        typeof args.session_id === "number"
+          ? String(args.session_id)
+          : "unknown";
+      command = `write_stdin ${sessionId}`;
+      description =
+        typeof args.chars === "string" && args.chars.length > 0
+          ? "Write input to running shell session"
+          : "Poll running shell session";
+    } else {
+      // Bash uses command string and description
+      command =
+        typeof args.command === "string" ? args.command : "(no command)";
+      description =
+        typeof args.description === "string" ? args.description : "";
+    }
+
+    return { toolName: approval.toolName, command, description };
+  } catch {
+    return null;
+  }
+}
+
+/** Parse file edit info from approval args. */
+export function getFileEditApprovalInfo(
+  approval: ApprovalRequest,
+): FileEditApprovalInfo | null {
+  try {
+    const args = JSON.parse(approval.toolArgs || "{}");
+
+    // For patch tools, use the input field
+    if (isPatchTool(approval.toolName)) {
+      return {
+        toolName: approval.toolName,
+        filePath: "", // Patch can have multiple files
+        patchInput: args.input as string | undefined,
+        toolCallId: approval.toolCallId,
+      };
+    }
+
+    // For regular file edit/write tools
+    return {
+      toolName: approval.toolName,
+      filePath: String(args.file_path || ""),
+      content: args.content as string | undefined,
+      oldString: args.old_string as string | undefined,
+      newString: args.new_string as string | undefined,
+      replaceAll: args.replace_all as boolean | undefined,
+      toolCallId: approval.toolCallId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Parse task info from approval args. */
+export function getTaskApprovalInfo(
+  approval: ApprovalRequest,
+): TaskApprovalInfo | null {
+  try {
+    const args = JSON.parse(approval.toolArgs || "{}");
+    return {
+      subagentType:
+        typeof args.subagent_type === "string" ? args.subagent_type : "unknown",
+      description:
+        typeof args.description === "string"
+          ? args.description
+          : "(no description)",
+      prompt: typeof args.prompt === "string" ? args.prompt : "(no prompt)",
+      model: typeof args.model === "string" ? args.model : undefined,
+      isBackground: true,
+    };
+  } catch {
+    return {
+      subagentType: "unknown",
+      description: "(parse error)",
+      prompt: "(parse error)",
+    };
+  }
+}

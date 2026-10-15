@@ -1,11 +1,14 @@
 import { Box } from "ink";
 import { memo } from "react";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
+import {
+  DEFAULT_COLLAPSED_LINES,
+  selectCollapsedOutput,
+} from "@/cli/helpers/shell-output";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { MarkdownDisplay } from "./MarkdownDisplay";
 import { Text } from "./Text";
 
-const DEFAULT_COLLAPSED_LINES = 3;
 const PREFIX_WIDTH = 5; // `  └  ` or `     `
 
 interface CollapsedOutputDisplayProps {
@@ -33,33 +36,13 @@ export const CollapsedOutputDisplay = memo(
     const columns = useTerminalWidth();
     const contentWidth = Math.max(0, columns - PREFIX_WIDTH);
 
-    let displayOutput = output;
-    let clippedByChars = false;
-    if (
-      !expanded &&
-      typeof maxChars === "number" &&
-      maxChars > 0 &&
-      output.length > maxChars
-    ) {
-      displayOutput = `${output.slice(0, maxChars)}…`;
-      clippedByChars = true;
-    }
-
-    // Keep empty lines for accurate display (don't filter them out)
-    const lines = displayOutput.split("\n");
-    // Remove trailing empty line from final newline
-    if (lines.length > 0 && lines[lines.length - 1] === "") {
-      lines.pop();
-    }
+    // The visible-line selection is shared with the transcript row model.
+    const { lines, visibleLines, hiddenCount, clippedByChars } =
+      selectCollapsedOutput(output, { maxLines, maxChars, expanded });
 
     if (lines.length === 0) {
       return null;
     }
-
-    const showAll =
-      expanded || maxLines === Infinity || maxLines >= lines.length;
-    const visibleLines = showAll ? lines : lines.slice(0, maxLines);
-    const hiddenCount = showAll ? 0 : Math.max(0, lines.length - maxLines);
 
     return (
       <Box flexDirection="column">
