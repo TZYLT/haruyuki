@@ -230,12 +230,23 @@ export function ViewportTranscript(props: AppViewProps) {
 
   const visible = items.slice(window.start, window.end);
 
+  // `flexShrink={0}` on everything here is what makes the viewport *clip*.
+  //
+  // Yoga shrinks children by default, and the window deliberately contains a
+  // whole item taller than the band (that is how a long answer is reachable at
+  // all). Without this, Ink compresses the tall item to the box instead of
+  // letting the overflow be hidden: its inner rows collapse and lines vanish
+  // from the *middle* of the content — reported from a 12-row terminal as
+  // "each page shows one item, with lines missing in between".
+  const shrinkProof = { flexShrink: 0 } as const;
+
   return (
     <Box
       height={height}
       flexDirection="column"
       justifyContent="flex-end"
       overflow="hidden"
+      flexShrink={0}
     >
       {visible.map((item, offset) => {
         const index = window.start + offset;
@@ -249,7 +260,12 @@ export function ViewportTranscript(props: AppViewProps) {
 
         if (isCurrentApproval && currentApproval) {
           return (
-            <Box key={item.id} flexDirection="column" marginTop={marginTop}>
+            <Box
+              key={item.id}
+              flexDirection="column"
+              marginTop={marginTop}
+              {...shrinkProof}
+            >
               <ApprovalSwitch
                 approval={currentApproval}
                 onApprove={handleApproveCurrent}
@@ -283,7 +299,12 @@ export function ViewportTranscript(props: AppViewProps) {
           toolCallId !== undefined && pendingIds.has(toolCallId);
         if (isQueued || isPending) {
           return (
-            <Box key={item.id} flexDirection="column" marginTop={marginTop}>
+            <Box
+              key={item.id}
+              flexDirection="column"
+              marginTop={marginTop}
+              {...shrinkProof}
+            >
               <PendingApprovalStub
                 toolName={
                   (toolCallId ? approvalMap.get(toolCallId)?.toolName : null) ||
@@ -304,17 +325,18 @@ export function ViewportTranscript(props: AppViewProps) {
         }
 
         return (
-          <TranscriptItemView
-            key={item.id}
-            item={item}
-            index={index}
-            columns={columns}
-            statusLinePrompt={statusLinePrompt}
-            showCompactionsEnabled={showCompactionsEnabled}
-            precomputedDiffs={precomputedDiffsRef.current}
-            hiddenToolCallId={expandedToolCallId ?? undefined}
-            lastShellToolCallId={lastShellToolCallId ?? undefined}
-          />
+          <Box key={item.id} flexDirection="column" {...shrinkProof}>
+            <TranscriptItemView
+              item={item}
+              index={index}
+              columns={columns}
+              statusLinePrompt={statusLinePrompt}
+              showCompactionsEnabled={showCompactionsEnabled}
+              precomputedDiffs={precomputedDiffsRef.current}
+              hiddenToolCallId={expandedToolCallId ?? undefined}
+              lastShellToolCallId={lastShellToolCallId ?? undefined}
+            />
+          </Box>
         );
       })}
     </Box>
