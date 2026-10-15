@@ -79,6 +79,21 @@ export function selectCollapsedOutput(
   return { lines, visibleLines, hiddenCount, clippedByChars };
 }
 
+/** Minimum width `StreamingOutputDisplay` clips a tail line to. */
+export const STREAMING_MIN_CONTENT_WIDTH = 10;
+
+/**
+ * Clip one streaming tail line to the display width, marking the cut with an
+ * ellipsis. Mirrored by the row model, which counts these rows without
+ * rendering; the clip is by code unit (not display column), matching the
+ * renderer.
+ */
+export function clipStreamingLine(text: string, contentWidth: number): string {
+  if (text.length <= contentWidth) return text;
+  if (contentWidth <= 1) return "…";
+  return `${text.slice(0, contentWidth - 1)}…`;
+}
+
 export interface StreamingOutputLayout {
   /** First tail line with the `  └` prefix (undefined while nothing arrived). */
   first: StreamingState["tailLines"][number] | undefined;

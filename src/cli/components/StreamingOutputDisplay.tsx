@@ -2,7 +2,11 @@ import { Box } from "ink";
 import { memo, useEffect, useState } from "react";
 import type { StreamingState } from "@/cli/helpers/accumulator";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
-import { streamingOutputLayout } from "@/cli/helpers/shell-output";
+import {
+  clipStreamingLine,
+  STREAMING_MIN_CONTENT_WIDTH,
+  streamingOutputLayout,
+} from "@/cli/helpers/shell-output";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { Text } from "./Text";
 
@@ -33,17 +37,7 @@ export const StreamingOutputDisplay = memo(
       rest,
       hiddenCount,
     } = streamingOutputLayout(streaming);
-    const contentWidth = Math.max(10, columns - 5);
-
-    const clipToWidth = (text: string): string => {
-      if (text.length <= contentWidth) {
-        return text;
-      }
-      if (contentWidth <= 1) {
-        return "…";
-      }
-      return `${text.slice(0, contentWidth - 1)}…`;
-    };
+    const contentWidth = Math.max(STREAMING_MIN_CONTENT_WIDTH, columns - 5);
 
     const interruptHint = showInterruptHint ? " (esc to interrupt)" : "";
     if (!firstLine) {
@@ -65,7 +59,7 @@ export const StreamingOutputDisplay = memo(
             dimColor={!firstLine.isStderr}
             color={firstLine.isStderr ? "red" : undefined}
           >
-            {clipToWidth(firstLine.text)}
+            {clipStreamingLine(firstLine.text, contentWidth)}
           </Text>
         </Box>
         {/* Remaining lines with indent (5 spaces to align with content after bracket) */}
@@ -77,7 +71,7 @@ export const StreamingOutputDisplay = memo(
             color={line.isStderr ? "red" : undefined}
           >
             {"     "}
-            {clipToWidth(line.text)}
+            {clipStreamingLine(line.text, contentWidth)}
           </Text>
         ))}
         {/* Hidden count + elapsed time */}

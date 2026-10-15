@@ -171,6 +171,23 @@ export function isPatchTool(name: string): boolean {
 }
 
 /**
+ * Tools the eagerly-committed approval preview renders as a file-edit preview.
+ *
+ * Deliberately wider than `isFileEditTool`/`isFileWriteTool`: `ApprovalPreview`
+ * predates the shared predicates and also covers the legacy `str_replace_*`
+ * names, so a saved transcript keeps its preview.
+ */
+export function isFileEditPreviewTool(name: string): boolean {
+  return (
+    name === "Edit" ||
+    name === "Write" ||
+    name === "str_replace_editor" ||
+    name === "str_replace_based_edit_tool" ||
+    name === "ApplyPatch"
+  );
+}
+
+/**
  * Checks if a tool is a shell/bash tool
  */
 export function isShellTool(name: string): boolean {

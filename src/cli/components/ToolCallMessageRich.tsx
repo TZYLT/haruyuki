@@ -18,13 +18,15 @@ import {
   isTaskCrudTool,
   isTaskTool,
   isTodoTool,
-  isWorkflowTool,
 } from "@/cli/helpers/tool-name-mapping.js";
+import { showsDefaultToolResult } from "@/cli/helpers/tool-result-branch";
+import {
+  extractToolResultMessage,
+  resolveToolResultDisplayText,
+} from "@/cli/helpers/tool-result-text";
 import { formatUnifiedExecOutputForTui } from "@/cli/helpers/unified-exec-output.js";
-import { formatWorkflowLaunchLine } from "@/cli/helpers/workflow-display";
 import { INTERRUPTED_BY_USER } from "@/constants";
 import { listTasks } from "@/tools/impl/tasks/store.js";
-import { clipToolReturn } from "@/tools/manager.js";
 import { isRecord } from "@/utils/type-guards";
 import { Text } from "./Text";
 
@@ -176,28 +178,12 @@ export const ToolCallMessage = memo(
         shellContinuationLines = visibleLines.slice(1);
       }
 
-      // Extract display text from tool result (handles JSON responses)
-      const extractMessageFromResult = (text: string): string => {
-        try {
-          const parsed = JSON.parse(text);
-          // If it's a JSON object with a message field, extract that
-          if (
-            parsed &&
-            typeof parsed === "object" &&
-            typeof parsed.message === "string"
-          ) {
-            return parsed.message;
-          }
-        } catch {
-          // Not JSON or parsing failed, use as-is
-        }
-        return text;
-      };
-
       const getResultElement = () => {
         if (!line.resultText) return null;
 
-        const extractedText = extractMessageFromResult(line.resultText);
+        // The JSON-envelope unwrap and the display-text clip are shared with the
+        // transcript row model (`@/cli/helpers/tool-result-text`).
+        const extractedText = extractToolResultMessage(line.resultText);
         const prefix = `  ${CLI_GLYPHS.result}  `; // 2 spaces, glyph, 2 spaces
         const prefixWidth = 5; // Total width of prefix
         const contentWidth = Math.max(0, columns - prefixWidth);
@@ -232,10 +218,10 @@ export const ToolCallMessage = memo(
 
         // Clip for display only (the API gets the full text). Workflow launches
         // show a one-line summary instead of the model-facing task notes.
-        const displayResultText =
-          (isWorkflowTool(rawName) &&
-            formatWorkflowLaunchLine(extractedText)) ||
-          clipToolReturn(extractedText).replace(/\n+$/, "");
+        const displayResultText = resolveToolResultDisplayText(
+          extractedText,
+          rawName,
+        );
 
         // Check if this is a todo_write tool with successful result
         if (
@@ -805,7 +791,7 @@ export const ToolCallMessage = memo(
             line.resultOk !== false &&
             (() => {
               const output = formatUnifiedExecOutputForTui(
-                extractMessageFromResult(line.resultText),
+                extractToolResultMessage(line.resultText),
                 { hideEmptyCompletion: rawName === "write_stdin" },
               );
               return output ? (
@@ -822,15 +808,10 @@ export const ToolCallMessage = memo(
 
           {/* Tool result for non-shell tools or shell tool errors */}
           {(() => {
-            // Show default result element when:
-            // - Not a shell tool (always show result)
-            // - Shell tool with error (show error message)
-            // - Shell tool in streaming/ready phase (show default "Running..." etc)
-            const showDefaultResult =
-              !isShellOutputTool(rawName) ||
-              (line.phase === "finished" && line.resultOk === false) ||
-              (line.phase !== "running" && line.phase !== "finished");
-            return showDefaultResult ? getResultElement() : null;
+            // Shared with the transcript row model (`tool-result-branch`).
+            return showsDefaultToolResult(line, rawName)
+              ? getResultElement()
+              : null;
           })()}
         </Box>
       );

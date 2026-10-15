@@ -10,6 +10,8 @@
  * viewport window disagree with the approval that is actually on screen.
  */
 
+import { simpleDiffDisplayPath } from "@/cli/helpers/diff-rows";
+import { parsePatchOperations } from "@/cli/helpers/format-args-display";
 import type { ApprovalRequest } from "@/cli/helpers/stream";
 import {
   isFileEditTool,
@@ -46,6 +48,62 @@ export interface TaskApprovalInfo {
 
 /** Which inline approval UI a request maps to. */
 export type ApprovalKind = "fileEdit" | "shell" | "task" | "generic";
+
+/** Tool name, file path and (for patch tools) the patch body of an edit. */
+export interface FileEditApprovalHeaderInput {
+  toolName: string;
+  filePath: string;
+  patchInput?: string;
+}
+
+/**
+ * Human-readable header for a file edit/write/patch approval ("Overwrite x?",
+ * "Apply patch to 3 files?", …).
+ *
+ * Existence is injected rather than probed here: the write case distinguishes
+ * "Overwrite" from "Write to" with a filesystem check, and the transcript row
+ * model measures this header without touching the filesystem. The renderers pass
+ * their own `existsSync`; the row model passes both answers and keeps the taller
+ * header, so the measured height never lands under the rendered one.
+ */
+export function fileEditApprovalHeaderText(
+  input: FileEditApprovalHeaderInput,
+  fileExists: (filePath: string) => boolean,
+): string {
+  const toolName = input.toolName.toLowerCase();
+
+  if (toolName === "applypatch") {
+    if (input.patchInput) {
+      const operations = parsePatchOperations(input.patchInput);
+      if (operations.length > 1) {
+        return `Apply patch to ${operations.length} files?`;
+      }
+      const operation = operations[0];
+      if (operation) {
+        const displayPath = simpleDiffDisplayPath(operation.path);
+        if (operation.kind === "add") return `Write to ${displayPath}?`;
+        if (operation.kind === "update") return `Update ${displayPath}?`;
+        return `Delete ${displayPath}?`;
+      }
+    }
+    return "Apply patch?";
+  }
+
+  const displayPath = simpleDiffDisplayPath(input.filePath);
+  if (toolName === "write") {
+    return fileExists(input.filePath)
+      ? `Overwrite ${displayPath}?`
+      : `Write to ${displayPath}?`;
+  }
+  if (
+    toolName === "edit" ||
+    toolName === "str_replace_editor" ||
+    toolName === "str_replace_based_edit_tool"
+  ) {
+    return `Update ${displayPath}?`;
+  }
+  return `Edit ${displayPath}?`;
+}
 
 export function isCommandMonitorApproval(approval: ApprovalRequest): boolean {
   if (approval.toolName !== "Monitor") return false;

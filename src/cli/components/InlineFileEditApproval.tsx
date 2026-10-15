@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { Box, useInput } from "ink";
 import { memo, useMemo, useState } from "react";
+import { fileEditApprovalHeaderText } from "@/cli/helpers/approval-info";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import { parsePatchToAdvancedDiff } from "@/cli/helpers/diff";
 import { parsePatchOperations } from "@/cli/helpers/format-args-display";
@@ -47,64 +49,6 @@ type Props = {
 // Horizontal line characters for Claude Code style
 const SOLID_LINE = "─";
 const DOTTED_LINE = "╌";
-
-/**
- * Get a human-readable header for the file edit
- */
-function getHeaderText(fileEdit: FileEditInfo): string {
-  const t = fileEdit.toolName.toLowerCase();
-
-  // Handle ApplyPatch (multi-file)
-  if (t === "applypatch") {
-    if (fileEdit.patchInput) {
-      const operations = parsePatchOperations(fileEdit.patchInput);
-      if (operations.length > 1) {
-        return `Apply patch to ${operations.length} files?`;
-      } else if (operations.length === 1) {
-        const op = operations[0];
-        if (op) {
-          const { relative } = require("node:path");
-          const cwd = process.cwd();
-          const relPath = relative(cwd, op.path);
-          const displayPath = relPath.startsWith("..") ? op.path : relPath;
-
-          if (op.kind === "add") {
-            return `Write to ${displayPath}?`;
-          } else if (op.kind === "update") {
-            return `Update ${displayPath}?`;
-          } else if (op.kind === "delete") {
-            return `Delete ${displayPath}?`;
-          }
-        }
-      }
-    }
-    return "Apply patch?";
-  }
-
-  // Handle single-file edit/write tools
-  const { relative } = require("node:path");
-  const cwd = process.cwd();
-  const relPath = relative(cwd, fileEdit.filePath);
-  const displayPath = relPath.startsWith("..") ? fileEdit.filePath : relPath;
-
-  if (t === "write") {
-    const { existsSync } = require("node:fs");
-    try {
-      if (existsSync(fileEdit.filePath)) {
-        return `Overwrite ${displayPath}?`;
-      }
-    } catch {
-      // Ignore errors
-    }
-    return `Write to ${displayPath}?`;
-  }
-
-  if (t === "edit") {
-    return `Update ${displayPath}?`;
-  }
-
-  return `Edit ${displayPath}?`;
-}
 
 /**
  * Determine diff kind based on tool name
@@ -274,7 +218,17 @@ export const InlineFileEditApproval = memo(
     // Generate horizontal lines
     const solidLine = SOLID_LINE.repeat(Math.max(columns, 10));
     const dottedLine = DOTTED_LINE.repeat(Math.max(columns, 10));
-    const headerText = headerOverride || getHeaderText(fileEdit);
+    // Shared with the committed preview and the transcript row model
+    // (`@/cli/helpers/approval-info`).
+    const headerText =
+      headerOverride ||
+      fileEditApprovalHeaderText(fileEdit, (filePath) => {
+        try {
+          return existsSync(filePath);
+        } catch {
+          return false;
+        }
+      });
     const diffKind = getDiffKind(fileEdit.toolName);
 
     // Memoize the static diff content so it doesn't re-render on keystroke

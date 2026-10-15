@@ -1,8 +1,13 @@
+import { existsSync } from "node:fs";
 import { Box } from "ink";
 import { memo } from "react";
+import { fileEditApprovalHeaderText } from "@/cli/helpers/approval-info";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import { parsePatchOperations } from "@/cli/helpers/format-args-display";
-import { isShellTool } from "@/cli/helpers/tool-name-mapping";
+import {
+  isFileEditPreviewTool,
+  isShellTool,
+} from "@/cli/helpers/tool-name-mapping";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { AdvancedDiffRenderer } from "./AdvancedDiffRenderer";
 import { colors } from "./colors";
@@ -19,71 +24,6 @@ type Props = {
   allDiffs?: Map<string, AdvancedDiffSuccess>;
   toolCallId?: string;
 };
-
-/**
- * Get a human-readable header for file edit tools
- */
-function getFileEditHeader(toolName: string, toolArgs: string): string {
-  const t = toolName.toLowerCase();
-
-  try {
-    const args = JSON.parse(toolArgs);
-
-    // Handle patch tools
-    if (t === "applypatch") {
-      if (args.input) {
-        const operations = parsePatchOperations(args.input);
-        if (operations.length > 1) {
-          return `Apply patch to ${operations.length} files?`;
-        } else if (operations.length === 1) {
-          const op = operations[0];
-          if (op) {
-            const { relative } = require("node:path");
-            const cwd = process.cwd();
-            const relPath = relative(cwd, op.path);
-            const displayPath = relPath.startsWith("..") ? op.path : relPath;
-
-            if (op.kind === "add") return `Write to ${displayPath}?`;
-            if (op.kind === "update") return `Update ${displayPath}?`;
-            if (op.kind === "delete") return `Delete ${displayPath}?`;
-          }
-        }
-      }
-      return "Apply patch?";
-    }
-
-    // Handle single-file edit/write tools
-    const filePath = args.file_path || "";
-    const { relative } = require("node:path");
-    const cwd = process.cwd();
-    const relPath = relative(cwd, filePath);
-    const displayPath = relPath.startsWith("..") ? filePath : relPath;
-
-    if (t === "write") {
-      const { existsSync } = require("node:fs");
-      try {
-        if (existsSync(filePath)) {
-          return `Overwrite ${displayPath}?`;
-        }
-      } catch {
-        // Ignore
-      }
-      return `Write to ${displayPath}?`;
-    }
-
-    if (
-      t === "edit" ||
-      t === "str_replace_editor" ||
-      t === "str_replace_based_edit_tool"
-    ) {
-      return `Update ${displayPath}?`;
-    }
-  } catch {
-    // Fall through
-  }
-
-  return `${toolName} requires approval`;
-}
 
 /**
  * ApprovalPreview - Renders the preview content for an eagerly-committed approval
@@ -136,17 +76,18 @@ export const ApprovalPreview = memo(
     }
 
     // File Edit tools: Render diff preview
-    if (
-      toolName === "Edit" ||
-      toolName === "Write" ||
-      toolName === "str_replace_editor" ||
-      toolName === "str_replace_based_edit_tool" ||
-      toolName === "ApplyPatch"
-    ) {
-      const headerText = getFileEditHeader(toolName, toolArgs);
-
+    if (isFileEditPreviewTool(toolName)) {
       try {
         const args = JSON.parse(toolArgs);
+        // Shared with the inline approval and the transcript row model.
+        const headerText = fileEditApprovalHeaderText(
+          {
+            toolName,
+            filePath: args.file_path || "",
+            patchInput: toolName === "ApplyPatch" ? args.input : undefined,
+          },
+          existsSync,
+        );
 
         // Handle ApplyPatch (can have multiple files)
         if (args.input && toolName === "ApplyPatch") {
