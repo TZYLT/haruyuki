@@ -1,10 +1,37 @@
-import { useStdin } from "ink";
+import { useApp } from "ink";
 import { useCallback, useEffect, useState } from "react";
 import { SYSTEM_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
+import { debugWarn } from "@/utils/debug";
+
+/** Resolves the next time the process is resumed with `SIGCONT`. */
+export function waitForResumeSignal(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    process.once("SIGCONT", () => {
+      resolve();
+    });
+  });
+}
+
+/**
+ * Stop the process and resolve once it is resumed.
+ *
+ * The resume listener is armed **before** the stop request on purpose: a
+ * self-delivered `SIGTSTP` can stop the process before the call returns, so
+ * registering afterwards would wait for a signal that already fired and leave
+ * the terminal handed over forever (raw mode off, no way back).
+ */
+export function stopUntilResumed(
+  stop: () => void,
+  waitForResume: () => Promise<void> = waitForResumeSignal,
+): Promise<void> {
+  const resumed = waitForResume();
+  stop();
+  return resumed;
+}
 
 export function useSuspend() {
-  const { stdin, isRawModeSupported } = useStdin();
+  const { suspendTerminal } = useApp();
   // Use a state variable to force a re-render when needed
   const [resumeKey, setResumeKey] = useState(0);
 
@@ -25,35 +52,36 @@ export function useSuspend() {
             // Suspending is a POSIX job-control concept: there is no SIGTSTP on
             // Windows, and `process.kill(pid, "SIGTSTP")` throws
             // ERR_UNKNOWN_SIGNAL there — from a key binding, which means an
-            // uncaught exception and a process exit. The key is simply inert on
-            // Windows. (Ink 7's `suspendTerminal` is the primitive to build on if
-            // this ever needs to release the terminal on other platforms; it also
-            // restores bracketed paste, the kitty protocol and the alternate
-            // screen, none of which the raw-mode dance below touches.)
+            // uncaught exception and a process exit. The key is inert on
+            // Windows.
             if (process.platform === "win32") {
               return;
             }
-            if (stdin && isRawModeSupported) {
-              stdin.setRawMode(false);
-            }
 
-            process.kill(process.pid, "SIGTSTP");
+            // Ink 7 owns the terminal hand-over: `suspendTerminal` turns raw
+            // mode, bracketed paste, the kitty protocol and the alternate
+            // screen off before the callback, then restores all of them and
+            // forces a full redraw. Doing it by hand (raw mode only) left the
+            // subshell reading kitty-encoded keys with its prompt drawn in the
+            // alternate screen.
+            void suspendTerminal(() =>
+              stopUntilResumed(() => process.kill(process.pid, "SIGTSTP")),
+            ).catch((error: unknown) => {
+              // Never let a failed hand-over reach the uncaught-exception
+              // handler: that would exit the session and drop the draft.
+              debugWarn("suspend", "suspendTerminal failed", error);
+            });
           },
         },
       ],
     },
   ]);
 
-  // Handle the SIGCONT (fg command) resume
+  // Handle the SIGCONT (fg command) resume. Ink restores the terminal itself;
+  // this only forces the tree to repaint so a legacy `<Static>` transcript is
+  // re-emitted onto a screen the subshell has since overwritten.
   useEffect(() => {
     const handleResume = () => {
-      if (stdin && isRawModeSupported && stdin.setRawMode) {
-        stdin.setRawMode(true);
-      }
-
-      // clear the console
-      process.stdout.write("\x1B[H\x1B[2J");
-
       forceUpdate();
     };
 
@@ -62,7 +90,7 @@ export function useSuspend() {
     return () => {
       process.off("SIGCONT", handleResume);
     };
-  }, [stdin, isRawModeSupported, forceUpdate]);
+  }, [forceUpdate]);
 
   return resumeKey;
 }
