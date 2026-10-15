@@ -49,6 +49,8 @@ import type { ApprovalRequest } from "@/cli/helpers/stream";
 import { countTextRows } from "@/cli/helpers/text-metrics";
 import {
   isFileEditPreviewTool,
+  isFileEditTool,
+  isFileWriteTool,
   isShellTool,
 } from "@/cli/helpers/tool-name-mapping";
 import type { ApprovalContext } from "@/permissions/analyzer";
@@ -246,6 +248,65 @@ export function approvalPreviewItemRows(
   }
 
   return GENERIC_PREVIEW_ROWS;
+}
+
+/**
+ * The `approval_preview` static item the eager-commit path appends.
+ *
+ * Shared with the decision that triggers the commit, so the item that gets
+ * committed is always the item that was measured: an approval preview is
+ * committed early precisely when it would overflow the live area, and a second
+ * copy of this construction would let the two disagree about the diff.
+ */
+export function buildApprovalPreviewItem(
+  approval: ApprovalRequest,
+  diffs: ReadonlyMap<string, AdvancedDiffSuccess>,
+): Extract<StaticItem, { kind: "approval_preview" }> {
+  const item: Extract<StaticItem, { kind: "approval_preview" }> = {
+    kind: "approval_preview",
+    id: `approval-preview-${approval.toolCallId}`,
+    toolCallId: approval.toolCallId,
+    toolName: approval.toolName,
+    toolArgs: approval.toolArgs || "{}",
+  };
+
+  // `ApprovalPreview` renders the diff from the item itself for the single-file
+  // tools and from `allDiffs` (keyed `id:path`) for patch operations, so only the
+  // former is attached here.
+  const { toolName } = approval;
+  if (
+    (isFileEditTool(toolName) || isFileWriteTool(toolName)) &&
+    diffs.has(approval.toolCallId)
+  ) {
+    item.precomputedDiff = diffs.get(approval.toolCallId);
+  }
+
+  return item;
+}
+
+/**
+ * Rows an approval's preview needs in the live area before it is worth committing
+ * to static — or 0 when that approval never qualifies.
+ *
+ * Only the tall previews qualify: a shell command block or a file edit/write/patch
+ * diff. The generic preview is three rows and can never overflow the viewport, so
+ * committing it would add static churn without fixing a flicker source.
+ *
+ * Keeping the gate here rather than at the call site means the decision, the
+ * measured layout and the committed item are all in one module, tested together.
+ */
+export function eagerCommitPreviewRows(
+  approval: ApprovalRequest,
+  options: ApprovalMeasureOptions,
+): number {
+  const { toolName, toolCallId } = approval;
+  if (!toolName || !toolCallId) return 0;
+  if (!isShellTool(toolName) && !isFileEditPreviewTool(toolName)) return 0;
+
+  return approvalPreviewItemRows(
+    buildApprovalPreviewItem(approval, options.diffs),
+    options,
+  );
 }
 
 /** Rows the inline approval's preview block occupies (0 when it is hidden). */

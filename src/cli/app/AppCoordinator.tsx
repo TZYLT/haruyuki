@@ -84,7 +84,6 @@ import {
 } from "@/cli/helpers/conversation-title";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import { setErrorContext } from "@/cli/helpers/error-context";
-import { parsePatchOperations } from "@/cli/helpers/format-args-display";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { getReflectionSettings } from "@/cli/helpers/memory-reminder";
 import type { ExecutionPhase } from "@/cli/helpers/phase-visuals";
@@ -93,7 +92,6 @@ import {
   AUTO_REFLECTION_DESCRIPTION,
   launchReflectionSubagent,
 } from "@/cli/helpers/reflection-launcher";
-import { safeJsonParseOr } from "@/cli/helpers/safe-json-parse";
 import { getStartupModelDisplayOverride } from "@/cli/helpers/startup-model-display";
 import type { ApprovalRequest } from "@/cli/helpers/stream";
 import {
@@ -192,26 +190,21 @@ import { appendTaskNotificationEventsToBuffer } from "@/utils/task-notifications
 import { recordTuiPerf } from "@/utils/tui-perf";
 import { getVersion } from "@/version";
 import {
+  buildApprovalPreviewItem,
+  eagerCommitPreviewRows,
+} from "./approval-rows";
+import {
   ANIMATION_RESUME_HYSTERESIS_ROWS,
   APPROVAL_OPTIONS_HEIGHT,
   APPROVAL_PREVIEW_BUFFER,
   CLEAR_SCREEN_AND_HOME,
-  DIFF_WRAP_GUTTER,
   MIN_CLEAR_INTERVAL_MS,
   MIN_RESIZE_DELTA,
-  MIN_WRAP_WIDTH,
   RESIZE_SETTLE_MS,
-  SHELL_PREVIEW_MAX_LINES,
   STABLE_WIDTH_SETTLE_MS,
-  TEXT_WRAP_GUTTER,
   TOOL_CALL_COMMIT_DEFER_MS,
 } from "./constants";
 import { uid } from "./ids";
-import {
-  countWrappedLines,
-  countWrappedLinesFromList,
-  estimateAdvancedDiffLines,
-} from "./layout";
 import {
   buildModelHandleFromLlmConfig,
   deriveReasoningEffort,
@@ -2264,147 +2257,26 @@ export function App({
   // This prevents double-committing when the approval changes
   const eagerCommittedPreviewsRef = useRef<Set<string>>(new Set());
 
-  const estimateApprovalPreviewLines = useCallback(
-    (approval: ApprovalRequest): number => {
-      const toolName = approval.toolName;
-      if (!toolName) return 0;
-      const args = safeJsonParseOr<Record<string, unknown>>(
-        approval.toolArgs || "{}",
-        {},
-      );
-      const wrapWidth = Math.max(MIN_WRAP_WIDTH, columns - TEXT_WRAP_GUTTER);
-      const diffWrapWidth = Math.max(
-        MIN_WRAP_WIDTH,
-        columns - DIFF_WRAP_GUTTER,
-      );
-
-      if (isShellTool(toolName)) {
-        const t = toolName.toLowerCase();
-        let command = "(no command)";
-        let description = "";
-
-        if (t === "exec_command") {
-          command = typeof args.cmd === "string" ? args.cmd : "(no command)";
-          description =
-            typeof args.description === "string" ? args.description : "";
-        } else if (t === "write_stdin") {
-          const sessionId =
-            typeof args.session_id === "string" ||
-            typeof args.session_id === "number"
-              ? String(args.session_id)
-              : "unknown";
-          command = `write_stdin ${sessionId}`;
-          description =
-            typeof args.chars === "string" && args.chars.length > 0
-              ? "Write input to running shell session"
-              : "Poll running shell session";
-        } else {
-          command =
-            typeof args.command === "string" ? args.command : "(no command)";
-          description =
-            typeof args.description === "string" ? args.description : "";
-        }
-
-        let lines = 3; // solid line + header + blank line
-        lines += Math.min(
-          countWrappedLines(command, wrapWidth),
-          SHELL_PREVIEW_MAX_LINES,
-        );
-        if (description) {
-          lines += countWrappedLines(description, wrapWidth);
-        }
-        return lines;
-      }
-
-      if (
-        isFileEditTool(toolName) ||
-        isFileWriteTool(toolName) ||
-        isPatchTool(toolName)
-      ) {
-        const headerLines = 4; // solid line + header + dotted lines
-        let diffLines = 0;
-        const toolCallId = approval.toolCallId;
-
-        if (isPatchTool(toolName) && typeof args.input === "string") {
-          const operations = parsePatchOperations(args.input);
-          operations.forEach((op, idx) => {
-            if (idx > 0) diffLines += 1; // blank line between operations
-            diffLines += 1; // filename line
-
-            const diffKey = toolCallId ? `${toolCallId}:${op.path}` : undefined;
-            const opDiff =
-              diffKey && precomputedDiffsRef.current.has(diffKey)
-                ? precomputedDiffsRef.current.get(diffKey)
-                : undefined;
-
-            if (opDiff) {
-              diffLines += estimateAdvancedDiffLines(opDiff, diffWrapWidth);
-              return;
-            }
-
-            if (op.kind === "add") {
-              diffLines += countWrappedLines(op.content, wrapWidth);
-              return;
-            }
-            if (op.kind === "update") {
-              if (op.patchLines?.length) {
-                diffLines += countWrappedLinesFromList(
-                  op.patchLines,
-                  wrapWidth,
-                );
-              } else {
-                diffLines += countWrappedLines(op.oldString || "", wrapWidth);
-                diffLines += countWrappedLines(op.newString || "", wrapWidth);
-              }
-              return;
-            }
-
-            diffLines += 1; // delete placeholder
-          });
-
-          return headerLines + diffLines;
-        }
-
-        const diff =
-          toolCallId && precomputedDiffsRef.current.has(toolCallId)
-            ? precomputedDiffsRef.current.get(toolCallId)
-            : undefined;
-
-        if (diff) {
-          diffLines += estimateAdvancedDiffLines(diff, diffWrapWidth);
-          return headerLines + diffLines;
-        }
-
-        if (typeof args.content === "string") {
-          diffLines += countWrappedLines(args.content, wrapWidth);
-          return headerLines + diffLines;
-        }
-
-        const oldString =
-          typeof args.old_string === "string" ? args.old_string : "";
-        const newString =
-          typeof args.new_string === "string" ? args.new_string : "";
-        diffLines += countWrappedLines(oldString, wrapWidth);
-        diffLines += countWrappedLines(newString, wrapWidth);
-        return headerLines + diffLines;
-      }
-
-      return 0;
-    },
-    [columns],
-  );
-
+  // Whether the approval's preview is tall enough that the live area cannot hold
+  // it, in which case the preview is committed to static early and only the
+  // options stay live. Rows come from the shared approval row model, measured
+  // against the very item the commit below appends, so the decision and the
+  // committed content cannot disagree.
   const shouldEagerCommitApprovalPreview = useCallback(
     (approval: ApprovalRequest): boolean => {
       if (!terminalRows) return false;
-      const previewLines = estimateApprovalPreviewLines(approval);
+      const previewLines = eagerCommitPreviewRows(approval, {
+        columns,
+        terminalRows,
+        diffs: precomputedDiffsRef.current,
+      });
       if (previewLines === 0) return false;
       return (
         previewLines + APPROVAL_OPTIONS_HEIGHT + APPROVAL_PREVIEW_BUFFER >=
         terminalRows
       );
     },
-    [estimateApprovalPreviewLines, terminalRows],
+    [columns, terminalRows],
   );
 
   const currentApprovalShouldCommitPreview = useMemo(() => {
@@ -2709,21 +2581,10 @@ export function App({
     if (eagerCommittedPreviewsRef.current.has(toolCallId)) return;
     if (!currentApprovalShouldCommitPreview) return;
 
-    const previewItem: StaticItem = {
-      kind: "approval_preview",
-      id: `approval-preview-${toolCallId}`,
-      toolCallId,
-      toolName: currentApproval.toolName,
-      toolArgs: currentApproval.toolArgs || "{}",
-    };
-
-    if (
-      (isFileEditTool(currentApproval.toolName) ||
-        isFileWriteTool(currentApproval.toolName)) &&
-      precomputedDiffsRef.current.has(toolCallId)
-    ) {
-      previewItem.precomputedDiff = precomputedDiffsRef.current.get(toolCallId);
-    }
+    const previewItem = buildApprovalPreviewItem(
+      currentApproval,
+      precomputedDiffsRef.current,
+    );
 
     setStaticItems((prev) => [...prev, previewItem]);
     eagerCommittedPreviewsRef.current.add(toolCallId);

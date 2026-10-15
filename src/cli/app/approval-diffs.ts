@@ -12,8 +12,8 @@ export function buildApprovalBatchKey(approvals: ApprovalRequest[]): string {
 /**
  * Release the heavy before/after file contents of every cached diff owned by
  * a tool call: the plain `toolCallId` key plus ApplyPatch compound keys
- * (`toolCallId:filePath`). Renderers only read `hunks`
- * (AdvancedDiffRenderer, estimateAdvancedDiffLines), so the full-file
+ * (`toolCallId:filePath`). Renderers only read `hunks` (AdvancedDiffRenderer,
+ * `advancedDiffRowCount`), so the full-file
  * `oldStr`/`newStr` payloads are dead weight once the hunks exist.
  *
  * Mutates entries in place: eagerly-committed `approval_preview` static items
