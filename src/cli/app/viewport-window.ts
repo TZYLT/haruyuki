@@ -43,6 +43,32 @@ export function totalRows(rows: readonly number[]): number {
   return rows.reduce((sum, row) => sum + Math.max(0, row), 0);
 }
 
+/**
+ * Bottom-anchored selection of whole items that fit in `height` rows.
+ *
+ * Items are kept whole so nothing has to be clipped mid-item; a partially
+ * visible top item is deferred to the next scroll step instead.
+ */
+export function fitWholeItems(
+  heights: readonly number[],
+  height: number,
+  maxItems: number,
+): { start: number; end: number } {
+  const end = heights.length;
+  let used = 0;
+  let start = end;
+  while (start > 0) {
+    const next = Math.max(0, heights[start - 1] ?? 0);
+    if (used + next > height) break;
+    used += next;
+    start -= 1;
+  }
+  if (end - start > maxItems) {
+    start = end - Math.trunc(maxItems);
+  }
+  return { start, end };
+}
+
 export function layoutViewport(
   rows: readonly number[],
   options: ViewportLayoutOptions,

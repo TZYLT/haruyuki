@@ -14,6 +14,7 @@
  * consumes this yet: the virtualized viewport is the first consumer.
  */
 
+import type { StaticItem } from "@/cli/app/types";
 import type { Line } from "@/cli/helpers/accumulator";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import {
@@ -30,6 +31,12 @@ export const STATIC_ITEM_GAP_ROWS = 1;
 
 /** Cap on tool-argument rows, mirroring the previous height estimator. */
 const TOOL_ARGS_MAX_ROWS = 5;
+
+/** Approximate height of the welcome banner (it is a fixed template). */
+const WELCOME_ROWS = 12;
+
+/** Rows per subagent entry in a committed subagent group. */
+const SUBAGENT_ROWS = 4;
 
 export interface RowMeasureOptions {
   /** Total terminal columns. */
@@ -245,5 +252,35 @@ export function measureLineRows(
 
     default:
       return 1;
+  }
+}
+
+/**
+ * Rows a whole transcript item occupies, including the leading blank line that
+ * `TranscriptItemView` inserts for every item after the first.
+ *
+ * `index` is the item's position in the rendered list (0 = first), so the caller
+ * must pass the global index when rendering a window.
+ */
+export function measureTranscriptItemRows(
+  item: StaticItem,
+  options: RowMeasureOptions & { index: number },
+): number {
+  const gap = options.index > 0 ? STATIC_ITEM_GAP_ROWS : 0;
+  const columns = Math.max(1, options.columns);
+
+  switch (item.kind) {
+    case "welcome":
+      return gap + WELCOME_ROWS;
+    case "subagent_group":
+      return gap + Math.max(1, item.agents.length) * SUBAGENT_ROWS;
+    case "approval_preview":
+      return (
+        gap +
+        1 +
+        Math.min(countTextRows(item.toolArgs, columns), TOOL_ARGS_MAX_ROWS)
+      );
+    default:
+      return gap + measureLineRows(item, options);
   }
 }

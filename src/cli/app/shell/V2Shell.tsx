@@ -1,14 +1,15 @@
-import { LegacyShell } from "@/cli/app/shell/LegacyShell";
+import { ShellFrame } from "@/cli/app/shell/ShellFrame";
 import type { AppShellProps } from "@/cli/app/shell/types";
+import { ViewportTranscript } from "@/cli/app/ViewportTranscript";
 
 /**
  * Full-screen shell (`ui_v2=on`).
  *
- * At M1 this only proves the shell seam and the runtime switch: the new shell
- * must mount and behave identically to the append-style shell. The alt-screen
- * viewport, key/mouse handling and panels land in M2+, at which point this
- * component stops delegating to the legacy shell.
+ * Draws the transcript in a bounded, bottom-pinned viewport instead of an
+ * append-only `<Static>` tree, so render cost does not grow with history. The
+ * alt-screen buffer itself is enabled by `render({ alternateScreen })` at the
+ * process entry.
  */
 export function V2Shell(props: AppShellProps) {
-  return <LegacyShell {...props} />;
+  return <ShellFrame {...props} transcript={ViewportTranscript} />;
 }

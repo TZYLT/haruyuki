@@ -1,33 +1,11 @@
-import { AppView } from "@/cli/app/AppView";
+import { AppendTranscript } from "@/cli/app/AppendTranscript";
+import { ShellFrame } from "@/cli/app/shell/ShellFrame";
 import type { AppShellProps } from "@/cli/app/shell/types";
-import { TerminalTitleWriter } from "@/cli/components/TerminalTitleWriter";
 
 /**
- * Append-style shell: the committed transcript plus the live tree rendered by
- * `AppView`, with the terminal-title writer attached.
- *
- * This is the behaviour-compatible shell kept behind `ui_v2=off` (the
- * "compatibility mode"). It must stay behaviour-equivalent to the pre-redesign
- * coordinator render.
+ * Append-style shell (`ui_v2=off`) — the behaviour-compatible "compatibility
+ * mode". Its transcript region is the Ink `<Static>` + live tree.
  */
-export function LegacyShell({
-  terminalTitleConfigRefreshEpoch,
-  terminalTitleTaskRunning,
-  terminalTitlePreviewOverride,
-  ...viewProps
-}: AppShellProps) {
-  return (
-    <>
-      <TerminalTitleWriter
-        projectDirectory={viewProps.projectDirectory}
-        configRefreshKey={`${viewProps.activeOverlay ?? ""}:${terminalTitleConfigRefreshEpoch}`}
-        titleData={viewProps.terminalTitleData}
-        shouldAnimate={viewProps.shouldAnimate}
-        hasActiveProgress={terminalTitleTaskRunning}
-        requiresAction={viewProps.pendingApprovals.length > 0}
-        previewTitle={terminalTitlePreviewOverride}
-      />
-      <AppView {...viewProps} />
-    </>
-  );
+export function LegacyShell(props: AppShellProps) {
+  return <ShellFrame {...props} transcript={AppendTranscript} />;
 }

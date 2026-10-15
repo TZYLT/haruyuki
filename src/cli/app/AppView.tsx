@@ -3,7 +3,7 @@
 import { APIError } from "@letta-ai/letta-client/core/error";
 import type { AgentState } from "@letta-ai/letta-client/resources/agents/agents";
 import { Box } from "ink";
-import type { Dispatch, RefObject, SetStateAction } from "react";
+import type { ComponentType, Dispatch, RefObject, SetStateAction } from "react";
 import { getResumeDataFromBackend } from "@/agent/check-approval";
 import { pinAgentForCurrentUser } from "@/agent/favorites";
 import { isActiveMemfsEnabled } from "@/agent/memory-runtime";
@@ -17,15 +17,9 @@ import { getBackend } from "@/backend";
 import { isCloudServerUrl } from "@/backend/api/server-url";
 import type { CommandHandle } from "@/cli/commands/runner";
 import { AgentSelector } from "@/cli/components/AgentSelector";
-import { ApprovalSwitch } from "@/cli/components/ApprovalSwitch";
-import { AssistantMessage } from "@/cli/components/AssistantMessageRich";
-import { BashCommandMessage } from "@/cli/components/BashCommandMessage";
 import { BtwPane, type BtwState } from "@/cli/components/BtwPane";
-import { CommandMessage } from "@/cli/components/CommandMessage";
 import { CompactionOverlay } from "@/cli/components/CompactionOverlay";
 import { ConversationSelector } from "@/cli/components/ConversationSelector";
-import { ErrorMessage } from "@/cli/components/ErrorMessageRich";
-import { EventMessage } from "@/cli/components/EventMessage";
 import { ExperimentSelector } from "@/cli/components/ExperimentSelector";
 import { FeedbackDialog } from "@/cli/components/FeedbackDialog";
 import { HelpDialog } from "@/cli/components/HelpDialog";
@@ -41,25 +35,17 @@ import {
   ModelSelector,
   type ModelSelectorSelection,
 } from "@/cli/components/ModelSelector";
-import { PendingApprovalStub } from "@/cli/components/PendingApprovalStub";
 import { PersonalitySelector } from "@/cli/components/PersonalitySelector";
 import { PinDialog } from "@/cli/components/PinDialog";
 import { ProviderSelector } from "@/cli/components/ProviderSelector";
-import { LiveReasoningMessage } from "@/cli/components/ReasoningMessageRich";
 import { RecallOverlay } from "@/cli/components/RecallOverlay";
 import { SkillsDialog } from "@/cli/components/SkillsDialog";
 import { SleeptimeSelector } from "@/cli/components/SleeptimeSelector";
-import { StatusMessage } from "@/cli/components/StatusMessage";
-import { SubagentGroupDisplay } from "@/cli/components/SubagentGroupDisplay";
 import { SubagentManager } from "@/cli/components/SubagentManager";
 import { SystemPromptSelector } from "@/cli/components/SystemPromptSelector";
-import { ToolCallMessage } from "@/cli/components/ToolCallMessageRich";
 import { ToolsetSelector } from "@/cli/components/ToolsetSelector";
-import { LiveUserMessage as UserMessage } from "@/cli/components/UserMessageRich";
-import { WelcomeScreen } from "@/cli/components/WelcomeScreen";
 import { WindowTitlePicker } from "@/cli/components/WindowTitlePicker";
 import { WorktreeDiffSelector } from "@/cli/components/WorktreeDiffSelector";
-import { AnimationProvider } from "@/cli/contexts/AnimationContext";
 import { type Buffers, type Line, toLines } from "@/cli/helpers/accumulator";
 import { backfillBuffers } from "@/cli/helpers/backfill";
 import {
@@ -75,13 +61,6 @@ import {
 } from "@/cli/helpers/memory-reminder";
 import type { ExecutionPhase } from "@/cli/helpers/phase-visuals";
 import type { ApprovalRequest } from "@/cli/helpers/stream";
-import {
-  isFileEditTool,
-  isFileWriteTool,
-  isPatchTool,
-  isShellTool,
-} from "@/cli/helpers/tool-name-mapping";
-import { isTaskTool } from "@/cli/helpers/tool-name-mapping.js";
 import type { WindowTitleData } from "@/cli/helpers/window-title-config";
 import type { ModContext } from "@/cli/mods/types";
 import type { LocalModAdapter } from "@/cli/mods/use-local-mod-adapter";
@@ -95,7 +74,6 @@ import type { ToolsetName, ToolsetPreference } from "@/tools/toolset";
 import type { QueuedMessage } from "@/utils/message-queue-bridge";
 import { ExitStats } from "./ExitStats";
 import { uid } from "./ids";
-import { StaticTranscript } from "./StaticTranscript";
 import type {
   ActiveOverlay,
   AppCommandRunner,
@@ -337,29 +315,29 @@ export type AppViewProps = {
   updateAgentName: (name: string) => void;
 };
 
-export function AppView(props: AppViewProps) {
+export type AppViewRenderProps = AppViewProps & {
+  /** Transcript region supplied by the active shell. */
+  transcript: ComponentType<AppViewProps>;
+};
+
+export function AppView(props: AppViewRenderProps) {
   const {
     activeOverlay,
     agentId,
     agentName,
     agentState,
     anySelectorOpen,
-    approvalMap,
     bashRunning,
     billingTier,
     btwState,
     buffersRef,
     chromeColumns,
     closeOverlay,
-    columns,
     commandRunner,
     completeOverlay,
     contextTrackerRef,
-    continueSession,
     conversationId,
     projectDirectory,
-    currentApproval,
-    currentApprovalContext,
     currentModelDisplay,
     currentModelHandle,
     currentModelId,
@@ -371,8 +349,6 @@ export function AppView(props: AppViewProps) {
     currentToolset,
     currentToolsetPreference,
     emittedIdsRef,
-    expandedToolCallId,
-    lastShellToolCallId,
     handleCtrlO,
     queueMode,
     deferModeSupported,
@@ -381,16 +357,12 @@ export function AppView(props: AppViewProps) {
     showInspirationalPromptHints,
     onEscapeCommandCancel,
     handleAgentSelect,
-    handleApproveAlways,
-    handleApproveCurrent,
     handleBashInterrupt,
     handleBashSubmit,
     handleBtwJump,
-    handleCancelApprovals,
     handleCompactionModeSelect,
     handleCreateNewAgent,
     handleCycleReasoningEffort,
-    handleDenyCurrent,
     handleQueueEdit,
     handleExit,
     handleExperimentsConfirm,
@@ -411,7 +383,6 @@ export function AppView(props: AppViewProps) {
     inputVisible,
     interruptRequested,
     isAgentBusy,
-    liveItems,
     liveTrajectoryElapsedBaseMs,
     loadingState,
     markLocalModelsAvailable,
@@ -424,12 +395,8 @@ export function AppView(props: AppViewProps) {
     onSubmit,
     pendingApprovals,
     pendingConversationSwitchRef,
-    pendingIds,
-    precomputedDiffsRef,
     profileConfirmPending,
     queueDisplay,
-    queuedDecisions,
-    queuedIds,
     reasoningTabCycleEnabled,
     recoverRestoredPendingApprovals,
     refreshDerived,
@@ -455,12 +422,8 @@ export function AppView(props: AppViewProps) {
     setStaticItems,
     setStaticRenderEpoch,
     shouldAnimate,
-    showApprovalPreview,
-    showCompactionsEnabled,
     showExitStats,
     openOverlay,
-    staticItems,
-    staticRenderEpoch,
     modContext,
     statusLinePrompt,
     terminalTitleData,
@@ -468,7 +431,6 @@ export function AppView(props: AppViewProps) {
     onTitlePreviewEnd,
     modAdapter,
     streaming,
-    stubDescriptions,
     thinkingMessage,
     trajectoryTokenDisplay,
     usedContextTokens,
@@ -477,200 +439,15 @@ export function AppView(props: AppViewProps) {
     updateAgentName,
   } = props;
 
+  const Transcript = props.transcript;
+
   return (
     <Box key={resumeKey} flexDirection="column">
-      <StaticTranscript
-        renderEpoch={staticRenderEpoch}
-        items={staticItems}
-        columns={columns}
-        statusLinePrompt={statusLinePrompt}
-        showCompactionsEnabled={showCompactionsEnabled}
-        precomputedDiffs={precomputedDiffsRef.current}
-        hiddenToolCallId={expandedToolCallId ?? undefined}
-        lastShellToolCallId={lastShellToolCallId ?? undefined}
-      />
+      <Transcript {...props} />
 
       <Box flexDirection="column">
-        {/* Loading screen / intro text */}
-        {loadingState !== "ready" && (
-          <WelcomeScreen
-            loadingState={loadingState}
-            continueSession={continueSession}
-            agentState={agentState}
-          />
-        )}
-
         {loadingState === "ready" && (
           <>
-            {/* Transcript - wrapped in AnimationProvider for overflow-based animation control */}
-            <AnimationProvider shouldAnimate={shouldAnimate}>
-              {/* Show liveItems always - all approvals now render inline */}
-              {liveItems.length > 0 && (
-                <Box flexDirection="column">
-                  {liveItems.map((ln) => {
-                    const isFileTool =
-                      ln.kind === "tool_call" &&
-                      ln.name &&
-                      (isFileEditTool(ln.name) ||
-                        isFileWriteTool(ln.name) ||
-                        isPatchTool(ln.name));
-                    const isApprovalTracked =
-                      ln.kind === "tool_call" &&
-                      ln.toolCallId &&
-                      (ln.toolCallId === currentApproval?.toolCallId ||
-                        pendingIds.has(ln.toolCallId) ||
-                        queuedIds.has(ln.toolCallId));
-                    if (
-                      ln.kind === "tool_call" &&
-                      ln.name &&
-                      isShellTool(ln.name) &&
-                      !isApprovalTracked &&
-                      (ln.phase === "streaming" || ln.phase === "ready")
-                    ) {
-                      return null;
-                    }
-                    if (isFileTool && !isApprovalTracked) {
-                      return null;
-                    }
-                    // Skip Task tools that don't have a pending approval
-                    // They render as empty Boxes (ToolCallMessage returns null for non-finished Task tools)
-                    // which causes N blank lines when N Task tools are called in parallel
-                    // Note: pendingIds doesn't include the ACTIVE approval (currentApproval),
-                    // so we must also check if this is the active approval
-                    if (
-                      ln.kind === "tool_call" &&
-                      ln.name &&
-                      isTaskTool(ln.name) &&
-                      ln.toolCallId &&
-                      !pendingIds.has(ln.toolCallId) &&
-                      ln.toolCallId !== currentApproval?.toolCallId
-                    ) {
-                      return null;
-                    }
-
-                    // Check if this tool call matches the current approval awaiting user input
-                    const matchesCurrentApproval =
-                      ln.kind === "tool_call" &&
-                      currentApproval &&
-                      ln.toolCallId === currentApproval.toolCallId;
-
-                    return (
-                      <Box key={ln.id} flexDirection="column" marginTop={1}>
-                        {matchesCurrentApproval ? (
-                          <ApprovalSwitch
-                            approval={currentApproval}
-                            onApprove={handleApproveCurrent}
-                            onApproveAlways={handleApproveAlways}
-                            onDeny={handleDenyCurrent}
-                            onCancel={handleCancelApprovals}
-                            precomputedDiff={
-                              ln.toolCallId
-                                ? precomputedDiffsRef.current.get(ln.toolCallId)
-                                : undefined
-                            }
-                            allDiffs={precomputedDiffsRef.current}
-                            isFocused={true}
-                            approveAlwaysText={
-                              currentApprovalContext?.approveAlwaysText
-                            }
-                            allowPersistence={
-                              currentApprovalContext?.allowPersistence ?? true
-                            }
-                            defaultScope={
-                              currentApprovalContext?.defaultScope === "user"
-                                ? "session"
-                                : (currentApprovalContext?.defaultScope ??
-                                  "project")
-                            }
-                            showPreview={showApprovalPreview}
-                          />
-                        ) : ln.kind === "user" ? (
-                          <UserMessage line={ln} prompt={statusLinePrompt} />
-                        ) : ln.kind === "reasoning" ? (
-                          <LiveReasoningMessage line={ln} />
-                        ) : ln.kind === "assistant" ? (
-                          <AssistantMessage line={ln} />
-                        ) : ln.kind === "tool_call" &&
-                          ln.toolCallId &&
-                          queuedIds.has(ln.toolCallId) ? (
-                          // Render stub for queued (decided but not executed) approval
-                          <PendingApprovalStub
-                            toolName={
-                              approvalMap.get(ln.toolCallId)?.toolName ||
-                              ln.name ||
-                              "Unknown"
-                            }
-                            description={stubDescriptions.get(ln.toolCallId)}
-                            decision={queuedDecisions.get(ln.toolCallId)}
-                          />
-                        ) : ln.kind === "tool_call" &&
-                          ln.toolCallId &&
-                          pendingIds.has(ln.toolCallId) ? (
-                          // Render stub for pending (undecided) approval
-                          <PendingApprovalStub
-                            toolName={
-                              approvalMap.get(ln.toolCallId)?.toolName ||
-                              ln.name ||
-                              "Unknown"
-                            }
-                            description={stubDescriptions.get(ln.toolCallId)}
-                          />
-                        ) : ln.kind === "tool_call" ? (
-                          <ToolCallMessage
-                            line={ln}
-                            precomputedDiffs={precomputedDiffsRef.current}
-                            isStreaming={streaming}
-                            expandedToolCallId={expandedToolCallId}
-                            lastShellToolCallId={lastShellToolCallId}
-                          />
-                        ) : ln.kind === "error" ? (
-                          <ErrorMessage line={ln} />
-                        ) : ln.kind === "status" ? (
-                          <StatusMessage line={ln} />
-                        ) : ln.kind === "event" ? (
-                          <EventMessage line={ln} />
-                        ) : ln.kind === "command" ? (
-                          <CommandMessage line={ln} />
-                        ) : ln.kind === "bash_command" ? (
-                          <BashCommandMessage line={ln} />
-                        ) : null}
-                      </Box>
-                    );
-                  })}
-                </Box>
-              )}
-
-              {/* Fallback approval UI when backfill is disabled (no liveItems) */}
-              {liveItems.length === 0 && currentApproval && (
-                <Box flexDirection="column">
-                  <ApprovalSwitch
-                    approval={currentApproval}
-                    onApprove={handleApproveCurrent}
-                    onApproveAlways={handleApproveAlways}
-                    onDeny={handleDenyCurrent}
-                    onCancel={handleCancelApprovals}
-                    allDiffs={precomputedDiffsRef.current}
-                    isFocused={true}
-                    approveAlwaysText={
-                      currentApprovalContext?.approveAlwaysText
-                    }
-                    allowPersistence={
-                      currentApprovalContext?.allowPersistence ?? true
-                    }
-                    defaultScope={
-                      currentApprovalContext?.defaultScope === "user"
-                        ? "session"
-                        : (currentApprovalContext?.defaultScope ?? "project")
-                    }
-                    showPreview={showApprovalPreview}
-                  />
-                </Box>
-              )}
-
-              {/* Subagent group display - shows running/completed subagents */}
-              <SubagentGroupDisplay />
-            </AnimationProvider>
-
             {/* Exit stats - shown when exiting via double Ctrl+C */}
             {showExitStats &&
               (() => {

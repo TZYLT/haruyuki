@@ -1,5 +1,27 @@
 import { describe, expect, test } from "bun:test";
-import { layoutViewport, totalRows } from "@/cli/app/viewport-window";
+import {
+  fitWholeItems,
+  layoutViewport,
+  totalRows,
+} from "@/cli/app/viewport-window";
+
+describe("fitWholeItems", () => {
+  test("keeps whole items that fit, anchored to the bottom", () => {
+    expect(fitWholeItems([10, 10, 10], 25, 100)).toEqual({ start: 1, end: 3 });
+  });
+
+  test("shows everything when it all fits", () => {
+    expect(fitWholeItems([3, 3], 10, 100)).toEqual({ start: 0, end: 2 });
+  });
+
+  test("caps the number of rendered items", () => {
+    expect(fitWholeItems([1, 1, 1, 1], 10, 2)).toEqual({ start: 2, end: 4 });
+  });
+
+  test("returns an empty window for no items", () => {
+    expect(fitWholeItems([], 10, 100)).toEqual({ start: 0, end: 0 });
+  });
+});
 
 describe("totalRows", () => {
   test("sums the heights", () => {
