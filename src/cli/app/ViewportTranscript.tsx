@@ -13,10 +13,10 @@ import type { StaticItem } from "./types";
 import { fitWholeItems } from "./viewport-window";
 
 /** Fallback chrome reserve used until the shell reports its measured height. */
-const CHROME_RESERVE_ROWS = 4;
+export const CHROME_RESERVE_ROWS = 4;
 
 /** Hard cap on rendered items (bounded residency). */
-const MAX_VIEWPORT_ITEMS = 200;
+export const MAX_VIEWPORT_ITEMS = 200;
 
 /**
  * Full-screen transcript region (`ui_v2=on`).
