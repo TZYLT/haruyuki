@@ -21,6 +21,15 @@ describe("fitWholeItems", () => {
   test("returns an empty window for no items", () => {
     expect(fitWholeItems([], 10, 100)).toEqual({ start: 0, end: 0 });
   });
+
+  test("bounded residency: a huge transcript still renders a capped window", () => {
+    const heights = Array.from({ length: 5000 }, () => 3);
+    const { start, end } = fitWholeItems(heights, 24, 200);
+    expect(end).toBe(5000);
+    expect(end - start).toBeLessThanOrEqual(200);
+    // Anchored to the bottom, not the top.
+    expect(start).toBeGreaterThan(4000);
+  });
 });
 
 describe("totalRows", () => {
