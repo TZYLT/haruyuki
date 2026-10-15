@@ -1,10 +1,14 @@
 import { Box } from "ink";
 import { memo, type ReactNode } from "react";
 import { getSubagentByToolCallId } from "@/agent/subagent-state.js";
+import type { StreamingState } from "@/cli/helpers/accumulator";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import { parsePatchOperations } from "@/cli/helpers/format-args-display.js";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
-import { resolveToolCallDisplay } from "@/cli/helpers/tool-call-display";
+import {
+  isQuestionToolName,
+  resolveToolCallDisplay,
+} from "@/cli/helpers/tool-call-display";
 import {
   isFileEditTool,
   isFileReadTool,
@@ -25,20 +29,10 @@ import {
   resolveToolResultDisplayText,
 } from "@/cli/helpers/tool-result-text";
 import { formatUnifiedExecOutputForTui } from "@/cli/helpers/unified-exec-output.js";
+import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { INTERRUPTED_BY_USER } from "@/constants";
 import { listTasks } from "@/tools/impl/tasks/store.js";
 import { isRecord } from "@/utils/type-guards";
-import { Text } from "./Text";
-
-/**
- * Check if tool is AskUserQuestion
- */
-function isQuestionTool(name: string): boolean {
-  return name === "AskUserQuestion";
-}
-
-import type { StreamingState } from "@/cli/helpers/accumulator";
-import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { AdvancedDiffRenderer } from "./AdvancedDiffRenderer";
 import { CollapsedOutputDisplay } from "./CollapsedOutputDisplay";
 import { colors } from "./colors.js";
@@ -56,6 +50,7 @@ import {
   highlightCommand,
   type StyledSpan,
 } from "./SyntaxHighlightedCommand";
+import { Text } from "./Text";
 import { TodoRenderer } from "./TodoRenderer.js";
 import { colorizeArgs, ToolCallHeader } from "./ToolCallHeader";
 import {
@@ -343,7 +338,7 @@ export const ToolCallMessage = memo(
         }
 
         // Check if this is AskUserQuestion - show pretty Q&A format
-        if (isQuestionTool(rawName) && line.resultOk !== false) {
+        if (isQuestionToolName(rawName) && line.resultOk !== false) {
           // Parse the result to extract questions and answers
           // Format: "Question"="Answer", "Question2"="Answer2"
           const qaPairs: Array<{ question: string; answer: string }> = [];

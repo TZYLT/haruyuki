@@ -40,8 +40,6 @@ export interface ToolCallDisplayInput {
 export interface ToolCallDisplay {
   /** Raw tool name (`?` when the stream has not delivered one yet). */
   rawName: string;
-  /** Args normalized to a string (`""` when absent, JSON when not a string). */
-  argsJson: string;
   /** Name shown in the header, after every remapping. */
   displayName: string;
   /** `AskUserQuestion` hides its args in the header. */
@@ -62,8 +60,6 @@ export interface ToolCallDisplay {
   shellCommand: string | null;
   /** Columns the highlighted first line of `shellCommand` is clipped to. */
   shellCommandMaxColumns: number;
-  /** True when the tool's args were not parsed as shell semantics. */
-  shellSemanticKind: ShellSemanticDisplay["kind"] | null;
 }
 
 /** Renderer gate: a question tool hides its args behind the result. */
@@ -217,7 +213,6 @@ export function resolveToolCallDisplay(
   const nameWidth = displayName.length + 1;
   return {
     rawName,
-    argsJson,
     displayName,
     hidesArgs,
     argsDisplayText,
@@ -225,6 +220,5 @@ export function resolveToolCallDisplay(
     headerInline: displayName.length >= rightWidth,
     shellCommand,
     shellCommandMaxColumns: Math.max(10, rightWidth - nameWidth),
-    shellSemanticKind,
   };
 }

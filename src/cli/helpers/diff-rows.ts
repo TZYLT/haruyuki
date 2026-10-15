@@ -23,7 +23,7 @@ import {
 } from "@/cli/helpers/text-metrics";
 
 /** Width a tab expands to before a diff line is laid out. */
-export const DIFF_TAB_WIDTH = 4;
+const DIFF_TAB_WIDTH = 4;
 
 /** Gutter the `  └  ` result prefix occupies. */
 export const DIFF_RESULT_GUTTER = 4;
@@ -93,7 +93,11 @@ export interface DiffLineChunks {
   contIndent: number;
 }
 
-export function expandTabsForDiffDisplay(text: string): string {
+/**
+ * Tab expansion happens inside the shared chunking, so the renderer and the row
+ * model count the same columns for a line that contains tabs.
+ */
+function expandTabsForDiffDisplay(text: string): string {
   return text.replaceAll("\t", " ".repeat(DIFF_TAB_WIDTH));
 }
 
