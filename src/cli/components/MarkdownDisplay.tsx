@@ -1,6 +1,16 @@
 import { Box, Transform } from "ink";
 import type React from "react";
 import stringWidth from "string-width";
+import {
+  BLOCKQUOTE_RE,
+  CODE_FENCE_OPEN_RE,
+  HEADER_RE,
+  HORIZONTAL_RULE_RE,
+  isCodeFenceClose,
+  isTableStart,
+  LIST_ITEM_RE,
+  TABLE_ROW_RE,
+} from "@/cli/helpers/markdown-blocks";
 import { colors, hexToBgAnsi } from "./colors.js";
 import { InlineMarkdown } from "./InlineMarkdownRenderer.js";
 import { MarkdownTable } from "./MarkdownTable.js";
@@ -18,16 +28,6 @@ interface MarkdownDisplayProps {
   backgroundColor?: string; // background color for all text
   contentWidth?: number; // available width for responsive blocks and background padding
 }
-
-// Regex patterns for markdown elements (defined outside component to avoid re-creation)
-const headerRegex = /^(#{1,6})\s+(.*)$/;
-const codeBlockOpenRegex = /^ *(`{3,}|~{3,}) *([^\s`~]*)?.*$/;
-const codeBlockCloseRegex = /^ *(`{3,}|~{3,}) *$/;
-const listItemRegex = /^(\s*)([*\-+]|\d+\.)\s+(.*)$/;
-const blockquoteRegex = /^>\s*(.*)$/;
-const hrRegex = /^[-*_]{3,}$/;
-const tableRowRegex = /^\|(.+)\|$/;
-const tableSeparatorRegex = /^\|[\s:]*[-]+[\s:]*(\|[\s:]*[-]+[\s:]*)+\|$/;
 
 // Header styles lookup
 const headerStyles: Record<
@@ -142,13 +142,7 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
 
     // Handle code blocks
     if (inCodeBlock) {
-      const codeBlockCloseMatch = line.match(codeBlockCloseRegex);
-      const fence = codeBlockCloseMatch?.[1] ?? "";
-      if (
-        codeBlockCloseMatch &&
-        fence.startsWith(codeBlockFence[0] ?? "") &&
-        fence.length >= codeBlockFence.length
-      ) {
+      if (isCodeFenceClose(line, codeBlockFence)) {
         inCodeBlock = false;
         const code = codeBlockContent.join("\n");
         contentBlocks.push(renderCodeBlock(code, codeBlockLanguage, key));
@@ -164,7 +158,7 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
       continue;
     }
 
-    const codeBlockOpenMatch = line.match(codeBlockOpenRegex);
+    const codeBlockOpenMatch = line.match(CODE_FENCE_OPEN_RE);
     if (codeBlockOpenMatch) {
       inCodeBlock = true;
       codeBlockContent = [];
@@ -175,7 +169,7 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
     }
 
     // Check for headers
-    const headerMatch = line.match(headerRegex);
+    const headerMatch = line.match(HEADER_RE);
     if (headerMatch?.[1] && headerMatch[2] !== undefined) {
       const level = headerMatch[1].length;
       const content = headerMatch[2];
@@ -198,7 +192,7 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
     }
 
     // Check for list items
-    const listMatch = line.match(listItemRegex);
+    const listMatch = line.match(LIST_ITEM_RE);
     if (
       listMatch &&
       listMatch[1] !== undefined &&
@@ -241,7 +235,7 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
     }
 
     // Check for blockquotes
-    const blockquoteMatch = line.match(blockquoteRegex);
+    const blockquoteMatch = line.match(BLOCKQUOTE_RE);
     if (blockquoteMatch && blockquoteMatch[1] !== undefined) {
       contentBlocks.push(
         <Box key={key} paddingLeft={2}>
@@ -267,7 +261,7 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
     }
 
     // Check for horizontal rules
-    if (line.match(hrRegex)) {
+    if (line.match(HORIZONTAL_RULE_RE)) {
       contentBlocks.push(
         <Box key={key}>
           <Text dimColor backgroundColor={backgroundColor}>
@@ -280,18 +274,13 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
     }
 
     // Check for tables (must have | at start and end, and next line should be separator)
-    const nextLine = lines[index + 1];
-    if (
-      tableRowRegex.test(line) &&
-      nextLine &&
-      tableSeparatorRegex.test(nextLine)
-    ) {
+    if (isTableStart(lines, index)) {
       // Collect all table lines
       const tableLines: string[] = [line];
       let tableIdx = index + 1;
       while (tableIdx < lines.length) {
         const tableLine = lines[tableIdx];
-        if (!tableLine || !tableRowRegex.test(tableLine)) break;
+        if (!tableLine || !TABLE_ROW_RE.test(tableLine)) break;
         tableLines.push(tableLine);
         tableIdx++;
       }

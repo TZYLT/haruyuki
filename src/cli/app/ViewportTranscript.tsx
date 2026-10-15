@@ -5,13 +5,14 @@ import { PendingApprovalStub } from "@/cli/components/PendingApprovalStub";
 import { WelcomeScreen } from "@/cli/components/WelcomeScreen";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
 import type { AppViewProps } from "./AppView";
+import { useChromeHeight } from "./chrome-height";
 import { shouldRenderLiveItem } from "./live-items";
 import { measureTranscriptItemRows } from "./row-model";
 import { TranscriptItemView } from "./TranscriptItem";
 import type { StaticItem } from "./types";
 import { fitWholeItems } from "./viewport-window";
 
-/** Rows the shell keeps below the transcript for the input row and its margin. */
+/** Fallback chrome reserve used until the shell reports its measured height. */
 const CHROME_RESERVE_ROWS = 4;
 
 /** Hard cap on rendered items (bounded residency). */
@@ -53,7 +54,11 @@ export function ViewportTranscript(props: AppViewProps) {
   } = props;
 
   const terminalRows = useTerminalRows();
-  const height = Math.max(1, terminalRows - CHROME_RESERVE_ROWS);
+  const measuredChromeRows = useChromeHeight();
+  const height = Math.max(
+    1,
+    terminalRows - (measuredChromeRows ?? CHROME_RESERVE_ROWS),
+  );
 
   const items = useMemo<StaticItem[]>(() => {
     const currentApprovalToolCallId = currentApproval?.toolCallId;

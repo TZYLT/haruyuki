@@ -18,6 +18,16 @@ import type { StaticItem } from "@/cli/app/types";
 import type { Line } from "@/cli/helpers/accumulator";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import {
+  BLOCKQUOTE_RE,
+  CODE_FENCE_OPEN_RE,
+  HEADER_RE,
+  HORIZONTAL_RULE_RE,
+  isCodeFenceClose,
+  isTableStart,
+  LIST_ITEM_RE,
+  TABLE_ROW_RE,
+} from "@/cli/helpers/markdown-blocks";
+import {
   countTextRows,
   inkStringWidth,
   wrappedRowCount,
@@ -47,15 +57,6 @@ export interface RowMeasureOptions {
   reasoningExpanded?: boolean;
 }
 
-const HEADER_RE = /^(#{1,6})\s+(.*)$/;
-const CODE_OPEN_RE = /^ *(`{3,}|~{3,}) *([^\s`~]*)?.*$/;
-const CODE_CLOSE_RE = /^ *(`{3,}|~{3,}) *$/;
-const LIST_RE = /^(\s*)([*\-+]|\d+\.)\s+(.*)$/;
-const BLOCKQUOTE_RE = /^>\s*(.*)$/;
-const HR_RE = /^[-*_]{3,}$/;
-const TABLE_ROW_RE = /^\|(.+)\|$/;
-const TABLE_SEP_RE = /^\|[\s:]*[-]+[\s:]*(\|[\s:]*[-]+[\s:]*)*\|$/;
-
 /**
  * Rows a markdown block occupies at `width`, following `MarkdownDisplay`'s block
  * classification. Inline markers (`**bold**`, `` `code` ``) are not stripped, so
@@ -73,19 +74,14 @@ export function markdownRowCount(text: string, width: number): number {
   while (index < lines.length) {
     const line = lines[index] ?? "";
 
-    const codeOpen = line.match(CODE_OPEN_RE);
+    const codeOpen = line.match(CODE_FENCE_OPEN_RE);
     if (codeOpen) {
       const fence = codeOpen[1] ?? "";
       index += 1;
       const codeLines: string[] = [];
       while (index < lines.length) {
         const inner = lines[index] ?? "";
-        const close = inner.match(CODE_CLOSE_RE);
-        if (
-          close &&
-          (close[1] ?? "").startsWith(fence[0] ?? "") &&
-          (close[1] ?? "").length >= fence.length
-        ) {
+        if (isCodeFenceClose(inner, fence)) {
           index += 1;
           break;
         }
@@ -108,7 +104,7 @@ export function markdownRowCount(text: string, width: number): number {
       continue;
     }
 
-    const list = line.match(LIST_RE);
+    const list = line.match(LIST_ITEM_RE);
     if (list && list[2] && list[3] !== undefined) {
       const bulletWidth = inkStringWidth(`${list[2]} `);
       const indent = (list[1] ?? "").length;
@@ -128,14 +124,13 @@ export function markdownRowCount(text: string, width: number): number {
       continue;
     }
 
-    if (HR_RE.test(line)) {
+    if (HORIZONTAL_RULE_RE.test(line)) {
       rows += 1;
       index += 1;
       continue;
     }
 
-    const nextLine = lines[index + 1];
-    if (TABLE_ROW_RE.test(line) && nextLine && TABLE_SEP_RE.test(nextLine)) {
+    if (isTableStart(lines, index)) {
       let tableRows = 0;
       let tableIndex = index;
       while (

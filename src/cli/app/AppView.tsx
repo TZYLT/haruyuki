@@ -72,6 +72,7 @@ import { readRecallSettings } from "@/recall-settings";
 import { settingsManager } from "@/settings-manager";
 import type { ToolsetName, ToolsetPreference } from "@/tools/toolset";
 import type { QueuedMessage } from "@/utils/message-queue-bridge";
+import { ChromeHeightContext, useMeasuredChromeHeight } from "./chrome-height";
 import { ExitStats } from "./ExitStats";
 import { uid } from "./ids";
 import type {
@@ -441,11 +442,16 @@ export function AppView(props: AppViewRenderProps) {
 
   const Transcript = props.transcript;
 
+  // The chrome height drives how much room the full-screen viewport gets.
+  const { ref: chromeRef, rows: chromeRows } = useMeasuredChromeHeight();
+
   return (
     <Box key={resumeKey} flexDirection="column">
-      <Transcript {...props} />
+      <ChromeHeightContext.Provider value={chromeRows}>
+        <Transcript {...props} />
+      </ChromeHeightContext.Provider>
 
-      <Box flexDirection="column">
+      <Box ref={chromeRef} flexDirection="column">
         {loadingState === "ready" && (
           <>
             {/* Exit stats - shown when exiting via double Ctrl+C */}
