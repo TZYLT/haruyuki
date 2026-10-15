@@ -1,8 +1,12 @@
 import { existsSync } from "node:fs";
 import { Box } from "ink";
 import { memo } from "react";
-import { fileEditApprovalHeaderText } from "@/cli/helpers/approval-info";
+import {
+  fileEditApprovalHeaderText,
+  parseBashApprovalArgs,
+} from "@/cli/helpers/approval-info";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
+import { simpleDiffDisplayPath } from "@/cli/helpers/diff-rows";
 import { parsePatchOperations } from "@/cli/helpers/format-args-display";
 import {
   isFileEditPreviewTool,
@@ -40,38 +44,19 @@ export const ApprovalPreview = memo(
 
     // Bash/Shell: Use BashPreview component
     if (isShellTool(toolName)) {
-      try {
-        const args = JSON.parse(toolArgs);
-        let command = "";
-        let description = "";
-        if (toolName === "exec_command") {
-          command = typeof args.cmd === "string" ? args.cmd : "";
-          description =
-            typeof args.description === "string" ? args.description : "";
-        } else if (toolName === "write_stdin") {
-          const sessionId =
-            typeof args.session_id === "string" ||
-            typeof args.session_id === "number"
-              ? String(args.session_id)
-              : "unknown";
-          command = `write_stdin ${sessionId}`;
-          description =
-            typeof args.chars === "string" && args.chars.length > 0
-              ? "Write input to running shell session"
-              : "Poll running shell session";
-        } else {
-          command = typeof args.command === "string" ? args.command : "";
-          description =
-            typeof args.description === "string" ? args.description : "";
-        }
-
+      // The same parse the inline approval and the row model use, so a preview
+      // committed early cannot show a different command than the approval it
+      // stands in for.
+      const bash = parseBashApprovalArgs(toolName, toolArgs);
+      if (bash) {
         return (
           <Box flexDirection="column">
-            <BashPreview command={command} description={description} />
+            <BashPreview
+              command={bash.command}
+              description={bash.description ?? ""}
+            />
           </Box>
         );
-      } catch {
-        // Fall through to generic
       }
     }
 
@@ -103,12 +88,9 @@ export const ApprovalPreview = memo(
 
               <Box flexDirection="column">
                 {operations.map((op, idx) => {
-                  const { relative } = require("node:path");
-                  const cwd = process.cwd();
-                  const relPath = relative(cwd, op.path);
-                  const displayPath = relPath.startsWith("..")
-                    ? op.path
-                    : relPath;
+                  // The display form of a patch target, shared with the inline
+                  // approval and the transcript row model.
+                  const displayPath = simpleDiffDisplayPath(op.path);
 
                   const diffKey = toolCallId
                     ? `${toolCallId}:${op.path}`

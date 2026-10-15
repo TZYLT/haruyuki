@@ -116,35 +116,61 @@ export function isCommandMonitorApproval(approval: ApprovalRequest): boolean {
 }
 
 /**
- * The UI family for a request. Mirrors `ApprovalSwitch`'s dispatch order:
- * file edit/write/patch, then shell (or a command Monitor), then Task, then the
- * generic fallback.
+ * The UI family for a request **and** the parsed fields for it.
+ *
+ * This is the single dispatch: `ApprovalSwitch` renders by it and the transcript
+ * row model measures by it. A second copy of the order (or of the per-family
+ * predicates) would let the viewport window disagree with the approval that is
+ * actually on screen, which is invisible until the two drift and a row is clipped.
  */
-export function resolveApprovalKind(approval: ApprovalRequest): ApprovalKind {
+export type ResolvedApproval =
+  | { kind: "fileEdit"; fileEdit: FileEditApprovalInfo }
+  | { kind: "shell"; bash: BashApprovalInfo }
+  | { kind: "task"; task: TaskApprovalInfo }
+  | { kind: "generic" };
+
+export function resolveApproval(approval: ApprovalRequest): ResolvedApproval {
   const toolName = approval.toolName;
   if (
     isFileEditTool(toolName) ||
     isFileWriteTool(toolName) ||
     isPatchTool(toolName)
   ) {
-    if (getFileEditApprovalInfo(approval)) return "fileEdit";
+    const fileEdit = getFileEditApprovalInfo(approval);
+    if (fileEdit) return { kind: "fileEdit", fileEdit };
   }
   if (isShellTool(toolName) || isCommandMonitorApproval(approval)) {
-    if (getBashApprovalInfo(approval)) return "shell";
+    const bash = getBashApprovalInfo(approval);
+    if (bash) return { kind: "shell", bash };
   }
   if (isTaskTool(toolName)) {
-    if (getTaskApprovalInfo(approval)) return "task";
+    const task = getTaskApprovalInfo(approval);
+    if (task) return { kind: "task", task };
   }
-  return "generic";
+  return { kind: "generic" };
 }
 
-/** Parse bash info from approval args. */
-export function getBashApprovalInfo(
-  approval: ApprovalRequest,
+/** Just the family, for callers that measure options and hints by kind. */
+export function resolveApprovalKind(approval: ApprovalRequest): ApprovalKind {
+  return resolveApproval(approval).kind;
+}
+
+/**
+ * Parse bash info from the raw tool name and args.
+ *
+ * Split out for `ApprovalPreview`, which has the tool name and args but no
+ * `ApprovalRequest`. The two used to parse separately and disagreed on the
+ * missing-command placeholder — the preview rendered an empty command where the
+ * inline approval renders `(no command)` — so the preview and the approval it
+ * stands in for could differ in the very case the row model measures.
+ */
+export function parseBashApprovalArgs(
+  toolName: string,
+  toolArgs: string,
 ): BashApprovalInfo | null {
   try {
-    const args = JSON.parse(approval.toolArgs || "{}");
-    const t = approval.toolName.toLowerCase();
+    const args = JSON.parse(toolArgs || "{}");
+    const t = toolName.toLowerCase();
 
     let command = "";
     let description = "";
@@ -172,10 +198,17 @@ export function getBashApprovalInfo(
         typeof args.description === "string" ? args.description : "";
     }
 
-    return { toolName: approval.toolName, command, description };
+    return { toolName, command, description };
   } catch {
     return null;
   }
+}
+
+/** Parse bash info from an approval request. */
+export function getBashApprovalInfo(
+  approval: ApprovalRequest,
+): BashApprovalInfo | null {
+  return parseBashApprovalArgs(approval.toolName, approval.toolArgs);
 }
 
 /** Parse file edit info from approval args. */

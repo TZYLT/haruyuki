@@ -4,6 +4,7 @@ import { memo, useMemo, useState } from "react";
 import { fileEditApprovalHeaderText } from "@/cli/helpers/approval-info";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import { parsePatchToAdvancedDiff } from "@/cli/helpers/diff";
+import { simpleDiffDisplayPath } from "@/cli/helpers/diff-rows";
 import { parsePatchOperations } from "@/cli/helpers/format-args-display";
 import { useProgressIndicator } from "@/cli/hooks/use-progress-indicator";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
@@ -221,14 +222,7 @@ export const InlineFileEditApproval = memo(
     // Shared with the committed preview and the transcript row model
     // (`@/cli/helpers/approval-info`).
     const headerText =
-      headerOverride ||
-      fileEditApprovalHeaderText(fileEdit, (filePath) => {
-        try {
-          return existsSync(filePath);
-        } catch {
-          return false;
-        }
-      });
+      headerOverride || fileEditApprovalHeaderText(fileEdit, existsSync);
     const diffKind = getDiffKind(fileEdit.toolName);
 
     // Memoize the static diff content so it doesn't re-render on keystroke
@@ -253,12 +247,9 @@ export const InlineFileEditApproval = memo(
               // Render patch operations (can be multiple files)
               <Box flexDirection="column">
                 {parsePatchOperations(fileEdit.patchInput).map((op, idx) => {
-                  const { relative } = require("node:path");
-                  const cwd = process.cwd();
-                  const relPath = relative(cwd, op.path);
-                  const displayPath = relPath.startsWith("..")
-                    ? op.path
-                    : relPath;
+                  // The display form of a patch target, shared with the
+                  // transcript row model and the committed preview.
+                  const displayPath = simpleDiffDisplayPath(op.path);
 
                   // Look up precomputed diff using toolCallId:path key
                   const diffKey = fileEdit.toolCallId

@@ -1,19 +1,7 @@
 import { memo } from "react";
-import {
-  getBashApprovalInfo,
-  getFileEditApprovalInfo,
-  getTaskApprovalInfo,
-  isCommandMonitorApproval,
-} from "@/cli/helpers/approval-info";
+import { resolveApproval } from "@/cli/helpers/approval-info";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import type { ApprovalRequest } from "@/cli/helpers/stream";
-import {
-  isFileEditTool,
-  isFileWriteTool,
-  isPatchTool,
-  isShellTool,
-  isTaskTool,
-} from "@/cli/helpers/tool-name-mapping.js";
 import { InlineBashApproval } from "./InlineBashApproval";
 import { InlineFileEditApproval } from "./InlineFileEditApproval";
 import { InlineGenericApproval } from "./InlineGenericApproval";
@@ -47,8 +35,9 @@ type Props = {
  *
  * This consolidates the approval rendering logic that was previously duplicated
  * in the transcript rendering and fallback UI paths. The dispatch and the args
- * parsing live in `@/cli/helpers/approval-info`, shared with the transcript row
- * model so the measured height matches the approval that is on screen.
+ * parsing live in `@/cli/helpers/approval-info` — `resolveApproval` is the single
+ * decision, shared with the transcript row model, so the measured height matches
+ * the approval that is on screen.
  */
 export const ApprovalSwitch = memo(
   ({
@@ -66,72 +55,60 @@ export const ApprovalSwitch = memo(
     defaultScope = "project",
   }: Props) => {
     const toolName = approval.toolName;
+    // The dispatch and the args parsing are the row model's too: one call decides
+    // which surface renders *and* hands over the fields it will render, so the
+    // measured height cannot be computed from a different decision.
+    const resolved = resolveApproval(approval);
 
-    // File edit/write/patch tools → InlineFileEditApproval
-    if (
-      isFileEditTool(toolName) ||
-      isFileWriteTool(toolName) ||
-      isPatchTool(toolName)
-    ) {
-      const fileEditInfo = getFileEditApprovalInfo(approval);
-      if (fileEditInfo) {
-        return (
-          <InlineFileEditApproval
-            fileEdit={fileEditInfo}
-            precomputedDiff={precomputedDiff}
-            allDiffs={allDiffs}
-            onApprove={(diffs) => onApprove(diffs)}
-            onApproveAlways={(scope, diffs) => onApproveAlways(scope, diffs)}
-            onDeny={onDeny}
-            onCancel={onCancel}
-            isFocused={isFocused}
-            approveAlwaysText={approveAlwaysText}
-            allowPersistence={allowPersistence}
-            defaultScope={defaultScope}
-            showPreview={showPreview}
-          />
-        );
-      }
+    if (resolved.kind === "fileEdit") {
+      return (
+        <InlineFileEditApproval
+          fileEdit={resolved.fileEdit}
+          precomputedDiff={precomputedDiff}
+          allDiffs={allDiffs}
+          onApprove={(diffs) => onApprove(diffs)}
+          onApproveAlways={(scope, diffs) => onApproveAlways(scope, diffs)}
+          onDeny={onDeny}
+          onCancel={onCancel}
+          isFocused={isFocused}
+          approveAlwaysText={approveAlwaysText}
+          allowPersistence={allowPersistence}
+          defaultScope={defaultScope}
+          showPreview={showPreview}
+        />
+      );
     }
 
-    // Shell/Bash tools → InlineBashApproval
-    if (isShellTool(toolName) || isCommandMonitorApproval(approval)) {
-      const bashInfo = getBashApprovalInfo(approval);
-      if (bashInfo) {
-        return (
-          <InlineBashApproval
-            bashInfo={bashInfo}
-            onApprove={() => onApprove()}
-            onApproveAlways={(scope) => onApproveAlways(scope)}
-            onDeny={onDeny}
-            onCancel={onCancel}
-            isFocused={isFocused}
-            approveAlwaysText={approveAlwaysText}
-            allowPersistence={allowPersistence}
-            defaultScope={defaultScope}
-            showPreview={showPreview}
-          />
-        );
-      }
+    if (resolved.kind === "shell") {
+      return (
+        <InlineBashApproval
+          bashInfo={resolved.bash}
+          onApprove={() => onApprove()}
+          onApproveAlways={(scope) => onApproveAlways(scope)}
+          onDeny={onDeny}
+          onCancel={onCancel}
+          isFocused={isFocused}
+          approveAlwaysText={approveAlwaysText}
+          allowPersistence={allowPersistence}
+          defaultScope={defaultScope}
+          showPreview={showPreview}
+        />
+      );
     }
 
-    // Task tool → InlineTaskApproval
-    if (isTaskTool(toolName)) {
-      const taskInfo = getTaskApprovalInfo(approval);
-      if (taskInfo) {
-        return (
-          <InlineTaskApproval
-            taskInfo={taskInfo}
-            onApprove={() => onApprove()}
-            onApproveAlways={(scope) => onApproveAlways(scope)}
-            onDeny={onDeny}
-            onCancel={onCancel}
-            isFocused={isFocused}
-            approveAlwaysText={approveAlwaysText}
-            allowPersistence={allowPersistence}
-          />
-        );
-      }
+    if (resolved.kind === "task") {
+      return (
+        <InlineTaskApproval
+          taskInfo={resolved.task}
+          onApprove={() => onApprove()}
+          onApproveAlways={(scope) => onApproveAlways(scope)}
+          onDeny={onDeny}
+          onCancel={onCancel}
+          isFocused={isFocused}
+          approveAlwaysText={approveAlwaysText}
+          allowPersistence={allowPersistence}
+        />
+      );
     }
 
     // Fallback → InlineGenericApproval
