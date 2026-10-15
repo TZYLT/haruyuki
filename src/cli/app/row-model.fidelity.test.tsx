@@ -562,6 +562,47 @@ test("an approval with its preview committed measures the options only", async (
   );
 });
 
+test("a running shell call measures its streaming window", async () => {
+  const item = toolCall({
+    name: "Bash",
+    toolCallId: "tc-streaming",
+    argsText: JSON.stringify({ command: "npm test" }),
+    resultText: undefined,
+    phase: "running",
+    streaming: {
+      tailLines: [
+        { text: "line one", isStderr: false },
+        { text: "line two", isStderr: false },
+        { text: "line three", isStderr: true },
+      ],
+      partialLine: "",
+      partialIsStderr: false,
+      totalLineCount: 9,
+      startTime: Date.now() - 5000,
+    },
+  });
+  // Header, the first tail line, the other two, and the hidden-count row.
+  await expectPredictedHeight(toolCallCase(item));
+});
+
+test("a running shell call with no output yet is one row", async () => {
+  const item = toolCall({
+    name: "Bash",
+    toolCallId: "tc-streaming-empty",
+    argsText: JSON.stringify({ command: "npm test" }),
+    resultText: undefined,
+    phase: "running",
+    streaming: {
+      tailLines: [],
+      partialLine: "",
+      partialIsStderr: false,
+      totalLineCount: 0,
+      startTime: Date.now(),
+    },
+  });
+  await expectPredictedHeight(toolCallCase(item));
+});
+
 test("a pending approval stub matches its measured height", async () => {
   const toolCallId = "tc-pending";
   const item = toolCall({
