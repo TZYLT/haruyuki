@@ -3,9 +3,9 @@ import { Readable, Writable } from "node:stream";
 import { render } from "ink";
 import stripAnsi from "strip-ansi";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
+import { buildAdvancedDiffRows } from "@/cli/helpers/diff-rows";
 import {
   AdvancedDiffRenderer,
-  buildAdvancedDiffRows,
   exceedsAdvancedDiffHighlightLimits,
 } from "./AdvancedDiffRenderer";
 

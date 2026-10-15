@@ -72,4 +72,33 @@ describe("paddedRows", () => {
       "  ef",
     ]);
   });
+
+  test("splits by display width, not by code units", () => {
+    // Four CJK characters are eight display columns. At four columns the first
+    // row holds two characters; the two-column continuation indent then leaves
+    // room for one character per row. Splitting by String.length would instead
+    // emit one "row" of twice the requested width and force Ink to wrap it again.
+    const rows = paddedRows([{ text: "你好世界" }], 4, 2);
+    expect(rows.map((row) => row.map((chunk) => chunk.text).join(""))).toEqual([
+      "你好",
+      "  世",
+      "  界",
+    ]);
+  });
+
+  test("never emits a row wider than the requested columns", () => {
+    const rows = paddedRows([{ text: "a你b好c世d界e" }], 5, 2);
+    for (const row of rows) {
+      expect(
+        inkStringWidth(row.map((chunk) => chunk.text).join("")),
+      ).toBeLessThanOrEqual(5);
+    }
+  });
+
+  test("keeps chunks that fit together on one row", () => {
+    const rows = paddedRows([{ text: "你" }, { text: "好" }], 4, 0);
+    expect(rows.map((row) => row.map((chunk) => chunk.text).join(""))).toEqual([
+      "你好",
+    ]);
+  });
 });

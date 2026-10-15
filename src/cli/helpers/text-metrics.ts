@@ -137,9 +137,56 @@ export function countTextRows(text: string, width: number): number {
 export type StyledChunk = { text: string; color?: string; dimColor?: boolean };
 
 /**
- * Split styled chunks into rows of exactly `cols` characters, padding the last
- * row. Continuation rows start with a blank indent of `contIndent` characters
+ * Longest prefix of `text` whose visible width is at most `maxWidth`, split by
+ * code point so a surrogate pair is never cut in half.
+ */
+function takePrefixByDisplayWidth(
+  text: string,
+  maxWidth: number,
+): { prefix: string; rest: string; width: number } {
+  if (maxWidth <= 0) {
+    return { prefix: "", rest: text, width: 0 };
+  }
+
+  let prefix = "";
+  let width = 0;
+
+  for (const character of text) {
+    const characterWidth = inkStringWidth(character);
+    if (width + characterWidth > maxWidth) {
+      break;
+    }
+    prefix += character;
+    width += characterWidth;
+  }
+
+  return { prefix, rest: text.slice(prefix.length), width };
+}
+
+/** First code point of `text`, even when it is wider than the available width. */
+function takeFirstCharacter(text: string): {
+  prefix: string;
+  rest: string;
+  width: number;
+} {
+  const prefix = Array.from(text)[0] ?? "";
+  return {
+    prefix,
+    rest: text.slice(prefix.length),
+    width: inkStringWidth(prefix),
+  };
+}
+
+/**
+ * Split styled chunks into rows of exactly `cols` *display columns*, padding the
+ * last row. Continuation rows start with a blank indent of `contIndent` columns
  * (matching Codex's empty-gutter + 2-space continuation, diff_render.rs:922-929).
+ *
+ * Rows are split by `inkStringWidth` — the same width rules Ink's own output
+ * buffer uses — not by `String.length`. Splitting a CJK or emoji line by code
+ * units would emit a row that is twice the requested width, and Ink would then
+ * wrap it again: the rendered row count would exceed the count this function
+ * reports, which is exactly what the transcript row model relies on.
  */
 export function paddedRows(
   chunks: StyledChunk[],
@@ -149,30 +196,41 @@ export function paddedRows(
   if (cols <= 0) return [chunks];
   const rows: StyledChunk[][] = [];
   let row: StyledChunk[] = [];
-  let len = 0;
+  let width = 0;
   for (const chunk of chunks) {
     let rem = chunk.text;
     while (rem.length > 0) {
-      const space = cols - len;
-      if (rem.length <= space) {
+      if (width >= cols) {
+        rows.push(row);
+        row = [{ text: " ".repeat(contIndent) }];
+        width = contIndent;
+      }
+
+      const space = Math.max(1, cols - width);
+      if (inkStringWidth(rem) <= space) {
         row.push({ text: rem, color: chunk.color, dimColor: chunk.dimColor });
-        len += rem.length;
+        width += inkStringWidth(rem);
         rem = "";
       } else {
+        let next = takePrefixByDisplayWidth(rem, space);
+        if (!next.prefix) {
+          next = takeFirstCharacter(rem);
+        }
         row.push({
-          text: rem.slice(0, space),
+          text: next.prefix,
           color: chunk.color,
           dimColor: chunk.dimColor,
         });
+        width += next.width;
+        rem = next.rest;
         rows.push(row);
         // Start continuation row with blank gutter indent
         row = [{ text: " ".repeat(contIndent) }];
-        len = contIndent;
-        rem = rem.slice(space);
+        width = contIndent;
       }
     }
   }
-  if (len < cols) row.push({ text: " ".repeat(cols - len) });
+  if (width < cols) row.push({ text: " ".repeat(cols - width) });
   if (row.length > 0) rows.push(row);
   return rows;
 }
