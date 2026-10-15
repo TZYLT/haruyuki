@@ -9,6 +9,11 @@
  * Pure and height-based so it can be unit-tested independently of Ink: the
  * caller measures rows with the row model and renders `[start, end)`.
  *
+ * `fitWholeItemsFromEnd` is the window the full-screen shell uses: it takes a
+ * measure callback so only the items on screen are measured, which is what keeps
+ * a streaming frame cheap on a long transcript. `layoutViewport` is the
+ * scroll-aware row-band variant the scrolling input will need.
+ *
  * Scrolling is expressed as `scrollFromBottom` (0 = pinned to the newest row),
  * which is what "sticky to bottom" needs: following is just keeping the offset
  * at 0.
@@ -49,22 +54,35 @@ export function totalRows(rows: readonly number[]): number {
  * Items are kept whole so nothing has to be clipped mid-item; a partially
  * visible top item is deferred to the next scroll step instead.
  */
-export function fitWholeItems(
-  heights: readonly number[],
+/**
+ * Bottom-anchored selection of whole items that fit in `height` rows, measuring
+ * each item lazily from the end.
+ *
+ * Only the items on screen need a height, so `measure` is called from the end
+ * backwards and stops as soon as one more item would not fit. The work is
+ * therefore bounded by the window (plus the one item that did not fit), never by
+ * the history length — which matters because this runs on every streaming frame,
+ * where a full pass over a long transcript costs more than the frame budget.
+ *
+ * The walk also stops at `maxItems`, so the residency cap bounds the *measuring*
+ * as well as the rendering.
+ */
+export function fitWholeItemsFromEnd(
+  itemCount: number,
   height: number,
   maxItems: number,
+  measure: (index: number) => number,
 ): { start: number; end: number } {
-  const end = heights.length;
+  const end = Math.max(0, Math.trunc(itemCount));
+  const limit = Math.max(0, Math.trunc(maxItems));
+
   let used = 0;
   let start = end;
-  while (start > 0) {
-    const next = Math.max(0, heights[start - 1] ?? 0);
+  while (start > 0 && end - start < limit) {
+    const next = Math.max(0, measure(start - 1));
     if (used + next > height) break;
     used += next;
     start -= 1;
-  }
-  if (end - start > maxItems) {
-    start = end - Math.trunc(maxItems);
   }
   return { start, end };
 }

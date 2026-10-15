@@ -6,14 +6,17 @@
  * to run on every frame. `row-model.fidelity.test.tsx` pins the per-item heights
  * themselves, but it renders a handful of items, so it cannot see either claim.
  *
- * Measurement is deliberately O(history): every item's height is recomputed each
- * frame so the window is chosen from real numbers. Rendering is bounded by
- * `MAX_VIEWPORT_ITEMS`. The timing guard is loose on purpose — an anti-quadratic
- * net, not a frame budget, because a wall-clock threshold in a unit test is a
- * flake waiting to happen. **The printed table is the gate's real evidence**, and
- * the per-item figure it reports is what the shell pays per streaming frame.
- * Single-run numbers are not comparable across runs (see the repo guide's note on
- * measured figures).
+ * Both claims are asserted here over the real measure path with a synthetic
+ * history. Measuring used to be a full pass over the transcript (`items.map`),
+ * which cost ~18us per item on every streaming frame — ~22ms at 1000 items and
+ * ~280ms at 16000. The window is now fitted from the end with a lazy measure, so
+ * the work is bounded by the window instead of the history, and the assertions
+ * below fail if that regresses to a full pass.
+ *
+ * The timing guard is loose on purpose — an anti-quadratic net, not a frame
+ * budget, because a wall-clock threshold in a unit test is a flake waiting to
+ * happen. **The printed table is the gate's real evidence.** Single-run numbers
+ * are not comparable across runs (see the repo guide's note on measured figures).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -23,7 +26,7 @@ import {
   CHROME_RESERVE_ROWS,
   MAX_VIEWPORT_ITEMS,
 } from "@/cli/app/ViewportTranscript";
-import { fitWholeItems } from "@/cli/app/viewport-window";
+import { fitWholeItemsFromEnd } from "@/cli/app/viewport-window";
 import type { Line } from "@/cli/helpers/accumulator";
 
 const COLUMNS = 100;
@@ -118,33 +121,46 @@ function separatorHistory(count: number): StaticItem[] {
 }
 
 interface FrameCost {
-  heights: number[];
   window: { start: number; end: number };
+  /** Rows the rendered window occupies. */
   rows: number;
+  /** How many items the frame had to measure. */
+  measured: number;
   ms: number;
 }
 
-/** One frame of the viewport: measure every item, then pick the window. */
+/** One frame of the viewport: measure what fits, then pick the window. */
 function measureFrame(
   items: StaticItem[],
   viewportRows = VIEWPORT_HEIGHT,
 ): FrameCost {
+  const heights = new Map<number, number>();
   const started = performance.now();
-  const heights = items.map((item, index) =>
-    measureTranscriptItemRows(item, {
-      columns: COLUMNS,
-      index,
-      terminalRows: TERMINAL_ROWS,
-    }),
+  const window = fitWholeItemsFromEnd(
+    items.length,
+    viewportRows,
+    MAX_VIEWPORT_ITEMS,
+    (index) => {
+      const item = items[index];
+      const rows =
+        item === undefined
+          ? 0
+          : measureTranscriptItemRows(item, {
+              columns: COLUMNS,
+              index,
+              terminalRows: TERMINAL_ROWS,
+            });
+      heights.set(index, rows);
+      return rows;
+    },
   );
-  const window = fitWholeItems(heights, viewportRows, MAX_VIEWPORT_ITEMS);
   const ms = performance.now() - started;
 
   let rows = 0;
   for (let index = window.start; index < window.end; index += 1) {
-    rows += heights[index] ?? 0;
+    rows += heights.get(index) ?? 0;
   }
-  return { heights, window, rows, ms };
+  return { window, rows, measured: heights.size, ms };
 }
 
 function renderedItems(frame: FrameCost): number {
@@ -173,6 +189,24 @@ describe("viewport frame cost", () => {
     expect(last * 100).toBeLessThan(frames[frames.length - 1]?.size ?? 0);
   });
 
+  test("measuring stays bounded however long the history is", () => {
+    for (const { frame } of frames) {
+      // The window plus the one item that turned out not to fit.
+      expect(frame.measured).toBeLessThanOrEqual(renderedItems(frame) + 1);
+      expect(frame.measured).toBeLessThanOrEqual(MAX_VIEWPORT_ITEMS + 1);
+    }
+
+    // This is the regression net: a full pass over the transcript would measure
+    // as many items as the history has, so the largest history would dwarf the
+    // smallest instead of matching it.
+    const first = frames[0]?.frame as FrameCost;
+    const last = frames[frames.length - 1]?.frame as FrameCost;
+    expect(last.measured).toBeLessThanOrEqual(first.measured + 2);
+    expect(last.measured * 100).toBeLessThan(
+      frames[frames.length - 1]?.size ?? 0,
+    );
+  });
+
   test("the rendered window fits the viewport rows", () => {
     for (const { frame } of frames) {
       expect(frame.rows).toBeLessThanOrEqual(VIEWPORT_HEIGHT);
@@ -191,22 +225,25 @@ describe("viewport frame cost", () => {
 
     expect(renderedItems(small)).toBe(MAX_VIEWPORT_ITEMS);
     expect(renderedItems(large)).toBe(MAX_VIEWPORT_ITEMS);
+    // The cap bounds the measuring too, so even a zero-row-item history cannot
+    // walk to the start of the transcript.
+    expect(small.measured).toBe(MAX_VIEWPORT_ITEMS);
+    expect(large.measured).toBe(MAX_VIEWPORT_ITEMS);
   });
 
-  test("per-frame measurement stays linear in the history", () => {
+  test("per-frame cost does not follow the history", () => {
     const short = frames[0]?.frame as FrameCost;
     const long = frames[frames.length - 1]?.frame as FrameCost;
 
-    // 16x the items may cost 16x the time; the allowance is 2x that plus a fixed
-    // floor, so a noisy machine cannot fail the gate.
-    expect(long.ms).toBeLessThan(short.ms * 32 + 50);
+    // 16x the history may cost 4x the time, plus a fixed floor for timer noise.
+    expect(long.ms).toBeLessThan(short.ms * 4 + 50);
 
     // The gate's evidence: what one measured frame costs at each history size.
     for (const { size, frame } of frames) {
       console.log(
         `viewport frame cost: ${String(size).padStart(6)} items ` +
-          `${frame.ms.toFixed(1).padStart(6)}ms ` +
-          `(${((frame.ms / size) * 1_000).toFixed(1).padStart(4)}us/item) ` +
+          `${frame.ms.toFixed(3).padStart(8)}ms | ` +
+          `measured ${String(frame.measured).padStart(3)} items | ` +
           `rendered ${renderedItems(frame)} items / ${frame.rows} rows`,
       );
     }

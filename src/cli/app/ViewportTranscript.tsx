@@ -10,7 +10,7 @@ import { shouldRenderLiveItem } from "./live-items";
 import { measureTranscriptItemRows } from "./row-model";
 import { TranscriptItemView } from "./TranscriptItem";
 import type { StaticItem } from "./types";
-import { fitWholeItems } from "./viewport-window";
+import { fitWholeItemsFromEnd } from "./viewport-window";
 
 /** Fallback chrome reserve used until the shell reports its measured height. */
 export const CHROME_RESERVE_ROWS = 4;
@@ -87,28 +87,38 @@ export function ViewportTranscript(props: AppViewProps) {
   // approval is drawn by `ApprovalSwitch` and the parallel ones by
   // `PendingApprovalStub`, so measuring the tool call instead would size the
   // window from a node that is not on screen.
+  //
+  // Measured lazily from the end: this runs on every streaming frame, and a full
+  // pass over a long transcript costs more than the frame budget (about 18us per
+  // item, so ~22ms at 1000 items).
   const window = useMemo(() => {
-    const heights = items.map((item, index) =>
-      measureTranscriptItemRows(item, {
-        columns,
-        index,
-        terminalRows,
-        diffs: precomputedDiffs,
-        expandedToolCallId,
-        lastShellToolCallId,
-        substitutions: {
-          currentApproval,
-          currentApprovalContext,
-          approvalMap,
-          pendingIds,
-          queuedIds,
-          queuedDecisions,
-          stubDescriptions,
-          showPreview: showApprovalPreview,
-        },
-      }),
+    return fitWholeItemsFromEnd(
+      items.length,
+      height,
+      MAX_VIEWPORT_ITEMS,
+      (index) => {
+        const item = items[index];
+        if (item === undefined) return 0;
+        return measureTranscriptItemRows(item, {
+          columns,
+          index,
+          terminalRows,
+          diffs: precomputedDiffs,
+          expandedToolCallId,
+          lastShellToolCallId,
+          substitutions: {
+            currentApproval,
+            currentApprovalContext,
+            approvalMap,
+            pendingIds,
+            queuedIds,
+            queuedDecisions,
+            stubDescriptions,
+            showPreview: showApprovalPreview,
+          },
+        });
+      },
     );
-    return fitWholeItems(heights, height, MAX_VIEWPORT_ITEMS);
   }, [
     items,
     columns,
