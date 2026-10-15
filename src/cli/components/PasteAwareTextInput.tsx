@@ -17,6 +17,22 @@ import {
 } from "@/cli/helpers/paste-registry";
 import { TextInput } from "./TextInput";
 
+// Fallback paste aggregation windows (ms). A markerless paste arrives as many
+// small input events; chunks that land within the "normal" window are treated
+// as one run, and once a run is clearly paste-sized (>= ESCALATE_AT chars) the
+// window widens so the remaining chunks still join. Kept short so ordinary
+// typing and key auto-repeat stay in separate runs.
+const PASTE_FALLBACK_NORMAL_MS = 16;
+const PASTE_FALLBACK_PASTE_MS = 150;
+const PASTE_FALLBACK_ESCALATE_AT = 128;
+
+// How many paste-aware composers are focused right now. `usePaste` is
+// registered for the whole app lifetime (Ink ties bracketed-paste mode to
+// having a listener), so every mounted composer — including the always-mounted
+// one while an overlay owns focus — hears the same paste event. Only the
+// focused one may insert it.
+let focusedPasteAwareInputCount = 0;
+
 // Global timestamp for forward delete coordination
 // Use globalThis to ensure singleton across bundle
 declare global {
@@ -144,7 +160,6 @@ export function PasteAwareTextInput({
   const [actualValue, setActualValue] = useState(() =>
     resolvePlaceholders(value),
   );
-  const lastPasteDetectedAtRef = useRef<number>(0);
   const caretOffsetRef = useRef<number>((value || "").length);
   const [nudgeCursorOffset, setNudgeCursorOffset] = useState<
     number | undefined
@@ -166,6 +181,18 @@ export function PasteAwareTextInput({
 
   useEffect(() => {
     focusRef.current = focus;
+  }, [focus]);
+
+  // Register this composer as a focused paste owner while it has focus, so an
+  // unfocused composer knows another paste-aware input will handle the paste.
+  useEffect(() => {
+    if (!focus) {
+      return undefined;
+    }
+    focusedPasteAwareInputCount += 1;
+    return () => {
+      focusedPasteAwareInputCount -= 1;
+    };
   }, [focus]);
 
   // Apply cursor position from parent
@@ -320,12 +347,16 @@ export function PasteAwareTextInput({
       return;
     }
     if (!focusRef.current) {
-      // Composer unfocused: hand the paste to the focused component as a
-      // normal input event so overlays still receive it.
+      // Composer unfocused. If a paste-aware composer owns focus it will insert
+      // this paste from its own usePaste listener, so forwarding here too would
+      // insert it twice. Only a focused input without usePaste (a raw
+      // TextInput, e.g. the masked API-key field) needs the forwarded event.
+      if (focusedPasteAwareInputCount > 0) {
+        return;
+      }
       internal_eventEmitter?.emit("input", text);
       return;
     }
-    lastPasteDetectedAtRef.current = Date.now();
     const payload = text;
     // Translate any image payloads in the paste (OSC 1337, data URLs, paths).
     const translated = translatePasteForImages(payload);
@@ -405,6 +436,94 @@ export function PasteAwareTextInput({
   useEffect(() => {
     onPasteErrorRef.current = onPasteError;
   }, [onPasteError]);
+
+  // Fallback paste aggregation. Ink 7 drops the fork's time-window paste
+  // aggregator, so a paste without bracketed-paste markers arrives as many
+  // small input events (one per stdin read) that individually look like
+  // ordinary typing. Accumulate rapid successive insertions; once the run is
+  // paste-sized, replace it with a placeholder (or sanitize it inline).
+  const pasteBurstRef = useRef<{
+    active: boolean;
+    start: number;
+    text: string;
+    timer: ReturnType<typeof setTimeout> | null;
+  }>({ active: false, start: 0, text: "", timer: null });
+
+  const resetPasteBurst = useCallback(() => {
+    const burst = pasteBurstRef.current;
+    if (burst.timer) {
+      clearTimeout(burst.timer);
+      burst.timer = null;
+    }
+    burst.active = false;
+    burst.text = "";
+  }, []);
+
+  const flushPasteBurst = useCallback(() => {
+    const burst = pasteBurstRef.current;
+    if (burst.timer) {
+      clearTimeout(burst.timer);
+      burst.timer = null;
+    }
+    if (!burst.active) {
+      return;
+    }
+    const { start, text } = burst;
+    burst.active = false;
+    burst.text = "";
+
+    const display = displayValueRef.current;
+    // Bail if the run no longer sits where it did (an interleaved edit landed).
+    if (display.slice(start, start + text.length) !== text) {
+      return;
+    }
+
+    const translated = translatePasteForImages(text);
+    const actual = actualValueRef.current;
+    // Map the display offset to the actual offset (placeholders expand).
+    const actualStart = resolvePlaceholders(display.slice(0, start)).length;
+
+    if (countLines(translated) > 5 || translated.length > 500) {
+      const pasteId = allocatePaste(translated);
+      const placeholder = `[Pasted text #${pasteId} +${countLines(translated)} lines]`;
+      const newDisplay =
+        display.slice(0, start) +
+        placeholder +
+        display.slice(start + text.length);
+      const newActual =
+        actual.slice(0, actualStart) +
+        translated +
+        actual.slice(actualStart + text.length);
+      setDraft(newDisplay, newActual);
+      onChangeRef.current(newDisplay);
+      const nextCaret = start + placeholder.length;
+      setNudgeCursorOffset(nextCaret);
+      caretOffsetRef.current = nextCaret;
+      return;
+    }
+
+    // Small run: keep it inline, but sanitize newlines for display like the
+    // bracketed-paste path does.
+    const displayText = sanitizeForDisplay(translated);
+    if (displayText === text && translated === text) {
+      return;
+    }
+    const newDisplay =
+      display.slice(0, start) +
+      displayText +
+      display.slice(start + text.length);
+    const newActual =
+      actual.slice(0, actualStart) +
+      translated +
+      actual.slice(actualStart + text.length);
+    setDraft(newDisplay, newActual);
+    onChangeRef.current(newDisplay);
+    const nextCaret = start + displayText.length;
+    setNudgeCursorOffset(nextCaret);
+    caretOffsetRef.current = nextCaret;
+  }, [setDraft]);
+
+  useEffect(() => resetPasteBurst, [resetPasteBurst]);
 
   // Consolidated raw stdin handler for Option+Arrow navigation and Option+Delete
   // Uses internal_eventEmitter (Ink's private API) for escape sequences that useInput doesn't parse correctly.
@@ -646,82 +765,59 @@ export function PasteAwareTextInput({
       }
     }
 
-    // Heuristic: detect large additions that look like pastes
     const previousValue = displayValueRef.current;
     const addedLen = newValue.length - previousValue.length;
-    const lineDelta = countLines(newValue) - countLines(previousValue);
-    const sincePasteMs = Date.now() - lastPasteDetectedAtRef.current;
-
-    // If we see a large addition (and it's not too soon after the last paste), treat it as a paste
-    if (
-      sincePasteMs > 1000 &&
-      addedLen > 0 &&
-      (addedLen > 500 || lineDelta > 5)
-    ) {
-      lastPasteDetectedAtRef.current = Date.now();
-
-      // Compute inserted segment via longest common prefix/suffix
-      const a = previousValue;
-      const b = newValue;
-      let lcp = 0;
-      while (lcp < a.length && lcp < b.length && a[lcp] === b[lcp]) lcp++;
-      let lcs = 0;
-      while (
-        lcs < a.length - lcp &&
-        lcs < b.length - lcp &&
-        a[a.length - 1 - lcs] === b[b.length - 1 - lcs]
-      )
-        lcs++;
-      const inserted = b.slice(lcp, b.length - lcs);
-
-      // Translate any image payloads in the inserted text (run always for reliability)
-      const translated = translatePasteForImages(inserted);
-      const translatedLines = countLines(translated);
-      const translatedChars = translated.length;
-
-      // If translated text is still large, create a placeholder
-      if (translatedLines > 5 || translatedChars > 500) {
-        const pasteId = allocatePaste(translated);
-        const placeholder = `[Pasted text #${pasteId} +${translatedLines} lines]`;
-
-        const prevActual = actualValueRef.current;
-        const newDisplayValue =
-          a.slice(0, lcp) + placeholder + a.slice(a.length - lcs);
-        const newActualValue =
-          prevActual.slice(0, lcp) +
-          translated +
-          prevActual.slice(prevActual.length - lcs);
-
-        setDraft(newDisplayValue, newActualValue);
-        onChange(newDisplayValue);
-        const nextCaret = lcp + placeholder.length;
-        setNudgeCursorOffset(nextCaret);
-        caretOffsetRef.current = nextCaret;
-        return;
-      }
-
-      // Otherwise, insert the translated text inline (sanitize newlines for display)
-      const prevActual = actualValueRef.current;
-      const displayText = sanitizeForDisplay(translated);
-      const newDisplayValue =
-        a.slice(0, lcp) + displayText + a.slice(a.length - lcs);
-      const newActualValue =
-        prevActual.slice(0, lcp) +
-        translated +
-        prevActual.slice(prevActual.length - lcs);
-
-      setDraft(newDisplayValue, newActualValue);
-      onChange(newDisplayValue);
-      const nextCaret = lcp + displayText.length;
-      setNudgeCursorOffset(nextCaret);
-      caretOffsetRef.current = nextCaret;
-      return;
-    }
 
     // Normal typing/edits - update display and compute actual by substituting placeholders
     setDraft(newValue, resolvePlaceholders(newValue));
     onChange(newValue);
     // Note: caretOffsetRef is updated by onCursorOffsetChange callback (called before onChange)
+
+    // Fallback aggregation for a markerless paste delivered as many small
+    // changes: extend the current run of rapid insertions, and collapse it to a
+    // placeholder once it is paste-sized (see flushPasteBurst).
+    if (addedLen <= 0) {
+      resetPasteBurst();
+      return;
+    }
+    const a = previousValue;
+    const b = newValue;
+    let lcp = 0;
+    while (lcp < a.length && lcp < b.length && a[lcp] === b[lcp]) lcp++;
+    let lcs = 0;
+    while (
+      lcs < a.length - lcp &&
+      lcs < b.length - lcp &&
+      a[a.length - 1 - lcs] === b[b.length - 1 - lcs]
+    )
+      lcs++;
+    const inserted = b.slice(lcp, b.length - lcs);
+    if (inserted.length === 0 || inserted.includes("\u001b")) {
+      resetPasteBurst();
+      return;
+    }
+    const burst = pasteBurstRef.current;
+    if (
+      burst.active &&
+      lcp === burst.start + burst.text.length &&
+      inserted.length > 1
+    ) {
+      burst.text += inserted;
+    } else {
+      resetPasteBurst();
+      burst.active = true;
+      burst.start = lcp;
+      burst.text = inserted;
+    }
+    if (burst.timer) {
+      clearTimeout(burst.timer);
+    }
+    burst.timer = setTimeout(
+      flushPasteBurst,
+      burst.text.length >= PASTE_FALLBACK_ESCALATE_AT
+        ? PASTE_FALLBACK_PASTE_MS
+        : PASTE_FALLBACK_NORMAL_MS,
+    );
   };
 
   const handleSubmit = () => {

@@ -151,6 +151,72 @@ async function typeInReads(groups: string[][]): Promise<Observed> {
   return observed;
 }
 
+function TwoInputHarness({
+  composer,
+  overlay,
+}: {
+  composer: Observed;
+  overlay: Observed;
+}) {
+  const [composerValue, setComposerValue] = useState("");
+  const [overlayValue, setOverlayValue] = useState("");
+  return (
+    <>
+      <PasteAwareTextInput
+        value={composerValue}
+        onChange={(next) => {
+          composer.value = next;
+          setComposerValue(next);
+        }}
+        onSubmit={() => {}}
+        focus={false}
+      />
+      <PasteAwareTextInput
+        value={overlayValue}
+        onChange={(next) => {
+          overlay.value = next;
+          setOverlayValue(next);
+        }}
+        onSubmit={() => {}}
+        focus
+      />
+    </>
+  );
+}
+
+async function pasteIntoTwo(chunks: string[]): Promise<{
+  composer: Observed;
+  overlay: Observed;
+}> {
+  const composer: Observed = { value: "", caret: null, renderedCaret: null };
+  const overlay: Observed = { value: "", caret: null, renderedCaret: null };
+  const stdin = new MultiReadStdin();
+  const stdout = new CaptureStream() as CaptureStream & NodeJS.WriteStream;
+  const previousLevel = chalk.level;
+  chalk.level = 1;
+  const instance = render(
+    <TwoInputHarness composer={composer} overlay={overlay} />,
+    {
+      stdin: stdin as unknown as NodeJS.ReadStream,
+      stdout,
+      stderr: stdout,
+      debug: false,
+      patchConsole: false,
+      exitOnCtrlC: false,
+    },
+  );
+  try {
+    await tick();
+    stdin.pushReads(chunks);
+    await tick();
+    await tick();
+  } finally {
+    instance.unmount();
+    chalk.level = previousLevel;
+  }
+  return { composer, overlay };
+}
+
 describe("PasteAwareTextInput multi-read input commits (#4493)", () => {
   test("keeps the caret at the end when one commit arrives as two reads in one tick", async () => {
     // Reporter's first log: 日本語 delivered as 日本 + 語 within one tick.
@@ -198,5 +264,33 @@ describe("PasteAwareTextInput multi-read input commits (#4493)", () => {
     expect(observed.value.indexOf("[Pasted text")).toBeLessThan(
       observed.value.lastIndexOf("[Pasted text"),
     );
+  });
+});
+
+describe("PasteAwareTextInput paste delivery", () => {
+  test("folds a markerless paste split across reads into one placeholder", async () => {
+    // A terminal that does not wrap the paste in bracketed-paste markers sends
+    // it as many small stdin reads. Each read is well under the single-change
+    // placeholder threshold, so without aggregation the raw text lands inline.
+    const text = Array.from({ length: 12 }, (_, i) => `line-${i}`).join("\n");
+    const chunks: string[] = [];
+    for (let i = 0; i < text.length; i += 40) {
+      chunks.push(text.slice(i, i + 40));
+    }
+    const observed = await typeInReads([chunks]);
+    expect(observed.value).toMatch(/^\[Pasted text #\d+ \+12 lines\]$/);
+  });
+
+  test("does not duplicate a paste when the composer is unfocused under an overlay", async () => {
+    const text = Array.from({ length: 12 }, (_, i) => `line-${i}`).join("\n");
+    const { composer, overlay } = await pasteIntoTwo([
+      `\u001b[200~${text}\u001b[201~`,
+    ]);
+    // The focused overlay input owns the paste; the always-mounted composer
+    // must not also forward it as a raw input event.
+    expect(
+      overlay.value.match(/\[Pasted text #\d+ \+\d+ lines\]/g),
+    ).toHaveLength(1);
+    expect(composer.value).toBe("");
   });
 });
