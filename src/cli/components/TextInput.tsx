@@ -56,15 +56,9 @@ function isControlSequence(input: string, key: Key): boolean {
     return true;
   }
 
-  // Forward delete is handled by the parent's raw input handler; it stamps
-  // `__haruyukiForwardDeleteTimestamp` so this component skips its own delete.
-  if (
-    key.delete &&
-    globalThis.__haruyukiForwardDeleteTimestamp &&
-    Date.now() - globalThis.__haruyukiForwardDeleteTimestamp < 100
-  ) {
-    return true;
-  }
+  // Forward delete is the input router's binding; this component must not also
+  // act on it, or one press would delete on both sides of the caret.
+  if (key.delete) return true;
 
   return false;
 }
@@ -161,7 +155,7 @@ export function TextInput({
         }
       } else if (key.upArrow || key.downArrow) {
         return; // parent decides (wrapped-line navigation)
-      } else if (key.backspace || key.delete) {
+      } else if (key.backspace) {
         if (key.meta) return; // Option+Delete = delete word (parent)
         if (caret > 0) {
           nextValue = base.slice(0, caret - 1) + base.slice(caret);

@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { Writable } from "node:stream";
 import { type Key, render, useInput } from "ink";
-import { shieldKeyEvent } from "@/cli/helpers/input-sequence";
+import {
+  shieldKeyEvent,
+  terminalWorkaroundSequences,
+} from "@/cli/helpers/input-sequence";
 
 /**
  * The shield reads raw sequences itself so it can run before Ink's handlers and
@@ -243,5 +246,29 @@ describe("input sequence shield", () => {
     expect(shieldKeyEvent("hello")).toBeUndefined();
     expect(shieldKeyEvent(`${ESC}[<0;10;5M`)).toBeUndefined();
     expect(shieldKeyEvent(`${ESC}[111;6u`)).toBeUndefined();
+  });
+
+  test("keeps the terminal workarounds explicit, each with a reason", () => {
+    // These are the entries the shield reads *differently* from Ink on purpose,
+    // because the fork already treated them as a key. They are allowed to exist;
+    // they are not allowed to be silent or unreachable.
+    const workarounds = terminalWorkaroundSequences();
+    expect(workarounds.length).toBeGreaterThan(0);
+    for (const entry of workarounds) {
+      expect(entry.reason.trim().length).toBeGreaterThan(0);
+      expect(shieldKeyEvent(entry.sequence)).toBeDefined();
+      expect(entry.sequence.length).toBeGreaterThan(1);
+    }
+  });
+
+  test("each workaround is read as the key it stands for", () => {
+    // Both entries in the table mean "modified Enter" -- Option+Enter on
+    // terminals that send ESC LF, and the literal backslash-r a VS Code
+    // keybinding is commonly configured to send for Shift+Enter.
+    for (const entry of terminalWorkaroundSequences()) {
+      const event = shieldKeyEvent(entry.sequence);
+      expect(event?.key.return).toBe(true);
+      expect(event?.key.meta).toBe(true);
+    }
   });
 });

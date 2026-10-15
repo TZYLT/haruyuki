@@ -34,9 +34,15 @@ export const APP_KEY_CHORDS = {
 } as const satisfies Record<string, KeyChordList>;
 
 /**
- * Composer editing the raw stdin layer used to own, because Ink's parsed event
- * was not enough to tell which sequence arrived. Registered as normal chords now
- * that one router parses every sequence.
+ * Composer editing, which the raw stdin layer used to own.
+ *
+ * Several of these carry more than one chord because terminals disagree about
+ * how to encode them, and the old raw handler accepted a family of sequences for
+ * each: "Option+Left" arrived as `ESC b`, `CSI 1;3D`, and (on terminals in the
+ * older xterm mode) `CSI 7D` / `CSI 8D` / `CSI 1;4D`. Ink decodes all of those to
+ * a left arrow with meta held, so the variants reduce to the modifier
+ * combinations here. A sequence the shield does not read exactly still reaches
+ * these chords through the router's Ink-parsed fallback.
  */
 export const COMPOSER_KEY_CHORDS = {
   /** Insert a newline instead of submitting. */
@@ -47,11 +53,17 @@ export const COMPOSER_KEY_CHORDS = {
   /** Option+Left: caret to the previous word boundary. */
   caretPreviousWord: [
     { key: "leftArrow", meta: true },
+    { key: "leftArrow", meta: true, shift: true },
+    { key: "leftArrow", meta: true, ctrl: true },
+    { key: "leftArrow", meta: true, ctrl: true, shift: true },
     { key: "b", meta: true },
   ],
   /** Option+Right: caret to the next word boundary. */
   caretNextWord: [
     { key: "rightArrow", meta: true },
+    { key: "rightArrow", meta: true, shift: true },
+    { key: "rightArrow", meta: true, ctrl: true },
+    { key: "rightArrow", meta: true, ctrl: true, shift: true },
     { key: "f", meta: true },
   ],
   /** Option+Delete / Ctrl+W: delete the word before the caret. */
@@ -60,22 +72,31 @@ export const COMPOSER_KEY_CHORDS = {
     { key: "w", ctrl: true },
   ],
   /** fn+Delete: delete the character after the caret. */
-  deleteNextChar: [{ key: "delete" }],
+  deleteNextChar: [
+    { key: "delete" },
+    { key: "delete", shift: true },
+    { key: "delete", ctrl: true },
+    { key: "delete", ctrl: true, shift: true },
+  ],
   /** Home: caret to the start of the draft. */
   caretToStart: [{ key: "home" }],
   /** End: caret to the end of the draft. */
   caretToEnd: [{ key: "end" }],
   /**
-   * Import an image from the clipboard where the terminal cannot paste it.
-   * Ctrl+V is the macOS probe; Option+V and Ctrl+Shift+V are the explicit
-   * bindings other terminals send.
+   * macOS Ctrl+V: the terminal cannot deliver an image through bracketed paste,
+   * so the key probes the clipboard. Elsewhere the terminal owns Ctrl+V, and the
+   * binding declines so the key travels the ordinary path.
    */
+  pasteImageMac: [{ key: "v", ctrl: true }],
+  /** Option+V / Ctrl+Shift+V: the explicit image-paste keys other terminals send. */
   pasteImage: [
-    { key: "v", ctrl: true },
     { key: "v", meta: true },
     { key: "v", ctrl: true, shift: true },
   ],
-  /** Backspace on an empty draft: leave bash mode (second press). */
+  /**
+   * Backspace on an empty draft: leave bash mode. Claimed only while the draft is
+   * empty — the binding declines otherwise, so the text input still deletes.
+   */
   backspaceAtEmpty: [{ key: "backspace" }],
 } as const satisfies Record<string, KeyChordList>;
 

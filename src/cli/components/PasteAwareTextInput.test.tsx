@@ -294,3 +294,89 @@ describe("PasteAwareTextInput paste delivery", () => {
     expect(composer.value).toBe("");
   });
 });
+
+/**
+ * The composer's editing keys used to be handled by a raw `prependListener` on
+ * Ink's emitter, next to a `useInput` handler for the rest. Both are gone: the
+ * keys are chords in the input router's table now. These cases pin the readings
+ * that only the raw layer used to get right.
+ */
+describe("PasteAwareTextInput editing keys", () => {
+  const CTRL_W = "\u0017";
+  const HOME = "\u001b[H";
+  const END = "\u001b[F";
+  const FORWARD_DELETE = "\u001b[3~";
+  const SHIFT_ENTER = "\u001b[13;2u";
+  const OPTION_LEFT = "\u001b[1;3D";
+  // Older xterm modifier encodings the raw handler accepted as Option+Arrow:
+  // 7 is ctrl+alt, 4 is shift+alt.
+  const OPTION_LEFT_CTRL = "\u001b[7D";
+  const OPTION_LEFT_SHIFT = "\u001b[1;4D";
+  const OPTION_DELETE = "\u001b\u007f";
+
+  test("Shift+Enter inserts a newline instead of submitting", async () => {
+    const observed = await typeInReads([["ab"], [SHIFT_ENTER], ["cd"]]);
+    expect(observed.value).toBe("ab\ncd");
+    expect(observed.caret).toBe(5);
+  });
+
+  test("Option+Left and Option+Right move by word", async () => {
+    const back = await typeInReads([["one two"], [OPTION_LEFT]]);
+    expect(back.caret).toBe(4);
+    const forward = await typeInReads([
+      ["one two"],
+      [OPTION_LEFT],
+      [OPTION_LEFT],
+      ["\u001b[1;3C"],
+    ]);
+    expect(forward.caret).toBe(4);
+  });
+
+  test("accepts the older Option+Arrow encodings", async () => {
+    const ctrlAlt = await typeInReads([["one two"], [OPTION_LEFT_CTRL]]);
+    expect(ctrlAlt.caret).toBe(4);
+    const shiftAlt = await typeInReads([["one two"], [OPTION_LEFT_SHIFT]]);
+    expect(shiftAlt.caret).toBe(4);
+  });
+
+  test("Home and End move the caret to the draft's ends", async () => {
+    const atStart = await typeInReads([["abc"], [HOME]]);
+    expect(atStart.caret).toBe(0);
+    const atEnd = await typeInReads([["abc"], [HOME], [END]]);
+    expect(atEnd.caret).toBe(3);
+  });
+
+  test("Ctrl+W and Option+Delete delete the previous word", async () => {
+    const ctrlW = await typeInReads([["one two"], [CTRL_W]]);
+    expect(ctrlW.value).toBe("one ");
+    const optionDelete = await typeInReads([["one two"], [OPTION_DELETE]]);
+    expect(optionDelete.value).toBe("one ");
+  });
+
+  test("fn+Delete deletes the character after the caret, not before it", async () => {
+    const observed = await typeInReads([["abc"], [HOME], [FORWARD_DELETE]]);
+    expect(observed.value).toBe("bc");
+    expect(observed.caret).toBe(0);
+  });
+
+  test("Option+Enter inserts a newline", async () => {
+    const observed = await typeInReads([["ab"], ["\u001b\r"], ["cd"]]);
+    expect(observed.value).toBe("ab\ncd");
+  });
+
+  test("honours the terminal workarounds the raw layer carried", async () => {
+    // VS Code/Cursor keybindings send a literal backslash-r for Shift+Enter.
+    const literal = await typeInReads([["ab"], ["\\r"], ["cd"]]);
+    expect(literal.value).toBe("ab\ncd");
+    // Some terminals send ESC LF for Option+Enter.
+    const escLf = await typeInReads([["ab"], ["\u001b\n"], ["cd"]]);
+    expect(escLf.value).toBe("ab\ncd");
+  });
+
+  test("leaves a plain Enter to the submit handler", async () => {
+    const observed = await typeInReads([["ab"], ["\r"]]);
+    // The harness's onSubmit is a no-op, so the draft stays and the newline was
+    // not inserted into it.
+    expect(observed.value).toBe("ab");
+  });
+});

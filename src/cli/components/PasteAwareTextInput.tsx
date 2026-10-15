@@ -4,17 +4,23 @@
 // 3. Maintains separate display value (with placeholders) vs actual value (full content)
 // 4. Resolves placeholders on submit
 
-// Import useInput from vendored Ink for bracketed paste support
-import { useInput, usePaste, useStdin } from "ink";
+// Bracketed paste arrives on Ink's own channel; the key bindings live in the
+// input router's table (see cli/helpers/keymap.ts).
+import { usePaste } from "ink";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   translatePasteForImages,
   tryImportClipboardImageMac,
 } from "@/cli/helpers/clipboard";
+import type { KeyBindingTable } from "@/cli/helpers/input-keys";
+import { forwardInputEvent } from "@/cli/helpers/input-router";
+import { COMPOSER_KEY_CHORDS } from "@/cli/helpers/keymap";
 import {
   allocatePaste,
   resolvePlaceholders,
 } from "@/cli/helpers/paste-registry";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
+import { useInternalEventEmitter } from "@/cli/hooks/use-internal-event-emitter";
 import { TextInput } from "./TextInput";
 
 // Fallback paste aggregation windows (ms). A markerless paste arrives as many
@@ -32,13 +38,6 @@ const PASTE_FALLBACK_ESCALATE_AT = 128;
 // one while an overlay owns focus — hears the same paste event. Only the
 // focused one may insert it.
 let focusedPasteAwareInputCount = 0;
-
-// Global timestamp for forward delete coordination
-// Use globalThis to ensure singleton across bundle
-declare global {
-  // eslint-disable-next-line no-var
-  var __haruyukiForwardDeleteTimestamp: number | undefined;
-}
 
 interface PasteAwareTextInputProps {
   value: string;
@@ -120,22 +119,6 @@ function findNextWordBoundary(text: string, cursorPos: number): number {
   return pos;
 }
 
-type WordDirection = "left" | "right";
-
-// biome-ignore lint/suspicious/noControlCharactersInRegex: Terminal escape sequences require ESC control character
-const OPTION_LEFT_PATTERN = /^\u001b\[(?:1;)?(?:3|4|7|8|9)D$/;
-// biome-ignore lint/suspicious/noControlCharactersInRegex: Terminal escape sequences require ESC control character
-const OPTION_RIGHT_PATTERN = /^\u001b\[(?:1;)?(?:3|4|7|8|9)C$/;
-
-function detectOptionWordDirection(sequence: string): WordDirection | null {
-  if (!sequence.startsWith("\u001b")) return null;
-  if (sequence === "\u001bb" || sequence === "\u001bB") return "left";
-  if (sequence === "\u001bf" || sequence === "\u001bF") return "right";
-  if (OPTION_LEFT_PATTERN.test(sequence)) return "left";
-  if (OPTION_RIGHT_PATTERN.test(sequence)) return "right";
-  return null;
-}
-
 export function PasteAwareTextInput({
   value,
   onChange,
@@ -148,12 +131,9 @@ export function PasteAwareTextInput({
   onBackspaceAtEmpty,
   onPasteError,
 }: PasteAwareTextInputProps) {
-  // Ink 7 narrows `useStdin()`'s public type to `PublicProps`; the runtime
-  // context still carries `internal_eventEmitter`. Access it through a local
-  // type instead of a second raw stdin listener (see src/cli/AGENTS.md).
-  const { internal_eventEmitter } = useStdin() as unknown as {
-    internal_eventEmitter?: import("node:events").EventEmitter;
-  };
+  // The paste channel needs the emitter to forward an unroutable paste to a raw
+  // `TextInput`; the private name lives in one accessor module.
+  const internalEventEmitter = useInternalEventEmitter();
   const [displayValue, setDisplayValue] = useState(value);
   // The sync effect below skips renders that already display `value`, so
   // resolve placeholders for the initial value here instead of on mount.
@@ -231,110 +211,208 @@ export function PasteAwareTextInput({
     }
   }, [value, displayValue, setDraft]);
 
-  // Intercept paste events and macOS fallback for image clipboard imports
-  useInput(
-    (input, key) => {
-      // Handle Shift/Option/Ctrl + Enter to insert newline
-      if (key.return && (key.shift || key.meta || key.ctrl)) {
-        const at = Math.max(
-          0,
-          Math.min(caretOffsetRef.current, displayValueRef.current.length),
-        );
+  const insertNewlineAtCaret = useCallback(() => {
+    const at = Math.max(
+      0,
+      Math.min(caretOffsetRef.current, displayValueRef.current.length),
+    );
 
-        // Insert actual \n for visual newline (cursor moves to new line)
-        const newValue =
-          displayValueRef.current.slice(0, at) +
-          "\n" +
-          displayValueRef.current.slice(at);
+    // Insert actual \n for visual newline (cursor moves to new line)
+    const newValue =
+      displayValueRef.current.slice(0, at) +
+      "\n" +
+      displayValueRef.current.slice(at);
 
-        setDraft(newValue, newValue); // Display and actual are same (both have \n)
-        onChangeRef.current(newValue);
+    setDraft(newValue, newValue); // Display and actual are same (both have \n)
+    onChangeRef.current(newValue);
 
-        const nextCaret = at + 1;
-        setNudgeCursorOffset(nextCaret);
-        caretOffsetRef.current = nextCaret;
+    const nextCaret = at + 1;
+    setNudgeCursorOffset(nextCaret);
+    caretOffsetRef.current = nextCaret;
+  }, [setDraft]);
+
+  // Native terminals do not send image data through bracketed paste, so the
+  // clipboard is probed directly.
+  const insertClipboardImage = useCallback(() => {
+    void (async () => {
+      const result = await tryImportClipboardImageMac();
+      if (!result) return;
+      if ("error" in result) {
+        // Report the error via callback
+        onPasteErrorRef.current?.(result.error);
         return;
       }
+      // Success - insert the placeholder
+      const placeholder = result.placeholder;
+      const base = displayValueRef.current;
+      const at = Math.max(0, Math.min(caretOffsetRef.current, base.length));
+      const newDisplay = base.slice(0, at) + placeholder + base.slice(at);
+      const newActual =
+        actualValueRef.current.slice(0, at) +
+        placeholder +
+        actualValueRef.current.slice(at);
+      setDraft(newDisplay, newActual);
+      onChangeRef.current(newDisplay);
+      const nextCaret = at + placeholder.length;
+      setNudgeCursorOffset(nextCaret);
+      caretOffsetRef.current = nextCaret;
+    })();
+  }, [setDraft]);
 
-      // macOS: Ctrl+V probes the clipboard for an image (native terminals do not
-      // send image data through bracketed paste). Elsewhere the terminal owns
-      // Ctrl+V as a paste binding, so leave the key alone.
-      if (process.platform === "darwin" && key.ctrl && input === "v") {
-        // Fire async handler (can't await in useInput callback)
-        (async () => {
-          const result = await tryImportClipboardImageMac();
-          if (result) {
-            if ("error" in result) {
-              // Report the error via callback
-              onPasteErrorRef.current?.(result.error);
-              return;
-            }
-            // Success - insert the placeholder
-            const clip = result.placeholder;
-            const at = Math.max(
-              0,
-              Math.min(caretOffsetRef.current, displayValueRef.current.length),
-            );
-            const newDisplay =
-              displayValueRef.current.slice(0, at) +
-              clip +
-              displayValueRef.current.slice(at);
-            setDraft(newDisplay, newDisplay);
-            onChangeRef.current(newDisplay);
-            const nextCaret = at + clip.length;
-            setNudgeCursorOffset(nextCaret);
-            caretOffsetRef.current = nextCaret;
-          }
-        })();
-        return;
-      }
+  // macOS only: elsewhere the terminal owns Ctrl+V as a paste binding, so the
+  // binding declines and the key travels the ordinary path.
+  const pasteImageMac = useCallback((): boolean | void => {
+    if (process.platform !== "darwin") return false;
+    insertClipboardImage();
+  }, [insertClipboardImage]);
 
-      // Bracketed paste is handled on Ink's separate 'paste' channel (usePaste
-      // below). It never reaches this handler while usePaste is active.
+  // Backspace on an empty draft is handled here because `handleChange` never
+  // fires (the value does not change when backspacing on empty).
+  const backspaceAtEmpty = useCallback((): boolean | void => {
+    if (displayValueRef.current !== "") return false;
+    onBackspaceAtEmptyRef.current?.();
+  }, []);
 
-      if (
-        (key.meta && (input === "v" || input === "V")) ||
-        (key.ctrl && key.shift && (input === "v" || input === "V"))
-      ) {
-        // Fire async handler
-        (async () => {
-          const result = await tryImportClipboardImageMac();
-          if (result) {
-            if ("error" in result) {
-              onPasteErrorRef.current?.(result.error);
-              return;
-            }
-            const placeholder = result.placeholder;
-            const base = displayValueRef.current;
-            const at = Math.max(
-              0,
-              Math.min(caretOffsetRef.current, base.length),
-            );
-            const newDisplay = base.slice(0, at) + placeholder + base.slice(at);
-            const newActual =
-              actualValueRef.current.slice(0, at) +
-              placeholder +
-              actualValueRef.current.slice(at);
-            setDraft(newDisplay, newActual);
-            onChange(newDisplay);
-            const nextCaret = at + placeholder.length;
-            setNudgeCursorOffset(nextCaret);
-            caretOffsetRef.current = nextCaret;
-          }
-        })();
-      }
+  const caretPreviousWord = useCallback(() => {
+    const newPos = findPreviousWordBoundary(
+      displayValueRef.current,
+      caretOffsetRef.current,
+    );
+    setNudgeCursorOffset(newPos);
+    caretOffsetRef.current = newPos;
+  }, []);
 
-      // Backspace on empty input - handle here since handleChange won't fire
-      // (value doesn't change when backspacing on empty)
-      // Use ref to avoid stale closure issues
-      // Note: On macOS, backspace sends \x7f which Ink parses as "delete", not "backspace"
-      if ((key.backspace || key.delete) && displayValueRef.current === "") {
-        onBackspaceAtEmptyRef.current?.();
-        return;
-      }
-    },
-    { isActive: focus },
-  );
+  const caretNextWord = useCallback(() => {
+    const newPos = findNextWordBoundary(
+      displayValueRef.current,
+      caretOffsetRef.current,
+    );
+    setNudgeCursorOffset(newPos);
+    caretOffsetRef.current = newPos;
+  }, []);
+
+  const deletePreviousWord = useCallback(() => {
+    const curPos = caretOffsetRef.current;
+    const wordStart = findPreviousWordBoundary(displayValueRef.current, curPos);
+    if (wordStart === curPos) return;
+
+    const newDisplay =
+      displayValueRef.current.slice(0, wordStart) +
+      displayValueRef.current.slice(curPos);
+    setDraft(newDisplay, resolvePlaceholders(newDisplay));
+    onChangeRef.current(newDisplay);
+    setNudgeCursorOffset(wordStart);
+    caretOffsetRef.current = wordStart;
+  }, [setDraft]);
+
+  // Forward delete: delete the character AFTER the cursor.
+  const deleteNextChar = useCallback(() => {
+    const cursorPos = caretOffsetRef.current;
+    if (cursorPos >= displayValueRef.current.length) return;
+
+    const newDisplay =
+      displayValueRef.current.slice(0, cursorPos) +
+      displayValueRef.current.slice(cursorPos + 1);
+    setDraft(newDisplay, resolvePlaceholders(newDisplay));
+    // Update refs synchronously for consecutive operations
+    caretOffsetRef.current = cursorPos;
+    onChangeRef.current(newDisplay);
+    // Cursor stays in place, sync it
+    setNudgeCursorOffset(cursorPos);
+  }, [setDraft]);
+
+  const caretToStart = useCallback(() => {
+    setNudgeCursorOffset(0);
+    caretOffsetRef.current = 0;
+  }, []);
+
+  const caretToEnd = useCallback(() => {
+    const endPos = displayValueRef.current.length;
+    setNudgeCursorOffset(endPos);
+    caretOffsetRef.current = endPos;
+  }, []);
+
+  /** A binding that applies only while this input is the focused one. */
+  const whileFocused = (run: () => void): (() => boolean | void) => {
+    return () => {
+      if (!focusRef.current) return false;
+      run();
+      return true;
+    };
+  };
+
+  // The text editor's own keys. They stay out of the app shortcut table because
+  // they are not app-level actions: they apply whenever this input has focus and
+  // decline otherwise, which is how the always-mounted composer stays out of the
+  // way while an overlay's input is the focused one. Registered for the app and
+  // the overlay layer alike, since selectors and dialogs use this component too.
+  const textEditingTables: KeyBindingTable[] = (
+    ["app", "overlay"] as const
+  ).map((scope) => ({
+    scope,
+    bindings: [
+      {
+        id: `${scope}.editor.insertNewline`,
+        chords: COMPOSER_KEY_CHORDS.insertNewline,
+        run: whileFocused(insertNewlineAtCaret),
+      },
+      {
+        id: `${scope}.editor.caretPreviousWord`,
+        chords: COMPOSER_KEY_CHORDS.caretPreviousWord,
+        run: whileFocused(caretPreviousWord),
+      },
+      {
+        id: `${scope}.editor.caretNextWord`,
+        chords: COMPOSER_KEY_CHORDS.caretNextWord,
+        run: whileFocused(caretNextWord),
+      },
+      {
+        id: `${scope}.editor.deletePreviousWord`,
+        chords: COMPOSER_KEY_CHORDS.deletePreviousWord,
+        run: whileFocused(deletePreviousWord),
+      },
+      {
+        id: `${scope}.editor.deleteNextChar`,
+        chords: COMPOSER_KEY_CHORDS.deleteNextChar,
+        run: whileFocused(deleteNextChar),
+      },
+      {
+        id: `${scope}.editor.caretToStart`,
+        chords: COMPOSER_KEY_CHORDS.caretToStart,
+        run: whileFocused(caretToStart),
+      },
+      {
+        id: `${scope}.editor.caretToEnd`,
+        chords: COMPOSER_KEY_CHORDS.caretToEnd,
+        run: whileFocused(caretToEnd),
+      },
+      {
+        id: `${scope}.editor.pasteImageMac`,
+        chords: COMPOSER_KEY_CHORDS.pasteImageMac,
+        run: () => {
+          if (!focusRef.current) return false;
+          return pasteImageMac();
+        },
+      },
+      {
+        id: `${scope}.editor.pasteImage`,
+        chords: COMPOSER_KEY_CHORDS.pasteImage,
+        run: whileFocused(insertClipboardImage),
+      },
+      {
+        // Claims Backspace only while the draft is empty; declines otherwise so
+        // the text input still deletes.
+        id: `${scope}.editor.backspaceAtEmpty`,
+        chords: COMPOSER_KEY_CHORDS.backspaceAtEmpty,
+        run: () => {
+          if (!focusRef.current) return false;
+          return backspaceAtEmpty();
+        },
+      },
+    ],
+  }));
+
+  useKeyBindings("composer-input", textEditingTables);
 
   // Bracketed paste is delivered on Ink 7's separate 'paste' channel. Ink ties
   // bracketed paste mode (`\x1b[?2004h`) to having a `usePaste` listener, so
@@ -354,7 +432,7 @@ export function PasteAwareTextInput({
       if (focusedPasteAwareInputCount > 0) {
         return;
       }
-      internal_eventEmitter?.emit("input", text);
+      forwardInputEvent(internalEventEmitter, text);
       return;
     }
     const payload = text;
@@ -524,220 +602,6 @@ export function PasteAwareTextInput({
   }, [setDraft]);
 
   useEffect(() => resetPasteBurst, [resetPasteBurst]);
-
-  // Consolidated raw stdin handler for Option+Arrow navigation and Option+Delete
-  // Uses internal_eventEmitter (Ink's private API) for escape sequences that useInput doesn't parse correctly.
-  // Falls back gracefully if internal_eventEmitter is unavailable (useInput handler above still works for some cases).
-  useEffect(() => {
-    if (!internal_eventEmitter) return undefined;
-
-    const moveCursorToPreviousWord = () => {
-      const newPos = findPreviousWordBoundary(
-        displayValueRef.current,
-        caretOffsetRef.current,
-      );
-      setNudgeCursorOffset(newPos);
-      caretOffsetRef.current = newPos;
-    };
-
-    const moveCursorToNextWord = () => {
-      const newPos = findNextWordBoundary(
-        displayValueRef.current,
-        caretOffsetRef.current,
-      );
-      setNudgeCursorOffset(newPos);
-      caretOffsetRef.current = newPos;
-    };
-
-    const deletePreviousWord = () => {
-      const curPos = caretOffsetRef.current;
-      const wordStart = findPreviousWordBoundary(
-        displayValueRef.current,
-        curPos,
-      );
-      if (wordStart === curPos) return;
-
-      const newDisplay =
-        displayValueRef.current.slice(0, wordStart) +
-        displayValueRef.current.slice(curPos);
-      const resolvedActual = resolvePlaceholders(newDisplay);
-
-      setDraft(newDisplay, resolvedActual);
-      onChangeRef.current(newDisplay);
-      setNudgeCursorOffset(wordStart);
-      caretOffsetRef.current = wordStart;
-    };
-
-    // Forward delete: delete character AFTER cursor
-    const forwardDeleteAtCursor = (cursorPos: number) => {
-      if (cursorPos >= displayValueRef.current.length) return;
-
-      const newDisplay =
-        displayValueRef.current.slice(0, cursorPos) +
-        displayValueRef.current.slice(cursorPos + 1);
-      const resolvedActual = resolvePlaceholders(newDisplay);
-
-      // Update refs synchronously for consecutive operations
-      caretOffsetRef.current = cursorPos;
-
-      setDraft(newDisplay, resolvedActual);
-      onChangeRef.current(newDisplay);
-      // Cursor stays in place, sync it
-      setNudgeCursorOffset(cursorPos);
-    };
-
-    const insertNewlineAtCursor = () => {
-      const at = Math.max(
-        0,
-        Math.min(caretOffsetRef.current, displayValueRef.current.length),
-      );
-
-      const newValue =
-        displayValueRef.current.slice(0, at) +
-        "\n" +
-        displayValueRef.current.slice(at);
-
-      setDraft(newValue, newValue);
-      onChangeRef.current(newValue);
-
-      const nextCaret = at + 1;
-      setNudgeCursorOffset(nextCaret);
-      caretOffsetRef.current = nextCaret;
-    };
-
-    // Move cursor to beginning of input (Home key)
-    const moveCursorToStart = () => {
-      setNudgeCursorOffset(0);
-      caretOffsetRef.current = 0;
-    };
-
-    // Move cursor to end of input (End key)
-    const moveCursorToEnd = () => {
-      const endPos = displayValueRef.current.length;
-      setNudgeCursorOffset(endPos);
-      caretOffsetRef.current = endPos;
-    };
-
-    const handleRawInput = (payload: unknown) => {
-      if (!focusRef.current) return;
-
-      // Extract sequence from payload (may be string or object with sequence property)
-      let sequence: string | null = null;
-      if (typeof payload === "string") {
-        sequence = payload;
-      } else if (
-        payload &&
-        typeof payload === "object" &&
-        typeof (payload as { sequence?: unknown }).sequence === "string"
-      ) {
-        sequence = (payload as { sequence?: string }).sequence ?? null;
-      }
-      if (!sequence) return;
-
-      // Optional debug logging for raw input bytes
-      if (process.env.HARUYUKI_DEBUG_INPUT === "1") {
-        const debugHex = [...sequence]
-          .map((c) => `0x${c.charCodeAt(0).toString(16).padStart(2, "0")}`)
-          .join(" ");
-        // eslint-disable-next-line no-console
-        console.error(
-          `[debug:raw-input] len=${sequence.length} hex: ${debugHex}`,
-        );
-      }
-
-      // Option+Enter (Alt+Enter): ESC + carriage return
-      // On macOS with "Option as Meta" enabled, this sends \x1b\r
-      // Also check for \x1b\n (ESC + newline) for compatibility
-      if (sequence === "\x1b\r" || sequence === "\x1b\n") {
-        insertNewlineAtCursor();
-        return;
-      }
-
-      // VS Code/Cursor terminal keybinding style:
-      // Often configured to send a literal "\\r" sequence for Shift+Enter.
-      // Treat it as newline.
-      if (sequence === "\\r") {
-        insertNewlineAtCursor();
-        return;
-      }
-
-      // CSI u modifier+Enter (ESC[13;Nu) is now handled by the CSI u fallback
-      // in use-input.js, which parses it as return + shift/ctrl/meta flags.
-      // The useInput handler at line 186 then handles the newline insertion.
-
-      // Note: Arrow keys with modifiers are now handled natively by parseKeypress
-      // since we use kitty protocol flag 1 only (no event types).
-      // With flag 1, arrows come as ESC[1;modifierD which parseKeypress recognizes.
-      // Previously we handled ESC[1;modifier:eventD format (with flag 7) here.
-
-      // Home key: ESC[H (standard) or ESC[1~ (VT100/xterm) or ESCOH (xterm)
-      if (
-        sequence === "\x1b[H" ||
-        sequence === "\x1b[1~" ||
-        sequence === "\x1bOH"
-      ) {
-        moveCursorToStart();
-        return;
-      }
-
-      // End key: ESC[F (standard) or ESC[4~ (VT100/xterm) or ESCOF (xterm)
-      if (
-        sequence === "\x1b[F" ||
-        sequence === "\x1b[4~" ||
-        sequence === "\x1bOF"
-      ) {
-        moveCursorToEnd();
-        return;
-      }
-
-      // fn+Delete (forward delete): ESC[3~ - standard ANSI escape sequence
-      // With kitty flag 1, modifiers come as ESC[3;modifier~ (no event type).
-      // Use caretOffsetRef which is updated synchronously via onCursorOffsetChange
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC sequence matching
-      if (sequence === "\x1b[3~" || /^\x1b\[3;\d+~$/.test(sequence)) {
-        // Set timestamp so ink-text-input skips its delete handling
-        globalThis.__haruyukiForwardDeleteTimestamp = Date.now();
-        forwardDeleteAtCursor(caretOffsetRef.current);
-        return;
-      }
-
-      // Option+Delete sequences (check first as they're exact matches)
-      // - iTerm2/some terminals: ESC + DEL (\x1b\x7f)
-      // - Some terminals: ESC + Backspace (\x1b\x08)
-      // - Warp: Ctrl+W (\x17)
-      // Note: macOS Terminal sends plain \x7f (same as regular delete) - no modifier info
-      if (
-        sequence === "\x1b\x7f" ||
-        sequence === "\x1b\x08" ||
-        sequence === "\x1b\b" ||
-        sequence === "\x17"
-      ) {
-        deletePreviousWord();
-        return;
-      }
-
-      // Option+Arrow navigation (only process escape sequences)
-      if (sequence.length <= 32 && sequence.includes("\u001b")) {
-        const parts = sequence.split("\u001b");
-        for (let i = 1; i < parts.length; i++) {
-          const dir = detectOptionWordDirection(`\u001b${parts[i]}`);
-          if (dir === "left") {
-            moveCursorToPreviousWord();
-            return;
-          }
-          if (dir === "right") {
-            moveCursorToNextWord();
-            return;
-          }
-        }
-      }
-    };
-
-    internal_eventEmitter.prependListener("input", handleRawInput);
-    return () => {
-      internal_eventEmitter.removeListener("input", handleRawInput);
-    };
-  }, [internal_eventEmitter, setDraft]);
 
   const handleChange = (newValue: string) => {
     // Bash mode entry: intercept "!" typed on empty input BEFORE updating state

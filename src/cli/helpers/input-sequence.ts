@@ -7,21 +7,23 @@ import type { KeyEvent } from "./input-keys";
  *
  * Why it exists: Ink fans one stdin event out to every `useInput` listener with
  * no stopPropagation, so "one key, one action" can only be *guaranteed* by a
- * listener that runs first (`prependListener`) and can decide not to pass the
- * event on. Ink does not export the parser `useInput` uses
- * (`ink/build/parse-keypress.js` is not in its `exports` map), so the shield
- * recognizes a **deliberately small, sound-by-construction** set:
+ * listener that runs first and can decide not to pass the event on. Ink does not
+ * export the parser `useInput` uses (`ink/build/parse-keypress.js` is not in its
+ * `exports` map), so the shield recognizes a **deliberately small,
+ * sound-by-construction** set:
  *
  * - single-character sequences, whose reading is unambiguous (a control
- *   character below 0x1b is Ctrl+letter, anything printable is itself), and
- * - an exact-match table of the multi-character sequences the app binds.
+ *   character below 0x1b is Ctrl+letter, anything printable is itself),
+ * - an exact-match table of the multi-character sequences the app binds, and
+ * - a short table of terminal/editor workarounds, each carrying its reason.
  *
  * Everything else returns `undefined`, and the caller lets the event travel the
  * ordinary path: Ink parses it and the router's own `useInput` fallback routes
  * it. Incomplete coverage therefore costs nothing (the key still works, it is
  * just not shielded from legacy handlers); what matters is that the shield never
- * claims a sequence it read *differently* from Ink. `input-sequence.test.tsx`
- * pins that against real `useInput` output.
+ * claims a sequence it read *differently* from Ink. The first two tables are
+ * pinned against real `useInput` output, and the third is checked to be
+ * disjoint from them, in `input-sequence.equivalence.test.tsx`.
  *
  * The single-character rule is also the seed of the raw layer the mouse
  * milestone needs, where the question is the same one: is this raw input a key
@@ -74,6 +76,49 @@ const EXACT_SEQUENCES: ReadonlyMap<string, SequenceShape> = new Map([
   [`${ESC}b`, { input: "b", key: { meta: true } }],
   [`${ESC}f`, { input: "f", key: { meta: true } }],
 ]);
+
+/**
+ * Sequences the fork already treated as a key, which Ink reads differently (or
+ * not at all). They are listed apart from `EXACT_SEQUENCES` precisely because
+ * they are **not** Ink-equivalent: each is a terminal or editor configuration
+ * that sends something else for a key, carried over from the raw stdin handler
+ * this table replaces. The reason is part of the entry so the list cannot grow
+ * silently.
+ */
+const TERMINAL_WORKAROUNDS: ReadonlyMap<
+  string,
+  { input: string; key: Partial<Key>; reason: string }
+> = new Map([
+  [
+    `${ESC}\n`,
+    {
+      input: "\r",
+      key: { return: true, meta: true },
+      reason:
+        "some terminals send ESC LF for Option+Enter; Ink reads it as an unnamed sequence",
+    },
+  ],
+  [
+    "\\r",
+    {
+      input: "\r",
+      key: { return: true, meta: true },
+      reason:
+        'VS Code/Cursor keybindings are commonly configured to send a literal "\\r" for Shift+Enter',
+    },
+  ],
+]);
+
+/** The workaround sequences and why each exists, for tests and diagnostics. */
+export function terminalWorkaroundSequences(): {
+  sequence: string;
+  reason: string;
+}[] {
+  return [...TERMINAL_WORKAROUNDS.entries()].map(([sequence, entry]) => ({
+    sequence,
+    reason: entry.reason,
+  }));
+}
 
 /**
  * A single character, read the way Ink reads it.
@@ -133,6 +178,8 @@ export function keyEventFrom(input: string, key?: Partial<Key>): KeyEvent {
 export function shieldKeyEvent(raw: string): KeyEvent | undefined {
   const exact = EXACT_SEQUENCES.get(raw);
   if (exact) return keyEventFrom(exact.input, exact.key);
+  const workaround = TERMINAL_WORKAROUNDS.get(raw);
+  if (workaround) return keyEventFrom(workaround.input, workaround.key);
   if (raw.length !== 1) return undefined;
   const shape = singleCharacterShape(raw);
   return shape ? keyEventFrom(shape.input, shape.key) : undefined;
