@@ -1,6 +1,5 @@
 import { Box, useInput } from "ink";
 import Link from "ink-link";
-import RawTextInput from "ink-text-input";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { getCurrentAgentId } from "@/agent/context";
 import {
@@ -16,18 +15,11 @@ import { settingsManager } from "@/settings-manager";
 import { colors } from "./colors";
 import { PasteAwareTextInput } from "./PasteAwareTextInput";
 import { Text } from "./Text";
-
-type TextInputProps = {
-  value: string;
-  onChange: (value: string) => void;
-  onSubmit?: (value: string) => void;
-  placeholder?: string;
-  focus?: boolean;
-  mask?: string;
-};
-
-const TextInput =
-  RawTextInput as unknown as React.ComponentType<TextInputProps>;
+// The owned input, not `ink-text-input`: that package left the dependency list in
+// the Ink 7 upgrade, and this was the single import site it was missed at — a
+// fresh `bun install --frozen-lockfile` then fails to resolve it. `mask` covers
+// the only thing this flow needed from it.
+import { TextInput } from "./TextInput";
 
 type Step =
   | "checking"
