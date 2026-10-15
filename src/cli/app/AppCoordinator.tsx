@@ -1543,13 +1543,10 @@ export function App({
   // Strict lock to ensure dequeue submit path is at-most-once while onSubmit is in flight.
   const dequeueInFlightRef = useRef(false);
 
-  // Queue defer mode: when 'defer', queued messages only fire on end_turn stop reason.
-  // Defer mode is only meaningful in API backend mode (local backend fires end_turn
-  // between each sequential tool call, making defer indistinguishable from immediate).
-  const deferModeSupported = !isLocalAgentId(agentId);
-  // When 'immediate' (default), they fire on any turn end. It is not a state: its
-  // only writer was Ctrl+D's hold/release toggle, which never applied on a local
-  // agent and whose key is now the viewport's "jump to newest".
+  // Queue defer mode was removed with Ctrl+D: the only writer of this flag was that
+  // key's hold/release toggle, it never applied on a local agent, and its statusline
+  // text is gone. Queued messages fire on any turn end ("immediate"). Restoring defer
+  // means restoring a writer *and* a visible mode, not just this flag.
   const queueMode = "immediate" as const;
   // Ref mirror of queueMode so useConversationLoop can read it without stale closures.
   const queueModeRef = useRef<"immediate" | "defer">("immediate");
@@ -4613,7 +4610,6 @@ export function App({
       lastShellToolCallId={lastShellToolCallId}
       handleCtrlO={handleCtrlO}
       queueMode={queueMode}
-      deferModeSupported={deferModeSupported}
       emittedIdsRef={emittedIdsRef}
       feedbackPrefill={feedbackPrefill}
       showInspirationalPromptHints={showInspirationalPromptHints}

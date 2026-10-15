@@ -144,7 +144,6 @@ export type AppViewProps = {
   lastShellToolCallId: string | null;
   handleCtrlO: () => void;
   queueMode: "immediate" | "defer";
-  deferModeSupported: boolean;
 
   feedbackPrefill: string;
   showInspirationalPromptHints: boolean;
@@ -351,7 +350,6 @@ export function AppView(props: AppViewRenderProps) {
     emittedIdsRef,
     handleCtrlO,
     queueMode,
-    deferModeSupported,
     feedbackPrefill,
     showInspirationalPromptHints,
     onEscapeCommandCancel,
@@ -505,7 +503,6 @@ export function AppView(props: AppViewRenderProps) {
                 onInterrupt={handleInterrupt}
                 onCtrlO={handleCtrlO}
                 queueMode={queueMode}
-                deferModeSupported={deferModeSupported}
                 interruptRequested={interruptRequested}
                 agentId={agentId}
                 agentName={agentName}

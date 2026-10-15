@@ -14,6 +14,8 @@ import {
   routeKeyEvent,
 } from "@/cli/helpers/input-router";
 import { keyEventFrom } from "@/cli/helpers/input-sequence";
+import { LEADER_KEY_CHORDS } from "@/cli/helpers/keymap";
+import { armLeader, isLeaderArmed, resetLeader } from "@/cli/helpers/leader";
 
 const CTRL_O = "\u000F";
 
@@ -64,6 +66,121 @@ const shells = (run: () => boolean | void): KeyBindingTable[] => [
 afterEach(() => {
   resetBindingOwners();
   resetInputScopes();
+  resetLeader();
+});
+
+/** The composer's leader table as the app builds it: prefix plus one entry. */
+function leaderTables(runs: string[]): KeyBindingTable[] {
+  return [
+    {
+      scope: "app",
+      bindings: [
+        {
+          id: "leader.activate",
+          chords: LEADER_KEY_CHORDS.activate,
+          run: () => {
+            runs.push("arm");
+            armLeader();
+          },
+        },
+        {
+          id: "leader.help",
+          leader: true,
+          chords: LEADER_KEY_CHORDS.help,
+          run: () => {
+            runs.push("help");
+          },
+        },
+        // An ordinary app chord, to prove a second key does not reach it through
+        // the leader path and that the prefix does not shadow it either.
+        {
+          id: "transcript.shell",
+          chords: [{ key: "o", ctrl: true }],
+          run: () => {
+            runs.push("shell");
+          },
+        },
+      ],
+    },
+  ];
+}
+
+describe("the leader prefix in the router", () => {
+  test("the second key reaches a leader entry and is swallowed", () => {
+    const runs: string[] = [];
+    const { emitter, legacy, uninstall } = harness(leaderTables(runs));
+    emitter.emit("input", "\u0018"); // Ctrl+X
+    expect(runs).toEqual(["arm"]);
+    expect(isLeaderArmed()).toBe(true);
+    emitter.emit("input", "?"); // the leader's help entry
+    expect(runs).toEqual(["arm", "help"]);
+    expect(legacy).toEqual([]);
+    // One-shot: the entry consumed the prefix.
+    expect(isLeaderArmed()).toBe(false);
+    uninstall();
+  });
+
+  test("a key the prefix does not know disarms it and continues normally", () => {
+    const runs: string[] = [];
+    const { emitter, legacy, uninstall } = harness(leaderTables(runs));
+    emitter.emit("input", "\u0018");
+    emitter.emit("input", "\u000F"); // Ctrl+O: an ordinary app chord
+    expect(runs).toEqual(["arm", "shell"]);
+    expect(isLeaderArmed()).toBe(false);
+    // The ordinary binding swallowed it, exactly as it would have without a
+    // leader in front.
+    expect(legacy).toEqual([]);
+    uninstall();
+  });
+
+  test("an unknown plain letter is typed, not eaten by the prefix", () => {
+    const runs: string[] = [];
+    const { emitter, legacy, uninstall } = harness(leaderTables(runs));
+    emitter.emit("input", "\u0018");
+    emitter.emit("input", "z");
+    expect(runs).toEqual(["arm"]);
+    expect(isLeaderArmed()).toBe(false);
+    // No leader entry, no app binding: it travels to the text input.
+    expect(legacy).toEqual(["z"]);
+    uninstall();
+  });
+
+  test("Escape leaves the prefix instead of interrupting", () => {
+    const runs: string[] = [];
+    const interrupted: string[] = [];
+    const { emitter, legacy, uninstall } = harness([
+      ...leaderTables(runs),
+      {
+        scope: "app",
+        bindings: [
+          {
+            id: "app.interrupt",
+            chords: [{ key: "escape" }],
+            run: () => {
+              interrupted.push("interrupt");
+            },
+          },
+        ],
+      },
+    ]);
+    emitter.emit("input", "\u0018");
+    emitter.emit("input", "\u001b"); // Escape
+    expect(interrupted).toEqual([]);
+    expect(isLeaderArmed()).toBe(false);
+    expect(runs).toEqual(["arm"]);
+    expect(legacy).toEqual([]);
+    uninstall();
+  });
+
+  test("a leader entry is unreachable while the prefix is not armed", () => {
+    const runs: string[] = [];
+    const { emitter, legacy, uninstall } = harness(leaderTables(runs));
+    emitter.emit("input", "?");
+    expect(runs).toEqual([]);
+    // Nothing bound it, so `?` is typing.
+    expect(legacy).toEqual(["?"]);
+    uninstall();
+  });
 });
 
 describe("input router", () => {

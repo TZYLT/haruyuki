@@ -19,6 +19,8 @@ function handlers(
     clearOrExit: () => {},
     cycleReasoningEffort: () => {},
     cyclePermissionMode: () => {},
+    armLeader: () => {},
+    leaderHelp: () => {},
     ...overrides,
   };
 }
@@ -51,10 +53,27 @@ describe("composerKeyTables", () => {
       "app.clearOrExit",
       "app.cycleReasoningEffort",
       "app.cyclePermissionMode",
+      "leader.activate",
+      "leader.help",
     ]);
     expect(tables[0]?.bindings[0]?.chords).toEqual(
       APP_KEY_CHORDS.toggleShellOutput,
     );
+  });
+
+  test("marks the leader's second keys so only the prefix reaches them", () => {
+    const tables = composerKeyTables(handlers(), {
+      enabled: true,
+      profileConfirmPending: false,
+    });
+    const bindings = tables[0]?.bindings ?? [];
+    const leaderEntries = bindings.filter((binding) => binding.leader === true);
+    expect(leaderEntries.map((binding) => binding.id)).toEqual(["leader.help"]);
+    // The prefix itself is an ordinary app chord: it must be reachable without
+    // being armed, and it must not be marked as one of its own second keys.
+    expect(
+      bindings.find((binding) => binding.id === "leader.activate")?.leader,
+    ).toBeUndefined();
   });
 
   test("a pending profile confirmation takes any key, in the modal scope", () => {

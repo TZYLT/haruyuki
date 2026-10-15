@@ -137,9 +137,27 @@ export const RESERVED_TEXT_CHORDS: KeyChordList = [
   { key: "y", ctrl: true },
 ];
 
+/**
+ * The leader prefix and the keys behind it.
+ *
+ * `activate` is an ordinary app chord; `help` and anything added later are
+ * *second* keys — reachable only while the prefix is armed, so a plain letter
+ * costs typing nothing (`KeyBinding.leader`). M3-3 ships the mechanism with one
+ * entry on purpose: the table's contents are the command palette's job (M6),
+ * which must read the command registry rather than a list hard-coded here.
+ *
+ * `Ctrl+X` is free (see `RESERVED_FUTURE_CHORDS`), mnemonic for "eXecute", and
+ * the same shape as Emacs' `C-x`, tmux's `Ctrl+B`, and VS Code's `Ctrl+K`.
+ */
+export const LEADER_KEY_CHORDS = {
+  /** Arm the leader prefix: the next key is a command. */
+  activate: [{ key: "x", ctrl: true }],
+  /** List what the prefix can do. */
+  help: [{ key: "?" }],
+} as const satisfies Record<string, KeyChordList>;
+
 /** Reserved by later milestones so no M3 binding can claim them by accident. */
 export const RESERVED_FUTURE_CHORDS: KeyChordList = [
-  { key: "x", ctrl: true }, // leader key (M3-3)
   { key: "p", ctrl: true }, // command palette (M6)
 ];
 
@@ -149,6 +167,7 @@ export function registeredKeyChords(): { id: string; chord: KeyChord }[] {
     app: APP_KEY_CHORDS,
     composer: COMPOSER_KEY_CHORDS,
     system: SYSTEM_KEY_CHORDS,
+    leader: LEADER_KEY_CHORDS,
   };
   const chords: { id: string; chord: KeyChord }[] = [];
   for (const [table, bindings] of Object.entries(tables)) {

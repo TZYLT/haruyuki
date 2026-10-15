@@ -33,6 +33,7 @@ import {
   formatModeLabel,
 } from "@/cli/helpers/format";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
+import { armLeader } from "@/cli/helpers/leader";
 import {
   type ExecutionPhase,
   getPhaseVisual,
@@ -63,6 +64,7 @@ import type { QueuedMessage } from "@/utils/message-queue-bridge";
 import { colors } from "./colors";
 import { composerKeyTables } from "./composer-key-tables";
 import { InputAssist } from "./InputAssist";
+import { LeaderHint } from "./LeaderHint";
 import { ModPanelRow, renderModPanelLines } from "./ModPanelRow";
 import { PasteAwareTextInput } from "./PasteAwareTextInput";
 import { QueuedMessages } from "./QueuedMessages";
@@ -139,16 +141,7 @@ type StatuslineTransientHint =
       modeGlyph?: string | null;
       showExitHint: boolean;
     }
-  | {
-      type: "queued-message-hint";
-      queueMode: "immediate" | "defer";
-      deferModeSupported: boolean;
-    }
-  | {
-      type: "queue-mode-changed";
-      queueMode: "immediate" | "defer";
-      deferModeSupported: boolean;
-    };
+  | { type: "queued-message-hint" };
 
 function isStatuslineTransientHintRelevant(
   hint: StatuslineTransientHint,
@@ -161,7 +154,6 @@ function isStatuslineTransientHintRelevant(
     case "bash-mode":
       return state.isBashMode;
     case "queued-message-hint":
-    case "queue-mode-changed":
       return state.queuedUserMessageCount > 0;
     case "message":
     case "permission-mode":
@@ -234,42 +226,8 @@ function StatuslineModeHint({
   );
 }
 
-function StatuslineQueuedMessageHint({
-  queueMode,
-  deferModeSupported,
-}: {
-  queueMode: "immediate" | "defer";
-  deferModeSupported: boolean;
-}) {
-  return (
-    <Text dimColor>
-      {deferModeSupported
-        ? queueMode === "defer"
-          ? "press ↑ to edit queued message · ctrl+d to release queue"
-          : "press ↑ to edit queued message · ctrl+d to hold queue until done"
-        : "press ↑ to edit queued message"}
-    </Text>
-  );
-}
-
-function StatuslineQueueModeChangedHint({
-  queueMode,
-  deferModeSupported,
-}: {
-  queueMode: "immediate" | "defer";
-  deferModeSupported: boolean;
-}) {
-  if (!deferModeSupported) {
-    return null;
-  }
-
-  return (
-    <Text dimColor>
-      {queueMode === "defer"
-        ? "queue held until done · ctrl+d to release"
-        : "queue sends as soon as possible · ctrl+d to hold"}
-    </Text>
-  );
+function StatuslineQueuedMessageHint() {
+  return <Text dimColor>press ↑ to edit queued message</Text>;
 }
 
 function StatuslineTransientHintView({
@@ -296,19 +254,7 @@ function StatuslineTransientHintView({
         />
       );
     case "queued-message-hint":
-      return (
-        <StatuslineQueuedMessageHint
-          queueMode={hint.queueMode}
-          deferModeSupported={hint.deferModeSupported}
-        />
-      );
-    case "queue-mode-changed":
-      return (
-        <StatuslineQueueModeChangedHint
-          queueMode={hint.queueMode}
-          deferModeSupported={hint.deferModeSupported}
-        />
-      );
+      return <StatuslineQueuedMessageHint />;
   }
 }
 
@@ -829,7 +775,6 @@ export function Input({
   onInterrupt,
   onCtrlO,
   queueMode = "immediate",
-  deferModeSupported = false,
   interruptRequested = false,
   agentId,
   agentName,
@@ -876,7 +821,6 @@ export function Input({
   onInterrupt?: () => void;
   onCtrlO?: () => void;
   queueMode?: "immediate" | "defer";
-  deferModeSupported?: boolean;
   interruptRequested?: boolean;
   agentId?: string;
   agentName?: string | null;
@@ -1394,6 +1338,16 @@ export function Input({
           return true;
         },
         cyclePermissionMode: handleCyclePermissionModeKey,
+        // The leader prefix is an app chord; its second keys are marked `leader`
+        // in the table and only reachable while the prefix is armed.
+        armLeader: () => {
+          armLeader();
+        },
+        leaderHelp: () => {
+          // Re-arm with the list open, so the user can read it and then press one
+          // of the keys in it.
+          armLeader({ help: true });
+        },
       },
       {
         enabled: interactionEnabled,
@@ -1783,41 +1737,9 @@ export function Input({
     previousQueuedUserMessageCountRef.current = queuedUserMessageCount;
 
     if (previousCount === 0 && queuedUserMessageCount > 0) {
-      showStatuslineTransientHint({
-        type: "queued-message-hint",
-        queueMode,
-        deferModeSupported,
-      });
+      showStatuslineTransientHint({ type: "queued-message-hint" });
     }
-  }, [
-    queuedUserMessageCount,
-    queueMode,
-    deferModeSupported,
-    showStatuslineTransientHint,
-  ]);
-
-  const previousQueueModeRef = useRef(queueMode);
-  useEffect(() => {
-    const previousMode = previousQueueModeRef.current;
-    previousQueueModeRef.current = queueMode;
-
-    if (
-      previousMode !== queueMode &&
-      queuedUserMessageCount > 0 &&
-      deferModeSupported
-    ) {
-      showStatuslineTransientHint({
-        type: "queue-mode-changed",
-        queueMode,
-        deferModeSupported,
-      });
-    }
-  }, [
-    queueMode,
-    queuedUserMessageCount,
-    deferModeSupported,
-    showStatuslineTransientHint,
-  ]);
+  }, [queuedUserMessageCount, showStatuslineTransientHint]);
 
   const {
     panelsWithDefaultProductStatus,
@@ -1958,6 +1880,9 @@ export function Input({
                 modCommands={modAdapter.registry?.commands}
               />
             )}
+
+            {/* The leader prefix's own line: renders nothing unless it is armed. */}
+            {!suppressDividers && <LeaderHint />}
 
             {!suppressDividers && (
               <StatuslineSlot

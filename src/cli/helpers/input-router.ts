@@ -1,8 +1,9 @@
 import type { EventEmitter } from "node:events";
 import { consultedInputScopes } from "./focus-ledger";
 import type { KeyBinding, KeyBindingTable, KeyEvent } from "./input-keys";
-import { matchingBindings } from "./input-keys";
+import { describeChord, matchingBindings } from "./input-keys";
 import { shieldKeyEvent } from "./input-sequence";
+import { disarmLeader, isLeaderArmed } from "./leader";
 
 /**
  * The app's single input router.
@@ -76,14 +77,47 @@ export function resetBindingOwners(): void {
   fallbackConsumed = false;
 }
 
-function bindingsForScope(scope: KeyBindingTable["scope"]): KeyBinding[] {
+function bindingsForScope(
+  scope: KeyBindingTable["scope"],
+  options?: { leaderOnly?: boolean },
+): KeyBinding[] {
   const bindings: KeyBinding[] = [];
   for (const source of bindingSources.values()) {
     for (const table of source()) {
-      if (table.scope === scope) bindings.push(...table.bindings);
+      if (table.scope !== scope) continue;
+      for (const binding of table.bindings) {
+        if (options?.leaderOnly && binding.leader !== true) continue;
+        if (!options?.leaderOnly && binding.leader === true) continue;
+        bindings.push(binding);
+      }
     }
   }
   return bindings;
+}
+
+/**
+ * The leader entries that are currently registered, for the which-key hint.
+ *
+ * Read from the bindings rather than declared next to the hint: an entry added
+ * where its behaviour lives shows up here on its own, which is the property the
+ * command palette (M6) needs when it fills this table from the command registry.
+ */
+export function leaderEntries(): {
+  id: string;
+  keys: string[];
+  label?: string;
+}[] {
+  const entries: { id: string; keys: string[]; label?: string }[] = [];
+  for (const scope of consultedInputScopes()) {
+    for (const binding of bindingsForScope(scope, { leaderOnly: true })) {
+      entries.push({
+        id: binding.id,
+        keys: (binding.chords ?? []).map(describeChord),
+        label: binding.label,
+      });
+    }
+  }
+  return entries;
 }
 
 /**
@@ -105,10 +139,34 @@ export function routeFallbackEvent(event: KeyEvent): void {
  *
  * Called from both ends: the raw layer (for sequences it read itself) and the
  * `useInput` fallback (for everything Ink parsed).
+ *
+ * An armed leader prefix takes the key first, and takes it *instead of* the
+ * ordinary tables rather than in addition to them: the second key of the prefix
+ * has no meaning on its own (`?` would otherwise be typing). A key the prefix
+ * does not know disarms it and then continues down the normal path, so a stray
+ * `Ctrl+X` costs the next keystroke nothing.
  */
 export function routeKeyEvent(event: KeyEvent): boolean {
+  if (isLeaderArmed()) {
+    if (event.key.escape === true) {
+      // Escape leaves the prefix and stops there: the user asked to get out, not
+      // to interrupt the turn that is running behind it.
+      disarmLeader();
+      return true;
+    }
+    const consumed = routeScopes(event, { leaderOnly: true });
+    disarmLeader();
+    if (consumed) return true;
+  }
+  return routeScopes(event);
+}
+
+function routeScopes(
+  event: KeyEvent,
+  options?: { leaderOnly?: boolean },
+): boolean {
   for (const scope of consultedInputScopes()) {
-    const bindings = bindingsForScope(scope);
+    const bindings = bindingsForScope(scope, options);
     if (bindings.length === 0) continue;
     for (const binding of matchingBindings(bindings, event)) {
       if (binding.run(event) === false) continue;

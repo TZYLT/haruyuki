@@ -1,5 +1,5 @@
 import type { KeyBindingTable } from "@/cli/helpers/input-keys";
-import { APP_KEY_CHORDS } from "@/cli/helpers/keymap";
+import { APP_KEY_CHORDS, LEADER_KEY_CHORDS } from "@/cli/helpers/keymap";
 
 /**
  * The keys the composer owns, as data.
@@ -9,13 +9,16 @@ import { APP_KEY_CHORDS } from "@/cli/helpers/keymap";
  * than declared statically — but "which keys does the composer have" is still
  * answerable without reading the handler bodies.
  *
- * Two scopes are involved, and the difference is the point:
+ * Three scopes are involved, and the difference is the point:
  *
  * - While a profile confirmation is pending the confirmation takes **any** key
  *   (Enter confirms, anything else cancels) and nothing else may run: that is the
- *   `modal` scope, with a catch-all.
+ *   `modal` scope with a catch-all.
  * - Every other composer key is `app` scope, which the focus ledger stands down
  *   whenever a selector, dialog route, or approval owns the keyboard.
+ * - The leader prefix arms `app` scope and its entries are marked `leader: true`,
+ *   so the router only reaches them while the prefix is armed. A second key with
+ *   no meaning on its own (`?`) is typing the rest of the time.
  */
 
 export interface ComposerKeyHandlers {
@@ -37,6 +40,10 @@ export interface ComposerKeyHandlers {
   cycleReasoningEffort: () => boolean | void;
   /** Cycle the permission mode. */
   cyclePermissionMode: () => void;
+  /** Arm the leader prefix (Ctrl+X): the next key is a leader command. */
+  armLeader: () => void;
+  /** The leader's own help entry: list what the prefix can do. */
+  leaderHelp: () => void;
 }
 
 export function composerKeyTables(
@@ -100,6 +107,18 @@ export function composerKeyTables(
         id: "app.cyclePermissionMode",
         chords: APP_KEY_CHORDS.cyclePermissionMode,
         run: handlers.cyclePermissionMode,
+      },
+      {
+        id: "leader.activate",
+        chords: LEADER_KEY_CHORDS.activate,
+        run: handlers.armLeader,
+      },
+      {
+        id: "leader.help",
+        leader: true,
+        chords: LEADER_KEY_CHORDS.help,
+        label: "列出可用键",
+        run: handlers.leaderHelp,
       },
     ],
   });

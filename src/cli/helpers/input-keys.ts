@@ -91,6 +91,15 @@ export interface KeyBinding {
    * binding can claim a key only in the state where it applies.
    */
   run: (event: KeyEvent) => boolean | void;
+  /**
+   * Reachable only as the second key of the leader prefix, and *only* while the
+   * prefix is armed. A plain letter is normally the text editor's; behind the
+   * leader it is a command, which is the whole point of the prefix — one more
+   * usable key per entry, without taking anything away from typing.
+   */
+  leader?: boolean;
+  /** What the leader hint and (later) the command palette show for this binding. */
+  label?: string;
 }
 
 /** A binding list owned by one component, inside one scope. */
