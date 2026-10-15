@@ -25,8 +25,10 @@ file to change.
   decided stubs until they become current.
 - Keep `Input` mounted after startup. Use its visibility, enabled, and collapse
   props while approvals or overlays own focus so draft and terminal state survive.
-- Bracketed paste and keyboard-protocol handling live in `PasteAwareTextInput`
-  and the vendored Ink patches. Do not add competing raw stdin listeners.
+- Bracketed paste and keyboard-protocol handling live in `PasteAwareTextInput`,
+  which uses Ink's `usePaste` hook and the `kittyKeyboard` render option. The
+  vendored Ink string patches were retired in the Ink 7 upgrade. Do not add
+  competing raw stdin listeners.
 
 ## Verification
 

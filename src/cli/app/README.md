@@ -7,6 +7,12 @@ file first.
 - `App.tsx`: local entrypoint that re-exports the coordinator.
 - `AppCoordinator.tsx`: Ink state, effects, overlay wiring, and render tree.
 - `AppView.tsx`: render-only Ink tree for the coordinator.
+- `shell/AppShell.tsx`: the single shell selector (append-style vs full-screen),
+  resolved once per mount so a mode flip never remounts the transcript.
+- `shell/LegacyShell.tsx`: append-style shell (terminal-title writer + AppView).
+- `shell/V2Shell.tsx`: full-screen shell; delegates to the legacy shell until the
+  alt-screen viewport lands.
+- `shell/types.ts`: the `AppShellProps` projection shared by every shell.
 - `useSubmitHandler.ts`: slash-command and user-submit router.
 - `useConversationLoop.ts`: streaming turn loop, retry/recovery, tool execution,
   and reflection auto-launch.
