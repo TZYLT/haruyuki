@@ -43,6 +43,10 @@ import {
   truncateEnd,
 } from "@/cli/helpers/text-layout";
 import { getRandomThinkingTip } from "@/cli/helpers/thinking-messages";
+import {
+  useInputScopeClaim,
+  useKeyBindings,
+} from "@/cli/hooks/use-input-router";
 import { useProductStatusPanels } from "@/cli/hooks/use-product-status-panels";
 import { useShimmerAnimation } from "@/cli/hooks/use-shimmer-animation";
 import { useTokenSmoothing } from "@/cli/hooks/use-token-smoothing";
@@ -57,6 +61,7 @@ import { permissionMode } from "@/permissions/mode";
 import { OPENAI_CODEX_PROVIDER_NAME } from "@/providers/openai-codex-provider";
 import type { QueuedMessage } from "@/utils/message-queue-bridge";
 import { colors } from "./colors";
+import { composerKeyTables } from "./composer-key-tables";
 import { InputAssist } from "./InputAssist";
 import { ModPanelRow, renderModPanelLines } from "./ModPanelRow";
 import { PasteAwareTextInput } from "./PasteAwareTextInput";
@@ -68,7 +73,10 @@ import {
 } from "./spinners/animations.js";
 import { StreamingStatusSpinner } from "./spinners/StreamingStatusSpinner.js";
 import { Text } from "./Text";
-import { handleTranscriptDisplayShortcut } from "./transcript-display-state";
+import {
+  toggleSystemReminderDisplay,
+  toggleThinkingDisplay,
+} from "./transcript-display-state";
 
 // Window for double-escape to clear input
 const ESC_CLEAR_WINDOW_MS = 2500;
@@ -1233,197 +1241,183 @@ export function Input({
     }
   }, [interactionEnabled]);
 
-  const interactionEnabledRef = useRef(interactionEnabled);
-  useEffect(() => {
-    interactionEnabledRef.current = interactionEnabled;
-  }, [interactionEnabled]);
-
   const onEscapeCommandCancelRef = useRef(onEscapeCommandCancel);
   useEffect(() => {
     onEscapeCommandCancelRef.current = onEscapeCommandCancel;
   }, [onEscapeCommandCancel]);
 
-  useEffect(() => {
-    const handleRawInput = (data: Buffer | string) => {
-      if (!interactionEnabledRef.current) return;
-      if (data.toString("utf8") !== "\u001b") return;
-      onEscapeCommandCancelRef.current?.();
-    };
-
-    stdin.on("data", handleRawInput);
-    return () => {
-      stdin.off("data", handleRawInput);
-    };
-  }, []);
+  // Escape used to be handled twice here: a raw `process.stdin` "data" listener
+  // cancelled an active connect operation for a lone ESC, and the escape binding
+  // below cancelled it again. The router owns that key now.
 
   // The bar only asks whether this is a Cloud server; never re-derive the
   // env/settings fallback chain here.
   const serverUrl = getServerUrl();
 
-  // Handle profile confirmation: Enter confirms, any other key cancels
-  // When onEscapeCancel is provided, TextInput is unfocused so we handle all keys here
-  useInput((_input, key) => {
-    if (!interactionEnabled) return;
-    if (!onEscapeCancel) return;
+  // Handle escape key for interrupt (when streaming) or double-escape-to-clear (when not)
+  const handleEscapeKey = useCallback(() => {
+    // Debug logging for escape key detection
+    if (process.env.HARUYUKI_DEBUG_KEYS === "1") {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[debug:InputRich:escape] visible=${visible} streaming=${streaming}`,
+      );
+    }
 
-    // Enter key confirms the action - trigger submit with empty input
-    if (key.return) {
-      onSubmit("");
+    // When bash command running, use Esc to interrupt (LET-7199)
+    if (bashRunning && onBashInterrupt) {
+      onBashInterrupt();
       return;
     }
 
-    // Any other key cancels
-    onEscapeCancel();
-  });
-
-  // Handle escape key for interrupt (when streaming) or double-escape-to-clear (when not)
-  useInput((_input, key) => {
-    if (!interactionEnabled) return;
-    // Debug logging for escape key detection
-    if (process.env.HARUYUKI_DEBUG_KEYS === "1" && key.escape) {
-      // eslint-disable-next-line no-console
-      console.error(
-        `[debug:InputRich:escape] escape=${key.escape} visible=${visible} onEscapeCancel=${!!onEscapeCancel} streaming=${streaming}`,
-      );
+    // When agent streaming, use Esc to interrupt
+    if (streaming && onInterrupt && !interruptRequested) {
+      onInterrupt();
+      // Don't load queued messages into input - let the dequeue effect
+      // in App.tsx process them automatically after the interrupt completes.
+      return;
     }
-    // Skip if onEscapeCancel is provided - handled by the confirmation handler above
-    if (onEscapeCancel) return;
 
-    if (key.escape) {
-      // When bash command running, use Esc to interrupt (LET-7199)
-      if (bashRunning && onBashInterrupt) {
-        onBashInterrupt();
-        return;
-      }
+    if (onEscapeCommandCancelRef.current?.()) {
+      return;
+    }
 
-      // When agent streaming, use Esc to interrupt
-      if (streaming && onInterrupt && !interruptRequested) {
-        onInterrupt();
-        // Don't load queued messages into input - let the dequeue effect
-        // in App.tsx process them automatically after the interrupt completes.
-        return;
-      }
-
-      if (onEscapeCommandCancel?.()) {
-        return;
-      }
-
-      // When input is non-empty, use double-escape to clear
-      if (value) {
-        if (escapePressed) {
-          // Second escape - clear input (discard: release dropped placeholders)
-          releaseDiscardedDraftPlaceholders(value, "");
-          setValue("");
+    // When input is non-empty, use double-escape to clear
+    if (value) {
+      if (escapePressed) {
+        // Second escape - clear input (discard: release dropped placeholders)
+        releaseDiscardedDraftPlaceholders(value, "");
+        setValue("");
+        setEscapePressed(false);
+        if (escapeTimerRef.current) clearTimeout(escapeTimerRef.current);
+      } else {
+        // First escape - start timer to allow double-escape to clear
+        setEscapePressed(true);
+        if (escapeTimerRef.current) clearTimeout(escapeTimerRef.current);
+        escapeTimerRef.current = setTimeout(() => {
           setEscapePressed(false);
-          if (escapeTimerRef.current) clearTimeout(escapeTimerRef.current);
-        } else {
-          // First escape - start timer to allow double-escape to clear
-          setEscapePressed(true);
-          if (escapeTimerRef.current) clearTimeout(escapeTimerRef.current);
-          escapeTimerRef.current = setTimeout(() => {
-            setEscapePressed(false);
-          }, ESC_CLEAR_WINDOW_MS);
-        }
+        }, ESC_CLEAR_WINDOW_MS);
       }
     }
-  });
+  }, [
+    bashRunning,
+    escapePressed,
+    interruptRequested,
+    onBashInterrupt,
+    onInterrupt,
+    releaseDiscardedDraftPlaceholders,
+    streaming,
+    value,
+    visible,
+  ]);
 
+  // Handle CTRL-C for double-ctrl-c-to-exit.
+  // In bash mode, CTRL-C wipes input but doesn't exit bash mode.
+  const handleClearOrExitKey = useCallback(() => {
+    // If a bash command is running, Ctrl+C interrupts it (same as Esc)
+    if (bashRunning && onBashInterrupt) {
+      onBashInterrupt();
+      return;
+    }
+
+    if (ctrlCPressed) {
+      // Second CTRL-C - call onExit callback which handles stats and exit
+      if (onExit) onExit();
+    } else {
+      // First CTRL-C - wipe input and start 1-second timer
+      // Note: In bash mode, this clears input but keeps bash mode active
+      // Discard: release placeholders dropped with the wiped input
+      releaseDiscardedDraftPlaceholders(value, "");
+      setValue("");
+      setBashExitArmed(false);
+      setCtrlCPressed(true);
+      if (ctrlCTimerRef.current) clearTimeout(ctrlCTimerRef.current);
+      ctrlCTimerRef.current = setTimeout(() => {
+        setCtrlCPressed(false);
+      }, 1000);
+    }
+  }, [
+    bashRunning,
+    ctrlCPressed,
+    onBashInterrupt,
+    onExit,
+    releaseDiscardedDraftPlaceholders,
+    value,
+  ]);
+
+  // Shift+Tab cycles the permission mode.
+  const handleCyclePermissionModeKey = useCallback(() => {
+    if (process.env.HARUYUKI_DEBUG_KEYS === "1") {
+      // eslint-disable-next-line no-console
+      console.error(`[debug:InputRich] shift+tab visible=${visible}`);
+    }
+
+    const modes: PermissionMode[] = ["unrestricted", "acceptEdits", "standard"];
+    const currentIndex = modes.indexOf(currentMode);
+    const nextIndex = (currentIndex + 1) % modes.length;
+    const nextMode = modes[nextIndex] ?? "unrestricted";
+
+    // Update both singleton and local state
+    permissionMode.setMode(nextMode);
+    setCurrentMode(nextMode);
+
+    // Notify parent of mode change
+    if (onPermissionModeChange) {
+      onPermissionModeChange(nextMode);
+    }
+  }, [currentMode, onPermissionModeChange, visible]);
+
+  // A pending profile confirmation takes any key and must not let app-level
+  // shortcuts fire behind it: that is the `modal` scope.
+  useInputScopeClaim("modal", interactionEnabled && Boolean(onEscapeCancel));
+
+  useKeyBindings(
+    "composer",
+    composerKeyTables(
+      {
+        profileConfirm: () => {
+          onSubmit("");
+        },
+        profileCancel: () => {
+          onEscapeCancel?.();
+        },
+        toggleShellOutput: () => {
+          onCtrlO?.();
+        },
+        toggleSystemReminders: toggleSystemReminderDisplay,
+        toggleThinking: toggleThinkingDisplay,
+        interrupt: handleEscapeKey,
+        clearOrExit: handleClearOrExitKey,
+        // Tab is also the autocomplete's "accept" key; the composer only takes it
+        // when no autocomplete is open and nothing is running.
+        cycleReasoningEffort: () => {
+          if (isAutocompleteActive || streaming) return false;
+          onCycleReasoningEffort?.();
+          return true;
+        },
+        cyclePermissionMode: handleCyclePermissionModeKey,
+      },
+      {
+        enabled: interactionEnabled,
+        profileConfirmPending: Boolean(onEscapeCancel),
+      },
+    ),
+  );
+
+  // Handle CTRL-D to toggle queue defer mode — works even while agent is running
+  // since that's exactly when messages are queued and the toggle is useful.
   useInput((input, key) => {
-    // Handle CTRL-D to toggle queue defer mode — works even while agent is running
-    // since that's exactly when messages are queued and the toggle is useful.
     if (
       input === "d" &&
       key.ctrl &&
       (messageQueue?.filter((m) => m.kind === "user").length ?? 0) > 0
     ) {
       if (onCtrlD) onCtrlD();
-      return;
-    }
-
-    if (!interactionEnabled) return;
-
-    if (input === "o" && key.ctrl) {
-      if (onCtrlO) onCtrlO();
-      return;
-    }
-    if (handleTranscriptDisplayShortcut(input, key)) return;
-    // Handle CTRL-C for double-ctrl-c-to-exit
-    // In bash mode, CTRL-C wipes input but doesn't exit bash mode
-    if (input === "c" && key.ctrl) {
-      // If a bash command is running, Ctrl+C interrupts it (same as Esc)
-      if (bashRunning && onBashInterrupt) {
-        onBashInterrupt();
-        return;
-      }
-
-      if (ctrlCPressed) {
-        // Second CTRL-C - call onExit callback which handles stats and exit
-        if (onExit) onExit();
-      } else {
-        // First CTRL-C - wipe input and start 1-second timer
-        // Note: In bash mode, this clears input but keeps bash mode active
-        // Discard: release placeholders dropped with the wiped input
-        releaseDiscardedDraftPlaceholders(value, "");
-        setValue("");
-        setBashExitArmed(false);
-        setCtrlCPressed(true);
-        if (ctrlCTimerRef.current) clearTimeout(ctrlCTimerRef.current);
-        ctrlCTimerRef.current = setTimeout(() => {
-          setCtrlCPressed(false);
-        }, 1000);
-      }
     }
   });
 
   // Note: bash mode entry/exit is implemented inside PasteAwareTextInput so we can
   // consume the keystroke before it renders (no flicker).
-
-  // Handle Shift+Tab for permission mode cycling
-  useInput((_input, key) => {
-    if (!interactionEnabled) return;
-
-    // Tab (no shift): cycle reasoning effort tiers for the current model (when idle).
-    // Only trigger when autocomplete is NOT active.
-    if (
-      key.tab &&
-      !key.shift &&
-      !isAutocompleteActive &&
-      !streaming &&
-      onCycleReasoningEffort
-    ) {
-      onCycleReasoningEffort();
-      return;
-    }
-
-    // Debug logging for shift+tab detection
-    if (process.env.HARUYUKI_DEBUG_KEYS === "1" && (key.shift || key.tab)) {
-      // eslint-disable-next-line no-console
-      console.error(
-        `[debug:InputRich] shift=${key.shift} tab=${key.tab} visible=${visible}`,
-      );
-    }
-
-    if (key.shift && key.tab) {
-      // Cycle through permission modes
-      const modes: PermissionMode[] = [
-        "unrestricted",
-        "acceptEdits",
-        "standard",
-      ];
-      const currentIndex = modes.indexOf(currentMode);
-      const nextIndex = (currentIndex + 1) % modes.length;
-      const nextMode = modes[nextIndex] ?? "unrestricted";
-
-      // Update both singleton and local state
-      permissionMode.setMode(nextMode);
-      setCurrentMode(nextMode);
-
-      // Notify parent of mode change
-      if (onPermissionModeChange) {
-        onPermissionModeChange(nextMode);
-      }
-    }
-  });
 
   // Handle up/down arrow keys for wrapped text navigation and command history
   useInput((_input, key) => {

@@ -1,5 +1,7 @@
-import { useInput, useStdin } from "ink";
+import { useStdin } from "ink";
 import { useCallback, useEffect, useState } from "react";
+import { SYSTEM_KEY_CHORDS } from "@/cli/helpers/keymap";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
 
 export function useSuspend() {
   const { stdin, isRawModeSupported } = useStdin();
@@ -10,17 +12,26 @@ export function useSuspend() {
     setResumeKey((prev) => prev + 1);
   }, []);
 
-  useInput((input, key) => {
-    // Handle CTRL-Z for suspend
-    if (key.ctrl && input === "z") {
-      if (stdin && isRawModeSupported) {
-        stdin.setRawMode(false);
-      }
+  // Suspend is a `system` binding: it stays reachable whatever owns input, which
+  // is what the unconditional `useInput` handler it replaces did.
+  useKeyBindings("use-suspend", [
+    {
+      scope: "system",
+      bindings: [
+        {
+          id: "system.suspend",
+          chords: SYSTEM_KEY_CHORDS.suspend,
+          run: () => {
+            if (stdin && isRawModeSupported) {
+              stdin.setRawMode(false);
+            }
 
-      process.kill(process.pid, "SIGTSTP");
-      return;
-    }
-  });
+            process.kill(process.pid, "SIGTSTP");
+          },
+        },
+      ],
+    },
+  ]);
 
   // Handle the SIGCONT (fg command) resume
   useEffect(() => {

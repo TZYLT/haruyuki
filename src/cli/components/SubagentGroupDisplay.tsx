@@ -8,14 +8,14 @@
  * Features:
  * - Real-time updates via useSyncExternalStore
  * - Single blinking dot in header while running
- * - Expand/collapse tool calls (ctrl+o)
+ * - Expand/collapse tool calls (ctrl+g)
  * - Shows "Running N subagents..." while active
  *
  * When agents complete, they get committed to Ink's <Static> area using
  * SubagentGroupStatic instead (a pure props-based snapshot with no hooks).
  */
 
-import { Box, useInput } from "ink";
+import { Box } from "ink";
 import { memo, useSyncExternalStore } from "react";
 import {
   getSnapshot,
@@ -26,11 +26,13 @@ import {
 } from "@/agent/subagent-state.js";
 import { useAnimation } from "@/cli/contexts/AnimationContext.js";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
+import { APP_KEY_CHORDS } from "@/cli/helpers/keymap";
 import {
   formatStats,
   getSubagentModelDisplay,
   getTreeChars,
 } from "@/cli/helpers/subagent-display.js";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width.js";
 import { BlinkDot } from "./BlinkDot.js";
 import { colors } from "./colors.js";
@@ -309,7 +311,7 @@ interface GroupHeaderProps {
 
 const GroupHeader = memo(
   ({ count, allCompleted, hasErrors, expanded }: GroupHeaderProps) => {
-    const hint = expanded ? "(ctrl+o to collapse)" : "(ctrl+o to expand)";
+    const hint = expanded ? "(ctrl+g to collapse)" : "(ctrl+g to expand)";
 
     const dotColor = hasErrors
       ? colors.subagent.error
@@ -348,12 +350,23 @@ export const SubagentGroupDisplay = memo(() => {
   const { agents, expanded } = useSyncExternalStore(subscribe, getSnapshot);
   const { shouldAnimate } = useAnimation();
 
-  // Handle ctrl+o for expand/collapse
-  useInput((input, key) => {
-    if (key.ctrl && input === "o") {
-      toggleExpanded();
-    }
-  });
+  // Expand/collapse the group. Ctrl+O used to reach both this component and the
+  // last shell tool call, so one press changed two things; the shell output kept
+  // Ctrl+O and the group answers to Ctrl+G.
+  useKeyBindings("subagent-group", [
+    {
+      scope: "app",
+      bindings: [
+        {
+          id: "transcript.toggleSubagents",
+          chords: APP_KEY_CHORDS.toggleSubagents,
+          run: () => {
+            toggleExpanded();
+          },
+        },
+      ],
+    },
+  ]);
 
   // Hide silent subagents (e.g. init) — they handle user notifications
   // via their own mechanisms (e.g. EventMessage).

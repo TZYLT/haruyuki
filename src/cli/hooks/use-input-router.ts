@@ -1,34 +1,24 @@
-import type { EventEmitter } from "node:events";
-import { useInput, useStdin } from "ink";
+import { useInput } from "ink";
 import { useEffect, useRef } from "react";
 import { acquireInputScope } from "@/cli/helpers/focus-ledger";
 import type { InputScope, KeyBindingTable } from "@/cli/helpers/input-keys";
 import {
   installInputRouter,
   registerBindingOwner,
-  routeKeyEvent,
+  routeFallbackEvent,
 } from "@/cli/helpers/input-router";
+import { useInternalEventEmitter } from "@/cli/hooks/use-internal-event-emitter";
 
 /**
  * The imperative half of the input router (the declarative half is `keymap.ts`):
- * installs the raw shield, adds the `useInput` fallback for sequences the shield
- * does not read, and lets components register binding tables.
+ * installs the raw router, adds the `useInput` fallback for sequences the router
+ * does not read itself, and lets components register binding tables.
  */
 
 /**
- * Ink 7 narrows `useStdin()`'s public type to `PublicProps`; the runtime context
- * still carries `internal_eventEmitter` (and `useInput` reads it from there).
- */
-function useInternalEventEmitter(): EventEmitter | undefined {
-  const { internalEventEmitter } = useStdin() as unknown as {
-    internalEventEmitter?: EventEmitter;
-  };
-  return internalEventEmitter;
-}
-
-/**
- * Mounts the router. Must be mounted **once** (the app root): a second mount
- * would route every fallback event twice.
+ * Mounts the router. The app root calls it once; a component that registers
+ * bindings also installs it, so a component rendered on its own (a focused test)
+ * behaves exactly as it does in the app. Installation is idempotent per emitter.
  */
 export function useInputRouter(): void {
   const internalEventEmitter = useInternalEventEmitter();
@@ -38,13 +28,13 @@ export function useInputRouter(): void {
     return installInputRouter(internalEventEmitter);
   }, [internalEventEmitter]);
 
-  // The fallback. Everything the shield did not claim arrives here with Ink's
+  // The fallback. Everything the raw layer did not claim arrives here with Ink's
   // own parse, so an unusual terminal encoding still reaches its binding instead
   // of being dropped. If a binding consumes it, the legacy handlers have already
   // been offered the event — which is why the table owns each of its keys
   // exclusively and no legacy handler still binds one.
   useInput((input, key) => {
-    routeKeyEvent({ input, key });
+    routeFallbackEvent({ input, key });
   });
 }
 
@@ -60,10 +50,17 @@ export function useKeyBindings(
   owner: string,
   tables: readonly KeyBindingTable[],
 ): void {
+  // A component that binds keys installs the router itself, so it works when it
+  // is rendered on its own (a focused component test) exactly as it does in the
+  // app. Installation is ref-counted per emitter, and the fallback dedupes per
+  // dispatch, so extra installations cost nothing.
+  useInputRouter();
   const tablesRef = useRef(tables);
-  useEffect(() => {
-    tablesRef.current = tables;
-  });
+  // Assigned during render, not in an effect: a key handler must see the closures
+  // of the render that is on screen, and Ink's own `useInput` gives its callbacks
+  // the same freshness (it wraps them in `useEffectEvent`). The codebase already
+  // uses this latest-value ref pattern for input state.
+  tablesRef.current = tables;
   useEffect(() => {
     return registerBindingOwner(owner, () => tablesRef.current);
   }, [owner]);

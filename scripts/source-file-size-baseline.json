@@ -11,7 +11,7 @@
   "src/cli/app/use-configuration-handlers.ts": 1365,
   "src/cli/app/use-conversation-loop.ts": 2783,
   "src/cli/app/use-submit-handler.ts": 3324,
-  "src/cli/components/InputRich.tsx": 2088,
+  "src/cli/components/InputRich.tsx": 2082,
   "src/cli/components/ModelSelector.tsx": 1217,
   "src/cli/components/ProviderSelector.tsx": 1564,
   "src/cli/helpers/accumulator.ts": 1601,

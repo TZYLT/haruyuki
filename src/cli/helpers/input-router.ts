@@ -47,6 +47,17 @@ const installations = new WeakMap<
 
 let forwarding = false;
 
+/**
+ * Set while the router is dispatching an event it did not consume itself.
+ *
+ * Only that dispatch may be routed by the fallback (the `useInput` path), and
+ * `fallbackConsumed` makes sure several installed fallbacks route it once. Both
+ * are cleared when the dispatch returns, so an event can never leave routing
+ * disarmed for the next one.
+ */
+let fallbackArmed = false;
+let fallbackConsumed = false;
+
 /** Registers a component's binding tables. Call the result on unmount. */
 export function registerBindingOwner(
   owner: string,
@@ -61,6 +72,8 @@ export function registerBindingOwner(
 /** Test seam: drop every registered owner. */
 export function resetBindingOwners(): void {
   bindingSources.clear();
+  fallbackArmed = false;
+  fallbackConsumed = false;
 }
 
 function bindingsForScope(scope: KeyBindingTable["scope"]): KeyBinding[] {
@@ -71,6 +84,20 @@ function bindingsForScope(scope: KeyBindingTable["scope"]): KeyBinding[] {
     }
   }
   return bindings;
+}
+
+/**
+ * Route an event Ink parsed.
+ *
+ * This is the fallback path: sequences the raw layer did not read itself arrive
+ * here with Ink's parse, so an unusual terminal encoding still reaches its
+ * binding instead of being dropped. Every component that installs the router
+ * adds one `useInput` fallback; the arm/consumed pair makes them route the
+ * dispatch once between them, and only while the router is dispatching it.
+ */
+export function routeFallbackEvent(event: KeyEvent): void {
+  if (!fallbackArmed || fallbackConsumed) return;
+  if (routeKeyEvent(event)) fallbackConsumed = true;
 }
 
 /**
@@ -147,10 +174,14 @@ export function installInputRouter(emitter: EventEmitter): () => void {
       if (claimed && routeKeyEvent(claimed)) return true;
     }
     forwarding = true;
+    fallbackArmed = true;
+    fallbackConsumed = false;
     try {
       return originalEmit.apply(this, [type, ...args] as never);
     } finally {
       forwarding = false;
+      fallbackArmed = false;
+      fallbackConsumed = false;
     }
   };
 

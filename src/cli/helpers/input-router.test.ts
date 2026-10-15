@@ -1,4 +1,4 @@
-﻿import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import {
   acquireInputScope,
@@ -10,14 +10,36 @@ import {
   installInputRouter,
   registerBindingOwner,
   resetBindingOwners,
+  routeFallbackEvent,
   routeKeyEvent,
 } from "@/cli/helpers/input-router";
 import { keyEventFrom } from "@/cli/helpers/input-sequence";
 
 const CTRL_O = "\u000F";
 
+/** A sequence the raw layer deliberately does not read, so it takes the fallback. */
+const SHIFT_LEFT_ARROW = "\u001b[1;2D";
+
+function shiftLeftTable(runs: string[]): KeyBindingTable[] {
+  return [
+    {
+      scope: "app",
+      bindings: [
+        {
+          id: "test.shiftLeft",
+          chords: [{ key: "leftArrow", shift: true }],
+          run: () => {
+            runs.push("run");
+            return true;
+          },
+        },
+      ],
+    },
+  ];
+}
+
 /**
- * A shield on a bare emitter, plus a "legacy" listener standing in for the
+ * A router on a bare emitter, plus a "legacy" listener standing in for the
  * components that still use Ink's `useInput`.
  */
 function harness(tables: KeyBindingTable[]) {
@@ -247,5 +269,48 @@ describe("input router", () => {
     second();
     emitter.emit("input", CTRL_O);
     expect(legacy).toEqual([CTRL_O]);
+  });
+
+  test("routes every fallback event in turn, never disarming itself", () => {
+    // The fallback arm is scoped to one dispatch. If a consumed event left it
+    // set, every later key would stop being routed — which is exactly the bug
+    // this test was written from.
+    const runs: string[] = [];
+    const emitter = new EventEmitter();
+    registerBindingOwner("test", () => shiftLeftTable(runs));
+    // Stands in for Ink's `useInput`: same event, Ink's parse. The sequence is
+    // one the raw layer deliberately does not read, so it takes the fallback.
+    const legacy = (raw: string) => {
+      if (raw === SHIFT_LEFT_ARROW) {
+        routeFallbackEvent(keyEventFrom("", { leftArrow: true, shift: true }));
+      }
+    };
+    emitter.on("input", legacy);
+    const uninstall = installInputRouter(emitter);
+    emitter.emit("input", SHIFT_LEFT_ARROW);
+    emitter.emit("input", SHIFT_LEFT_ARROW);
+    expect(runs).toEqual(["run", "run"]);
+    uninstall();
+  });
+
+  test("several installed fallbacks route one dispatch once", () => {
+    const runs: string[] = [];
+    const emitter = new EventEmitter();
+    registerBindingOwner("test", () => shiftLeftTable(runs));
+    const legacy = (raw: string) => {
+      if (raw === SHIFT_LEFT_ARROW) {
+        routeFallbackEvent(keyEventFrom("", { leftArrow: true, shift: true }));
+      }
+    };
+    // Two installations, as the app has: the root plus every component that
+    // registers bindings.
+    emitter.on("input", legacy);
+    emitter.on("input", legacy);
+    const first = installInputRouter(emitter);
+    const second = installInputRouter(emitter);
+    emitter.emit("input", SHIFT_LEFT_ARROW);
+    expect(runs).toEqual(["run"]);
+    first();
+    second();
   });
 });
