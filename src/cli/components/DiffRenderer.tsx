@@ -1,6 +1,7 @@
 import { relative } from "node:path";
 import { Box } from "ink";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
+import { paddedRows, type StyledChunk } from "@/cli/helpers/text-metrics";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { colors } from "./colors";
 import {
@@ -27,48 +28,6 @@ function formatDisplayPath(filePath: string): string {
 function countLines(str: string): number {
   if (!str) return 0;
   return str.split("\n").length;
-}
-
-// A styled text chunk with optional color/dim for row-splitting.
-type StyledChunk = { text: string; color?: string; dimColor?: boolean };
-
-// Split styled chunks into rows of exactly `cols` characters, padding the last row.
-// Continuation rows start with a blank indent of `contIndent` characters
-// (matching Codex's empty-gutter + 2-space continuation, diff_render.rs:922-929).
-function buildPaddedRows(
-  chunks: StyledChunk[],
-  cols: number,
-  contIndent: number,
-): StyledChunk[][] {
-  if (cols <= 0) return [chunks];
-  const rows: StyledChunk[][] = [];
-  let row: StyledChunk[] = [];
-  let len = 0;
-  for (const chunk of chunks) {
-    let rem = chunk.text;
-    while (rem.length > 0) {
-      const space = cols - len;
-      if (rem.length <= space) {
-        row.push({ text: rem, color: chunk.color, dimColor: chunk.dimColor });
-        len += rem.length;
-        rem = "";
-      } else {
-        row.push({
-          text: rem.slice(0, space),
-          color: chunk.color,
-          dimColor: chunk.dimColor,
-        });
-        rows.push(row);
-        // Start continuation row with blank gutter indent
-        row = [{ text: " ".repeat(contIndent) }];
-        len = contIndent;
-        rem = rem.slice(space);
-      }
-    }
-  }
-  if (len < cols) row.push({ text: " ".repeat(cols - len) });
-  if (row.length > 0) rows.push(row);
-  return rows;
 }
 
 // Render a single diff line split into full-width rows.
@@ -112,7 +71,7 @@ function DiffLine({
 
   // Continuation indent = indent + lineNum + sign + gap (blank, same width)
   const contIndent = indent.length + numStr.length + 1 + 2;
-  const rows = buildPaddedRows(chunks, columns, contIndent);
+  const rows = paddedRows(chunks, columns, contIndent);
 
   return (
     <>
