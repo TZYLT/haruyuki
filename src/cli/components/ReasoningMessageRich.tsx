@@ -1,6 +1,6 @@
 import { Box } from "ink";
 import { memo, useSyncExternalStore } from "react";
-import stringWidth from "string-width";
+import { markdownRowCount } from "@/cli/helpers/markdown-rows";
 import {
   useTerminalRows,
   useTerminalWidth,
@@ -32,15 +32,19 @@ type ReasoningLine = {
 const LIVE_REASONING_MAX_LINES = 16;
 const LIVE_REASONING_CHROME_ROWS = 8;
 
+/**
+ * Rows of the streaming reasoning body the live window shows.
+ *
+ * Measured with the transcript row model's markdown walker, which is what
+ * `MarkdownDisplay` actually renders — a per-line `ceil(width/width)` count
+ * disagrees with it on code fences, lists, headers and CJK text.
+ */
 export function getLiveReasoningWindowHeight(
   text: string,
   contentWidth: number,
   terminalRows: number,
 ): number {
-  const width = Math.max(1, contentWidth);
-  const estimatedLines = text.split("\n").reduce((total, line) => {
-    return total + Math.max(1, Math.ceil(stringWidth(line) / width));
-  }, 0);
+  const estimatedLines = markdownRowCount(text, Math.max(1, contentWidth));
   const availableRows = Math.max(3, terminalRows - LIVE_REASONING_CHROME_ROWS);
   return Math.min(estimatedLines, LIVE_REASONING_MAX_LINES, availableRows);
 }

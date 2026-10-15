@@ -221,6 +221,7 @@ import {
   providerTypeFromModelSettings,
   reasoningEffortLlmConfigPatch,
 } from "./model-config";
+import { measureTranscriptItemRows } from "./row-model";
 import { prepareSessionExit } from "./session";
 import type {
   ActiveOverlay,
@@ -4470,38 +4471,23 @@ export function App({
     getSubagentSnapshot,
   );
 
-  // Estimate live area height for overflow detection.
+  // Estimate live area height for overflow detection. Each live item is measured
+  // by the transcript row model — the same measurement the full-screen viewport
+  // windows with — rather than by counting newlines, so the two agree.
   const estimatedLiveHeight = useMemo(() => {
-    // Count actual lines in live content by counting newlines
-    const countLines = (text: string | undefined): number => {
-      if (!text) return 0;
-      return (text.match(/\n/g) || []).length + 1;
-    };
-
-    // Estimate height for each live item based on actual content
     let liveItemsHeight = 0;
-    for (const item of liveItems) {
-      // Base height for each item (header line, margins)
-      let itemHeight = 2;
-
-      if (item.kind === "bash_command" || item.kind === "command") {
-        // Count lines in command input and output
-        itemHeight += countLines(item.input);
-        itemHeight += countLines(item.output);
-      } else if (item.kind === "tool_call") {
-        // Count lines in tool args and result
-        itemHeight += Math.min(countLines(item.argsText), 5); // Cap args display
-        itemHeight += countLines(item.resultText);
-      } else if (
-        item.kind === "assistant" ||
-        item.kind === "reasoning" ||
-        item.kind === "error"
-      ) {
-        itemHeight += countLines(item.text);
-      }
-
-      liveItemsHeight += itemHeight;
-    }
+    liveItems.forEach((item, index) => {
+      // Committed items precede the live area, so the first live item carries the
+      // separator blank line like every item after it.
+      liveItemsHeight += measureTranscriptItemRows(item, {
+        columns,
+        index: index + 1,
+        terminalRows,
+        diffs: precomputedDiffsRef.current,
+        expandedToolCallId,
+        lastShellToolCallId,
+      });
+    });
 
     // Subagents: 4 lines each (description + URL + status + margin)
     const LINES_PER_SUBAGENT = 4;
@@ -4514,7 +4500,14 @@ export function App({
     const estimatedHeight = liveItemsHeight + subagentsHeight + FIXED_BUFFER;
 
     return estimatedHeight;
-  }, [liveItems, subagents.length]);
+  }, [
+    liveItems,
+    subagents.length,
+    columns,
+    terminalRows,
+    expandedToolCallId,
+    lastShellToolCallId,
+  ]);
 
   // Overflow detection with hysteresis: disable quickly on overflow, re-enable
   // only after we've recovered extra headroom to avoid flap near the boundary.
