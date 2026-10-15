@@ -231,6 +231,42 @@ describe("viewport frame cost", () => {
     expect(large.measured).toBe(MAX_VIEWPORT_ITEMS);
   });
 
+  test("lazy windowing renders exactly what the full pass rendered", () => {
+    // The pre-lazy algorithm, kept here as the reference oracle: measure every
+    // item, walk back until one more would not fit, then clamp to the cap. The
+    // lazy walk has to pick the same window on a real transcript, not only on
+    // hand-written height arrays.
+    const fullPass = (
+      rows: readonly number[],
+    ): { start: number; end: number } => {
+      const end = rows.length;
+      let used = 0;
+      let start = end;
+      while (start > 0) {
+        const next = Math.max(0, rows[start - 1] ?? 0);
+        if (used + next > VIEWPORT_HEIGHT) break;
+        used += next;
+        start -= 1;
+      }
+      if (end - start > MAX_VIEWPORT_ITEMS) {
+        start = end - MAX_VIEWPORT_ITEMS;
+      }
+      return { start, end };
+    };
+
+    for (const size of HISTORY_SIZES) {
+      const items = syntheticHistory(size);
+      const allHeights = items.map((item, index) =>
+        measureTranscriptItemRows(item, {
+          columns: COLUMNS,
+          index,
+          terminalRows: TERMINAL_ROWS,
+        }),
+      );
+      expect(measureFrame(items).window).toEqual(fullPass(allHeights));
+    }
+  });
+
   test("per-frame cost does not follow the history", () => {
     const short = frames[0]?.frame as FrameCost;
     const long = frames[frames.length - 1]?.frame as FrameCost;
