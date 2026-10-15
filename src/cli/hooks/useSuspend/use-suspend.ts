@@ -22,6 +22,17 @@ export function useSuspend() {
           id: "system.suspend",
           chords: SYSTEM_KEY_CHORDS.suspend,
           run: () => {
+            // Suspending is a POSIX job-control concept: there is no SIGTSTP on
+            // Windows, and `process.kill(pid, "SIGTSTP")` throws
+            // ERR_UNKNOWN_SIGNAL there — from a key binding, which means an
+            // uncaught exception and a process exit. The key is simply inert on
+            // Windows. (Ink 7's `suspendTerminal` is the primitive to build on if
+            // this ever needs to release the terminal on other platforms; it also
+            // restores bracketed paste, the kitty protocol and the alternate
+            // screen, none of which the raw-mode dance below touches.)
+            if (process.platform === "win32") {
+              return;
+            }
             if (stdin && isRawModeSupported) {
               stdin.setRawMode(false);
             }
