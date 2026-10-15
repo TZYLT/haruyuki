@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { markdownRowCount, measureLineRows } from "@/cli/app/row-model";
+import { measureLineRows } from "@/cli/app/row-model";
 import type { Line } from "@/cli/helpers/accumulator";
+import { markdownRowCount } from "@/cli/helpers/markdown-rows";
 
 const OPTIONS = { columns: 40 };
 
@@ -110,25 +111,53 @@ describe("measureLineRows", () => {
     expect(measureLineRows(bare, OPTIONS)).toBe(1);
   });
 
-  test("a tool call adds its args and result rows", () => {
+  test("a tool call measures its header and its markdown result body", () => {
     const withBody: Line = {
       kind: "tool_call",
       id: "t",
       phase: "finished",
+      // Not JSON: the header shows the placeholder, on one row.
       argsText: "line1\nline2",
       resultText: "ok",
     };
-    expect(measureLineRows(withBody, OPTIONS)).toBe(1 + 2 + 1);
+    expect(measureLineRows(withBody, OPTIONS)).toBe(1 + 1);
   });
 
-  test("tool args are capped", () => {
+  test("an arg body that does not parse stays a single header row", () => {
     const huge: Line = {
       kind: "tool_call",
       id: "t",
       phase: "finished",
       argsText: Array.from({ length: 20 }, (_, i) => `line-${i}`).join("\n"),
     };
-    expect(measureLineRows(huge, OPTIONS)).toBe(1 + 5);
+    expect(measureLineRows(huge, OPTIONS)).toBe(1);
+  });
+
+  test("a read result is a one-line summary, not the returned text", () => {
+    const read: Line = {
+      kind: "tool_call",
+      id: "t",
+      phase: "finished",
+      name: "read",
+      argsText: JSON.stringify({ file_path: "src/a.ts" }),
+      resultText: "a\nb\nc",
+      resultOk: true,
+    };
+    expect(measureLineRows(read, OPTIONS)).toBe(1 + 1);
+  });
+
+  test("a finished shell call measures its collapsed output block", () => {
+    const bash: Line = {
+      kind: "tool_call",
+      id: "t",
+      phase: "finished",
+      name: "Bash",
+      argsText: JSON.stringify({ command: "echo hi" }),
+      resultText: "a\nb\nc\nd",
+      resultOk: true,
+    };
+    // One header row, three visible output lines, and the hidden-count row.
+    expect(measureLineRows(bash, OPTIONS)).toBe(1 + 3 + 1);
   });
 
   test("a command row counts its input and output", () => {

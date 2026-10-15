@@ -6,32 +6,35 @@
  * virtualize: it decides which items intersect the viewport and how tall the
  * scroll extent is.
  *
- * This module reuses the same measurement primitives the renderers use
- * (`@/cli/helpers/text-metrics`) and mirrors the block layout of
- * `MarkdownDisplay`. Where a renderer's row count depends on runtime display
- * state (ctrl+r / ctrl+t) or on a tool-specific body, the caller passes the state
- * in and the model documents the approximation. Nothing outside the tests
- * consumes this yet: the virtualized viewport is the first consumer.
+ * This module owns the item-level dispatch (gap, welcome, subagent group) and the
+ * plain transcript lines. Two kinds are delegated because their height is a
+ * layout of their own:
+ *
+ * - `tool_call` → `@/cli/app/tool-call-rows` (one branch per tool family)
+ * - approvals → `@/cli/app/approval-rows` (the viewport substitutes an approval
+ *   UI or a pending stub for a tool call item)
+ *
+ * Every branch reuses the same pure primitives the renderers use
+ * (`@/cli/helpers/text-metrics`, `markdown-rows`, `diff-rows`), so the model and
+ * the render pass cannot disagree about a row count. Where a renderer's height
+ * depends on runtime display state (ctrl+r / ctrl+t / ctrl+o) or on data the model
+ * must not fetch (a diff, a syntax highlight), the caller passes the state in and
+ * the approximation is documented on the branch that carries it.
  */
 
+import {
+  type ApprovalMeasureOptions,
+  type ApprovalSubstitutions,
+  approvalPreviewItemRows,
+  substitutedApprovalRows,
+} from "@/cli/app/approval-rows";
+import { toolCallRows } from "@/cli/app/tool-call-rows";
 import type { StaticItem } from "@/cli/app/types";
 import type { Line } from "@/cli/helpers/accumulator";
+import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
-import {
-  BLOCKQUOTE_RE,
-  CODE_FENCE_OPEN_RE,
-  HEADER_RE,
-  HORIZONTAL_RULE_RE,
-  isCodeFenceClose,
-  isTableStart,
-  LIST_ITEM_RE,
-  TABLE_ROW_RE,
-} from "@/cli/helpers/markdown-blocks";
-import {
-  countTextRows,
-  inkStringWidth,
-  wrappedRowCount,
-} from "@/cli/helpers/text-metrics";
+import { markdownRowCount } from "@/cli/helpers/markdown-rows";
+import { countTextRows, inkStringWidth } from "@/cli/helpers/text-metrics";
 
 /** Two-column gutter used by assistant/reasoning/error rows. */
 export const TRANSCRIPT_GUTTER_WIDTH = 2;
@@ -39,14 +42,21 @@ export const TRANSCRIPT_GUTTER_WIDTH = 2;
 /** Blank row `StaticTranscript` inserts between two committed items. */
 export const STATIC_ITEM_GAP_ROWS = 1;
 
-/** Cap on tool-argument rows, mirroring the previous height estimator. */
-const TOOL_ARGS_MAX_ROWS = 5;
-
 /** Approximate height of the welcome banner (it is a fixed template). */
 const WELCOME_ROWS = 12;
 
 /** Rows per subagent entry in a committed subagent group. */
 const SUBAGENT_ROWS = 4;
+
+/**
+ * Preview row budget used when the caller does not report the terminal height.
+ * Approval previews shrink to fit the terminal; measuring them unbounded is the
+ * larger answer, which is the safe direction for a window calculation.
+ */
+const UNBOUNDED_PREVIEW_ROWS = Number.MAX_SAFE_INTEGER;
+
+/** No precomputed diffs, for callers that measure without a render frame. */
+const EMPTY_DIFFS: ReadonlyMap<string, AdvancedDiffSuccess> = new Map();
 
 export interface RowMeasureOptions {
   /** Total terminal columns. */
@@ -55,107 +65,31 @@ export interface RowMeasureOptions {
   userPromptPrefix?: string;
   /** Whether collapsed reasoning rows render their body (ctrl+t). */
   reasoningExpanded?: boolean;
+  /** Total terminal rows; sizes the approval preview budgets. */
+  terminalRows?: number;
+  /** Diffs precomputed for this frame, keyed by tool call id (and `id:path`). */
+  diffs?: ReadonlyMap<string, AdvancedDiffSuccess>;
+  /** Tool call whose shell output the user expanded (ctrl+o). */
+  expandedToolCallId?: string | null;
+  /** Shell tool call that owns the ctrl+o expand hint. */
+  lastShellToolCallId?: string | null;
+  /**
+   * Set by the full-screen viewport, which substitutes the current approval and
+   * the pending/queued stubs for a tool call item. Omit it when the item really
+   * renders as a tool call (the append shell's measurement).
+   */
+  substitutions?: ApprovalSubstitutions;
 }
 
-/**
- * Rows a markdown block occupies at `width`, following `MarkdownDisplay`'s block
- * classification. Inline markers (`**bold**`, `` `code` ``) are not stripped, so
- * decorated text is over-estimated slightly — an over-estimate leaves a blank
- * row, an under-estimate hides content, and the render pass clips to the
- * measured height.
- */
-export function markdownRowCount(text: string, width: number): number {
-  if (!text) return 0;
-  const usable = Math.max(1, width);
-  const lines = text.split("\n");
-  let rows = 0;
-  let index = 0;
-
-  while (index < lines.length) {
-    const line = lines[index] ?? "";
-
-    const codeOpen = line.match(CODE_FENCE_OPEN_RE);
-    if (codeOpen) {
-      const fence = codeOpen[1] ?? "";
-      index += 1;
-      const codeLines: string[] = [];
-      while (index < lines.length) {
-        const inner = lines[index] ?? "";
-        if (isCodeFenceClose(inner, fence)) {
-          index += 1;
-          break;
-        }
-        codeLines.push(inner);
-        index += 1;
-      }
-      const body = codeLines.length > 0 ? codeLines : [""];
-      rows += body.reduce(
-        (total, codeLine) =>
-          total + Math.max(1, wrappedRowCount(codeLine, usable)),
-        0,
-      );
-      continue;
-    }
-
-    const header = line.match(HEADER_RE);
-    if (header?.[1] && header[2] !== undefined) {
-      rows += Math.max(1, wrappedRowCount(header[2], usable));
-      index += 1;
-      continue;
-    }
-
-    const list = line.match(LIST_ITEM_RE);
-    if (list && list[2] && list[3] !== undefined) {
-      const bulletWidth = inkStringWidth(`${list[2]} `);
-      const indent = (list[1] ?? "").length;
-      const available = Math.max(1, usable - indent - bulletWidth);
-      rows += Math.max(1, wrappedRowCount(list[3], available));
-      index += 1;
-      continue;
-    }
-
-    const blockquote = line.match(BLOCKQUOTE_RE);
-    if (blockquote && blockquote[1] !== undefined) {
-      rows += Math.max(
-        1,
-        wrappedRowCount(blockquote[1], Math.max(1, usable - 4)),
-      );
-      index += 1;
-      continue;
-    }
-
-    if (HORIZONTAL_RULE_RE.test(line)) {
-      rows += 1;
-      index += 1;
-      continue;
-    }
-
-    if (isTableStart(lines, index)) {
-      let tableRows = 0;
-      let tableIndex = index;
-      while (
-        tableIndex < lines.length &&
-        TABLE_ROW_RE.test(lines[tableIndex] ?? "")
-      ) {
-        tableRows += 1;
-        tableIndex += 1;
-      }
-      rows += Math.max(1, tableRows);
-      index = tableIndex;
-      continue;
-    }
-
-    if (line.trim() === "") {
-      rows += 1;
-      index += 1;
-      continue;
-    }
-
-    rows += Math.max(1, wrappedRowCount(line, usable));
-    index += 1;
-  }
-
-  return rows;
+/** The subset of the measure options the approval layout needs. */
+function approvalMeasureOptions(
+  options: RowMeasureOptions,
+): ApprovalMeasureOptions {
+  return {
+    columns: options.columns,
+    terminalRows: options.terminalRows ?? UNBOUNDED_PREVIEW_ROWS,
+    diffs: options.diffs ?? EMPTY_DIFFS,
+  };
 }
 
 /** Rows for optional body text: absent text occupies no rows. */
@@ -225,18 +159,9 @@ export function measureLineRows(
       );
     }
 
-    case "tool_call": {
-      // Approximation: a header row plus bounded args and the result body. The
-      // tool-specific renderers (edit/write/bash/diff) are measured exactly once
-      // the viewport needs per-tool heights.
-      const usable = Math.max(1, columns);
-      const argsRows = Math.min(
-        optionalTextRows(line.argsText, usable),
-        TOOL_ARGS_MAX_ROWS,
-      );
-      const resultRows = optionalTextRows(line.resultText, usable);
-      return 1 + argsRows + resultRows;
-    }
+    case "tool_call":
+      // Measured branch by branch against the renderer (`tool-call-rows`).
+      return toolCallRows(line, options);
 
     case "event": {
       const summaryRows = line.summary
@@ -262,7 +187,17 @@ export function measureTranscriptItemRows(
   options: RowMeasureOptions & { index: number },
 ): number {
   const gap = options.index > 0 ? STATIC_ITEM_GAP_ROWS : 0;
-  const columns = Math.max(1, options.columns);
+
+  // The full-screen viewport substitutes an approval UI or a stub for a tool call
+  // item, so the substituted node — not the tool call — is what occupies rows.
+  if (item.kind === "tool_call" && options.substitutions) {
+    const substituted = substitutedApprovalRows(
+      item,
+      options.substitutions,
+      approvalMeasureOptions(options),
+    );
+    if (substituted !== null) return gap + substituted;
+  }
 
   switch (item.kind) {
     case "welcome":
@@ -270,10 +205,10 @@ export function measureTranscriptItemRows(
     case "subagent_group":
       return gap + Math.max(1, item.agents.length) * SUBAGENT_ROWS;
     case "approval_preview":
+      // Measured against `ApprovalPreview` itself; it renders only the preview,
+      // with the options and hint left to the live area.
       return (
-        gap +
-        1 +
-        Math.min(countTextRows(item.toolArgs, columns), TOOL_ARGS_MAX_ROWS)
+        gap + approvalPreviewItemRows(item, approvalMeasureOptions(options))
       );
     default:
       return gap + measureLineRows(item, options);

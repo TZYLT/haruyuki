@@ -78,12 +78,54 @@ export function ViewportTranscript(props: AppViewProps) {
     queuedIds,
   ]);
 
+  // Read once per render: the map is mutated in place as diffs arrive, so its
+  // identity is stable and a diff that lands after this render is picked up on the
+  // next one (a one-frame drift, documented on the row model).
+  const precomputedDiffs = precomputedDiffsRef.current;
+
+  // Heights mirror what is actually rendered, substitutions included: the current
+  // approval is drawn by `ApprovalSwitch` and the parallel ones by
+  // `PendingApprovalStub`, so measuring the tool call instead would size the
+  // window from a node that is not on screen.
   const window = useMemo(() => {
     const heights = items.map((item, index) =>
-      measureTranscriptItemRows(item, { columns, index }),
+      measureTranscriptItemRows(item, {
+        columns,
+        index,
+        terminalRows,
+        diffs: precomputedDiffs,
+        expandedToolCallId,
+        lastShellToolCallId,
+        substitutions: {
+          currentApproval,
+          currentApprovalContext,
+          approvalMap,
+          pendingIds,
+          queuedIds,
+          queuedDecisions,
+          stubDescriptions,
+          showPreview: showApprovalPreview,
+        },
+      }),
     );
     return fitWholeItems(heights, height, MAX_VIEWPORT_ITEMS);
-  }, [items, columns, height]);
+  }, [
+    items,
+    columns,
+    height,
+    terminalRows,
+    precomputedDiffs,
+    expandedToolCallId,
+    lastShellToolCallId,
+    currentApproval,
+    currentApprovalContext,
+    approvalMap,
+    pendingIds,
+    queuedIds,
+    queuedDecisions,
+    stubDescriptions,
+    showApprovalPreview,
+  ]);
 
   if (loadingState !== "ready") {
     return (
