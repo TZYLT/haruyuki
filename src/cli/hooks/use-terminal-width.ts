@@ -6,8 +6,39 @@ const getStdout = () => {
   return stdout && typeof stdout.on === "function" ? stdout : undefined;
 };
 
-const getTerminalWidth = () => getStdout()?.columns ?? 80;
-const getTerminalRows = () => getStdout()?.rows ?? 24;
+/**
+ * Reads the size from the stream, preferring the API that *queries* the console.
+ *
+ * `stdout.columns`/`rows` are cached properties: Node refreshes them when it
+ * notices a change, which on a Windows console it only does on some hosts. A
+ * stale `rows` is invisible until something depends on it — and the full-screen
+ * shell does, because its viewport height is `rows - chrome`: a stale 24 leaves
+ * a tall terminal half empty and never grows the transcript. `getWindowSize()`
+ * asks the terminal every time, so re-reading it per render self-corrects.
+ */
+const querySize = (): { columns: number; rows: number } => {
+  const stdout = getStdout() as
+    | (NodeJS.WriteStream & { getWindowSize?: () => unknown })
+    | undefined;
+  if (!stdout) return { columns: 80, rows: 24 };
+  try {
+    // Node's `tty.WriteStream.getWindowSize()` answers `[columns, rows]`.
+    const queried = stdout.getWindowSize?.();
+    if (Array.isArray(queried)) {
+      const [columns, rows] = queried as [number, number];
+      if (columns && rows) return { columns, rows };
+    } else if (queried && typeof queried === "object") {
+      const { columns, rows } = queried as { columns?: number; rows?: number };
+      if (columns && rows) return { columns, rows };
+    }
+  } catch {
+    // Not a TTY after all; fall through to the cached properties.
+  }
+  return { columns: stdout.columns ?? 80, rows: stdout.rows ?? 24 };
+};
+
+const getTerminalWidth = () => querySize().columns;
+const getTerminalRows = () => querySize().rows;
 
 type WidthListener = (columns: number) => void;
 type RowsListener = (rows: number) => void;
@@ -57,9 +88,13 @@ const removeResizeHandlerIfIdle = () => {
 /**
  * Hook to get terminal width and reactively update on resize
  * Uses a shared resize listener to avoid exceeding WriteStream listener limits.
+ *
+ * The value is re-read here rather than taken from state: state only exists to
+ * schedule the re-render (the 'resize' event), and a cached number can outlive
+ * the terminal it described.
  */
 export function useTerminalWidth(): number {
-  const [columns, setColumns] = useState(trackedColumns);
+  const [, setColumns] = useState(trackedColumns);
 
   useEffect(() => {
     ensureResizeHandler();
@@ -74,7 +109,7 @@ export function useTerminalWidth(): number {
     };
   }, []);
 
-  return columns;
+  return getTerminalWidth();
 }
 
 /**
@@ -82,7 +117,7 @@ export function useTerminalWidth(): number {
  * Uses the same shared resize listener as useTerminalWidth.
  */
 export function useTerminalRows(): number {
-  const [rows, setRows] = useState(trackedRows);
+  const [, setRows] = useState(trackedRows);
 
   useEffect(() => {
     ensureResizeHandler();
@@ -97,5 +132,5 @@ export function useTerminalRows(): number {
     };
   }, []);
 
-  return rows;
+  return getTerminalRows();
 }
