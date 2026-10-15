@@ -2,7 +2,11 @@ import type { EventEmitter } from "node:events";
 import { consultedInputScopes } from "./focus-ledger";
 import type { KeyBinding, KeyBindingTable, KeyEvent } from "./input-keys";
 import { describeChord, matchingBindings } from "./input-keys";
-import { shieldKeyEvent } from "./input-sequence";
+import {
+  filterRawInput,
+  noteModifiedEnter,
+  shieldKeyEvent,
+} from "./input-sequence";
 import { disarmLeader, isLeaderArmed } from "./leader";
 
 /**
@@ -33,8 +37,25 @@ import { disarmLeader, isLeaderArmed } from "./leader";
  *    degrades to "works, unshielded" instead of "silently dropped".
  */
 
-/** Binding tables by owner id. Owners are components; order is mount order. */
-const bindingSources = new Map<string, () => readonly KeyBindingTable[]>();
+interface BindingSource {
+  /** The component's own id, for diagnostics. Not a key: see `registerBindingOwner`. */
+  owner: string;
+  tables: () => readonly KeyBindingTable[];
+}
+
+/**
+ * Binding tables by registration, in mount order.
+ *
+ * Keyed by a unique token rather than by the owner id, because one owner id can
+ * be mounted more than once at a time: the composer and every overlay input are
+ * the same component (`PasteAwareTextInput`), so opening a selector mounts a
+ * second `composer-input` next to the always-mounted composer. Keying by the id
+ * made the overlay's unmount delete the entry the composer had registered
+ * minutes earlier — with the composer's editing keys (Option+Arrow, Ctrl+W,
+ * Home/End, modified Enter) silently dead for the rest of the session, since a
+ * registration is never rebuilt while its component stays mounted.
+ */
+const bindingSources = new Map<symbol, BindingSource>();
 
 /** Live routers, one wrapper per emitter no matter how many callers install. */
 const installations = new WeakMap<
@@ -64,9 +85,10 @@ export function registerBindingOwner(
   owner: string,
   source: () => readonly KeyBindingTable[],
 ): () => void {
-  bindingSources.set(owner, source);
+  const token = Symbol(owner);
+  bindingSources.set(token, { owner, tables: source });
   return () => {
-    if (bindingSources.get(owner) === source) bindingSources.delete(owner);
+    bindingSources.delete(token);
   };
 }
 
@@ -77,13 +99,18 @@ export function resetBindingOwners(): void {
   fallbackConsumed = false;
 }
 
+/** The owners currently registered, for diagnostics and conflict tests. */
+export function registeredBindingOwners(): string[] {
+  return [...bindingSources.values()].map((entry) => entry.owner);
+}
+
 function bindingsForScope(
   scope: KeyBindingTable["scope"],
   options?: { leaderOnly?: boolean },
 ): KeyBinding[] {
   const bindings: KeyBinding[] = [];
-  for (const source of bindingSources.values()) {
-    for (const table of source()) {
+  for (const { tables } of bindingSources.values()) {
+    for (const table of tables()) {
       if (table.scope !== scope) continue;
       for (const binding of table.bindings) {
         if (options?.leaderOnly && binding.leader !== true) continue;
@@ -147,6 +174,11 @@ export function routeFallbackEvent(event: KeyEvent): void {
  * `Ctrl+X` costs the next keystroke nothing.
  */
 export function routeKeyEvent(event: KeyEvent): boolean {
+  // Linux terminals report Enter as LF, which Ink does not flag as `return`; the
+  // echo a modified Enter can be followed by is dropped before it gets here. This
+  // is the one place every routed event passes through, so it is where the flag
+  // that suppresses that echo is armed.
+  noteModifiedEnter(event);
   if (isLeaderArmed()) {
     if (event.key.escape === true) {
       // Escape leaves the prefix and stops there: the user asked to get out, not
@@ -209,8 +241,16 @@ export function forwardInputEvent(
 /**
  * Installs the router on an emitter. Idempotent; the last release restores the
  * original `emit`.
+ *
+ * `platform` selects the host's raw-payload rules (`input-sequence.ts`). It is a
+ * parameter so the Linux Enter behaviour is testable from any machine, and it is
+ * read when the wrapper is created — the first installation on an emitter wins,
+ * which is fine because production always passes the default.
  */
-export function installInputRouter(emitter: EventEmitter): () => void {
+export function installInputRouter(
+  emitter: EventEmitter,
+  platform: string = process.platform,
+): () => void {
   const existing = installations.get(emitter);
   if (existing) {
     existing.count += 1;
@@ -227,15 +267,21 @@ export function installInputRouter(emitter: EventEmitter): () => void {
       return originalEmit.apply(this, [type, ...args] as never);
     }
     const raw = inputPayloadToString(args[0]);
+    let payload = raw;
     if (raw !== null) {
-      const claimed = shieldKeyEvent(raw);
+      payload = filterRawInput(raw, platform);
+      // A dropped payload is the terminal echoing a keystroke already delivered.
+      if (payload === null) return true;
+      const claimed = shieldKeyEvent(payload);
       if (claimed && routeKeyEvent(claimed)) return true;
     }
+    const dispatched =
+      payload !== null && payload !== raw ? [payload, ...args.slice(1)] : args;
     forwarding = true;
     fallbackArmed = true;
     fallbackConsumed = false;
     try {
-      return originalEmit.apply(this, [type, ...args] as never);
+      return originalEmit.apply(this, [type, ...dispatched] as never);
     } finally {
       forwarding = false;
       fallbackArmed = false;

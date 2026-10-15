@@ -9,6 +9,7 @@ import {
   forwardInputEvent,
   installInputRouter,
   registerBindingOwner,
+  registeredBindingOwners,
   resetBindingOwners,
   routeFallbackEvent,
   routeKeyEvent,
@@ -323,6 +324,39 @@ describe("input router", () => {
     const uninstall = installInputRouter(emitter);
     emitter.emit("input", CTRL_O);
     expect(order).toEqual(["first"]);
+    uninstall();
+  });
+
+  test("releasing one owner does not unregister another that shares its id", () => {
+    // The composer and every overlay's input are the same component, so two
+    // `composer-input` registrations are live at once whenever a selector is open
+    // (the composer is mounted for the whole session). Keying the registry by the
+    // id alone let the overlay's unmount delete the composer's tables, which no
+    // component ever rebuilds while it stays mounted — its editing keys went dead
+    // silently for the rest of the session.
+    const runs: string[] = [];
+    const emitter = new EventEmitter();
+    registerBindingOwner("composer-input", () =>
+      shells(() => {
+        runs.push("composer");
+        return true;
+      }),
+    );
+    const releaseOverlay = registerBindingOwner("composer-input", () =>
+      shells(() => {
+        runs.push("overlay");
+        return true;
+      }),
+    );
+    const uninstall = installInputRouter(emitter);
+
+    expect(registeredBindingOwners()).toEqual([
+      "composer-input",
+      "composer-input",
+    ]);
+    releaseOverlay(); // the overlay closes; the composer never unmounted
+    emitter.emit("input", CTRL_O);
+    expect(runs).toEqual(["composer"]);
     uninstall();
   });
 

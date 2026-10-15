@@ -176,6 +176,96 @@ export function keyEventFrom(input: string, key?: Partial<Key>): KeyEvent {
 }
 
 /**
+ * Platform rules for the raw payload, applied before anything parses it.
+ *
+ * Enter reaches a terminal app as CR (`\r`) on most platforms and as LF (`\n`) on
+ * Linux ones, and Ink 7 flags only CR as `return` — `\n` becomes a key named
+ * `enter` with no flag this app's chords can match, so it fell through to the
+ * text editor and was inserted into the draft as a literal newline instead of
+ * submitting. The retired vendored patch normalized exactly this
+ * (`shouldTreatAsReturn`) and went away with the patch layer.
+ *
+ * Rewriting the payload here rather than after parsing is the point: the router
+ * dispatches the string every `useInput` handler parses, so one rewrite fixes the
+ * routing table *and* the components that still use Ink directly. Nothing is
+ * patched upstream (`I12`), and non-Linux platforms return the payload untouched.
+ */
+const BARE_ENTER_SUPPRESSION_WINDOW_MS = 75;
+/** CR and LF of one `\r\n` arriving closer together than this are one keystroke. */
+const CRLF_WINDOW_MS = 16;
+
+let suppressBareEnterUntil = 0;
+let lastCrAt = 0;
+
+function isLinuxPlatform(platform: string): boolean {
+  return platform === "linux";
+}
+
+/**
+ * Remember that a modified Enter was just pressed, so the bare newline some
+ * terminals send *after* it is not taken for a second Enter press.
+ *
+ * Arming is inert off Linux — `filterRawInput` is the only reader and returns
+ * before it looks — so this needs no platform of its own.
+ *
+ * The retired patch armed the same flag and then never read its deadline, which
+ * dropped the next newline whenever it arrived: a real Enter pressed seconds
+ * later went missing. The window is applied here.
+ */
+export function noteModifiedEnter(
+  event: KeyEvent,
+  now: number = Date.now(),
+): void {
+  if (event.key.return !== true) return;
+  if (!(event.key.shift || event.key.ctrl || event.key.meta)) return;
+  suppressBareEnterUntil = now + BARE_ENTER_SUPPRESSION_WINDOW_MS;
+}
+
+/**
+ * The payload to dispatch for a raw stdin string, or `null` when it is the echo
+ * of a keystroke already delivered and must be dropped.
+ *
+ * Three rules, all Linux-only:
+ * 1. LF is Enter: rewrite it to CR so Ink reads it as `return`.
+ * 2. The LF half of a CRLF pair is not a second key: drop it.
+ * 3. A bare newline right after a modified Enter is the terminal echoing the
+ *    keystroke back: drop it, or `Shift+Enter` would also submit the draft.
+ */
+export function filterRawInput(
+  raw: string,
+  platform: string = process.platform,
+  now: number = Date.now(),
+): string | null {
+  if (!isLinuxPlatform(platform)) return raw;
+  if (raw !== "\n" && raw !== "\r") return raw;
+
+  const echo = suppressBareEnterUntil > 0 && now <= suppressBareEnterUntil;
+  if (echo) {
+    suppressBareEnterUntil = 0;
+    lastCrAt = 0;
+    return null;
+  }
+  suppressBareEnterUntil = 0;
+
+  if (raw === "\r") {
+    lastCrAt = now;
+    return raw;
+  }
+  if (lastCrAt > 0 && now - lastCrAt <= CRLF_WINDOW_MS) {
+    lastCrAt = 0;
+    return null;
+  }
+  lastCrAt = 0;
+  return "\r";
+}
+
+/** Test seam: forget the pending modified-Enter suppression. */
+export function resetRawInputPlatformState(): void {
+  suppressBareEnterUntil = 0;
+  lastCrAt = 0;
+}
+
+/**
  * Read a raw stdin string, or `undefined` when this module does not understand
  * it (the caller must then let Ink parse it).
  */
