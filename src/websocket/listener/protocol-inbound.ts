@@ -1,4 +1,5 @@
 import type WebSocket from "ws";
+import { experimentIds } from "@/experiments/manager";
 import type { ExperimentId } from "@/experiments/types";
 import { isToolsetPreference } from "@/tools/toolset-catalog";
 import {
@@ -97,12 +98,11 @@ import type {
   WsProtocolCommand,
 } from "@/types/protocol_v2";
 
-const EXPERIMENT_IDS = new Set<ExperimentId>([
-  "conversation_titles",
-  "desktop_conversation_bootstrap",
-  "memory_palace",
-  "tui_cron",
-]);
+// Ids `set_experiment` accepts, derived from the experiment definitions so the
+// set cannot drift from what `get_experiments` reports. It used to be a hand-copy
+// of the union and had already lost three ids (the client could list them, and
+// its switch was rejected).
+const EXPERIMENT_IDS = new Set<ExperimentId>(experimentIds());
 
 function isExperimentId(value: unknown): value is ExperimentId {
   return typeof value === "string" && EXPERIMENT_IDS.has(value as ExperimentId);

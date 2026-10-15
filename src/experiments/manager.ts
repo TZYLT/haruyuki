@@ -9,6 +9,13 @@ import type {
   ExperimentSnapshot,
 } from "./types";
 
+/**
+ * Environment spellings that mean "on".
+ *
+ * The set is deliberately narrow, and `memory-palace.test.ts` pins it: `off`,
+ * `enabled` and every other word are *off*. Widening it is a decision about every
+ * experiment's env var, not about one of them.
+ */
 const ENABLED_TOGGLE_VALUES = new Set(["1", "true", "yes"]);
 
 const EXPERIMENT_DEFINITIONS: readonly ExperimentDefinition[] = [
@@ -63,6 +70,18 @@ function isEnabledToggle(value: string | undefined): boolean {
     return false;
   }
   return ENABLED_TOGGLE_VALUES.has(value.trim().toLowerCase());
+}
+
+/**
+ * Every experiment id, in declaration order.
+ *
+ * Validators must derive from this rather than hand-copy the union: the copy in
+ * the app-server inbound validator had already gone stale twice (a listed
+ * experiment the client could not switch), which is how `ui_v2` came to be
+ * visible over the protocol but rejected on `set_experiment`.
+ */
+export function experimentIds(): ExperimentId[] {
+  return EXPERIMENT_DEFINITIONS.map((definition) => definition.id);
 }
 
 function getExperimentDefinition(id: ExperimentId): ExperimentDefinition {
