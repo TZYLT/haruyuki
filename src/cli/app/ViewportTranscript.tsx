@@ -2,6 +2,14 @@ import { Box } from "ink";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { ApprovalSwitch } from "@/cli/components/ApprovalSwitch";
 import { PendingApprovalStub } from "@/cli/components/PendingApprovalStub";
+import {
+  getRecallDisplay,
+  getSystemRemindersExpanded,
+  getSystemRemindersVisible,
+  getThinkingExpanded,
+  subscribeToSystemReminderDisplay,
+  subscribeToThinkingDisplay,
+} from "@/cli/components/transcript-display-state";
 import { WelcomeScreen } from "@/cli/components/WelcomeScreen";
 import { APP_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
@@ -95,6 +103,29 @@ export function ViewportTranscript(props: AppViewProps) {
   // next one (a one-frame drift, documented on the row model).
   const precomputedDiffs = precomputedDiffsRef.current;
 
+  // The transcript's display state lives in a module store because the keystroke
+  // handler that toggles it (Ctrl+T / Ctrl+R) sits outside React. Rendering reads
+  // it through `TranscriptItemView`'s own subscription, but the *window* is chosen
+  // from measured heights, so this component has to subscribe as well: without it
+  // an expanded reasoning body keeps being measured as the one-row header it was
+  // before Ctrl+T, and the viewport would clip or misplace everything under it.
+  const reasoningExpanded = useSyncExternalStore(
+    subscribeToThinkingDisplay,
+    getThinkingExpanded,
+  );
+  const systemRemindersVisible = useSyncExternalStore(
+    subscribeToSystemReminderDisplay,
+    getSystemRemindersVisible,
+  );
+  const systemRemindersExpanded = useSyncExternalStore(
+    subscribeToSystemReminderDisplay,
+    getSystemRemindersExpanded,
+  );
+  const recallDisplay = useSyncExternalStore(
+    subscribeToSystemReminderDisplay,
+    getRecallDisplay,
+  );
+
   // Scroll position. The subscription keeps this component re-rendering on scroll
   // — and only this component, which is the point of the module store. Its return
   // value is not read: the request object below is what the window depends on, and
@@ -174,6 +205,13 @@ export function ViewportTranscript(props: AppViewProps) {
           diffs: precomputedDiffs,
           expandedToolCallId,
           lastShellToolCallId,
+          userPromptPrefix: statusLinePrompt
+            ? `${statusLinePrompt} `
+            : undefined,
+          reasoningExpanded,
+          systemRemindersVisible,
+          systemRemindersExpanded,
+          recallDisplay,
           substitutions: {
             currentApproval,
             currentApprovalContext,
@@ -196,6 +234,11 @@ export function ViewportTranscript(props: AppViewProps) {
     precomputedDiffs,
     expandedToolCallId,
     lastShellToolCallId,
+    statusLinePrompt,
+    reasoningExpanded,
+    systemRemindersVisible,
+    systemRemindersExpanded,
+    recallDisplay,
     currentApproval,
     currentApprovalContext,
     approvalMap,

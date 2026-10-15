@@ -28,19 +28,41 @@ import {
   approvalPreviewItemRows,
   substitutedApprovalRows,
 } from "@/cli/app/approval-rows";
-import { toolCallRows } from "@/cli/app/tool-call-rows";
+import { streamingOutputRows, toolCallRows } from "@/cli/app/tool-call-rows";
 import type { StaticItem } from "@/cli/app/types";
 import type { Line } from "@/cli/helpers/accumulator";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { markdownRowCount } from "@/cli/helpers/markdown-rows";
-import { countTextRows, inkStringWidth } from "@/cli/helpers/text-metrics";
+import { selectCollapsedOutput } from "@/cli/helpers/shell-output";
+import {
+  countTextRows,
+  inkStringWidth,
+  wrappedRowCount,
+} from "@/cli/helpers/text-metrics";
+import {
+  INTERRUPTED_BY_USER,
+  SYSTEM_ALERT_CLOSE,
+  SYSTEM_ALERT_OPEN,
+  SYSTEM_REMINDER_CLOSE,
+  SYSTEM_REMINDER_OPEN,
+} from "@/constants";
+import {
+  formatRecallBlockForDisplay,
+  RECALL_DISPLAY_DEFAULT,
+  type RecallDisplay,
+} from "@/reminders/recall-display";
+import { isRecallReminderText } from "@/reminders/recall-reminder";
+import { extractTaskNotificationsForDisplay } from "@/utils/task-notifications";
 
 /** Two-column gutter used by assistant/reasoning/error rows. */
 export const TRANSCRIPT_GUTTER_WIDTH = 2;
 
 /** Blank row `StaticTranscript` inserts between two committed items. */
 export const STATIC_ITEM_GAP_ROWS = 1;
+
+/** Gutter `CommandMessage` draws before its output (`  └  `). */
+const COMMAND_OUTPUT_GUTTER_WIDTH = 5;
 
 /** Approximate height of the welcome banner (it is a fixed template). */
 const WELCOME_ROWS = 12;
@@ -65,6 +87,22 @@ export interface RowMeasureOptions {
   userPromptPrefix?: string;
   /** Whether collapsed reasoning rows render their body (ctrl+t). */
   reasoningExpanded?: boolean;
+  /**
+   * Whether system-reminder blocks render at all (ctrl+r). Reminder blocks are
+   * part of a *user* row, so this changes that row's height; the value is the
+   * transcript display state (`getSystemRemindersVisible`).
+   */
+  systemRemindersVisible?: boolean;
+  /**
+   * Whether reminder and recall blocks render their full body instead of a
+   * one-line header (ctrl+r).
+   */
+  systemRemindersExpanded?: boolean;
+  /**
+   * Tier the transcript renders recall blocks with (`getRecallDisplay`): it
+   * decides whether a recall block is a summary line, its full text, or nothing.
+   */
+  recallDisplay?: RecallDisplay;
   /** Total terminal rows; sizes the approval preview budgets. */
   terminalRows?: number;
   /** Diffs precomputed for this frame, keyed by tool call id (and `id:path`). */
@@ -92,12 +130,6 @@ function approvalMeasureOptions(
   };
 }
 
-/** Rows for optional body text: absent text occupies no rows. */
-function optionalTextRows(text: string | undefined, width: number): number {
-  if (!text) return 0;
-  return countTextRows(text, width);
-}
-
 /**
  * Rows a single transcript `Line` occupies at the given width.
  *
@@ -119,44 +151,115 @@ export function measureLineRows(
     case "trajectory_summary":
       return 1;
 
-    case "status":
-      return Math.max(1, line.lines.length);
+    case "status": {
+      // `StatusMessage` gives every line its own row box: a two-column gutter
+      // and a `columns - 2` content box that wraps.
+      const statusWidth = Math.max(1, columns - gutterWidth);
+      return line.lines.reduce(
+        (total, text) => total + countTextRows(text, statusWidth),
+        0,
+      );
+    }
 
     case "assistant":
-      return markdownRowCount(line.text, contentWidth);
+      // `AssistantMessageRich` hands its `contentWidth` to `MarkdownDisplay`,
+      // so tables lay out against that width too.
+      return markdownRowCount(line.text, contentWidth, { contentWidth });
 
     case "reasoning": {
-      if (line.isContinuation && !options.reasoningExpanded) return 0;
-      if (!options.reasoningExpanded) return line.isContinuation ? 0 : 1;
-      // Expanded: header + blank spacer + body.
-      return 2 + markdownRowCount(line.text, contentWidth);
+      const expanded = options.reasoningExpanded ?? false;
+      if (!expanded) return line.isContinuation ? 0 : 1;
+      // Expanded: header row, the one-row spacer, then the markdown body. A
+      // continuation line has no header and no spacer. Measuring the raw text
+      // over-counts when `normalize` collapses a blank run, and the streaming
+      // live window is capped below the body's height: both err large.
+      const body = markdownRowCount(line.text, contentWidth);
+      return line.isContinuation ? body : 2 + body;
     }
 
-    case "recall":
-      return Math.max(1, markdownRowCount(line.text, contentWidth));
+    case "recall": {
+      // `RecallBlockMessage` renders the tier-formatted block as one `<Text>` at
+      // the full terminal width, and renders nothing at all when the tier hides
+      // it (`silent`, or a `summary` block whose marker will not parse).
+      const shown = formatRecallBlockForDisplay({
+        text: line.text,
+        display: options.recallDisplay ?? RECALL_DISPLAY_DEFAULT,
+        expanded: options.systemRemindersExpanded ?? false,
+      });
+      if (shown === null) return 0;
+      return countTextRows(shown, Math.max(1, columns));
+    }
 
     case "error":
-      // Approximation: the error renderer wraps its text in one block.
-      return Math.max(1, countTextRows(line.text, Math.max(1, columns)));
+      // `ErrorMessageRich` wraps inside its two-column box, not the full width.
+      return Math.max(
+        1,
+        countTextRows(line.text, Math.max(1, columns - gutterWidth)),
+      );
 
-    case "user": {
-      const prefix = options.userPromptPrefix ?? `${CLI_GLYPHS.prompt} `;
-      const prefixWidth = inkStringWidth(prefix);
-      const usable = Math.max(1, columns - prefixWidth);
-      // Approximation: reminder/recall blocks are measured as plain text and the
-      // blank row between blocks is not counted (display state is caller-side).
-      return Math.max(1, countTextRows(line.text, usable));
+    case "user":
+      return userLineRows(line, options);
+
+    case "command": {
+      // `CommandMessage`: a header row with the input in a `columns - 2` box (or
+      // nothing while the command is waiting), then a `  └  ` row whose body is
+      // markdown inside a `columns - 5` box.
+      if (line.phase === "waiting") return 0;
+      let rows = countTextRows(line.input, Math.max(1, columns - gutterWidth));
+      if (line.output) {
+        const outputWidth = Math.max(1, columns - COMMAND_OUTPUT_GUTTER_WIDTH);
+        rows += line.preformatted
+          ? countTextRows(line.output, outputWidth)
+          : markdownRowCount(line.output, outputWidth);
+      }
+      return rows;
     }
 
-    case "command":
     case "bash_command": {
-      // Approximation: one input header row plus wrapped input and output.
-      const usable = Math.max(1, columns);
-      return (
-        1 +
-        optionalTextRows(line.input, usable) +
-        optionalTextRows(line.output, usable)
+      // `BashCommandMessage`: same two-column input row as `CommandMessage`, then
+      // one of three bodies — the streaming window while running, the full
+      // (never-collapsed) output once finished, or the legacy markdown block when
+      // no phase was recorded.
+      const rows = countTextRows(
+        line.input,
+        Math.max(1, columns - gutterWidth),
       );
+
+      if (line.phase === "running" && line.streaming) {
+        // Bash mode shows the "(esc to interrupt)" hint.
+        return rows + streamingOutputRows(line.streaming, columns, true);
+      }
+
+      if (line.phase === "finished" && line.output) {
+        if (line.output === INTERRUPTED_BY_USER) {
+          return rows + Math.max(1, countTextRows(line.output, columns));
+        }
+        const outputWidth = Math.max(1, columns - COMMAND_OUTPUT_GUTTER_WIDTH);
+        // `CollapsedOutputDisplay` with `maxLines={Infinity}`: every line of the
+        // output is rendered as its own markdown block.
+        const { visibleLines } = selectCollapsedOutput(line.output, {
+          maxLines: Number.POSITIVE_INFINITY,
+        });
+        return (
+          rows +
+          visibleLines.reduce(
+            (total, outputLine) =>
+              total + markdownRowCount(outputLine, outputWidth),
+            0,
+          )
+        );
+      }
+
+      if (!line.phase && line.output) {
+        return (
+          rows +
+          markdownRowCount(
+            line.output,
+            Math.max(1, columns - COMMAND_OUTPUT_GUTTER_WIDTH),
+          )
+        );
+      }
+      return rows;
     }
 
     case "tool_call":
@@ -173,6 +276,171 @@ export function measureLineRows(
     default:
       return 1;
   }
+}
+
+/**
+ * Rows a `user` line occupies, mirroring `UserMessageRich`.
+ *
+ * `UserMessage` splits a message into system-reminder blocks and user content
+ * blocks, wraps each one at the prompt-adjusted width, and draws a full-width
+ * highlight row above *and* below every highlighted (user content) block. The row
+ * model must not import that component — it is the render pass, not a pure
+ * helper — so the block walk is mirrored here; `row-model.fidelity.test.tsx`
+ * measures the real component and is what keeps the two honest.
+ *
+ * Which blocks exist is display state, which the caller passes in: a
+ * non-recall reminder only renders while reminders are visible, and a recall
+ * block follows its own tier.
+ */
+function userLineRows(
+  line: Extract<Line, { kind: "user" }>,
+  options: RowMeasureOptions,
+): number {
+  const columns = Math.max(1, options.columns);
+  const prefix = options.userPromptPrefix ?? `${CLI_GLYPHS.prompt} `;
+  const contentWidth = Math.max(1, columns - inkStringWidth(prefix));
+  const displayText = extractTaskNotificationsForDisplay(
+    line.text,
+  ).cleanedText.trim();
+  if (!displayText) return 0;
+
+  const recallDisplay = options.recallDisplay ?? RECALL_DISPLAY_DEFAULT;
+  const remindersExpanded = options.systemRemindersExpanded ?? false;
+  const remindersVisible = options.systemRemindersVisible ?? false;
+
+  // `pushBlock` separates two blocks with an empty `<Text>`, which Ink measures
+  // as zero rows — the separator is not a row. The two blank rows around a
+  // highlighted block are real: they are `columns` spaces wide.
+  const pushBlock = (text: string, highlighted: boolean): number => {
+    const bodyRows = renderedBlockRows(text, contentWidth);
+    return bodyRows + (highlighted ? 2 : 0);
+  };
+
+  let rows = 0;
+  for (const block of splitReminderBlocks(displayText)) {
+    if (!block.text.trim()) continue;
+    if (!block.isSystemReminder) {
+      rows += pushBlock(block.text, true);
+      continue;
+    }
+    if (isRecallReminderText(block.text)) {
+      const recall = formatRecallBlockForDisplay({
+        text: block.text,
+        display: recallDisplay,
+        expanded: remindersExpanded,
+      });
+      if (recall !== null) rows += pushBlock(recall, false);
+      continue;
+    }
+    if (!remindersVisible) continue;
+    rows += pushBlock(
+      systemReminderBlockText(block.text, remindersExpanded),
+      false,
+    );
+  }
+  return rows;
+}
+
+/**
+ * Rows `UserMessageRich.renderBlock` produces for one block: every `\n` segment
+ * wraps independently, and a blank segment still takes a row. A blank segment
+ * also means the block is empty, and an empty block renders no rows at all.
+ */
+function renderedBlockRows(text: string, contentWidth: number): number {
+  let rows = 0;
+  for (const inputLine of text.split("\n")) {
+    if (inputLine.trim() === "") {
+      rows += 1;
+      continue;
+    }
+    rows += wrappedRowCount(inputLine, contentWidth);
+  }
+  return rows;
+}
+
+/**
+ * Split a message into `<system-reminder>` (and legacy `<system-alert>`) blocks
+ * and user content blocks, in order.
+ *
+ * Mirrors `splitSystemReminderBlocks` in `UserMessageRich`, including its two
+ * fallbacks: an unterminated tag makes the remainder literal user text, and
+ * blocks are trimmed (so a trailing newline never becomes a blank row).
+ */
+function splitReminderBlocks(
+  text: string,
+): Array<{ text: string; isSystemReminder: boolean }> {
+  const blocks: Array<{ text: string; isSystemReminder: boolean }> = [];
+  const tags = [
+    { open: SYSTEM_REMINDER_OPEN, close: SYSTEM_REMINDER_CLOSE },
+    { open: SYSTEM_ALERT_OPEN, close: SYSTEM_ALERT_CLOSE },
+  ];
+
+  let remaining = text;
+  while (remaining.length > 0) {
+    const nextTag = tags
+      .map((tag) => ({ ...tag, idx: remaining.indexOf(tag.open) }))
+      .filter((tag) => tag.idx >= 0)
+      .sort((a, b) => a.idx - b.idx)[0];
+
+    if (!nextTag) {
+      // No more system-reminder tags, rest is user content
+      if (remaining.trim()) {
+        blocks.push({ text: remaining.trim(), isSystemReminder: false });
+      }
+      break;
+    }
+
+    // Find the closing tag
+    const closeIdx = remaining.indexOf(nextTag.close, nextTag.idx);
+    if (closeIdx === -1) {
+      // Malformed/incomplete tag - treat the whole remainder as literal user text.
+      const literal = remaining.trim();
+      if (literal) {
+        blocks.push({ text: literal, isSystemReminder: false });
+      }
+      break;
+    }
+
+    // Content before the tag is user content
+    if (nextTag.idx > 0) {
+      const before = remaining.slice(0, nextTag.idx).trim();
+      if (before) {
+        blocks.push({ text: before, isSystemReminder: false });
+      }
+    }
+
+    blocks.push({
+      text: remaining.slice(nextTag.idx, closeIdx + nextTag.close.length),
+      isSystemReminder: true,
+    });
+
+    remaining = remaining.slice(closeIdx + nextTag.close.length);
+  }
+
+  return blocks;
+}
+
+/**
+ * The one-line (or expanded) form of a non-recall reminder block.
+ *
+ * Mirrors `formatSystemReminderBlock` in `UserMessageRich`; that module is a
+ * component file the row model must not import.
+ */
+function systemReminderBlockText(text: string, expanded: boolean): string {
+  const content = text
+    .replace(SYSTEM_REMINDER_OPEN, "")
+    .replace(SYSTEM_REMINDER_CLOSE, "")
+    .replace(SYSTEM_ALERT_OPEN, "")
+    .replace(SYSTEM_ALERT_CLOSE, "")
+    .trim();
+  const lineCount = content ? content.split("\n").length : 0;
+
+  if (expanded) {
+    return `▾ System reminder (ctrl+r to collapse)\n${text}`;
+  }
+
+  const lineLabel = lineCount === 1 ? "1 line" : `${lineCount} lines`;
+  return `▸ System reminder · ${lineLabel} (ctrl+r to expand)`;
 }
 
 /**
@@ -210,6 +478,10 @@ export function measureTranscriptItemRows(
       return (
         gap + approvalPreviewItemRows(item, approvalMeasureOptions(options))
       );
+    case "separator":
+      // `TranscriptItemView` gives a separator its own one-row `marginTop` box on
+      // top of the inter-item gap, and draws a single full-width rule.
+      return gap + 2;
     default:
       return gap + measureLineRows(item, options);
   }

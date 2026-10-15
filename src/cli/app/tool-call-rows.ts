@@ -31,7 +31,7 @@ import { memoryResultRows } from "@/cli/app/memory-result-rows";
 import { parseEnterWorktreeResult } from "@/cli/components/EnterWorktreeResultRenderer";
 import { parseExitWorktreeResult } from "@/cli/components/ExitWorktreeResultRenderer";
 import { hasWorktreeResultRenderer } from "@/cli/components/WorktreeResultRenderer.js";
-import type { Line } from "@/cli/helpers/accumulator";
+import type { Line, StreamingState } from "@/cli/helpers/accumulator";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import {
   advancedDiffRowCount,
@@ -40,6 +40,7 @@ import {
   writeRendererRowCount,
 } from "@/cli/helpers/diff-rows";
 import { parsePatchOperations } from "@/cli/helpers/format-args-display.js";
+import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { markdownRowCount } from "@/cli/helpers/markdown-rows";
 import {
   clipStreamingLine,
@@ -135,7 +136,7 @@ export function toolCallRows(
   });
 
   let rows = toolCallHeaderRows(display, columns);
-  rows += shellContinuationRows(display);
+  rows += shellContinuationRows(display, columns);
   rows += shellOutputRows(line, display, options);
 
   if (!showsDefaultToolResult(line, rawName)) return rows;
@@ -181,13 +182,93 @@ function toolCallHeaderRows(display: ToolCallDisplay, columns: number): number {
  * than from the highlighter's output (shiki is too expensive to run here). The
  * renderer keeps at most `SHELL_COMMAND_MAX_LINES` lines, so the count is
  * bounded and matches for the ordinary multi-line command.
+ *
+ * The continuation line is *not* one row: the renderer clips it to
+ * `columns - 5` **code units** (`clipStyledSpans`) and then wraps it inside a
+ * `columns - 5` box, so 40 columns of CJK text on a 45-column terminal occupy
+ * two rows. Measuring the clipped text at the same width keeps the two together.
  */
-function shellContinuationRows(display: ToolCallDisplay): number {
+function shellContinuationRows(
+  display: ToolCallDisplay,
+  columns: number,
+): number {
   if (!display.shellCommand) return 0;
   const nonEmptyLines = display.shellCommand
     .split("\n")
-    .filter((line) => line.length > 0).length;
-  return Math.max(0, Math.min(SHELL_COMMAND_MAX_LINES, nonEmptyLines) - 1);
+    .filter((line) => line.length > 0);
+  const continuationCount = Math.max(
+    0,
+    Math.min(SHELL_COMMAND_MAX_LINES, nonEmptyLines.length) - 1,
+  );
+  if (continuationCount === 0) return 0;
+
+  const contentWidth = Math.max(1, columns - RESULT_GUTTER_WIDTH);
+  const continuationLine = nonEmptyLines[1] ?? "";
+  const clipped = continuationLine.slice(0, contentWidth);
+  return Math.max(1, countTextRows(clipped, contentWidth));
+}
+
+/**
+ * Rows `StreamingOutputDisplay` occupies for a streaming shell body.
+ *
+ * Shared by the shell tool-call branch and the `bash_command` transcript row —
+ * both render the same component, with bash mode adding the interrupt hint.
+ *
+ * Every row is measured as its inner text at `columns - 5`, because that is the
+ * box the renderer gives it: the `  └  ` prefix and the five-space continuation
+ * indent are both five-column gutters beside a wrapping `<Text>`. (The leading
+ * gutter is *not* folded into the measured string: `wrappedRowCount` drops
+ * leading runs of spaces, which would under-count a row that has to wrap.)
+ */
+export function streamingOutputRows(
+  streaming: StreamingState,
+  columns: number,
+  showInterruptHint = false,
+): number {
+  const width = Math.max(1, columns);
+  const contentWidth = Math.max(1, width - RESULT_GUTTER_WIDTH);
+  const hint = showInterruptHint ? " (esc to interrupt)" : "";
+  // The elapsed time is read here for the same reason the renderer reads it: the
+  // row only has to be wide enough that the wrap is the same.
+  const elapsed = Math.floor((Date.now() - streaming.startTime) / 1000);
+  const { first, rest, hiddenCount } = streamingOutputLayout(streaming);
+
+  if (!first) {
+    // The "Running... (Ns)" row carries its gutter inside the same `<Text>`.
+    return Math.max(
+      1,
+      countTextRows(
+        `  ${CLI_GLYPHS.result}  Running... (${elapsed}s)${hint}`,
+        width,
+      ),
+    );
+  }
+
+  const clipWidth = Math.max(
+    STREAMING_MIN_CONTENT_WIDTH,
+    width - RESULT_GUTTER_WIDTH,
+  );
+  let rows = Math.max(
+    1,
+    countTextRows(clipStreamingLine(first.text, clipWidth), contentWidth),
+  );
+  for (const line of rest) {
+    rows += Math.max(
+      1,
+      countTextRows(clipStreamingLine(line.text, clipWidth), contentWidth),
+    );
+  }
+  // Exactly one trailing row: the hidden-line count, or the elapsed time.
+  rows += Math.max(
+    1,
+    countTextRows(
+      hiddenCount > 0
+        ? `… +${hiddenCount} more lines (${elapsed}s)${hint}`
+        : `(${elapsed}s)${hint}`,
+      contentWidth,
+    ),
+  );
+  return rows;
 }
 
 /** Streaming + collapsed shell output rows, mutually exclusive by phase. */
@@ -199,36 +280,7 @@ function shellOutputRows(
   if (!isShellOutputTool(display.rawName)) return 0;
 
   if (line.phase === "running" && line.streaming) {
-    const { first, rest, hiddenCount } = streamingOutputLayout(line.streaming);
-    if (!first) return 1; // "Running... (Ns)" row
-
-    const columns = Math.max(1, options.columns);
-    const clipWidth = Math.max(
-      STREAMING_MIN_CONTENT_WIDTH,
-      columns - RESULT_GUTTER_WIDTH,
-    );
-    const textWidth = Math.max(1, columns - RESULT_GUTTER_WIDTH);
-    // The first row carries the `  └  ` prefix beside the clipped line, and the
-    // remaining rows carry a blank 5-column indent in front of theirs.
-    let rows = Math.max(
-      1,
-      countTextRows(clipStreamingLine(first.text, clipWidth), textWidth),
-    );
-    for (const restLine of rest) {
-      rows += Math.max(
-        1,
-        countTextRows(
-          `     ${clipStreamingLine(restLine.text, clipWidth)}`,
-          columns,
-        ),
-      );
-    }
-    // Exactly one trailing row: the hidden-line count, or the elapsed time.
-    rows +=
-      hiddenCount > 0
-        ? countTextRows(`     … +${hiddenCount} more lines`, columns)
-        : countTextRows("     (elapsed)", columns);
-    return rows;
+    return streamingOutputRows(line.streaming, options.columns);
   }
 
   if (line.phase === "finished" && line.resultText && line.resultOk !== false) {

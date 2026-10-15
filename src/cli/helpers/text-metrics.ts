@@ -187,6 +187,12 @@ function takeFirstCharacter(text: string): {
  * units would emit a row that is twice the requested width, and Ink would then
  * wrap it again: the rendered row count would exceed the count this function
  * reports, which is exactly what the transcript row model relies on.
+ *
+ * **Every returned row is at most `cols` display columns wide** (the only
+ * exception is a terminal so narrow that one character alone overflows it).
+ * That invariant is the contract: `diff-rows` counts these rows without
+ * rendering them, so a row Ink has to wrap a second time would make the model
+ * report one row fewer than the screen shows.
  */
 export function paddedRows(
   chunks: StyledChunk[],
@@ -195,39 +201,83 @@ export function paddedRows(
 ): StyledChunk[][] {
   if (cols <= 0) return [chunks];
   const rows: StyledChunk[][] = [];
+  const continueRow = (): StyledChunk[] => [{ text: " ".repeat(contIndent) }];
   let row: StyledChunk[] = [];
   let width = 0;
+  // Whether `row` holds anything besides its continuation indent. A row that
+  // holds nothing else can always take the next code point, which is what keeps
+  // this loop terminating on a terminal too narrow to hold one character.
+  let rowHasContent = false;
   for (const chunk of chunks) {
     let rem = chunk.text;
     while (rem.length > 0) {
       if (width >= cols) {
         rows.push(row);
-        row = [{ text: " ".repeat(contIndent) }];
+        row = continueRow();
         width = contIndent;
+        rowHasContent = false;
       }
 
       const space = Math.max(1, cols - width);
       if (inkStringWidth(rem) <= space) {
         row.push({ text: rem, color: chunk.color, dimColor: chunk.dimColor });
         width += inkStringWidth(rem);
+        rowHasContent = true;
         rem = "";
-      } else {
-        let next = takePrefixByDisplayWidth(rem, space);
-        if (!next.prefix) {
-          next = takeFirstCharacter(rem);
+        continue;
+      }
+
+      const next = takePrefixByDisplayWidth(rem, space);
+      if (!next.prefix) {
+        // The next code point is wider than the space left on this row — a
+        // double-width character beside a one-column gap. Emitting it here would
+        // produce a row wider than `cols`, which Ink wraps again: the rendered
+        // row count would exceed the count this function's rows report, which is
+        // exactly what the transcript row model relies on. Close the row and let
+        // the character start the continuation row instead.
+        const characterWidth = inkStringWidth(Array.from(rem)[0] ?? "");
+        if (
+          rowHasContent &&
+          contIndent < cols &&
+          characterWidth <= cols - contIndent
+        ) {
+          rows.push(row);
+          row = continueRow();
+          width = contIndent;
+          rowHasContent = false;
+          continue;
         }
+        // Nowhere to move it to (the continuation indent itself leaves no room):
+        // take the character anyway so the loop always makes progress.
+        const forced = takeFirstCharacter(rem);
         row.push({
-          text: next.prefix,
+          text: forced.prefix,
           color: chunk.color,
           dimColor: chunk.dimColor,
         });
-        width += next.width;
-        rem = next.rest;
+        width += forced.width;
+        rem = forced.rest;
         rows.push(row);
         // Start continuation row with blank gutter indent
-        row = [{ text: " ".repeat(contIndent) }];
+        row = continueRow();
         width = contIndent;
+        rowHasContent = false;
+        continue;
       }
+
+      row.push({
+        text: next.prefix,
+        color: chunk.color,
+        dimColor: chunk.dimColor,
+      });
+      width += next.width;
+      rowHasContent = true;
+      rem = next.rest;
+      rows.push(row);
+      // Start continuation row with blank gutter indent
+      row = continueRow();
+      width = contIndent;
+      rowHasContent = false;
     }
   }
   if (width < cols) row.push({ text: " ".repeat(cols - width) });
