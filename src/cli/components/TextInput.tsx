@@ -65,7 +65,14 @@ function isControlSequence(input: string, key: Key): boolean {
 
 export interface TextInputProps {
   value: string;
-  onChange: (value: string) => void;
+  /**
+   * Report an edit. Returning `false` refuses it: the parent kept its own value
+   * (for example the composer intercepting `!` on an empty draft to enter bash
+   * mode), and this input must go back to displaying the parent's value rather
+   * than keeping the rejected one — otherwise the next keystroke builds on text
+   * the parent never accepted.
+   */
+  onChange: (value: string) => boolean | void;
   onSubmit?: (value: string) => void;
   placeholder?: string;
   focus?: boolean;
@@ -192,8 +199,22 @@ export function TextInput({
       setCursorOffset(nextCursor);
       onCursorOffsetChange?.(nextCursor);
       if (nextValue !== base) {
+        if (onChange(nextValue) === false) {
+          // The parent refused the edit and still holds `lastPropRef`: keep showing
+          // that, or this input's optimistic value becomes the base for the next
+          // keystroke (the composer's `!`-to-bash-mode entry used to leak a `!`
+          // into the first command that way).
+          latestValueRef.current = lastPropRef.current;
+          const restored = Math.min(
+            cursorOffsetRef.current,
+            lastPropRef.current.length,
+          );
+          cursorOffsetRef.current = restored;
+          setCursorOffset(restored);
+          onCursorOffsetChange?.(restored);
+          return;
+        }
         latestValueRef.current = nextValue;
-        onChange(nextValue);
       }
     },
     { isActive: focus },

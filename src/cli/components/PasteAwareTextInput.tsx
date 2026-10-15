@@ -603,13 +603,16 @@ export function PasteAwareTextInput({
 
   useEffect(() => resetPasteBurst, [resetPasteBurst]);
 
-  const handleChange = (newValue: string) => {
+  const handleChange = (newValue: string): boolean | void => {
     // Bash mode entry: intercept "!" typed on empty input BEFORE updating state
-    // This prevents any flicker since we never commit the "!" to displayValue
+    // This prevents any flicker since we never commit the "!" to displayValue.
+    // `false` tells the leaf input the edit was refused, so it drops the "!" it
+    // optimistically applied; without that the next keystroke built on it and the
+    // first bash command came out as `!cmd`.
     if (displayValueRef.current === "" && newValue === "!") {
       if (onBangAtEmpty?.()) {
         // Parent handled it (entered bash mode) - don't update our state
-        return;
+        return false;
       }
     }
 

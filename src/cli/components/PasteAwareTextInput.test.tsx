@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { Writable } from "node:stream";
 import chalk from "chalk";
 import { render } from "ink";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import stripAnsi from "strip-ansi";
 import { PasteAwareTextInput } from "./PasteAwareTextInput";
 
@@ -94,6 +94,8 @@ interface Observed {
   caret: number | null;
   /** Caret offset actually drawn in the last frame. */
   renderedCaret: number | null;
+  /** Times the input handed a value to the submit handler. */
+  submits: number;
 }
 
 function Harness({ observed }: { observed: Observed }) {
@@ -105,7 +107,9 @@ function Harness({ observed }: { observed: Observed }) {
         observed.value = next;
         setValue(next);
       }}
-      onSubmit={() => {}}
+      onSubmit={() => {
+        observed.submits += 1;
+      }}
       onCursorMove={(offset) => {
         observed.caret = offset;
       }}
@@ -118,14 +122,24 @@ function Harness({ observed }: { observed: Observed }) {
  * Renders the real composer input under Ink and feeds `groups` of stdin reads,
  * one group per tick. Returns the parent-observed value and caret.
  */
-async function typeInReads(groups: string[][]): Promise<Observed> {
-  const observed: Observed = { value: "", caret: null, renderedCaret: null };
+async function typeInReads(
+  groups: string[][],
+  harness: (observed: Observed) => ReactNode = (observed) => (
+    <Harness observed={observed} />
+  ),
+): Promise<Observed> {
+  const observed: Observed = {
+    value: "",
+    caret: null,
+    renderedCaret: null,
+    submits: 0,
+  };
   const stdin = new MultiReadStdin();
   const stdout = new CaptureStream() as CaptureStream & NodeJS.WriteStream;
   // Force styled output so the inverse-video caret is visible in captured frames.
   const previousLevel = chalk.level;
   chalk.level = 1;
-  const instance = render(<Harness observed={observed} />, {
+  const instance = render(harness(observed), {
     stdin: stdin as unknown as NodeJS.ReadStream,
     stdout,
     stderr: stdout,
@@ -149,6 +163,29 @@ async function typeInReads(groups: string[][]): Promise<Observed> {
   }
   observed.renderedCaret = renderedCaret(stdout.frames);
   return observed;
+}
+
+/**
+ * The composer's other half of bash-mode entry: `handleChange` takes `!` on an
+ * empty draft, enters bash mode and **keeps its own value**, so the `!` must not
+ * survive in the input.
+ */
+function BangEntryHarness({ observed }: { observed: Observed }) {
+  const [value, setValue] = useState("");
+  return (
+    <PasteAwareTextInput
+      value={value}
+      onChange={(next) => {
+        observed.value = next;
+        setValue(next);
+      }}
+      onSubmit={() => {
+        observed.submits += 1;
+      }}
+      onBangAtEmpty={() => true}
+      focus
+    />
+  );
 }
 
 function TwoInputHarness({
@@ -188,8 +225,18 @@ async function pasteIntoTwo(chunks: string[]): Promise<{
   composer: Observed;
   overlay: Observed;
 }> {
-  const composer: Observed = { value: "", caret: null, renderedCaret: null };
-  const overlay: Observed = { value: "", caret: null, renderedCaret: null };
+  const composer: Observed = {
+    value: "",
+    caret: null,
+    renderedCaret: null,
+    submits: 0,
+  };
+  const overlay: Observed = {
+    value: "",
+    caret: null,
+    renderedCaret: null,
+    submits: 0,
+  };
   const stdin = new MultiReadStdin();
   const stdout = new CaptureStream() as CaptureStream & NodeJS.WriteStream;
   const previousLevel = chalk.level;
@@ -375,8 +422,21 @@ describe("PasteAwareTextInput editing keys", () => {
 
   test("leaves a plain Enter to the submit handler", async () => {
     const observed = await typeInReads([["ab"], ["\r"]]);
-    // The harness's onSubmit is a no-op, so the draft stays and the newline was
-    // not inserted into it.
+    // The draft stays and the newline was not inserted into it...
     expect(observed.value).toBe("ab");
+    // ...because Enter is the submit handler's key. Asserting the hand-off is the
+    // point: without the count this passed even when Enter stopped submitting.
+    expect(observed.submits).toBe(1);
+  });
+
+  test("a refused edit is not the base for the next keystroke", async () => {
+    // The composer keeps its own value when it takes `!` for bash-mode entry. The
+    // leaf input had already applied the `!` optimistically, so before the refusal
+    // was reported back the next keystroke built on it and the first bash command
+    // came out as `!cmd`.
+    const observed = await typeInReads([["!"], ["l"], ["s"]], (o) => (
+      <BangEntryHarness observed={o} />
+    ));
+    expect(observed.value).toBe("ls");
   });
 });
