@@ -4,7 +4,8 @@ export type ExperimentId =
   | "desktop_conversation_bootstrap"
   | "diffs"
   | "memory_palace"
-  | "tui_cron";
+  | "tui_cron"
+  | "ui_v2";
 
 export type ExperimentSource = "override" | "env" | "default";
 

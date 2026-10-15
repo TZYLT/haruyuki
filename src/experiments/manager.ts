@@ -49,6 +49,13 @@ const EXPERIMENT_DEFINITIONS: readonly ExperimentDefinition[] = [
     description:
       "Fire scheduled tasks from the CLI when the desktop app isn't running.",
   },
+  {
+    id: "ui_v2",
+    label: "full-screen TUI",
+    description:
+      "Render the interactive TUI with the new full-screen shell (viewport, key and mouse handling, panels) instead of the append-style shell. Off by default while the new shell is being built.",
+    envVar: "HARUYUKI_UI_V2",
+  },
 ] as const;
 
 function isEnabledToggle(value: string | undefined): boolean {

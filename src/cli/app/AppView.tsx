@@ -125,7 +125,7 @@ type QueuedApprovalDecision = {
   reason?: string;
 };
 
-type AppViewProps = {
+export type AppViewProps = {
   activeOverlay: ActiveOverlay;
   agentId: string;
   agentName: string | null;
