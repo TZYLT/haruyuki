@@ -145,7 +145,6 @@ export type AppViewProps = {
   handleCtrlO: () => void;
   queueMode: "immediate" | "defer";
   deferModeSupported: boolean;
-  handleCtrlD: () => void;
 
   feedbackPrefill: string;
   showInspirationalPromptHints: boolean;
@@ -353,7 +352,6 @@ export function AppView(props: AppViewRenderProps) {
     handleCtrlO,
     queueMode,
     deferModeSupported,
-    handleCtrlD,
     feedbackPrefill,
     showInspirationalPromptHints,
     onEscapeCommandCancel,
@@ -506,7 +504,6 @@ export function AppView(props: AppViewRenderProps) {
                 onExit={handleExit}
                 onInterrupt={handleInterrupt}
                 onCtrlO={handleCtrlO}
-                onCtrlD={handleCtrlD}
                 queueMode={queueMode}
                 deferModeSupported={deferModeSupported}
                 interruptRequested={interruptRequested}

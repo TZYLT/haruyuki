@@ -9,149 +9,209 @@
  * Pure and height-based so it can be unit-tested independently of Ink: the
  * caller measures rows with the row model and renders `[start, end)`.
  *
- * `fitWholeItemsFromEnd` is the window the full-screen shell uses: it takes a
- * measure callback so only the items on screen are measured, which is what keeps
- * a streaming frame cheap on a long transcript. `layoutViewport` is the
- * scroll-aware row-band variant the scrolling input will need.
+ * `fitScrolledItemsFromEnd` walks up from the newest item, measuring as it goes,
+ * and stops once the scroll offset plus the viewport are covered. That is what
+ * keeps a streaming frame cheap on a long transcript (`scrollFromBottom = 0` --
+ * following the newest row -- touches only the window). Reaching the oldest item
+ * means the history was measured after all, which is the one case where the walk
+ * can also report the total row count and fold back an offset that went past the
+ * top.
  *
- * Scrolling is expressed as `scrollFromBottom` (0 = pinned to the newest row),
- * which is what "sticky to bottom" needs: following is just keeping the offset
- * at 0.
+ * The window is a **row band**, not a set of whole items: it runs from the first
+ * item that intersects `[windowTop, windowBottom)` to the last. The top item may
+ * therefore be clipped mid-row by Ink (`overflow="hidden"`). Requiring whole
+ * items instead would make the middle of an item taller than the viewport
+ * unreachable: a long answer could never be read past its first screen.
  */
 
-export interface ViewportLayoutOptions {
-  /** Rows available for the transcript viewport. */
-  height: number;
-  /** Rows scrolled up from the bottom; 0 keeps the view pinned to the newest row. */
-  scrollFromBottom?: number;
-  /** Hard cap on how many items to render (bounded residency). */
-  maxItems?: number;
-}
-
-export interface ViewportLayout {
+export interface ViewportWindow {
   /** First visible item index (inclusive). */
   start: number;
   /** Last visible item index (exclusive). */
   end: number;
-  /** Rows hidden above the first visible item. */
-  rowsAbove: number;
-  /** Rows hidden below the last visible item. */
-  rowsBelow: number;
-  /** Total rows across all items. */
-  totalRows: number;
-  /** Set when the tallest single item exceeds the viewport height. */
-  clipped: boolean;
-}
-
-/** Sum of the row heights. */
-export function totalRows(rows: readonly number[]): number {
-  return rows.reduce((sum, row) => sum + Math.max(0, row), 0);
+  /**
+   * The scroll offset actually applied: the requested offset clamped to the
+   * extent of the history. The clamp is possible only when the walk reached the
+   * oldest item, because until then the history length is unknown by design.
+   */
+  scrollFromBottom: number;
+  /**
+   * The same position as content, for holding the view while rows arrive below:
+   * the window's bottom item and the rows of it scrolled past.
+   */
+  anchor: ViewportAnchor;
 }
 
 /**
- * Bottom-anchored selection of whole items that fit in `height` rows.
+ * A scroll position expressed as content rather than as a distance.
  *
- * Items are kept whole so nothing has to be clipped mid-item; a partially
- * visible top item is deferred to the next scroll step instead.
+ * While the agent streams, rows keep appearing below the viewport. A row offset
+ * would then show *older* content every frame — the text under the reader's eyes
+ * would crawl upward. An anchor names the window's bottom item and how much of
+ * it sits below the viewport instead, so the same rows stay on screen however
+ * much arrives underneath. `delta` is always less than that item's height.
  */
-/**
- * Bottom-anchored selection of whole items that fit in `height` rows, measuring
- * each item lazily from the end.
- *
- * Only the items on screen need a height, so `measure` is called from the end
- * backwards and stops as soon as one more item would not fit. The work is
- * therefore bounded by the window (plus the one item that did not fit), never by
- * the history length — which matters because this runs on every streaming frame,
- * where a full pass over a long transcript costs more than the frame budget.
- *
- * The walk also stops at `maxItems`, so the residency cap bounds the *measuring*
- * as well as the rendering.
- */
-export function fitWholeItemsFromEnd(
-  itemCount: number,
-  height: number,
-  maxItems: number,
-  measure: (index: number) => number,
-): { start: number; end: number } {
-  const end = Math.max(0, Math.trunc(itemCount));
-  const limit = Math.max(0, Math.trunc(maxItems));
-
-  let used = 0;
-  let start = end;
-  while (start > 0 && end - start < limit) {
-    const next = Math.max(0, measure(start - 1));
-    if (used + next > height) break;
-    used += next;
-    start -= 1;
-  }
-  return { start, end };
+export interface ViewportAnchor {
+  /** The window's bottom item index. */
+  end: number;
+  /** Rows of that item which are scrolled past (below the viewport). */
+  delta: number;
 }
 
-export function layoutViewport(
-  rows: readonly number[],
-  options: ViewportLayoutOptions,
-): ViewportLayout {
-  const height = Math.max(0, options.height);
-  const total = totalRows(rows);
+interface WindowWalk {
+  start: number;
+  end: number;
+  /** Set when the walk reached the oldest item, so the whole history is measured. */
+  reachedStart: boolean;
+  /** Rows in the items at and after `end`: the ones the offset passes over. */
+  belowWindow: number;
+  /**
+   * Rows the walk accumulated in total. It equals the history's row count when
+   * `reachedStart` is set; otherwise it covers the offset, the window, and the
+   * one item that crossed the top edge.
+   */
+  measuredRows: number;
+}
 
-  if (height <= 0 || rows.length === 0 || total <= 0) {
-    return {
-      start: 0,
-      end: 0,
-      rowsAbove: 0,
-      rowsBelow: total,
-      totalRows: total,
-      clipped: total > height,
-    };
-  }
+/**
+ * The window for one offset.
+ *
+ * `scroll` and `topLimit` are both expressed in rows above the newest row:
+ * `end` is the first item whose rows below it no longer fit in `scroll`, and the
+ * window's top edge is the first item more than `topLimit` rows below the newest
+ * one. The caller passes `scroll + height`, or the history's total when it is
+ * shorter than the viewport.
+ */
+function walkWindow(
+  count: number,
+  limit: number,
+  scroll: number,
+  topLimit: number,
+  rowsAt: (index: number) => number,
+): WindowWalk {
+  let index = count;
+  let rowsBelow = 0;
 
-  const maxScroll = Math.max(0, total - height);
-  const scroll = Math.min(
-    Math.max(0, options.scrollFromBottom ?? 0),
-    maxScroll,
-  );
-
-  // Visible row band, in absolute row coordinates.
-  const windowBottom = total - scroll;
-  const windowTop = Math.max(0, windowBottom - height);
-
-  // Prefix sums to find the items that intersect the band.
-  let start = 0;
-  let cumulative = 0;
+  // Bounded on purpose. An item with no rows of its own cannot consume an
+  // offset, so a run of them would otherwise be walked to the start of the
+  // history — and the bound costs nothing for items that do have rows, where
+  // each skipped item consumes at least one row of the offset.
   while (
-    start < rows.length &&
-    cumulative + Math.max(0, rows[start] ?? 0) <= windowTop
+    index > 0 &&
+    count - index < scroll + limit &&
+    rowsBelow + rowsAt(index - 1) <= scroll
   ) {
-    cumulative += Math.max(0, rows[start] ?? 0);
-    start += 1;
+    rowsBelow += rowsAt(index - 1);
+    index -= 1;
+  }
+  const end = index;
+  const belowWindow = rowsBelow;
+
+  while (
+    index > 0 &&
+    end - index < limit &&
+    rowsBelow + rowsAt(index - 1) < topLimit
+  ) {
+    rowsBelow += rowsAt(index - 1);
+    index -= 1;
   }
 
-  let end = start;
-  let running = cumulative;
-  while (end < rows.length && running < windowBottom) {
-    running += Math.max(0, rows[end] ?? 0);
-    end += 1;
-  }
-
+  // `index` is the item that crosses the top edge; the window starts there.
+  let start = Math.max(0, index - 1);
   // Bounded residency: keep the items nearest the bottom when capped.
-  const maxItems = options.maxItems ?? Number.POSITIVE_INFINITY;
-  if (end - start > maxItems) {
-    start = end - Math.trunc(maxItems);
-    cumulative = 0;
-    for (let i = 0; i < start; i += 1) {
-      cumulative += Math.max(0, rows[i] ?? 0);
-    }
-  }
-
-  const rowsAbove = cumulative;
-  const rowsBelow = Math.max(0, total - running);
+  if (end - start > limit) start = end - limit;
 
   return {
     start,
     end,
-    rowsAbove,
-    rowsBelow,
-    totalRows: total,
-    clipped: total > height,
+    reachedStart: index === 0,
+    belowWindow,
+    measuredRows: rowsBelow,
+  };
+}
+
+export function fitScrolledItemsFromEnd(
+  itemCount: number,
+  height: number,
+  maxItems: number,
+  scrollFromBottom: number,
+  measure: (index: number) => number,
+  anchor?: ViewportAnchor,
+): ViewportWindow {
+  const count = Math.max(0, Math.trunc(itemCount));
+  const limit = Math.max(0, Math.trunc(maxItems));
+  if (count === 0 || height < 1 || limit === 0) {
+    return {
+      start: 0,
+      end: 0,
+      scrollFromBottom: 0,
+      anchor: { end: 0, delta: 0 },
+    };
+  }
+
+  // Heights are memoised because taking an anchor or folding an over-scroll back
+  // re-walks the same items.
+  const heights = new Map<number, number>();
+  const rowsAt = (index: number): number => {
+    const cached = heights.get(index);
+    if (cached !== undefined) return cached;
+    const measured = measure(index);
+    const rows = Number.isFinite(measured)
+      ? Math.max(0, Math.trunc(measured))
+      : 0;
+    heights.set(index, rows);
+    return rows;
+  };
+
+  // An anchor is translated back into an offset here, and only here: it needs the
+  // rows that have arrived below it, which is exactly what the walk measures.
+  let applied = Math.max(0, Math.trunc(scrollFromBottom));
+  if (anchor) {
+    const anchorEnd = Math.min(Math.max(0, Math.trunc(anchor.end)), count);
+    let belowAnchor = 0;
+    for (let index = count; index > anchorEnd; index -= 1) {
+      belowAnchor += rowsAt(index - 1);
+    }
+    applied = belowAnchor + Math.max(0, Math.trunc(anchor.delta));
+  }
+
+  const first = walkWindow(count, limit, applied, applied + height, rowsAt);
+  if (!first.reachedStart) {
+    return {
+      start: first.start,
+      end: first.end,
+      scrollFromBottom: applied,
+      anchor: { end: first.end, delta: applied - first.belowWindow },
+    };
+  }
+
+  // The walk reached the oldest item, so every height is known and the history's
+  // row count is `rowsBelow`. That fixes the two things the lazy pass cannot know
+  // earlier: the largest offset that still shows something new, and the window's
+  // top edge for a history shorter than the viewport -- the band then degenerates
+  // to the whole history.
+  const total = first.measuredRows;
+  if (total <= 0) {
+    return {
+      start: 0,
+      end: 0,
+      scrollFromBottom: 0,
+      anchor: { end: 0, delta: 0 },
+    };
+  }
+
+  const clamped = Math.min(applied, Math.max(0, total - height));
+  const second = walkWindow(
+    count,
+    limit,
+    clamped,
+    Math.min(clamped + height, total),
+    rowsAt,
+  );
+  return {
+    start: second.start,
+    end: second.end,
+    scrollFromBottom: clamped,
+    anchor: { end: second.end, delta: clamped - second.belowWindow },
   };
 }

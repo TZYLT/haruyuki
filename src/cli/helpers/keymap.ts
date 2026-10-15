@@ -31,6 +31,18 @@ export const APP_KEY_CHORDS = {
   cycleReasoningEffort: [{ key: "tab" }],
   /** Cycle the permission mode. */
   cyclePermissionMode: [{ key: "tab", shift: true }],
+  /** Scroll the transcript up one screen. */
+  scrollPageUp: [{ key: "pageUp" }],
+  /** Scroll the transcript down one screen. */
+  scrollPageDown: [{ key: "pageDown" }],
+  /**
+   * Jump to the newest row and resume following.
+   *
+   * Ctrl+D held the queue's hold/release toggle; that path never fired on a local
+   * agent (`deferModeSupported` is false for every `agent-local-*` id), so the key
+   * is reclaimed for this.
+   */
+  scrollToNewest: [{ key: "d", ctrl: true }],
 } as const satisfies Record<string, KeyChordList>;
 
 /**

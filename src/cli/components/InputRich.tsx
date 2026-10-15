@@ -828,7 +828,6 @@ export function Input({
   onExit,
   onInterrupt,
   onCtrlO,
-  onCtrlD,
   queueMode = "immediate",
   deferModeSupported = false,
   interruptRequested = false,
@@ -876,7 +875,6 @@ export function Input({
   onExit?: () => void;
   onInterrupt?: () => void;
   onCtrlO?: () => void;
-  onCtrlD?: () => void;
   queueMode?: "immediate" | "defer";
   deferModeSupported?: boolean;
   interruptRequested?: boolean;
@@ -1404,17 +1402,10 @@ export function Input({
     ),
   );
 
-  // Handle CTRL-D to toggle queue defer mode — works even while agent is running
-  // since that's exactly when messages are queued and the toggle is useful.
-  useInput((input, key) => {
-    if (
-      input === "d" &&
-      key.ctrl &&
-      (messageQueue?.filter((m) => m.kind === "user").length ?? 0) > 0
-    ) {
-      if (onCtrlD) onCtrlD();
-    }
-  });
+  // Ctrl+D used to toggle the queue's hold/release mode here. Nothing could set
+  // that mode on a local agent (`deferModeSupported` is false for every
+  // `agent-local-*` id), so the key is reclaimed: it is a scroll binding now
+  // (`transcript.scrollToNewest`, registered by the full-screen viewport).
 
   // Note: bash mode entry/exit is implemented inside PasteAwareTextInput so we can
   // consume the keystroke before it renders (no flicker).

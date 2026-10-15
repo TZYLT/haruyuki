@@ -1547,14 +1547,10 @@ export function App({
   // Defer mode is only meaningful in API backend mode (local backend fires end_turn
   // between each sequential tool call, making defer indistinguishable from immediate).
   const deferModeSupported = !isLocalAgentId(agentId);
-  // When 'immediate' (default), they fire on any turn end.
-  const [queueMode, setQueueMode] = useState<"immediate" | "defer">(
-    "immediate",
-  );
-  const handleCtrlD = useCallback(() => {
-    if (!deferModeSupported) return;
-    setQueueMode((prev) => (prev === "immediate" ? "defer" : "immediate"));
-  }, [deferModeSupported]);
+  // When 'immediate' (default), they fire on any turn end. It is not a state: its
+  // only writer was Ctrl+D's hold/release toggle, which never applied on a local
+  // agent and whose key is now the viewport's "jump to newest".
+  const queueMode = "immediate" as const;
   // Ref mirror of queueMode so useConversationLoop can read it without stale closures.
   const queueModeRef = useRef<"immediate" | "defer">("immediate");
   queueModeRef.current = queueMode;
@@ -3965,8 +3961,6 @@ export function App({
       // Lock prevents re-entrant dequeue if deps churn before processConversation
       // sets abortControllerRef (which is the normal long-term gate).
       dequeueInFlightRef.current = true;
-      // Reset to immediate mode after each dequeue — defer is opt-in per batch.
-      setQueueMode("immediate");
       void onSubmitRef
         .current(concatenatedMessage, submitOptions)
         .finally(() => {
@@ -4620,7 +4614,6 @@ export function App({
       handleCtrlO={handleCtrlO}
       queueMode={queueMode}
       deferModeSupported={deferModeSupported}
-      handleCtrlD={handleCtrlD}
       emittedIdsRef={emittedIdsRef}
       feedbackPrefill={feedbackPrefill}
       showInspirationalPromptHints={showInspirationalPromptHints}

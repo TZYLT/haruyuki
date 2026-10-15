@@ -26,7 +26,7 @@ import {
   CHROME_RESERVE_ROWS,
   MAX_VIEWPORT_ITEMS,
 } from "@/cli/app/ViewportTranscript";
-import { fitWholeItemsFromEnd } from "@/cli/app/viewport-window";
+import { fitScrolledItemsFromEnd } from "@/cli/app/viewport-window";
 import type { Line } from "@/cli/helpers/accumulator";
 
 const COLUMNS = 100;
@@ -124,6 +124,8 @@ interface FrameCost {
   window: { start: number; end: number };
   /** Rows the rendered window occupies. */
   rows: number;
+  /** Rows of the first rendered item — the one the band may clip. */
+  topItemRows: number;
   /** How many items the frame had to measure. */
   measured: number;
   ms: number;
@@ -133,13 +135,15 @@ interface FrameCost {
 function measureFrame(
   items: StaticItem[],
   viewportRows = VIEWPORT_HEIGHT,
+  scrollFromBottom = 0,
 ): FrameCost {
   const heights = new Map<number, number>();
   const started = performance.now();
-  const window = fitWholeItemsFromEnd(
+  const window = fitScrolledItemsFromEnd(
     items.length,
     viewportRows,
     MAX_VIEWPORT_ITEMS,
+    scrollFromBottom,
     (index) => {
       const item = items[index];
       const rows =
@@ -160,7 +164,13 @@ function measureFrame(
   for (let index = window.start; index < window.end; index += 1) {
     rows += heights.get(index) ?? 0;
   }
-  return { window, rows, measured: heights.size, ms };
+  return {
+    window,
+    rows,
+    topItemRows: heights.get(window.start) ?? 0,
+    measured: heights.size,
+    ms,
+  };
 }
 
 function renderedItems(frame: FrameCost): number {
@@ -207,9 +217,15 @@ describe("viewport frame cost", () => {
     );
   });
 
-  test("the rendered window fits the viewport rows", () => {
+  test("the rendered window fills the viewport without clipping an item away", () => {
     for (const { frame } of frames) {
-      expect(frame.rows).toBeLessThanOrEqual(VIEWPORT_HEIGHT);
+      // The band is exact, so the window covers the viewport...
+      expect(frame.rows).toBeGreaterThanOrEqual(VIEWPORT_HEIGHT);
+      // ...overflowing only by the part of the first item that sits above it.
+      // Anything more would mean the window is not the band it claims to be.
+      expect(frame.rows - VIEWPORT_HEIGHT).toBeLessThan(
+        Math.max(1, frame.topItemRows),
+      );
     }
   });
 
@@ -232,25 +248,34 @@ describe("viewport frame cost", () => {
   });
 
   test("lazy windowing renders exactly what the full pass rendered", () => {
-    // The pre-lazy algorithm, kept here as the reference oracle: measure every
-    // item, walk back until one more would not fit, then clamp to the cap. The
-    // lazy walk has to pick the same window on a real transcript, not only on
-    // hand-written height arrays.
+    // The full-pass algorithm, kept here as the reference oracle: measure every
+    // item, then take the row band the window is defined by. The lazy walk has to
+    // pick the same window on a real transcript, not only on hand-written height
+    // arrays.
     const fullPass = (
       rows: readonly number[],
     ): { start: number; end: number } => {
-      const end = rows.length;
-      let used = 0;
-      let start = end;
-      while (start > 0) {
-        const next = Math.max(0, rows[start - 1] ?? 0);
-        if (used + next > VIEWPORT_HEIGHT) break;
-        used += next;
-        start -= 1;
+      const total = rows.reduce((sum, value) => sum + Math.max(0, value), 0);
+      const windowBottom = total;
+      const windowTop = Math.max(0, windowBottom - VIEWPORT_HEIGHT);
+
+      let start = 0;
+      let cumulative = 0;
+      while (
+        start < rows.length &&
+        cumulative + Math.max(0, rows[start] ?? 0) <= windowTop
+      ) {
+        cumulative += Math.max(0, rows[start] ?? 0);
+        start += 1;
       }
-      if (end - start > MAX_VIEWPORT_ITEMS) {
-        start = end - MAX_VIEWPORT_ITEMS;
+
+      let end = start;
+      let running = cumulative;
+      while (end < rows.length && running < windowBottom) {
+        running += Math.max(0, rows[end] ?? 0);
+        end += 1;
       }
+      if (end - start > MAX_VIEWPORT_ITEMS) start = end - MAX_VIEWPORT_ITEMS;
       return { start, end };
     };
 
@@ -263,7 +288,10 @@ describe("viewport frame cost", () => {
           terminalRows: TERMINAL_ROWS,
         }),
       );
-      expect(measureFrame(items).window).toEqual(fullPass(allHeights));
+      const window = measureFrame(items).window;
+      expect({ start: window.start, end: window.end }).toEqual(
+        fullPass(allHeights),
+      );
     }
   });
 
