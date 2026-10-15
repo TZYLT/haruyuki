@@ -1,12 +1,18 @@
-import stringWidth from "string-width";
+import { inkStringWidth } from "@/cli/helpers/text-metrics";
 
 /**
  * Terminal rows `lines` take when wrapped at `width` columns.
+ *
+ * Split by `inkStringWidth` — the width rules Ink's own output buffer uses — so
+ * the budget this clips against is the wrap the renderer will actually perform.
+ * `string-width` disagrees with Ink on a few code points (U+26A0 is wide there
+ * and narrow in Ink), which would let a clipped preview exceed its budget.
  */
 export function countPreviewRows(lines: string[], width: number): number {
   const wrapWidth = Math.max(1, width);
   return lines.reduce(
-    (sum, line) => sum + Math.max(1, Math.ceil(stringWidth(line) / wrapWidth)),
+    (sum, line) =>
+      sum + Math.max(1, Math.ceil(inkStringWidth(line) / wrapWidth)),
     0,
   );
 }
