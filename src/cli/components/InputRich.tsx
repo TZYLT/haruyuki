@@ -786,7 +786,6 @@ export function Input({
   onQueueEdit,
   onEscapeCancel,
   onEscapeCommandCancel,
-  inputDisabled = false,
   conversationId,
   onPasteError,
   restoredInput,
@@ -832,7 +831,6 @@ export function Input({
   onQueueEdit?: () => string;
   onEscapeCancel?: () => void;
   onEscapeCommandCancel?: () => boolean;
-  inputDisabled?: boolean;
   conversationId?: string;
   onPasteError?: (message: string) => void;
   restoredInput?: string | null;
@@ -918,7 +916,7 @@ export function Input({
   const promptVisualWidth = stringWidth(promptChar) + 1; // +1 for trailing space
   const contentWidth = Math.max(0, columns - promptVisualWidth);
 
-  const interactionEnabled = visible && inputEnabled && !inputDisabled;
+  const interactionEnabled = visible && inputEnabled;
   const reserveInputSpace = !collapseInputWhenDisabled;
 
   const clearStatuslineTransientHint = useCallback(() => {

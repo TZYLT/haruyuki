@@ -516,7 +516,6 @@ export function AppView(props: AppViewRenderProps) {
                   profileConfirmPending ? handleProfileEscapeCancel : undefined
                 }
                 onEscapeCommandCancel={onEscapeCommandCancel}
-                inputDisabled={btwState.status === "complete"}
                 conversationId={conversationId}
                 onPasteError={handlePasteError}
                 restoredInput={restoredInput}

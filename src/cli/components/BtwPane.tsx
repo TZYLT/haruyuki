@@ -1,5 +1,9 @@
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 import { memo } from "react";
+import {
+  useInputScopeClaim,
+  useKeyBindings,
+} from "@/cli/hooks/use-input-router";
 import { brandColors } from "./colors.js";
 
 export type BtwState = {
@@ -18,27 +22,50 @@ type BtwPaneProps = {
 
 /**
  * Ephemeral pane for /btw responses.
- * Renders alongside the main transcript, showing the forked conversation's response.
+ *
+ * Renders alongside the main transcript, showing the forked conversation's
+ * response. The main input keeps working while it is up: this pane reports a
+ * finished side answer, it does not own the user's next message, and the
+ * composer unmounting behind it left a blank input area that typed nothing.
+ *
+ * Its own keys are therefore only the ones that cannot be someone typing:
+ * `Esc` closes the pane, and switching to the fork sits behind the leader
+ * prefix (`Ctrl+X` then `j`), which is what the prefix exists for — one more
+ * usable key per entry without taking a letter away from the draft. The pane
+ * claims the `modal` scope while it is showing so its `Esc` wins over the
+ * composer's, and so the which-key hint lists its entry.
  */
 export const BtwPane = memo(
   ({ state, onJumpToConversation, onDismiss }: BtwPaneProps) => {
-    // Handle keyboard input for jump/dismiss using Ink's useInput
-    useInput(
-      (input, key) => {
-        if (state.status !== "complete") return;
-
-        if (
-          input === "j" &&
-          state.forkedConversationId &&
-          onJumpToConversation
-        ) {
-          onJumpToConversation(state.forkedConversationId);
-        } else if (key.escape || input === "q") {
-          onDismiss?.();
-        }
+    const complete = state.status === "complete";
+    useInputScopeClaim("modal", complete);
+    useKeyBindings("btw-pane", [
+      {
+        scope: "modal",
+        bindings: [
+          {
+            id: "btw.dismiss",
+            chords: [{ key: "escape" }],
+            run: () => {
+              if (!complete) return false;
+              onDismiss?.();
+              return true;
+            },
+          },
+          {
+            id: "btw.jumpToFork",
+            leader: true,
+            chords: [{ key: "j" }],
+            label: "切到分叉会话",
+            run: () => {
+              if (!complete || !state.forkedConversationId) return false;
+              onJumpToConversation?.(state.forkedConversationId);
+              return true;
+            },
+          },
+        ],
       },
-      { isActive: state.status === "complete" },
-    );
+    ]);
 
     if (state.status === "idle") {
       return null;
@@ -100,7 +127,9 @@ export const BtwPane = memo(
               {"  "}Fork: {state.forkedConversationId}
             </Text>
             {onJumpToConversation && (
-              <Text dimColor>{"  "}[j] Switch to fork [esc] Dismiss</Text>
+              <Text dimColor>
+                {"  "}[esc] 关闭 · ctrl+x j 切到分叉（输入框仍可用）
+              </Text>
             )}
           </Box>
         )}
