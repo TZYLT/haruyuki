@@ -59,7 +59,6 @@ export type OlderHistoryOutcome =
   | "loaded"
   | "busy"
   | "start"
-  | "cap"
   | "refused"
   | "unavailable"
   | "failed";
@@ -191,7 +190,7 @@ let loadedRowIds = new Set<string>();
 let cursor: string | null = null;
 let loading = false;
 /** Set once there is nothing more to ask for. */
-let stopped: "start" | "cap" | "refused" | null = null;
+let stopped: "start" | "refused" | null = null;
 const listeners = new Set<() => void>();
 
 function publish(): void {
@@ -237,7 +236,7 @@ export interface OlderHistoryState {
   itemCount: number;
   cursor: string | null;
   loading: boolean;
-  stopped: "start" | "cap" | "refused" | null;
+  stopped: "start" | "refused" | null;
 }
 
 export function getOlderHistoryState(): OlderHistoryState {
