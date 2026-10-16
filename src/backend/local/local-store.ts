@@ -1085,10 +1085,14 @@ export class LocalStore {
       }
       this.ensureConversation(conversationId, agentId);
     }
+    const rawHistory = (
+      body as { include_out_of_context?: boolean } | undefined
+    )?.include_out_of_context;
     const tailMessages = this.projectTailMessagesForConversation(
       conversationId,
       agentId,
       body,
+      rawHistory ? "raw" : "in-context",
     );
     if (tailMessages) return tailMessages;
 
@@ -1780,13 +1784,17 @@ export class LocalStore {
     conversationId: string,
     agentId: string,
     body?: ConversationMessageListBody,
+    // `raw` is the conversation as the user saw it: the whole log, with the
+    // in-context filter — which compaction rewrites — left out (F1).
+    mode: "in-context" | "raw" = "in-context",
   ): StoredMessage[] | undefined {
     const limit = getListLimit(body);
     if (limit === undefined || getListOrder(body) !== "desc") return undefined;
     if (getCursor(body, "after")) return undefined;
 
     const key = this.conversationKey(conversationId, agentId);
-    if (this.loadedConversationKeys.has(key)) return undefined;
+    if (mode !== "raw" && this.loadedConversationKeys.has(key))
+      return undefined;
     const metadata = this.validateTranscriptMetadata(key);
     if (!metadata || metadata.requiresFullTimestampRepair) return undefined;
 
@@ -1802,7 +1810,7 @@ export class LocalStore {
         localTranscriptTailMessages(
           tail.items,
           metadata.messageFormat,
-          conversation?.in_context_message_ids ?? [],
+          mode === "raw" ? [] : (conversation?.in_context_message_ids ?? []),
           this.storageDir ?? "",
           metadata.conversationDir,
         );

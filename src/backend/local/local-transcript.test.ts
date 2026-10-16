@@ -503,6 +503,45 @@ describe("in-context tail window and unread head validation", () => {
     await writeFile(conversationPath(storageDir, "messages.jsonl"), "{gone\n");
     expect(restarted.listLocalMessages("default", agentId)).toHaveLength(5);
   });
+
+  test("a raw page reaches the messages compaction dropped from context", async () => {
+    const storageDir = await seedTranscript({ compactKeep: 2 });
+    const store = freshStore(storageDir);
+
+    // The projection is the compacted window: the summary plus what was kept.
+    const projected = store.listConversationMessages("default", {
+      agent_id: agentId,
+      order: "asc",
+    } as ConversationMessageListBody);
+    expect(projected.length).toBeLessThanOrEqual(3);
+
+    // A raw page is the conversation as the user saw it. `include_out_of_context`
+    // is what makes that possible: the in-context filter is dropped, so every row
+    // the compaction removed is readable again, in log order.
+    const raw = store.listConversationMessages("default", {
+      agent_id: agentId,
+      order: "desc",
+      limit: 500,
+      include_out_of_context: true,
+    } as ConversationMessageListBody);
+    expect(raw.length).toBeGreaterThan(projected.length);
+    const projectedIds = new Set(projected.map((message) => message.id));
+    expect(raw.some((message) => !projectedIds.has(message.id))).toBe(true);
+
+    // Oldest first, the first row is the first turn: the page walked past the
+    // compaction, which is exactly what the in-context projection cannot do.
+    const oldestFirst = [...raw].reverse();
+    expect(JSON.stringify(oldestFirst[0])).toContain("turn-0-");
+    // And paging before that row finds nothing: that is the true start.
+    const older = store.listConversationMessages("default", {
+      agent_id: agentId,
+      order: "desc",
+      limit: 10,
+      before: oldestFirst[0]?.id ?? "",
+      include_out_of_context: true,
+    } as ConversationMessageListBody);
+    expect(older).toHaveLength(0);
+  });
 });
 
 describe("spliceOutOfContextMessages", () => {
