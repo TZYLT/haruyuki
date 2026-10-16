@@ -66,10 +66,10 @@ import {
   isLocalToolCallContent,
   mergeSnapshotContentWithExistingToolCalls,
   projectedMessageLookupKeys,
+  projectLocalMessageAtSourceIndex,
   projectLocalMessageToStoredMessages,
   removeOrphanLocalToolResults,
   sourceLocalMessageIdFromStoredMessageId,
-  withProjectedMessageDates,
 } from "./local-message-projection";
 import {
   normalizeLocalModelHandle,
@@ -294,23 +294,6 @@ interface LocalConversationTranscriptMetadata {
   manifestValidated: boolean;
   timing: LocalTranscriptTiming;
   requiresFullTimestampRepair: boolean;
-}
-
-function projectLocalMessageAtSourceIndex(
-  localMessage: LocalMessage,
-  agentId: string,
-  conversationId: string,
-  sourceIndex: number,
-): StoredMessage[] {
-  return withProjectedMessageDates(
-    projectLocalMessageToStoredMessages(
-      localMessage,
-      agentId,
-      conversationId,
-      new Date(Date.UTC(2026, 0, 1, 0, 0, sourceIndex + 1)).toISOString(),
-    ),
-    sourceIndex,
-  );
 }
 
 export class LocalStore {

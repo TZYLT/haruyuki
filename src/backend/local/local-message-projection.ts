@@ -331,6 +331,32 @@ export function projectLocalMessagesToStoredMessages(
   });
 }
 
+/**
+ * Project one local message to its stored messages, at a logical source index.
+ *
+ * Lives here rather than in `local-store.ts` because it is pure: the two helpers
+ * it needs are in this module, and a second reader (`local-history.ts`, the raw
+ * transcript page that ignores the in-context filter) needs the same projection.
+ * One implementation is what keeps a message projected by a paged history read
+ * identical to the same message projected by the resume path.
+ */
+export function projectLocalMessageAtSourceIndex(
+  localMessage: LocalMessage,
+  agentId: string,
+  conversationId: string,
+  sourceIndex: number,
+): StoredMessage[] {
+  return withProjectedMessageDates(
+    projectLocalMessageToStoredMessages(
+      localMessage,
+      agentId,
+      conversationId,
+      new Date(Date.UTC(2026, 0, 1, 0, 0, sourceIndex + 1)).toISOString(),
+    ),
+    sourceIndex,
+  );
+}
+
 export function withProjectedMessageDates(
   messages: StoredMessage[],
   _sourceMessageIndex: number,
