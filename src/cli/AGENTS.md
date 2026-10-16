@@ -37,6 +37,14 @@ file to change.
   `helpers/mouse-tracking.ts`: every enable is paired with a disable — unmount,
   process exit, and a `Ctrl+Z` hand-over all give the mouse back, because a
   terminal left in mouse mode prints escape garbage into the user's shell.
+- **The selection copies what is on screen, so it reads Ink's frame.** Ink 7
+  writes a whole frame per write, and `helpers/terminal-frame.ts` captures it;
+  selection text and the highlight both come from those bytes, never from a second
+  renderer of the transcript. The highlight is spliced into the rows' own escape
+  sequences and written *outside* the frame bookkeeping, so it neither drops the
+  row's colours nor becomes text a copy would read back. The capture is installed
+  by the process entry (`app/shell/full-screen-terminal.ts`), because Ink writes
+  its first frame inside `render()`, before any effect runs.
 
 ## Verification
 

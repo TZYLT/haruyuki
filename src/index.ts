@@ -3,8 +3,8 @@ import "@/utils/startup-log-boundary";
 import { APIError } from "@letta-ai/letta-client/core/error";
 import type { AgentState } from "@letta-ai/letta-client/resources/agents/agents";
 import type { Message } from "@letta-ai/letta-client/resources/agents/messages";
+import { wireFullScreenTerminal } from "@/cli/app/shell/full-screen-terminal";
 import { APP_BINARY_NAME } from "@/constants";
-import { resolveUiV2Once } from "@/experiments/ui-v2";
 import { getTerminalTelemetrySurface, telemetry } from "@/telemetry";
 import { trackBoundaryError } from "@/telemetry/error-reporting";
 import {
@@ -2042,7 +2042,7 @@ async function main(): Promise<void> {
       // The full-screen shell draws into the alternate screen buffer so the
       // user's prior scrollback survives; Ink resolves this off for non-TTYs.
       // Same resolved value as `AppShell`'s shell choice (`resolveUiV2Once`).
-      alternateScreen: resolveUiV2Once(),
+      alternateScreen: wireFullScreenTerminal(),
     },
   );
 }
