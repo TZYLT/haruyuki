@@ -3,9 +3,12 @@
  * messages.
  *
  * A page's residency is atomic — either its items are materialized and its rows
- * measured, or it is a count — and that is what makes a key-based anchor stable
- * (`history-anchor.ts`). This module owns the first half: turning a materialized
- * page into a count, and reporting what the caller has to do about it.
+ * measured, or it is a count. This module owns the first half: turning a
+ * materialized page into a count, and reporting what the caller has to do about it.
+ * `droppedItems` is the whole report: the caller drops that many items from the front
+ * of its rendered array **and** moves a parked anchor — which names an item index — by
+ * the same amount. `older-history.ts` does both in one place, next to the notice that
+ * tells the frame they arrived together.
  *
  * `droppedItems` is that report, and it is the whole reason this returns a value
  * rather than mutating: the caller's rendered item array has to lose exactly those
