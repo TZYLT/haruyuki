@@ -35,3 +35,13 @@ file to change.
 Run focused tests for the component or hook you changed. For render-sensitive
 work, also exercise narrow and wide terminals, tall output, and parallel
 approvals or paste input when those paths are affected.
+
+**Judge a key path on the rendered frame when its purpose is to be seen.** Hints,
+which-key lists, panes and panels can be wired perfectly and still paint nothing:
+the handler runs, the state is exactly what the test asserts, and the screen is
+empty because a later step in the same keystroke undid it (a store rearmed during
+routing and then disarmed, a flag set and then reset). Router- or state-level
+assertions cannot see that class of bug — one shipped through a test that pinned
+the failure as expected behaviour. So for those paths, render the real component
+against a fake TTY and assert on the frame (see
+`src/cli/components/composer-leader.test.tsx`).
