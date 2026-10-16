@@ -18,7 +18,7 @@
  */
 
 /** How long an armed prefix waits for its second key before giving up. */
-export const LEADER_TIMEOUT_MS = 2_000;
+export const LEADER_TIMEOUT_MS = 10_000;
 
 interface LeaderState {
   /** True between the prefix and its second key. */
@@ -60,21 +60,36 @@ export function isLeaderHelpOpen(): boolean {
 /**
  * Arms the prefix, or refreshes it (the `?` entry re-arms so the user can read
  * the list and then press one of the keys in it).
+ *
+ * The window is a *reading* budget, not just a safety net. It was two seconds,
+ * and a person who read the hint before pressing its key routinely lost the
+ * window: the prefix expired silently and the second key was typed into the
+ * draft instead of running the command. The help list is worse off still — it is
+ * a surface that exists to be read — so while it is open the prefix does not
+ * expire at all. Leaving it is always possible: `Esc` and any key the table does
+ * not know both disarm the prefix and continue on the normal path.
+ *
+ * `timeoutMs` is a test seam; production callers do not pass it.
  */
-export function armLeader(options?: { help?: boolean }): void {
+export function armLeader(options?: {
+  help?: boolean;
+  timeoutMs?: number;
+}): void {
   const helpOpen = options?.help ?? false;
   const changed = !state.armed || state.helpOpen !== helpOpen;
   state = { armed: true, helpOpen };
   clearTimer();
-  timer = setTimeout(() => {
-    timer = null;
-    if (!state.armed) return;
-    state = { armed: false, helpOpen: false };
-    notify();
-  }, LEADER_TIMEOUT_MS);
-  // A pending timeout must not hold the process open (headless runs, tests).
-  if (typeof timer === "object" && timer !== null && "unref" in timer) {
-    timer.unref();
+  if (!helpOpen) {
+    timer = setTimeout(() => {
+      timer = null;
+      if (!state.armed) return;
+      state = { armed: false, helpOpen: false };
+      notify();
+    }, options?.timeoutMs ?? LEADER_TIMEOUT_MS);
+    // A pending timeout must not hold the process open (headless runs, tests).
+    if (typeof timer === "object" && timer !== null && "unref" in timer) {
+      timer.unref();
+    }
   }
   if (changed) notify();
 }

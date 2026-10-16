@@ -57,13 +57,40 @@ describe("the leader prefix", () => {
 
   test("gives up on its own after the timeout", async () => {
     // A real timer, deliberately: the prefix must expire without another event,
-    // and a fake clock would not prove that the timer is actually scheduled.
-    const started = Date.now();
-    armLeader();
+    // and a fake clock would not prove that the timer is actually scheduled. A
+    // short window keeps the test quick; the production value is pinned below.
+    armLeader({ timeoutMs: 40 });
     expect(isLeaderArmed()).toBe(true);
-    await Bun.sleep(LEADER_TIMEOUT_MS + 250);
+    await Bun.sleep(140);
     expect(isLeaderArmed()).toBe(false);
     expect(isLeaderHelpOpen()).toBe(false);
-    expect(Date.now() - started).toBeGreaterThanOrEqual(LEADER_TIMEOUT_MS - 50);
+  });
+
+  test("the default window is a reading budget, not a reflex test", () => {
+    // It was 2000ms, and a user reading the which-key hint before pressing its
+    // key lost the window: the second key went into the draft instead of running
+    // the command. Anyone shortening this must keep it readable.
+    expect(LEADER_TIMEOUT_MS).toBeGreaterThanOrEqual(5_000);
+  });
+
+  test("does not expire while the help list is open", async () => {
+    armLeader({ help: true, timeoutMs: 30 });
+    await Bun.sleep(150);
+    expect(isLeaderArmed()).toBe(true);
+    expect(isLeaderHelpOpen()).toBe(true);
+    // Leaving is still possible, and a plain re-arm puts the window back.
+    disarmLeader();
+    expect(isLeaderArmed()).toBe(false);
+  });
+
+  test("re-arming the plain prefix restores the window", async () => {
+    armLeader({ timeoutMs: 40 });
+    await Bun.sleep(20);
+    armLeader({ timeoutMs: 40 });
+    await Bun.sleep(20);
+    // The first window would have expired by now; the refresh kept it armed.
+    expect(isLeaderArmed()).toBe(true);
+    await Bun.sleep(140);
+    expect(isLeaderArmed()).toBe(false);
   });
 });
