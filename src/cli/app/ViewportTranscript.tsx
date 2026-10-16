@@ -21,9 +21,11 @@ import { historyBlockItems } from "./history-blocks";
 import { buildVisibleItems, hasFocusedApprovalItem } from "./live-items";
 import {
   composeTranscriptItems,
+  evictOlderHistoryBlocksBefore,
   getOlderHistoryBlocks,
   getOlderHistoryItems,
   olderHistoryCursor,
+  olderHistoryPrefixItems,
   requestOlderHistory,
   setOlderHistoryProvider,
   subscribeToOlderHistory,
@@ -282,16 +284,26 @@ export function ViewportTranscript(props: AppViewProps) {
     getOlderHistoryBlocks,
   );
   const olderBlockItems = historyBlockItems(olderBlocks);
+  // Items the evicted pages still account for. The walk counts every page; the
+  // rendered array only the materialized ones, so a walk index sits this far above
+  // its rendered one.
+  const olderPrefix = useSyncExternalStore(
+    subscribeToOlderHistory,
+    olderHistoryPrefixItems,
+  );
   const window = useMemo(() => {
     return fitBlockedItemsFromEnd({
       blocks: olderBlocks,
-      coreItemCount: Math.max(0, items.length - olderBlockItems),
+      coreItemCount: Math.max(
+        0,
+        items.length - (olderBlockItems - olderPrefix),
+      ),
       height,
       maxItems: MAX_VIEWPORT_ITEMS,
       scrollFromBottom: scrollRows,
       anchor: scrollAnchor,
       measure: (index) => {
-        const item = items[index];
+        const item = items[index - olderPrefix];
         if (item === undefined) return 0;
         return viewportItemRows(item, {
           columns,
@@ -345,7 +357,18 @@ export function ViewportTranscript(props: AppViewProps) {
     scrollAnchor,
     olderBlocks,
     olderBlockItems,
+    olderPrefix,
   ]);
+
+  // Evict the pages the window has left behind, keeping one page of slack above it:
+  // paging up by a row should not have to materialize a page in the same frame that
+  // it evicts one. This is what bounds residency while the walk stays free to reach
+  // the conversation's first row.
+  useEffect(() => {
+    const resident = window.resident;
+    if (resident === null) return;
+    evictOlderHistoryBlocksBefore(Math.max(0, resident.from - 1));
+  }, [window]);
 
   // Tell the store what was actually shown, in content terms: the window's bottom
   // item and the rows of it below the viewport. From that point the position is
