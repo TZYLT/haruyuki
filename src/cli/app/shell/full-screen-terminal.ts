@@ -81,9 +81,12 @@ function watchFrames(stream: FrameStream): void {
     frames += 1;
     // `lines` is the frame as written; the width the band is told it has is the
     // one the window was fitted to, so a mismatch here is the artifact itself.
+    // `nl` separates a frame that ends on a blank row (as many newlines as rows)
+    // from one that ends on content (one fewer): Ink drops the trailing blank row
+    // from `lines`, and without this the two read the same.
     debugLog(
       "frame",
-      `#${frames} rows=${frame.lines.length} term=${rows} band=${getViewportRows()} offset=${getViewportScrollRows()} anchored=${frame.anchored}`,
+      `#${frames} rows=${frame.lines.length} nl=${frame.cursorRow - 1} term=${rows} band=${getViewportRows()} offset=${getViewportScrollRows()} anchored=${frame.anchored}`,
     );
   });
 }
