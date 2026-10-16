@@ -5,7 +5,7 @@ import { createBuffers } from "@/cli/helpers/accumulator";
 import { backfillBuffers } from "@/cli/helpers/backfill";
 import { showNotice } from "@/cli/helpers/notice";
 import { debugWarn } from "@/utils/debug";
-import { type HistoryBlock, withHistoryBlockRows } from "./history-blocks";
+import type { HistoryBlock } from "./history-blocks";
 import type { StaticItem } from "./types";
 import {
   scrollTranscriptBy,
@@ -156,7 +156,22 @@ const EMPTY_ITEMS: readonly StaticItem[] = [];
  * viewport measures it, because only the measuring path knows a page's height, and a
  * page with no count cannot be skipped.
  */
-let blocks: readonly HistoryBlock[] = [];
+interface OlderHistoryBlock {
+  /** The page's identity: the cursor it was fetched before. */
+  key: string;
+  /**
+   * The messages the page came back with. Kept so an evicted page can be
+   * materialized again — `historyItemsForMessages` re-assembles it — without going
+   * back to the backend for a page it already has.
+   */
+  page: readonly Message[];
+  /** The entries the page contributed, after composition dropped duplicates. */
+  items: readonly StaticItem[];
+  /** Rows the viewport measured for the whole page, or `null` until it has. */
+  rows: number | null;
+}
+
+let blocks: readonly OlderHistoryBlock[] = [];
 
 let provider: (() => OlderHistorySeed) | null = null;
 let fetcher: OlderHistoryFetcher = fetchPageFromBackend;
@@ -238,9 +253,25 @@ export function getOlderHistoryState(): OlderHistoryState {
   };
 }
 
-/** The block ledger, for the viewport and for tests. */
+let blocksView: readonly HistoryBlock[] = [];
+let blocksViewSource: readonly OlderHistoryBlock[] | null = null;
+
+/**
+ * The ledger in the shape the window fitter reads (`history-blocks.ts`): page
+ * counts and measured heights, without the pages themselves.
+ *
+ * Memoised by the ledger's identity, because a caller reads this every frame and a
+ * fresh array per call would defeat the memoisation that keeps those frames cheap.
+ */
 export function getOlderHistoryBlocks(): readonly HistoryBlock[] {
-  return blocks;
+  if (blocksViewSource === blocks) return blocksView;
+  blocksView = blocks.map((block) => ({
+    key: block.key,
+    itemCount: block.items.length,
+    rows: block.rows,
+  }));
+  blocksViewSource = blocks;
+  return blocksView;
 }
 
 /**
@@ -252,8 +283,13 @@ export function getOlderHistoryBlocks(): readonly HistoryBlock[] {
  * several rounds removing.
  */
 export function reportOlderHistoryBlockRows(key: string, rows: number): void {
-  const next = withHistoryBlockRows(blocks, key, rows);
-  if (next === blocks) return;
+  let changed = false;
+  const next = blocks.map((block) => {
+    if (block.key !== key || block.rows === rows) return block;
+    changed = true;
+    return { ...block, rows };
+  });
+  if (!changed) return;
   blocks = next;
   publish();
 }
@@ -397,7 +433,7 @@ async function loadPage(
     // One ledger entry per page, at the same moment and in the same order as the
     // items. The count is `fresh.length` — the rows actually inserted, which is also
     // the number the anchor is re-based by just below.
-    blocks = [{ key: before, itemCount: fresh.length, rows: null }, ...blocks];
+    blocks = [{ key: before, page, items: fresh, rows: null }, ...blocks];
     publish();
     shiftViewportAnchorByItems(fresh.length);
     if (rows > 0) scrollTranscriptBy(rows);
