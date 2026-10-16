@@ -447,7 +447,7 @@ export function AppView(props: AppViewRenderProps) {
         <Transcript {...props} />
       </ChromeHeightContext.Provider>
 
-      <Box ref={chromeRef} flexDirection="column">
+      <Box ref={chromeRef} flexDirection="column" flexShrink={0}>
         {loadingState === "ready" && (
           <>
             {/* Exit stats - shown when exiting via double Ctrl+C */}

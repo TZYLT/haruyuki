@@ -373,11 +373,24 @@ export function ViewportTranscript(props: AppViewProps) {
 
   return (
     <>
+      {/* The band is the frame's one elastic box, and it has to be.
+          `height` is computed from the chrome and panel measured on the
+          *previous* frame, so the frame is regularly a row or two out of date —
+          and when it is, Yoga has to take those rows from somewhere. It used to
+          take them from the chrome, which is the input: the chrome box was
+          squeezed to zero rows, `measureElement` reported the squeezed height,
+          the band was sized as `rows - 0` again, and the input stayed off the
+          frame for the rest of the session (reported from the machine as "nothing
+          I type appears"). Giving the rows back here instead costs at most one
+          frame of the transcript's newest rows, and the band is the only box
+          whose measurement nothing depends on. Everything measured under it —
+          the chrome, `ViewportPanel` — is `flexShrink={0}` for the same reason:
+          a squeezed box reports a squeezed height. */}
       <Box
         height={height}
         flexDirection="column"
         overflow="hidden"
-        flexShrink={0}
+        flexShrink={1}
       >
         {/* The window's own offset: the band shows the rows this shift leaves
             inside it. A negative shift is what puts the middle of a tall item on

@@ -26,6 +26,17 @@ export function useChromeHeight(): number | null {
 /**
  * Measures a box after layout and re-renders only when its height changes.
  *
+ * **The box handed to this hook must be `flexShrink={0}`.** `measureElement`
+ * reports the height Yoga laid the node out to — not the height it needs — so a box
+ * Yoga is allowed to compress reports the *compressed* number to whatever sizes
+ * itself from this hook. With the full-screen frame pinned to the terminal's rows,
+ * a shrinkable chrome was squeezed to zero while the band held the whole screen,
+ * the band was then sized as `rows - 0`, and the input stayed clipped off the bottom
+ * of the frame for the rest of the session (`AppView`'s chrome box, reported from
+ * the machine as "nothing I type appears"). The band is the frame's one elastic box
+ * precisely because nothing measures it; `frame-chrome-rows.test.tsx` weighs the
+ * whole contract on a real Ink frame.
+ *
  * The effect intentionally has no dependency array: any render can change the
  * chrome's height (an overlay opening, the input growing), and `measureElement`
  * is a cheap read of the already-computed layout. The equality guard keeps it
