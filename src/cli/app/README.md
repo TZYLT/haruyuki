@@ -19,11 +19,11 @@ file first.
   reporting (on while the shell is up, given back on unmount/suspend/exit), wheel
   scrolling, and the leader's mouse switch. The reports are decoded in
   `src/cli/helpers/mouse-sequence.ts` and dispatched by `mouse-router.ts`.
-- `shell/use-terminal-selection.ts`: drag selection over the rendered rows and its
-  highlight. It reads the frame Ink wrote
-  (`src/cli/helpers/terminal-frame.ts`) instead of re-rendering the transcript,
-  paints the highlight with terminal writes, and stores the selection in
-  `viewport-selection.ts`.
+- `shell/use-terminal-selection.ts`: drag selection over the rendered rows, its
+  highlight, and `Ctrl+X y` (the selection, or the last answer). It reads the frame
+  Ink wrote (`src/cli/helpers/terminal-frame.ts`) instead of re-rendering the
+  transcript, paints the highlight with terminal writes, and stores the selection
+  in `viewport-selection.ts`.
 - `shell/full-screen-terminal.ts`: the entry's terminal hand-over for the
   full-screen shell — the alternate screen decision plus the frame capture, which
   has to exist before Ink writes its first frame inside `render()`.

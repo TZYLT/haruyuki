@@ -19,8 +19,10 @@ export function V2Shell(props: AppShellProps) {
   // Mouse reporting, wheel scrolling and the mouse escape hatch: the viewport is
   // the reason this shell wants the mouse at all.
   useMouseInput();
-  // Drag selection over the rendered rows, and its highlight.
-  useTerminalSelection();
+  // Drag selection over the rendered rows, its highlight, and Ctrl+X y.
+  useTerminalSelection({
+    items: () => [...props.staticItems, ...props.liveItems],
+  });
 
   return <ShellFrame {...props} transcript={ViewportTranscript} />;
 }

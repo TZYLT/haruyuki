@@ -1,14 +1,26 @@
 import { useEffect } from "react";
+import type { StaticItem } from "@/cli/app/types";
 import { getViewportRows } from "@/cli/app/viewport-scroll";
 import {
   beginSelection,
+  type CopySource,
   clearSelection,
+  copySourceFor,
   extendSelection,
+  getSelectedText,
   getSelection,
+  lastAnswerText,
   subscribeToSelection,
 } from "@/cli/app/viewport-selection";
+import { LEADER_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { registerMouseHandler } from "@/cli/helpers/mouse-router";
+import { showNotice } from "@/cli/helpers/notice";
 import {
+  type ClipboardResult,
+  copyText,
+} from "@/cli/helpers/terminal-clipboard";
+import {
+  type FrameStream,
   getTerminalFrame,
   getTerminalFrameVersion,
   isCapturingTerminalFrame,
@@ -20,18 +32,19 @@ import {
   orderSelection,
   rowSelectionSpan,
 } from "@/cli/helpers/text-selection";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
 
 /**
- * Drag selection over the rendered transcript, and its highlight.
+ * Drag selection over the rendered transcript, its highlight, and the copy key.
  *
  * The design decision this file carries out: the selection is judged against the
  * bytes Ink actually wrote (`terminal-frame.ts`) rather than against a second
- * renderer of the transcript. That is what makes what is selected exactly what
- * the user dragged over — diffs, boxes and highlighted code included — and it is
- * why the highlight can be painted by splicing two escape sequences into the
- * row's own bytes instead of re-rendering it.
+ * renderer of the transcript. That is what makes the copied text exactly what the
+ * user dragged over — diffs, boxes and highlighted code included — and it is why
+ * the highlight can be painted by splicing two escape sequences into the row's
+ * own bytes instead of re-rendering it.
  *
- * Four consequences worth knowing before changing anything here:
+ * Five consequences worth knowing before changing anything here:
  *
  * 1. **The highlight is a terminal write, never React state.** A drag calls
  *    `writeToTerminal` directly; nothing re-renders, so a drag cannot cause the
@@ -41,12 +54,16 @@ import {
  *    it subscribes to the frame store, which is notified from inside the write
  *    that carried the frame.
  * 3. **An unanchored frame is refused.** When the capture cannot prove which
- *    screen rows a frame occupies, no highlight is painted and nothing is
- *    selectable — a wrong highlight over the wrong text is worse than none.
+ *    screen rows a frame occupies, no highlight is painted and the selection
+ *    copies nothing — a wrong highlight over the wrong text is worse than none.
  * 4. **The capture is installed by the process entry**, not here
  *    (`full-screen-terminal.ts`): Ink writes its first frame inside `render()`,
  *    before any React effect runs, so a capture installed in an effect would miss
  *    the frame that is already on screen.
+ * 5. **OSC 52 cannot report failure.** The copy writes OSC 52 *and* runs the
+ *    platform command, because a terminal that blocks OSC 52 (Windows Terminal
+ *    ships that way) is indistinguishable from one that honoured it; the notice
+ *    says what was attempted rather than claiming success.
  *
  * Selection rows are clamped to the transcript band, whose rows are 1..n by
  * construction: the full-screen shell renders the transcript region first, so the
@@ -132,7 +149,44 @@ function clampedToBand(
   };
 }
 
-export function useTerminalSelection(): void {
+function methodLabel(method: ClipboardResult["method"]): string {
+  if (method === "osc52+local") return "OSC 52 ＋ 本地";
+  if (method === "osc52") return "OSC 52";
+  if (method === "local") return "本地剪贴板";
+  return "未送达";
+}
+
+/** What the notice says after a copy attempt. */
+export function copyNotice(
+  result: ClipboardResult,
+  source: CopySource,
+  text: string,
+): string {
+  if (source === "none" || result.method === "none") {
+    return "没有复制成功：终端不支持 OSC 52，本地剪贴板命令也不可用";
+  }
+  const what = source === "selection" ? "选区" : "最后一条回答";
+  const lines = text.split("\n").length;
+  return `已复制${what}（${lines} 行，${methodLabel(result.method)}）`;
+}
+
+export interface TerminalSelectionOptions {
+  /** The stream Ink writes to; the frame is read from it. Defaults to stdout. */
+  stream?: FrameStream;
+  /** The transcript items, for the "copy the last answer" fallback. */
+  items?: () => readonly StaticItem[];
+  /**
+   * The platform clipboard command. A seam for tests, which must not overwrite the
+   * clipboard of the machine they run on.
+   */
+  copyLocally?: (text: string) => boolean;
+}
+
+export function useTerminalSelection(
+  options: TerminalSelectionOptions = {},
+): void {
+  const { stream = process.stdout, items, copyLocally } = options;
+
   useEffect(() => {
     const repaint = () => paintSelection();
     const unsubscribeFrame = subscribeToTerminalFrame(repaint);
@@ -167,9 +221,37 @@ export function useTerminalSelection(): void {
         extendSelection(clampedToBand(report.row, report.column));
         return true;
       }
-      // A release keeps what was dragged: copying is a key of its own, so a stray
-      // drag never overwrites the clipboard on its own.
+      // A release keeps what was dragged: the copy key is what commits it, so a
+      // stray drag never overwrites the clipboard on its own.
       return true;
     });
   }, []);
+
+  useKeyBindings("selection", [
+    {
+      scope: "app",
+      bindings: [
+        {
+          id: "leader.copySelection",
+          leader: true,
+          chords: LEADER_KEY_CHORDS.copySelection,
+          label: "复制选区 / 最后一条回答",
+          run: () => {
+            const { source, text } = copySourceFor(
+              getSelectedText(),
+              items ? lastAnswerText(items()) : "",
+            );
+            if (source === "none") {
+              showNotice("没有可复制的内容");
+              return true;
+            }
+            showNotice(
+              copyNotice(copyText(text, { stream, copyLocally }), source, text),
+            );
+            return true;
+          },
+        },
+      ],
+    },
+  ]);
 }

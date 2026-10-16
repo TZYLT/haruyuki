@@ -44,7 +44,10 @@ file to change.
   sequences and written *outside* the frame bookkeeping, so it neither drops the
   row's colours nor becomes text a copy would read back. The capture is installed
   by the process entry (`app/shell/full-screen-terminal.ts`), because Ink writes
-  its first frame inside `render()`, before any effect runs.
+  its first frame inside `render()`, before any effect runs. Copying goes out over
+  OSC 52 **and** the platform command (`helpers/terminal-clipboard.ts`): OSC 52
+  cannot report failure, so treating the local command as a fallback that waits
+  for one would silently do nothing on terminals that block OSC 52.
 
 ## Verification
 
