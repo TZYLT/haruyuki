@@ -22,6 +22,15 @@ export type ViewportScrollRequest =
   | { kind: "anchor"; anchor: ViewportAnchor };
 
 const listeners = new Set<() => void>();
+/**
+ * Told when an up-move was refused because the oldest *loaded* row is on screen.
+ *
+ * That refusal is the one signal that the user wants rows this process does not
+ * have yet, and it is why the refusal is not silent: paging listens here
+ * (`older-history.ts`). The rows asked for are passed along so the move can be
+ * spent once the rows arrive.
+ */
+const atTopListeners = new Set<(rows: number) => void>();
 
 /** Bumped whenever the position changes, so subscribers can re-read it. */
 let version = 0;
@@ -65,6 +74,23 @@ export function subscribeToViewportScroll(listener: () => void): () => void {
   };
 }
 
+/**
+ * Subscribe to "the user asked for rows above the oldest loaded row".
+ *
+ * Fired synchronously by the refused move, with the rows it asked for. A
+ * listener that starts fetching must not call back into `scrollTranscriptBy`
+ * synchronously: the rows it fetches are not there yet, so the move would be
+ * refused again and the listener re-entered.
+ */
+export function subscribeToViewportTop(
+  listener: (rows: number) => void,
+): () => void {
+  atTopListeners.add(listener);
+  return () => {
+    atTopListeners.delete(listener);
+  };
+}
+
 /** Snapshot for `useSyncExternalStore`; read the request itself with `getViewportScrollRequest`. */
 export function getViewportScrollVersion(): number {
   return version;
@@ -97,7 +123,14 @@ export function scrollTranscriptBy(rows: number): void {
   // out identical, and the user would get a flash instead of a scroll. The
   // bottom already behaved this way (a down-move at offset 0 is a no-op request);
   // this is the same rule at the other end.
-  if (rows > 0 && base >= topLimit) return;
+  if (rows > 0 && base >= topLimit) {
+    // Refused, so nothing is published — but this is also the only place the
+    // request "more history than I have" exists, and paging has to hear it. The
+    // listeners are copied first: one of them may add or drop a listener, and a
+    // live `Set` iteration would visit it mid-loop.
+    for (const listener of [...atTopListeners]) listener(rows);
+    return;
+  }
   const next = Math.max(0, Math.trunc(base + rows));
   if (request.kind === "rows" && request.rows === next) return;
   pendingRows = next - lastRows;
@@ -226,6 +259,40 @@ export function reportViewportPosition(position: {
   }
 }
 
+/**
+ * Re-base a parked position after whole items were inserted above it.
+ *
+ * An anchor names the window's bottom item by its index in the transcript's item
+ * array, so rows paged in at the top shift every index below them: without this
+ * the frame would jump by exactly the rows that were just brought in, which is
+ * the opposite of what the parked view is for. The rows *below* the anchor are
+ * unchanged, so the text on screen does not move.
+ *
+ * The learned top limit is dropped with it, because it described the old top:
+ * there are rows above now, so the refused up-move is honourable again.
+ *
+ * Only an anchor carries indices — a rows-request is measured from the bottom,
+ * and the bottom does not move when the top grows.
+ */
+export function shiftViewportAnchorByItems(count: number): void {
+  const shift = Math.trunc(count);
+  if (shift === 0) return;
+  topLimit = Number.POSITIVE_INFINITY;
+  let changed = false;
+  if (reported) {
+    reported = { end: reported.end + shift, delta: reported.delta };
+    changed = true;
+  }
+  if (request.kind === "anchor") {
+    request = {
+      kind: "anchor",
+      anchor: { end: request.anchor.end + shift, delta: request.anchor.delta },
+    };
+    changed = true;
+  }
+  if (changed) publish();
+}
+
 /** Test seam. */
 export function resetViewportScroll(): void {
   version = 0;
@@ -236,4 +303,5 @@ export function resetViewportScroll(): void {
   viewportRows = 0;
   reported = null;
   listeners.clear();
+  atTopListeners.clear();
 }

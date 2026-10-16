@@ -17,6 +17,15 @@ import type { AppViewProps } from "./AppView";
 import { useChromeHeight, useMeasuredChromeHeight } from "./chrome-height";
 import { FocusedApproval } from "./FocusedApproval";
 import { buildVisibleItems, hasFocusedApprovalItem } from "./live-items";
+import {
+  composeTranscriptItems,
+  getOlderHistoryItems,
+  olderHistoryCursor,
+  requestOlderHistory,
+  setOlderHistoryProvider,
+  subscribeToOlderHistory,
+  transcriptLines,
+} from "./older-history";
 import { measureTranscriptItemRows, type RowMeasureOptions } from "./row-model";
 import { TranscriptItemView } from "./TranscriptItem";
 import type { StaticItem } from "./types";
@@ -30,6 +39,7 @@ import {
   scrollTranscriptPage,
   setViewportRows,
   subscribeToViewportScroll,
+  subscribeToViewportTop,
 } from "./viewport-scroll";
 import { fitScrolledItemsFromEnd } from "./viewport-window";
 
@@ -80,6 +90,9 @@ export function ViewportTranscript(props: AppViewProps) {
     staticItems,
     liveItems,
     columns,
+    agentId,
+    buffersRef,
+    conversationId,
     statusLinePrompt,
     showCompactionsEnabled,
     precomputedDiffsRef,
@@ -113,21 +126,54 @@ export function ViewportTranscript(props: AppViewProps) {
       (panelRows ?? 0),
   );
 
+  // Older history, paged in behind the resume window's cap. Subscribing to the rows
+  // themselves — not to a version counter — is what re-renders this component when a
+  // page lands, and it is also a real dependency of the composition below. The cursor
+  // is derived from the live buffer only when a page is actually asked for, because
+  // the buffer is mutated in place and walking it per frame would cost more than the
+  // frame it measures.
+  const olderItems = useSyncExternalStore(subscribeToOlderHistory, () =>
+    getOlderHistoryItems(conversationId),
+  );
+  useEffect(() => {
+    setOlderHistoryProvider(() => ({
+      conversationId,
+      agentId,
+      cursor: olderHistoryCursor(transcriptLines(buffersRef.current)),
+    }));
+    return () => {
+      setOlderHistoryProvider(null);
+    };
+  }, [conversationId, agentId, buffersRef]);
+  // The one signal that the user wants rows this process never loaded: an up-move
+  // refused because the oldest loaded row is on screen (`viewport-scroll.ts`).
+  useEffect(
+    () =>
+      subscribeToViewportTop((rows) => {
+        void requestOlderHistory(rows);
+      }),
+    [],
+  );
+
   const items = useMemo<StaticItem[]>(
     () =>
-      buildVisibleItems({
-        staticItems,
-        liveItems,
-        currentApprovalToolCallId: currentApproval?.toolCallId,
-        pendingIds,
-        queuedIds,
-      }),
+      composeTranscriptItems(
+        olderItems,
+        buildVisibleItems({
+          staticItems,
+          liveItems,
+          currentApprovalToolCallId: currentApproval?.toolCallId,
+          pendingIds,
+          queuedIds,
+        }),
+      ),
     [
       staticItems,
       liveItems,
       currentApproval?.toolCallId,
       pendingIds,
       queuedIds,
+      olderItems,
     ],
   );
 
