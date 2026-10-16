@@ -172,6 +172,13 @@ export function routeFallbackEvent(event: KeyEvent): void {
  * has no meaning on its own (`?` would otherwise be typing). A key the prefix
  * does not know disarms it and then continues down the normal path, so a stray
  * `Ctrl+X` costs the next keystroke nothing.
+ *
+ * The prefix is left **before** its entry runs, not after. An entry is allowed to
+ * re-arm on purpose — `?` (the help list) does exactly that, so the list stays
+ * open while the user reads it and picks a key from it — and disarming afterwards
+ * would erase the re-arm in the same keystroke. That is not a hypothetical: it is
+ * why the help entry ran, notified, and still showed nothing, leaving the hint
+ * line gone and no list behind it.
  */
 export function routeKeyEvent(event: KeyEvent): boolean {
   // Linux terminals report Enter as LF, which Ink does not flag as `return`; the
@@ -186,8 +193,8 @@ export function routeKeyEvent(event: KeyEvent): boolean {
       disarmLeader();
       return true;
     }
-    const consumed = routeScopes(event, { leaderOnly: true });
     disarmLeader();
+    const consumed = routeScopes(event, { leaderOnly: true });
     if (consumed) return true;
   }
   return routeScopes(event);

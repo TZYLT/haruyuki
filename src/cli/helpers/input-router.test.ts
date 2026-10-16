@@ -16,7 +16,12 @@ import {
 } from "@/cli/helpers/input-router";
 import { keyEventFrom } from "@/cli/helpers/input-sequence";
 import { LEADER_KEY_CHORDS } from "@/cli/helpers/keymap";
-import { armLeader, isLeaderArmed, resetLeader } from "@/cli/helpers/leader";
+import {
+  armLeader,
+  isLeaderArmed,
+  isLeaderHelpOpen,
+  resetLeader,
+} from "@/cli/helpers/leader";
 
 const CTRL_O = "\u000F";
 
@@ -116,9 +121,49 @@ describe("the leader prefix in the router", () => {
     emitter.emit("input", "?"); // the leader's help entry
     expect(runs).toEqual(["arm", "help"]);
     expect(legacy).toEqual([]);
-    // One-shot: the entry consumed the prefix.
+    // One-shot: this entry does not re-arm, so the prefix is left behind it.
     expect(isLeaderArmed()).toBe(false);
     uninstall();
+  });
+
+  test("a leader entry that re-arms keeps the prefix", () => {
+    // The help entry is the one entry whose *job* is to re-arm (with the list
+    // open), and the router used to disarm after running it, erasing the re-arm
+    // in the same keystroke: the entry ran and the screen showed nothing. The
+    // prefix therefore has to be left before the entry runs, not after.
+    const runs: string[] = [];
+    const emitter = new EventEmitter();
+    registerBindingOwner("test", () => [
+      {
+        scope: "app",
+        bindings: [
+          {
+            id: "leader.activate",
+            chords: LEADER_KEY_CHORDS.activate,
+            run: () => {
+              armLeader();
+            },
+          },
+          {
+            id: "leader.help",
+            leader: true,
+            chords: LEADER_KEY_CHORDS.help,
+            run: () => {
+              runs.push("help");
+              armLeader({ help: true });
+            },
+          },
+        ],
+      },
+    ]);
+    const uninstall = installInputRouter(emitter);
+    emitter.emit("input", "\u0018"); // Ctrl+X
+    emitter.emit("input", "?"); // the leader's help entry
+    expect(runs).toEqual(["help"]);
+    expect(isLeaderArmed()).toBe(true);
+    expect(isLeaderHelpOpen()).toBe(true);
+    uninstall();
+    resetLeader();
   });
 
   test("a key the prefix does not know disarms it and continues normally", () => {
