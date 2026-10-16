@@ -14,11 +14,14 @@ import { APP_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
 import type { AppViewProps } from "./AppView";
+import { fitBlockedItemsFromEnd } from "./blocked-window";
 import { useChromeHeight, useMeasuredChromeHeight } from "./chrome-height";
 import { FocusedApproval } from "./FocusedApproval";
+import { historyBlockItems } from "./history-blocks";
 import { buildVisibleItems, hasFocusedApprovalItem } from "./live-items";
 import {
   composeTranscriptItems,
+  getOlderHistoryBlocks,
   getOlderHistoryItems,
   olderHistoryCursor,
   requestOlderHistory,
@@ -41,7 +44,6 @@ import {
   subscribeToViewportScroll,
   subscribeToViewportTop,
 } from "./viewport-scroll";
-import { fitScrolledItemsFromEnd } from "./viewport-window";
 
 /** Fallback chrome reserve used until the shell reports its measured height. */
 export const CHROME_RESERVE_ROWS = 4;
@@ -268,13 +270,27 @@ export function ViewportTranscript(props: AppViewProps) {
   const scrollRows = scrollRequest.kind === "rows" ? scrollRequest.rows : 0;
   const scrollAnchor =
     scrollRequest.kind === "anchor" ? scrollRequest.anchor : undefined;
+  // The paged history is walked over its **pages** (`blocked-window.ts`): a page
+  // whose rows the viewport measured is one step, so a deep position costs
+  // arithmetic per page passed instead of measuring every item in the history.
+  //
+  // Nothing is evicted yet, so the page list is a partition of `items`: the blocks
+  // are the older part, in the same order, and the core is everything after them.
+  // The differential test holds this window equal to the item walk's for that case.
+  const olderBlocks = useSyncExternalStore(
+    subscribeToOlderHistory,
+    getOlderHistoryBlocks,
+  );
+  const olderBlockItems = historyBlockItems(olderBlocks);
   const window = useMemo(() => {
-    return fitScrolledItemsFromEnd(
-      items.length,
+    return fitBlockedItemsFromEnd({
+      blocks: olderBlocks,
+      coreItemCount: Math.max(0, items.length - olderBlockItems),
       height,
-      MAX_VIEWPORT_ITEMS,
-      scrollRows,
-      (index) => {
+      maxItems: MAX_VIEWPORT_ITEMS,
+      scrollFromBottom: scrollRows,
+      anchor: scrollAnchor,
+      measure: (index) => {
         const item = items[index];
         if (item === undefined) return 0;
         return viewportItemRows(item, {
@@ -303,8 +319,7 @@ export function ViewportTranscript(props: AppViewProps) {
           },
         });
       },
-      scrollAnchor,
-    );
+    });
   }, [
     items,
     columns,
@@ -328,6 +343,8 @@ export function ViewportTranscript(props: AppViewProps) {
     showApprovalPreview,
     scrollRows,
     scrollAnchor,
+    olderBlocks,
+    olderBlockItems,
   ]);
 
   // Tell the store what was actually shown, in content terms: the window's bottom
