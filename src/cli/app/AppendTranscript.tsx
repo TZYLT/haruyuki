@@ -1,5 +1,4 @@
 import { Box } from "ink";
-import { ApprovalSwitch } from "@/cli/components/ApprovalSwitch";
 import { AssistantMessage } from "@/cli/components/AssistantMessageRich";
 import { BashCommandMessage } from "@/cli/components/BashCommandMessage";
 import { CommandMessage } from "@/cli/components/CommandMessage";
@@ -14,6 +13,7 @@ import { LiveUserMessage as UserMessage } from "@/cli/components/UserMessageRich
 import { WelcomeScreen } from "@/cli/components/WelcomeScreen";
 import { AnimationProvider } from "@/cli/contexts/AnimationContext";
 import type { AppViewProps } from "./AppView";
+import { FocusedApproval } from "./FocusedApproval";
 import { shouldRenderLiveItem } from "./live-items";
 import { StaticTranscript } from "./StaticTranscript";
 
@@ -47,12 +47,6 @@ export function AppendTranscript(props: AppViewProps) {
     queuedIds,
     queuedDecisions,
     stubDescriptions,
-    handleApproveCurrent,
-    handleApproveAlways,
-    handleDenyCurrent,
-    handleCancelApprovals,
-    currentApprovalContext,
-    showApprovalPreview,
     streaming,
   } = props;
 
@@ -103,32 +97,13 @@ export function AppendTranscript(props: AppViewProps) {
                 return (
                   <Box key={ln.id} flexDirection="column" marginTop={1}>
                     {matchesCurrentApproval ? (
-                      <ApprovalSwitch
-                        approval={currentApproval}
-                        onApprove={handleApproveCurrent}
-                        onApproveAlways={handleApproveAlways}
-                        onDeny={handleDenyCurrent}
-                        onCancel={handleCancelApprovals}
+                      <FocusedApproval
+                        view={props}
                         precomputedDiff={
                           ln.toolCallId
                             ? precomputedDiffsRef.current.get(ln.toolCallId)
                             : undefined
                         }
-                        allDiffs={precomputedDiffsRef.current}
-                        isFocused={true}
-                        approveAlwaysText={
-                          currentApprovalContext?.approveAlwaysText
-                        }
-                        allowPersistence={
-                          currentApprovalContext?.allowPersistence ?? true
-                        }
-                        defaultScope={
-                          currentApprovalContext?.defaultScope === "user"
-                            ? "session"
-                            : (currentApprovalContext?.defaultScope ??
-                              "project")
-                        }
-                        showPreview={showApprovalPreview}
                       />
                     ) : ln.kind === "user" ? (
                       <UserMessage line={ln} prompt={statusLinePrompt} />
@@ -189,25 +164,7 @@ export function AppendTranscript(props: AppViewProps) {
           {/* Fallback approval UI when backfill is disabled (no liveItems) */}
           {liveItems.length === 0 && currentApproval && (
             <Box flexDirection="column">
-              <ApprovalSwitch
-                approval={currentApproval}
-                onApprove={handleApproveCurrent}
-                onApproveAlways={handleApproveAlways}
-                onDeny={handleDenyCurrent}
-                onCancel={handleCancelApprovals}
-                allDiffs={precomputedDiffsRef.current}
-                isFocused={true}
-                approveAlwaysText={currentApprovalContext?.approveAlwaysText}
-                allowPersistence={
-                  currentApprovalContext?.allowPersistence ?? true
-                }
-                defaultScope={
-                  currentApprovalContext?.defaultScope === "user"
-                    ? "session"
-                    : (currentApprovalContext?.defaultScope ?? "project")
-                }
-                showPreview={showApprovalPreview}
-              />
+              <FocusedApproval view={props} />
             </Box>
           )}
 

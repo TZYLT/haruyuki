@@ -20,10 +20,17 @@ file first.
   - `AppendTranscript.tsx`: append-style region — `<Static>` for committed items,
     live items and inline approvals under it.
   - `ViewportTranscript.tsx`: full-screen region — renders only the window that
-    intersects the viewport, bottom-anchored, with bounded residency.
+    intersects the viewport, bottom-anchored, with bounded residency, and the
+    panel (`ViewportPanel.tsx`) that sits under the band: running subagents, plus
+    the focused approval when the band does not draw it.
+  - `ViewportPanel.tsx`: that panel; its measured rows come out of the band.
+  - `FocusedApproval.tsx`: the one focused approval surface both regions render
+    through `ApprovalSwitch`.
   - `TranscriptItem.tsx`: one committed item, shared by both regions so a line
     renders identically in each.
-  - `live-items.ts`: which live `Line`s get a row (shared by both regions).
+  - `live-items.ts`: which live `Line`s get a row, the item list both regions
+    render, and whether the focused approval has a row of its own (shared by both
+    regions).
   - `chrome-height.ts`: measures the chrome below the transcript, which is what
     leaves the viewport its remaining rows.
 - **Row model** (how tall an item is, without rendering it):

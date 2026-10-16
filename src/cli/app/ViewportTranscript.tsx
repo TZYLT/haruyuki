@@ -1,6 +1,5 @@
 import { Box } from "ink";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { ApprovalSwitch } from "@/cli/components/ApprovalSwitch";
 import { PendingApprovalStub } from "@/cli/components/PendingApprovalStub";
 import {
   getRecallDisplay,
@@ -15,11 +14,13 @@ import { APP_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
 import type { AppViewProps } from "./AppView";
-import { useChromeHeight } from "./chrome-height";
-import { shouldRenderLiveItem } from "./live-items";
+import { useChromeHeight, useMeasuredChromeHeight } from "./chrome-height";
+import { FocusedApproval } from "./FocusedApproval";
+import { buildVisibleItems, hasFocusedApprovalItem } from "./live-items";
 import { measureTranscriptItemRows } from "./row-model";
 import { TranscriptItemView } from "./TranscriptItem";
 import type { StaticItem } from "./types";
+import { ViewportPanel } from "./ViewportPanel";
 import {
   getViewportScrollRequest,
   getViewportScrollVersion,
@@ -45,6 +46,12 @@ export const MAX_VIEWPORT_ITEMS = 200;
  * per-item renderer as the append shell so the two never disagree about layout.
  * Heights come from the row model, so the window is chosen without rendering
  * the rest of the transcript.
+ *
+ * Below the band sits the region's own panel: the running-subagent group, and the
+ * focused approval when the transcript cannot show it. The panel is chrome, but it
+ * is measured here because its rows come out of the viewport height: the band sizes
+ * itself from the chrome it is told about, and this panel is not part of that
+ * number.
  */
 export function ViewportTranscript(props: AppViewProps) {
   const {
@@ -66,37 +73,41 @@ export function ViewportTranscript(props: AppViewProps) {
     queuedIds,
     queuedDecisions,
     stubDescriptions,
-    handleApproveCurrent,
-    handleApproveAlways,
-    handleDenyCurrent,
-    handleCancelApprovals,
     showApprovalPreview,
   } = props;
 
   const terminalRows = useTerminalRows();
   const measuredChromeRows = useChromeHeight();
+
+  // The panel under the viewport (running subagents, and a focused approval the
+  // transcript cannot show). It is measured the same way the shell measures its
+  // chrome, and its rows come out of the viewport band — otherwise the panel would
+  // push the input off the bottom of a small terminal.
+  const { ref: panelRef, rows: panelRows } = useMeasuredChromeHeight();
   const height = Math.max(
     1,
-    terminalRows - (measuredChromeRows ?? CHROME_RESERVE_ROWS),
+    terminalRows -
+      (measuredChromeRows ?? CHROME_RESERVE_ROWS) -
+      (panelRows ?? 0),
   );
 
-  const items = useMemo<StaticItem[]>(() => {
-    const currentApprovalToolCallId = currentApproval?.toolCallId;
-    const live = liveItems.filter((ln) =>
-      shouldRenderLiveItem(ln, {
-        currentApprovalToolCallId,
+  const items = useMemo<StaticItem[]>(
+    () =>
+      buildVisibleItems({
+        staticItems,
+        liveItems,
+        currentApprovalToolCallId: currentApproval?.toolCallId,
         pendingIds,
         queuedIds,
       }),
-    );
-    return [...staticItems, ...live];
-  }, [
-    staticItems,
-    liveItems,
-    currentApproval?.toolCallId,
-    pendingIds,
-    queuedIds,
-  ]);
+    [
+      staticItems,
+      liveItems,
+      currentApproval?.toolCallId,
+      pendingIds,
+      queuedIds,
+    ],
+  );
 
   // Read once per render: the map is mutated in place as diffs arrive, so its
   // identity is stable and a diff that lands after this render is picked up on the
@@ -273,6 +284,15 @@ export function ViewportTranscript(props: AppViewProps) {
 
   const visible = items.slice(window.start, window.end);
 
+  // Whether the focused approval is on screen. Its tool call can be missing from
+  // the item list entirely (the backfill cap dropped it) or sit outside the
+  // window; either way the input is disabled and the user would see no way to
+  // answer, so the panel below pins the surface.
+  const approvalIsDrawn = hasFocusedApprovalItem(
+    visible,
+    currentApproval?.toolCallId,
+  );
+
   // `flexShrink={0}` on everything here is what makes the viewport *clip*.
   //
   // Yoga shrinks children by default, and the window deliberately contains a
@@ -284,104 +304,101 @@ export function ViewportTranscript(props: AppViewProps) {
   const shrinkProof = { flexShrink: 0 } as const;
 
   return (
-    <Box
-      height={height}
-      flexDirection="column"
-      justifyContent="flex-end"
-      overflow="hidden"
-      flexShrink={0}
-    >
-      {visible.map((item, offset) => {
-        const index = window.start + offset;
-        const marginTop = index > 0 ? 1 : 0;
-        const toolCallId =
-          item.kind === "tool_call" ? item.toolCallId : undefined;
-        const itemName = item.kind === "tool_call" ? item.name : undefined;
-        const isCurrentApproval =
-          toolCallId !== undefined &&
-          toolCallId === currentApproval?.toolCallId;
+    <>
+      <Box
+        height={height}
+        flexDirection="column"
+        justifyContent="flex-end"
+        overflow="hidden"
+        flexShrink={0}
+      >
+        {visible.map((item, offset) => {
+          const index = window.start + offset;
+          const marginTop = index > 0 ? 1 : 0;
+          const toolCallId =
+            item.kind === "tool_call" ? item.toolCallId : undefined;
+          const itemName = item.kind === "tool_call" ? item.name : undefined;
+          const isCurrentApproval =
+            toolCallId !== undefined &&
+            toolCallId === currentApproval?.toolCallId;
 
-        if (isCurrentApproval && currentApproval) {
+          if (isCurrentApproval && currentApproval) {
+            return (
+              <Box
+                key={item.id}
+                flexDirection="column"
+                marginTop={marginTop}
+                {...shrinkProof}
+              >
+                <FocusedApproval
+                  view={props}
+                  precomputedDiff={
+                    toolCallId
+                      ? precomputedDiffsRef.current.get(toolCallId)
+                      : undefined
+                  }
+                />
+              </Box>
+            );
+          }
+
+          const isQueued =
+            toolCallId !== undefined && queuedIds.has(toolCallId);
+          const isPending =
+            toolCallId !== undefined && pendingIds.has(toolCallId);
+          if (isQueued || isPending) {
+            return (
+              <Box
+                key={item.id}
+                flexDirection="column"
+                marginTop={marginTop}
+                {...shrinkProof}
+              >
+                <PendingApprovalStub
+                  toolName={
+                    (toolCallId
+                      ? approvalMap.get(toolCallId)?.toolName
+                      : null) ||
+                    itemName ||
+                    "Unknown"
+                  }
+                  description={
+                    toolCallId ? stubDescriptions.get(toolCallId) : undefined
+                  }
+                  decision={
+                    isQueued && toolCallId
+                      ? queuedDecisions.get(toolCallId)
+                      : undefined
+                  }
+                />
+              </Box>
+            );
+          }
+
           return (
-            <Box
-              key={item.id}
-              flexDirection="column"
-              marginTop={marginTop}
-              {...shrinkProof}
-            >
-              <ApprovalSwitch
-                approval={currentApproval}
-                onApprove={handleApproveCurrent}
-                onApproveAlways={handleApproveAlways}
-                onDeny={handleDenyCurrent}
-                onCancel={handleCancelApprovals}
-                precomputedDiff={
-                  toolCallId
-                    ? precomputedDiffsRef.current.get(toolCallId)
-                    : undefined
-                }
-                allDiffs={precomputedDiffsRef.current}
-                isFocused={true}
-                approveAlwaysText={currentApprovalContext?.approveAlwaysText}
-                allowPersistence={
-                  currentApprovalContext?.allowPersistence ?? true
-                }
-                defaultScope={
-                  currentApprovalContext?.defaultScope === "user"
-                    ? "session"
-                    : (currentApprovalContext?.defaultScope ?? "project")
-                }
-                showPreview={showApprovalPreview}
+            <Box key={item.id} flexDirection="column" {...shrinkProof}>
+              <TranscriptItemView
+                item={item}
+                index={index}
+                columns={columns}
+                statusLinePrompt={statusLinePrompt}
+                showCompactionsEnabled={showCompactionsEnabled}
+                precomputedDiffs={precomputedDiffsRef.current}
+                hiddenToolCallId={expandedToolCallId ?? undefined}
+                lastShellToolCallId={lastShellToolCallId ?? undefined}
               />
             </Box>
           );
-        }
+        })}
+      </Box>
 
-        const isQueued = toolCallId !== undefined && queuedIds.has(toolCallId);
-        const isPending =
-          toolCallId !== undefined && pendingIds.has(toolCallId);
-        if (isQueued || isPending) {
-          return (
-            <Box
-              key={item.id}
-              flexDirection="column"
-              marginTop={marginTop}
-              {...shrinkProof}
-            >
-              <PendingApprovalStub
-                toolName={
-                  (toolCallId ? approvalMap.get(toolCallId)?.toolName : null) ||
-                  itemName ||
-                  "Unknown"
-                }
-                description={
-                  toolCallId ? stubDescriptions.get(toolCallId) : undefined
-                }
-                decision={
-                  isQueued && toolCallId
-                    ? queuedDecisions.get(toolCallId)
-                    : undefined
-                }
-              />
-            </Box>
-          );
-        }
-
-        return (
-          <Box key={item.id} flexDirection="column" {...shrinkProof}>
-            <TranscriptItemView
-              item={item}
-              index={index}
-              columns={columns}
-              statusLinePrompt={statusLinePrompt}
-              showCompactionsEnabled={showCompactionsEnabled}
-              precomputedDiffs={precomputedDiffsRef.current}
-              hiddenToolCallId={expandedToolCallId ?? undefined}
-              lastShellToolCallId={lastShellToolCallId ?? undefined}
-            />
-          </Box>
-        );
-      })}
-    </Box>
+      {/* Below the band, above the input: running subagents, and the focused
+          approval when the band does not draw it. */}
+      <ViewportPanel
+        panelRef={panelRef}
+        approvalIsDrawn={approvalIsDrawn}
+        approval={props}
+      />
+    </>
   );
 }
