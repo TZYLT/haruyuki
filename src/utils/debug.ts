@@ -3,10 +3,10 @@ import { APP_DIR_NAME, APP_SUBDIRS } from "@/utils/app-paths";
 // Debug logging utility.
 //
 // Screen output: controlled by HARUYUKI_DEBUG=1 (or DEBUG=1 for legacy compatibility),
-// or HARUYUKI_DEBUG_FILE for a custom path.
+// or HARUYUKI_DEBUG_FILE for a custom path. It stops while an interactive session
+// owns the terminal (see `screenOutputSuppressed`); HARUYUKI_DEBUG_SCREEN=1 forces it.
 // File output:   always written to ~/.haruyuki/logs/debug/{agent-id}/{session-id}.log
-//                once debugLogFile.init() has been called.  Before init, lines are
-//                silently dropped (no file path yet).
+//                once debugLogFile.init() has been called.
 
 import {
   appendFileSync,
@@ -44,6 +44,29 @@ function getDebugFile(): string | null {
   return path && path.trim().length > 0 ? path : null;
 }
 
+/**
+ * Whether screen output is still allowed.
+ *
+ * The interactive TUI hands the screen to Ink, and a line written straight to
+ * stdout/stderr while Ink is drawing lands inside its frame: Ink only learns
+ * about a patched `console` write by erasing the frame and repainting it, so
+ * every debug line costs a full clear/repaint (visible flicker) — and in the
+ * append shell the static and live regions can end up out of step, printing
+ * overlapping output. `debugLogFile.init()` is the moment a session's log file
+ * exists, i.e. the interactive session is taking the screen, so screen output
+ * stops there. Every line still goes to that file unconditionally (and to
+ * `HARUYUKI_DEBUG_FILE` when that is set, which always wins over the screen).
+ *
+ * `HARUYUKI_DEBUG_SCREEN=1` forces screen output back on for a session that is
+ * being debugged on the terminal itself.
+ */
+let screenOutputSuppressed = false;
+
+/** Test seam: allow screen output again (module state survives between files). */
+export function resetDebugScreenSuppression(): void {
+  screenOutputSuppressed = false;
+}
+
 /** Print to screen (or HARUYUKI_DEBUG_FILE). Only called when HARUYUKI_DEBUG=1. */
 function printDebugLine(line: string, level: "log" | "warn" = "log"): void {
   const debugFile = getDebugFile();
@@ -55,6 +78,7 @@ function printDebugLine(line: string, level: "log" | "warn" = "log"): void {
       // Fall back to console if file write fails
     }
   }
+  if (screenOutputSuppressed) return;
   const colored =
     level === "warn"
       ? `\x1b[38;5;167m${line.trimEnd()}\x1b[0m` // muted red
@@ -96,6 +120,12 @@ class DebugLogFile {
     sessionId: string,
     options: DebugLogFileOptions = {},
   ): void {
+    // The interactive session is about to own the terminal (this is called once
+    // per session, from the app, with the agent it resolved). From here on screen
+    // output would land inside Ink's frame, so it goes to this file instead —
+    // see `screenOutputSuppressed`.
+    screenOutputSuppressed = process.env.HARUYUKI_DEBUG_SCREEN !== "1";
+
     const telem = process.env.HARUYUKI_CODE_TELEM;
     if (telem === "0" || telem === "false") return;
 
