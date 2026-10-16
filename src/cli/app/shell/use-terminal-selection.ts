@@ -4,6 +4,7 @@ import { getViewportRows } from "@/cli/app/viewport-scroll";
 import {
   beginSelection,
   type CopySource,
+  canSelectOnScreen,
   clearSelection,
   copySourceFor,
   extendSelection,
@@ -33,6 +34,7 @@ import {
   rowSelectionSpan,
 } from "@/cli/helpers/text-selection";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
+import { debugWarn } from "@/utils/debug";
 
 /**
  * Drag selection over the rendered transcript, its highlight, and the copy key.
@@ -128,7 +130,12 @@ function paintSelection(): void {
   }
 
   painted = target;
-  if (out.length > 0) writeToTerminal(out);
+  if (out.length === 0) return;
+
+  // Leave the cursor exactly where the frame write left it. Ink erases this frame
+  // on its next write by counting up from the bottom of its output, so a painter
+  // that left the cursor on a painted row would displace every frame after it.
+  writeToTerminal(out + CURSOR_TO_LINE_START(frame.cursorRow));
 }
 
 function isInsideBand(row: number): boolean {
@@ -211,6 +218,15 @@ export function useTerminalSelection(
           // A click outside the transcript (the input, the status line) ends the
           // selection, the way clicking away from a selection does anywhere else.
           clearSelection();
+          return true;
+        }
+        if (!canSelectOnScreen()) {
+          // A drag that does nothing looks exactly like a broken key path, and this
+          // is the only state where the app deliberately draws nothing.
+          debugWarn(
+            "selection",
+            "no anchored frame: the drag cannot be placed on screen",
+          );
           return true;
         }
         beginSelection({ row: report.row, column: Math.max(1, report.column) });

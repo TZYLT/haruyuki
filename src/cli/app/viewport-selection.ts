@@ -82,9 +82,23 @@ export function clearSelection(): void {
   publish();
 }
 
-/** The text the selection covers, read from the frame that is on screen now. */
+/**
+ * The text the selection covers, read from the frame that is on screen now.
+ *
+ * An unanchored frame yields nothing, for the same reason the painter refuses to
+ * draw on one: if the capture cannot prove which screen rows the frame occupies,
+ * the selection's rows may point at different text, and copying the wrong text is
+ * worse than copying nothing.
+ */
 export function getSelectedText(): string {
-  return selectionText(getTerminalFrame(), selection);
+  const frame = getTerminalFrame();
+  if (!frame?.anchored) return "";
+  return selectionText(frame, selection);
+}
+
+/** Whether a selection could be placed on the screen right now. */
+export function canSelectOnScreen(): boolean {
+  return getTerminalFrame()?.anchored === true;
 }
 
 /**

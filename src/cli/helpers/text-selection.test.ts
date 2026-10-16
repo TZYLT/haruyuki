@@ -16,6 +16,7 @@ function frame(text: readonly string[]): TerminalFrame {
     text,
     widths: text.map((line) => line.length),
     anchored: true,
+    cursorRow: text.length + 1,
   };
 }
 

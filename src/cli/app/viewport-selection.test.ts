@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { StaticItem } from "@/cli/app/types";
 import {
   beginSelection,
+  canSelectOnScreen,
   clearSelection,
   copySourceFor,
   extendSelection,
@@ -13,7 +14,11 @@ import {
   resetViewportSelectionForTests,
   subscribeToSelection,
 } from "@/cli/app/viewport-selection";
-import { resetTerminalFrameForTests } from "@/cli/helpers/terminal-frame";
+import {
+  getTerminalFrame,
+  installTerminalFrameCapture,
+  resetTerminalFrameForTests,
+} from "@/cli/helpers/terminal-frame";
 
 const ANSWER: StaticItem = {
   kind: "assistant",
@@ -82,6 +87,33 @@ describe("viewport selection", () => {
     beginSelection({ row: 1, column: 1 });
     extendSelection({ row: 1, column: 5 });
     expect(getSelectedText()).toBe("");
+  });
+
+  test("refuses a frame the screen cannot place", () => {
+    const stream = {
+      isTTY: true,
+      write(_chunk: string) {
+        return true;
+      },
+    };
+    installTerminalFrameCapture(stream);
+
+    beginSelection({ row: 1, column: 1 });
+    extendSelection({ row: 1, column: 5 });
+
+    // No clear and no fresh screen: the rows cannot be proven to be screen rows,
+    // so the selection copies nothing — the painter refuses such a frame for the
+    // same reason. The frame is still readable as text; the gate is the point.
+    stream.write("alpha bravo\nsecond\n");
+    expect(getTerminalFrame()?.text).toEqual(["alpha bravo", "second"]);
+    expect(getSelectedText()).toBe("");
+    expect(canSelectOnScreen()).toBe(false);
+
+    // A frame that clears the screen can be placed, and the same selection reads
+    // from it.
+    stream.write(`\u001B[2J\u001B[Halpha bravo\nsecond\n`);
+    expect(canSelectOnScreen()).toBe(true);
+    expect(getSelectedText()).toBe("alpha");
   });
 
   test("finds the last answer, not the last line", () => {

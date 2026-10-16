@@ -33,14 +33,21 @@ import {
  * 2. **The write follows the alternate-screen entry.** Ink writes `ESC[?1049h`,
  *    the terminal hands over a fresh screen with the cursor at row 1, and the
  *    first frame drawn on it therefore starts there whatever its shape.
- * 3. **Neither, but the previous frame was anchored and has the same number of
- *    rows.** Ink erases the previous frame first (`eraseLines`), which walks the
- *    cursor back up to that frame's first row — the same row this frame starts
- *    at, provided the height did not change.
+ * 3. **The previous frame was anchored.** Ink erases the previous frame first
+ *    (`eraseLines`), which walks the cursor back up to that frame's first row —
+ *    the row this frame starts at. The height may differ: the erase count is the
+ *    previous frame's own, so a frame that gained or lost a row still lands on the
+ *    same first row (one that grows past the screen is cleared instead, see
+ *    `shouldClearTerminalForFrame`).
  *
  * Anything else is recorded as unanchored, and the selection refuses to work on
  * an unanchored frame: a highlight painted on the wrong rows, or a copy of the
  * wrong text, is worse than no selection.
+ *
+ * A captured frame also records `cursorRow`, where the write left the cursor.
+ * That is not decoration: the highlight is written *after* the frame, and Ink's
+ * next write erases this frame by counting up from the bottom of its output, so a
+ * painter that left the cursor in the middle would displace every later frame.
  */
 
 export interface TerminalFrame {
@@ -52,6 +59,8 @@ export interface TerminalFrame {
   widths: readonly number[];
   /** Whether these rows are known to be the screen's rows 1..n. */
   anchored: boolean;
+  /** The row the write left the cursor on, counted from the frame's first row. */
+  cursorRow: number;
 }
 
 export interface FrameStream {
@@ -94,8 +103,9 @@ const installations = new WeakMap<
 /** Installed streams, so the test seam can restore all of them. */
 const installedStreams = new Set<FrameStream>();
 
-function parseRows(chunk: string): string[] {
+function parseRows(chunk: string): { rows: string[]; newlines: number } {
   const rows: string[] = [];
+  let newlines = 0;
   let current: AnsiToken[] = [];
 
   for (const token of scanAnsi(chunk)) {
@@ -105,6 +115,7 @@ function parseRows(chunk: string): string[] {
       if (token.value === "\n") {
         rows.push(current.map((entry) => entry.value).join(""));
         current = [];
+        newlines += 1;
       }
       continue;
     }
@@ -115,7 +126,7 @@ function parseRows(chunk: string): string[] {
   if (current.length > 0)
     rows.push(current.map((entry) => entry.value).join(""));
 
-  return rows.map(stripLeadingCursorEscapes);
+  return { rows: rows.map(stripLeadingCursorEscapes), newlines };
 }
 
 /** Drop the erase-and-move prefix Ink writes in front of a frame body. */
@@ -133,19 +144,21 @@ function looksLikeFrame(chunk: string): boolean {
 }
 
 function recordFrame(chunk: string, fromFreshScreen: boolean): void {
-  const lines = parseRows(chunk);
-  if (lines.length === 0) return;
+  const { rows, newlines } = parseRows(chunk);
+  if (rows.length === 0) return;
 
   const cleared = chunk.includes(CLEAR_SCREEN);
-  const anchored =
-    cleared ||
-    fromFreshScreen ||
-    (frame?.anchored === true && frame.lines.length === lines.length);
+  const anchored = cleared || fromFreshScreen || frame?.anchored === true;
 
   frame = {
-    lines,
-    text: lines.map(visibleText),
-    widths: lines.map(visibleWidth),
+    lines: rows,
+    text: rows.map(visibleText),
+    widths: rows.map(visibleWidth),
+    // Where the write left the cursor: one row per newline, counted from the
+    // frame's own first row. A frame that ends with a newline therefore leaves it
+    // one row below its last row, which is the position Ink's next write assumes
+    // when it erases this frame.
+    cursorRow: newlines + 1,
     anchored,
   };
   version += 1;

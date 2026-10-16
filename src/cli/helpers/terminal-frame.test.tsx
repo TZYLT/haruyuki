@@ -143,23 +143,28 @@ describe("terminal frame capture", () => {
     const stdout = probeStream();
     installTerminalFrameCapture(stdout);
 
-    // First frame: cleared, so anchored.
-    stdout.write(`${CLEAR}${ESC}[3J${ESC}[Hone\ntwo\n`);
-    expect(getTerminalFrame()?.anchored).toBe(true);
-
-    // Same height, no clear: Ink erased the previous frame first, which walks the
-    // cursor back to the row this frame starts at.
-    stdout.write(`${ESC}[2K${ESC}[1A${ESC}[2K${ESC}[Gthree\nfour\n`);
-    const same = getTerminalFrame();
-    expect(same?.anchored).toBe(true);
-    expect(same?.text).toEqual(["three", "four"]);
-    expect(same?.lines[0]).toBe("three");
-
-    // A different height without a clear has no known origin: refuse to place it
-    // rather than paint a highlight over the wrong rows.
-    stdout.write(`${ESC}[2K${ESC}[1A${ESC}[2K${ESC}[Gfive\n`);
+    // First frame: no clear, no alternate-screen entry — nothing places its rows,
+    // so it is refused rather than guessed at.
+    stdout.write("one\ntwo\n");
     expect(getTerminalFrame()?.anchored).toBe(false);
-    expect(getTerminalFrame()?.text).toEqual(["five"]);
+
+    // A cleared frame can be placed, and the cursor row is recorded: the painter
+    // has to put the cursor back there for Ink's next erase to line up.
+    stdout.write(`${CLEAR}${ESC}[3J${ESC}[Hone\ntwo\n`);
+    const cleared = getTerminalFrame();
+    expect(cleared?.anchored).toBe(true);
+    expect(cleared?.cursorRow).toBe(3);
+    expect(cleared?.text).toEqual(["one", "two"]);
+
+    // Same again with no clear: Ink erased the previous frame first, which walks
+    // the cursor back to the row this frame starts at. The *height may differ* —
+    // the erase count is the previous frame's own.
+    stdout.write(`${ESC}[2K${ESC}[1A${ESC}[2K${ESC}[Gthree\nfour\nfive\n`);
+    const taller = getTerminalFrame();
+    expect(taller?.anchored).toBe(true);
+    expect(taller?.text).toEqual(["three", "four", "five"]);
+    expect(taller?.lines[0]).toBe("three");
+    expect(taller?.cursorRow).toBe(4);
   });
 
   test("ignores writes that are not frames", () => {
