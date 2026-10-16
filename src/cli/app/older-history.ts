@@ -165,8 +165,15 @@ interface OlderHistoryBlock {
    * back to the backend for a page it already has.
    */
   page: readonly Message[];
-  /** The entries the page contributed, after composition dropped duplicates. */
-  items: readonly StaticItem[];
+  /**
+   * Entries the page contributed, after composition dropped duplicates, or `null`
+   * once the page is **evicted**: its rows are then only a count. `itemCount` is
+   * kept separately for exactly that state — a page that is not materialized still
+   * has to contribute its width to the walk and to every index above it.
+   */
+  items: readonly StaticItem[] | null;
+  /** Entries the page contributed, whatever its materialization state. */
+  itemCount: number;
   /** Rows the viewport measured for the whole page, or `null` until it has. */
   rows: number | null;
 }
@@ -267,7 +274,7 @@ export function getOlderHistoryBlocks(): readonly HistoryBlock[] {
   if (blocksViewSource === blocks) return blocksView;
   blocksView = blocks.map((block) => ({
     key: block.key,
-    itemCount: block.items.length,
+    itemCount: block.itemCount,
     rows: block.rows,
   }));
   blocksViewSource = blocks;
@@ -433,7 +440,10 @@ async function loadPage(
     // One ledger entry per page, at the same moment and in the same order as the
     // items. The count is `fresh.length` — the rows actually inserted, which is also
     // the number the anchor is re-based by just below.
-    blocks = [{ key: before, page, items: fresh, rows: null }, ...blocks];
+    blocks = [
+      { key: before, page, items: fresh, itemCount: fresh.length, rows: null },
+      ...blocks,
+    ];
     publish();
     shiftViewportAnchorByItems(fresh.length);
     if (rows > 0) scrollTranscriptBy(rows);
