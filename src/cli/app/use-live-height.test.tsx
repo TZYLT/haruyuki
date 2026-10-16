@@ -10,8 +10,7 @@ import { describe, expect, test } from "bun:test";
 import { Readable, Writable } from "node:stream";
 import { render, Text } from "ink";
 import {
-  setRecallDisplay,
-  setSystemRemindersVisible,
+  resetTranscriptDisplayState,
   setThinkingExpanded,
 } from "@/cli/components/transcript-display-state";
 import { SYSTEM_REMINDER_CLOSE, SYSTEM_REMINDER_OPEN } from "@/constants";
@@ -174,7 +173,7 @@ const wait = () => new Promise((resolve) => setTimeout(resolve, 20));
 
 describe("useEstimatedLiveHeight", () => {
   test("re-measures when ctrl+t expands a reasoning body", async () => {
-    setThinkingExpanded(false);
+    resetTranscriptDisplayState();
 
     const reported = { height: 0 };
 
@@ -203,9 +202,7 @@ describe("useEstimatedLiveHeight", () => {
     } finally {
       instance.unmount();
       instance.cleanup();
-      setThinkingExpanded(false);
-      setSystemRemindersVisible(false);
-      setRecallDisplay(RECALL_DISPLAY_DEFAULT);
+      resetTranscriptDisplayState();
     }
   });
 });

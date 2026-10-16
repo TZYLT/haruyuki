@@ -38,6 +38,22 @@ export function getSystemRemindersExpanded(): boolean {
   return expanded["system-reminders"];
 }
 
+/**
+ * Restore the store to its startup state.
+ *
+ * Test seam, because this state is module-level and Bun runs many test files in one
+ * worker: a file that toggles a display flag leaves it set for whichever file runs
+ * next. `setSystemRemindersVisible(false)` is not enough on its own — it returns
+ * early when the value already matches, so an expansion can outlive the visibility
+ * it was set with.
+ */
+export function resetTranscriptDisplayState(): void {
+  expanded["system-reminders"] = false;
+  expanded.thinking = false;
+  systemRemindersVisible = false;
+  recallDisplay = RECALL_DISPLAY_DEFAULT;
+}
+
 export function getSystemRemindersVisible(): boolean {
   return systemRemindersVisible;
 }

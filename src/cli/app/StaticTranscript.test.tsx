@@ -4,6 +4,7 @@ import { render } from "ink";
 import stripAnsi from "strip-ansi";
 import {
   getSystemRemindersExpanded,
+  resetTranscriptDisplayState,
   setRecallDisplay,
   setSystemRemindersVisible,
   setThinkingExpanded,
@@ -37,10 +38,9 @@ async function waitForRender(): Promise<void> {
 }
 
 afterEach(() => {
-  setSystemRemindersVisible(false);
-  setThinkingExpanded(false);
-  // Feature ②'s tier is module state too, and the tests below change it.
-  setRecallDisplay("summary");
+  // Module state, shared by every test file in the worker: leaving a flag set
+  // leaks into whichever file runs next.
+  resetTranscriptDisplayState();
 });
 
 test("system reminder display changes repaint committed transcript rows", async () => {

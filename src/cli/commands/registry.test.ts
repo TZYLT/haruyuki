@@ -4,7 +4,7 @@ import { commands, executeCommand } from "@/cli/commands/registry";
 import {
   getSystemRemindersExpanded,
   getSystemRemindersVisible,
-  setSystemRemindersVisible,
+  resetTranscriptDisplayState,
   toggleSystemReminderDisplay,
 } from "@/cli/components/transcript-display-state";
 import {
@@ -68,7 +68,9 @@ describe("command registry", () => {
   beforeEach(() => {
     installLocalSecretStorage();
     setCurrentAgentId(AGENT_ID);
-    setSystemRemindersVisible(false);
+    // The display store is module state: start from the startup value so this
+    // file neither inherits a flag nor leaves one for the next file.
+    resetTranscriptDisplayState();
     clearSecretsCache(AGENT_ID);
   });
 
@@ -76,7 +78,7 @@ describe("command registry", () => {
     __testOverrideLocalSecretStorage(null);
     clearSecretsCache(AGENT_ID);
     setCurrentAgentId(null);
-    setSystemRemindersVisible(false);
+    resetTranscriptDisplayState();
   });
 
   test("propagates secrets reminder refresh metadata for secret mutations", async () => {
