@@ -7,6 +7,7 @@ import {
   resetViewportScroll,
   scrollTranscriptBy,
   scrollTranscriptPage,
+  scrollTranscriptWheel,
   setViewportRows,
   subscribeToViewportScroll,
 } from "@/cli/app/viewport-scroll";
@@ -35,6 +36,57 @@ describe("viewport scroll store", () => {
     reportViewportPosition({ rows: 19, anchor: { end: 5, delta: 4 } });
     scrollTranscriptPage("up");
     expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 38 });
+  });
+
+  test("notches that arrive in one batch all move the view", () => {
+    setViewportRows(20);
+    // One stdin read carries many SGR reports when the wheel spins, and Ink
+    // emits them in one batch: the viewport has not drawn the first one yet when
+    // the last arrives. Every notch still has to count.
+    for (let index = 0; index < 40; index += 1) {
+      scrollTranscriptWheel("up");
+    }
+    expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 120 });
+
+    // Rapid pages accumulate the same way.
+    resetViewportScroll();
+    setViewportRows(20);
+    scrollTranscriptPage("up");
+    scrollTranscriptPage("up");
+    expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 38 });
+  });
+
+  test("a report ends the pending batch, so the next notch measures from what was shown", () => {
+    setViewportRows(20);
+    scrollTranscriptWheel("up");
+    scrollTranscriptWheel("up");
+    expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 6 });
+    // The walk reached the oldest item and clamped: four rows is all there was.
+    reportViewportPosition({ rows: 4, anchor: { end: 12, delta: 0 } });
+    scrollTranscriptWheel("up");
+    expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 7 });
+  });
+
+  test("scrolling back down cancels the moves that are still pending", () => {
+    setViewportRows(20);
+    scrollTranscriptWheel("up");
+    scrollTranscriptWheel("up");
+    scrollTranscriptWheel("up");
+    scrollTranscriptWheel("down");
+    expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 6 });
+    // Down from the newest row stays following, however many up-notches preceded.
+    scrollTranscriptWheel("down");
+    scrollTranscriptWheel("down");
+    expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 0 });
+  });
+
+  test("jumping to the newest row forgets pending moves", () => {
+    setViewportRows(20);
+    for (let index = 0; index < 5; index += 1) scrollTranscriptWheel("up");
+    jumpTranscriptToNewest();
+    expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 0 });
+    scrollTranscriptWheel("up");
+    expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 3 });
   });
 
   test("scrolling down past the newest row resumes following", () => {

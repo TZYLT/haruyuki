@@ -28,6 +28,15 @@ let version = 0;
 let request: ViewportScrollRequest = { kind: "rows", rows: 0 };
 /** Rows the last frame showed, for relative moves (a page, a line). */
 let lastRows = 0;
+/**
+ * Relative moves made since that report, not yet on screen.
+ *
+ * A relative move has to be measured from where the view will be, not from where
+ * it last was: the viewport reports only after it has drawn, so every notch that
+ * arrives in between would otherwise be measured from the same stale position and
+ * thrown away (see `scrollTranscriptBy`).
+ */
+let pendingRows = 0;
 let viewportRows = 0;
 let reported: ViewportAnchor | null = null;
 
@@ -57,10 +66,22 @@ export function setViewportRows(rows: number): void {
   viewportRows = Math.max(0, Math.trunc(rows));
 }
 
-/** Move by rows: positive scrolls up (older), negative back down. */
+/**
+ * Move by rows: positive scrolls up (older), negative back down.
+ *
+ * The base is the position the viewport last **reported** plus every relative
+ * move made since (`pendingRows`), because a report only arrives once the frame
+ * it describes has been drawn. Measuring from the report alone silently loses
+ * every notch that arrives before that frame: a wheel spin delivers many reports
+ * in one stdin read, Ink emits them in one batch, React renders once, and the
+ * notches after the first were all dropped — measured as 40 notches moving three
+ * rows. A single notch is unaffected either way, which is why this only shows up
+ * as "the wheel sometimes does nothing".
+ */
 export function scrollTranscriptBy(rows: number): void {
-  const next = Math.max(0, Math.trunc(lastRows + rows));
+  const next = Math.max(0, Math.trunc(lastRows + pendingRows + rows));
   if (request.kind === "rows" && request.rows === next) return;
+  pendingRows = next - lastRows;
   request = { kind: "rows", rows: next };
   reported = null;
   publish();
@@ -101,6 +122,8 @@ export function getViewportRows(): number {
 export function jumpTranscriptToNewest(): void {
   if (request.kind === "rows" && request.rows === 0 && reported === null)
     return;
+  lastRows = 0;
+  pendingRows = 0;
   request = { kind: "rows", rows: 0 };
   reported = null;
   publish();
@@ -114,6 +137,9 @@ export function jumpTranscriptToNewest(): void {
  * is the only place the total is known — it is what the lazy walk measures.
  */
 export function jumpTranscriptToOldest(): void {
+  // The sentinel is not a position, so it is not accumulated onto and the pending
+  // relative moves are dropped with it: the next report is what pins the view.
+  pendingRows = 0;
   request = { kind: "rows", rows: Number.MAX_SAFE_INTEGER };
   reported = null;
   publish();
@@ -133,6 +159,9 @@ export function reportViewportPosition(position: {
   anchor: ViewportAnchor;
 }): void {
   lastRows = Math.max(0, Math.trunc(position.rows));
+  // Whatever was asked for is answered by this report — including a request the
+  // window clamped — so relative moves go back to measuring from here.
+  pendingRows = 0;
   if (lastRows === 0) {
     reported = null;
     if (request.kind !== "rows" || request.rows !== 0) {
@@ -163,6 +192,7 @@ export function resetViewportScroll(): void {
   version = 0;
   request = { kind: "rows", rows: 0 };
   lastRows = 0;
+  pendingRows = 0;
   viewportRows = 0;
   reported = null;
   listeners.clear();
