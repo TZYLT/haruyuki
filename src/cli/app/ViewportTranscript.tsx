@@ -48,8 +48,8 @@ export const MAX_VIEWPORT_ITEMS = 200;
  * between two items, and the item draws that gap itself (`marginTop` on its own
  * box); counting it a second time here reserved rows nothing filled, so the band's
  * bottom rows came out blank — one per visible item, hiding the newest lines of
- * the transcript above the input. `row-model.fidelity.test.tsx` weighs this
- * function against a real render of the component for that reason. The two
+ * the transcript above the input. `viewport-wheel.test.tsx` weighs this function
+ * against a real render of the component for that reason. The two
  * substituted approval nodes are the one case where the viewport's own wrapper
  * carries the gap, and the model counts that gap through
  * `substitutedApprovalRows` — so nothing is added here for them either.
