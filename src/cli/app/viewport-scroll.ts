@@ -67,12 +67,34 @@ export function scrollTranscriptBy(rows: number): void {
 }
 
 /**
- * One screen of scroll, keeping a row of overlap so the line at the seam is not
- * lost between pages.
+ * Rows one wheel notch moves.
+ *
+ * Three, per the user's ruling of 2026-10-15 ("a wheel notch should move three
+ * rows by default"): one row per notch is too slow to cross a long answer with a
+ * wheel, and a full page makes the reader lose the line they were on.
  */
+export const WHEEL_ROWS_PER_NOTCH = 3;
+
+/** One screen of scroll, keeping a row of overlap so the line at the seam is not
+ * lost between pages. */
 export function scrollTranscriptPage(direction: "up" | "down"): void {
   const page = Math.max(1, viewportRows - 1);
   scrollTranscriptBy(direction === "up" ? page : -page);
+}
+
+/** One wheel notch: three rows, in the direction the wheel turned. */
+export function scrollTranscriptWheel(direction: "up" | "down"): void {
+  scrollTranscriptBy(
+    direction === "up" ? WHEEL_ROWS_PER_NOTCH : -WHEEL_ROWS_PER_NOTCH,
+  );
+}
+
+/**
+ * The rows the viewport last reported, so a caller outside it (the mouse layer)
+ * can translate a screen position into a row of the band.
+ */
+export function getViewportRows(): number {
+  return viewportRows;
 }
 
 /** Resume following: pin to the newest row and drop the anchor. */

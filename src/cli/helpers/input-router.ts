@@ -8,6 +8,8 @@ import {
   shieldKeyEvent,
 } from "./input-sequence";
 import { disarmLeader, isLeaderArmed } from "./leader";
+import { routeMouseReport } from "./mouse-router";
+import { parseMouseReport } from "./mouse-sequence";
 
 /**
  * The app's single input router.
@@ -279,6 +281,16 @@ export function installInputRouter(
       payload = filterRawInput(raw, platform);
       // A dropped payload is the terminal echoing a keystroke already delivered.
       if (payload === null) return true;
+      // Mouse reports are read here, before the key path, and are spent here
+      // whether or not anything acts on them. Ink has no mouse API: an unread
+      // report is not ignored, it is *typed* — a wheel notch or a click lands in
+      // the draft as `[<0;10;5M`. Claiming the exact shapes keeps that from
+      // happening even when reporting is off and a stray report arrives late.
+      const mouse = parseMouseReport(payload);
+      if (mouse) {
+        routeMouseReport(mouse);
+        return true;
+      }
       const claimed = shieldKeyEvent(payload);
       if (claimed && routeKeyEvent(claimed)) return true;
     }

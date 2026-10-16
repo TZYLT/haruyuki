@@ -29,6 +29,14 @@ file to change.
   which uses Ink's `usePaste` hook and the `kittyKeyboard` render option. The
   vendored Ink string patches were retired in the Ink 7 upgrade. Do not add
   competing raw stdin listeners.
+- **A mouse report is not a key and must never become text.** Ink has no mouse
+  API, so a report nobody claims is parsed as input and typed into the draft
+  (`[<0;10;5M`). The input router claims the two encodings before the key path
+  (`helpers/mouse-sequence.ts`), and `helpers/mouse-router.ts` dispatches them to
+  the shell that knows what a wheel notch should do. The terminal modes live in
+  `helpers/mouse-tracking.ts`: every enable is paired with a disable — unmount,
+  process exit, and a `Ctrl+Z` hand-over all give the mouse back, because a
+  terminal left in mouse mode prints escape garbage into the user's shell.
 
 ## Verification
 

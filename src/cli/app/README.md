@@ -15,6 +15,10 @@ file first.
 - `shell/V2Shell.tsx`: full-screen shell (ShellFrame + the viewport transcript).
 - `shell/ShellFrame.tsx`: chrome both shells share — terminal title, the input
   router, and the overlay/modal input claims.
+- `shell/use-mouse-input.ts`: the full-screen shell's mouse layer — terminal mouse
+  reporting (on while the shell is up, given back on unmount/suspend/exit), wheel
+  scrolling, and the leader's mouse switch. The reports are decoded in
+  `src/cli/helpers/mouse-sequence.ts` and dispatched by `mouse-router.ts`.
 - `shell/types.ts`: the `AppShellProps` projection shared by every shell.
 - **Transcript regions** (the shell's one difference):
   - `AppendTranscript.tsx`: append-style region — `<Static>` for committed items,

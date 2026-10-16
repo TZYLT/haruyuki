@@ -1,5 +1,5 @@
 import { Box, Text } from "ink";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { colors } from "@/cli/components/colors";
 import { describeChord } from "@/cli/helpers/input-keys";
 import { leaderEntries } from "@/cli/helpers/input-router";
@@ -9,15 +9,22 @@ import {
   isLeaderHelpOpen,
   subscribeToLeader,
 } from "@/cli/helpers/leader";
+import { getNotice, subscribeToNotice } from "@/cli/helpers/notice";
 
 /**
- * The leader's visible half.
+ * The leader's visible half, and the composer's one-line transient notices.
  *
  * A prefix with no affordance is a mode the user cannot see, cannot leave on
  * purpose, and cannot discover — so the prefix announces itself while it is
  * armed, and its `?` entry expands to the list of what it can do.
  *
- * The subscription lives here, in a leaf that renders nothing most of the time,
+ * Short notices land in the same slot (`notice.ts`): a mouse toggle and a
+ * clipboard write both change nothing on screen, and both are reported in the
+ * one line that already exists above the input. Notices are drawn first because a
+ * notice is the answer to the key just pressed; the prefix line is only reachable
+ * again by pressing `Ctrl+X`.
+ *
+ * The subscriptions live here, in a leaf that renders nothing most of the time,
  * so an armed prefix re-renders one line instead of the composer or the
  * transcript (the flicker red line covers anything that changes on a keystroke).
  *
@@ -49,6 +56,7 @@ function summarise(entries: ReturnType<typeof leaderEntries>): string {
 export function LeaderHint() {
   const [armed, setArmed] = useState(isLeaderArmed);
   const [helpOpen, setHelpOpen] = useState(isLeaderHelpOpen);
+  const notice = useSyncExternalStore(subscribeToNotice, getNotice);
 
   useEffect(() => {
     const sync = () => {
@@ -58,6 +66,14 @@ export function LeaderHint() {
     sync();
     return subscribeToLeader(sync);
   }, []);
+
+  if (notice !== null) {
+    return (
+      <Box>
+        <Text dimColor>{notice}</Text>
+      </Box>
+    );
+  }
 
   if (!armed) return null;
 

@@ -22,6 +22,11 @@ import {
   isLeaderHelpOpen,
   resetLeader,
 } from "@/cli/helpers/leader";
+import {
+  registeredMouseHandlers,
+  registerMouseHandler,
+  resetMouseHandlers,
+} from "@/cli/helpers/mouse-router";
 
 const CTRL_O = "\u000F";
 
@@ -508,5 +513,93 @@ describe("input router", () => {
     expect(runs).toEqual(["run"]);
     first();
     second();
+  });
+});
+
+describe("mouse reports in the router", () => {
+  const ESC = "\u001b";
+  const WHEEL_UP = `${ESC}[<64;10;5M`;
+  const WHEEL_DOWN = `${ESC}[<65;10;5M`;
+  const LEFT_PRESS = `${ESC}[<0;4;2M`;
+  /** The X10 encoding, for a terminal that ignores the request for SGR. */
+  const X10_WHEEL_UP = `${ESC}[M${String.fromCharCode(64 + 32, 10 + 32, 5 + 32)}`;
+
+  afterEach(() => {
+    resetMouseHandlers();
+  });
+
+  test("a wheel notch reaches the handler and never the text path", () => {
+    const reports: string[] = [];
+    const { emitter, legacy, uninstall } = harness(shells(() => true));
+    registerMouseHandler((report) => {
+      reports.push(`${report.wheel ?? "none"}@${report.column},${report.row}`);
+      return true;
+    });
+
+    emitter.emit("input", WHEEL_UP);
+    emitter.emit("input", WHEEL_DOWN);
+
+    expect(reports).toEqual(["up@10,5", "down@10,5"]);
+    // The point of the whole module: an unread report is *typed*, because Ink has
+    // no mouse API and parses the sequence as input.
+    expect(legacy).toEqual([]);
+    uninstall();
+  });
+
+  test("a report is spent even when nothing is listening", () => {
+    // Reporting can be off while a report is already in flight (the toggle, the
+    // exit path). It must not surface in the draft in that window.
+    const { emitter, legacy, uninstall } = harness(shells(() => true));
+    expect(registeredMouseHandlers()).toBe(0);
+
+    emitter.emit("input", LEFT_PRESS);
+
+    expect(legacy).toEqual([]);
+    uninstall();
+  });
+
+  test("reads the X10 encoding too", () => {
+    const seen: string[] = [];
+    const { emitter, legacy, uninstall } = harness(shells(() => true));
+    registerMouseHandler((report) => {
+      seen.push(`${report.wheel ?? "none"}@${report.column},${report.row}`);
+      return true;
+    });
+
+    emitter.emit("input", X10_WHEEL_UP);
+
+    expect(seen).toEqual(["up@10,5"]);
+    expect(legacy).toEqual([]);
+    uninstall();
+  });
+
+  test("a declining handler does not stop the report from being spent", () => {
+    // The handler convention (a `false` return means "I did not want this") must
+    // not leak the report back onto the text path.
+    const { emitter, legacy, uninstall } = harness(shells(() => true));
+    const seen: number[] = [];
+    registerMouseHandler((report) => {
+      seen.push(report.column);
+      return false;
+    });
+
+    emitter.emit("input", WHEEL_UP);
+
+    expect(seen).toEqual([10]);
+    expect(legacy).toEqual([]);
+    uninstall();
+  });
+
+  test("keys that only look like mouse reports still take their own path", () => {
+    // The claim is an exact match on the two encodings, not a CSI prefix: an
+    // over-broad claim would swallow real sequences (here, Shift+Left, which the
+    // raw layer deliberately leaves to Ink's parse).
+    const { emitter, legacy, uninstall } = harness(shells(() => true));
+    registerMouseHandler(() => true);
+
+    emitter.emit("input", SHIFT_LEFT_ARROW);
+
+    expect(legacy).toEqual([SHIFT_LEFT_ARROW]);
+    uninstall();
   });
 });

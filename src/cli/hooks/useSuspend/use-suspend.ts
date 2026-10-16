@@ -1,6 +1,10 @@
 import { useApp } from "ink";
 import { useCallback, useEffect, useState } from "react";
 import { SYSTEM_KEY_CHORDS } from "@/cli/helpers/keymap";
+import {
+  disableMouseTracking,
+  enableMouseTracking,
+} from "@/cli/helpers/mouse-tracking";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { debugWarn } from "@/utils/debug";
 
@@ -58,6 +62,12 @@ export function useSuspend() {
               return;
             }
 
+            // Mouse reporting is not part of Ink's hand-over, and it must not
+            // survive into the subshell: the terminal would keep sending reports
+            // to whatever is reading the tty, and a shell prompt prints them as
+            // text. It is handed back after Ink has restored the terminal.
+            const mouseWasOn = disableMouseTracking();
+
             // Ink 7 owns the terminal hand-over: `suspendTerminal` turns raw
             // mode, bracketed paste, the kitty protocol and the alternate
             // screen off before the callback, then restores all of them and
@@ -66,11 +76,15 @@ export function useSuspend() {
             // alternate screen.
             void suspendTerminal(() =>
               stopUntilResumed(() => process.kill(process.pid, "SIGTSTP")),
-            ).catch((error: unknown) => {
-              // Never let a failed hand-over reach the uncaught-exception
-              // handler: that would exit the session and drop the draft.
-              debugWarn("suspend", "suspendTerminal failed", error);
-            });
+            )
+              .catch((error: unknown) => {
+                // Never let a failed hand-over reach the uncaught-exception
+                // handler: that would exit the session and drop the draft.
+                debugWarn("suspend", "suspendTerminal failed", error);
+              })
+              .finally(() => {
+                if (mouseWasOn) enableMouseTracking();
+              });
           },
         },
       ],

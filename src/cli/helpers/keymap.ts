@@ -164,6 +164,23 @@ export const LEADER_KEY_CHORDS = {
    * rest are the same keystroke in another encoding.
    */
   help: [{ key: "?" }, { key: "?", shift: true }, { key: "/", shift: true }],
+  /**
+   * Turn terminal mouse reporting off (and back on).
+   *
+   * Mouse reporting is what makes wheel scrolling and drag selection possible,
+   * and it is also what *steals* the terminal's own text selection. The escape
+   * hatch has to be reachable from inside the app, and a mode with no visible
+   * state is exactly what the prefix is for.
+   */
+  toggleMouse: [{ key: "m" }],
+  /**
+   * Copy the selection (the whole answer when there is none).
+   *
+   * Copy needs a key of its own: the mouse can start a selection but cannot end
+   * one silently — a copy on button release would fire on every stray drag — and
+   * `Ctrl+C` is already the draft clear / exit guard.
+   */
+  copySelection: [{ key: "y" }],
 } as const satisfies Record<string, KeyChordList>;
 
 /** Reserved by later milestones so no M3 binding can claim them by accident. */
