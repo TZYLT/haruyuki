@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Readable, Writable } from "node:stream";
-import { Box, render, Text } from "ink";
-import { useEffect, useSyncExternalStore } from "react";
+import { Box, type DOMElement, measureElement, render, Text } from "ink";
+import { useEffect, useRef, useSyncExternalStore } from "react";
+import { TranscriptItemView } from "@/cli/app/TranscriptItem";
+import type { StaticItem } from "@/cli/app/types";
+import { viewportItemRows } from "@/cli/app/ViewportTranscript";
 import {
   getViewportScrollRequest,
   getViewportScrollVersion,
@@ -13,6 +16,8 @@ import {
   WHEEL_ROWS_PER_NOTCH,
 } from "@/cli/app/viewport-scroll";
 import { fitScrolledItemsFromEnd } from "@/cli/app/viewport-window";
+import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
+import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import {
   getTerminalFrame,
   installTerminalFrameCapture,
@@ -36,6 +41,11 @@ import {
  *    byte-identical. Measured before the fix: eight notches, no frame changed at
  *    all — which is also why a scroll that "did nothing" flashed the screen (on
  *    Windows an unchanged frame is still cleared and repainted).
+ * 3. **The rows the window reserves have to be the rows the band draws.** The
+ *    row model already counts the one-row gap between items, and the item draws
+ *    it itself; counting it again in the viewport's measure left the band's
+ *    bottom rows blank, one per visible item, reported as "the last lines above
+ *    the input are missing, in blocks".
  */
 
 const ESC = "\u001B";
@@ -70,8 +80,9 @@ function MiniViewport({ rows }: { rows: readonly number[] }) {
     VIEWPORT_ROWS,
     200,
     scrollRows,
-    // Mirrors the production measure: the row model counts the item's own gap,
-    // and the viewport wraps each item in a box carrying the same gap again.
+    // Mirrors the production measure: the row model counts each item's own
+    // leading gap (one row per item after the first), and the item draws exactly
+    // that. The wrapper here carries no margin, like the viewport's plain branch.
     (index) => (rows[index] ?? 0) + (index > 0 ? 1 : 0),
     anchor,
   );
@@ -103,18 +114,22 @@ function MiniViewport({ rows }: { rows: readonly number[] }) {
         marginTop={window.contentOffset}
       >
         {visible.map((index) => (
-          <Box
-            key={index}
-            flexDirection="column"
-            flexShrink={0}
-            marginTop={index > 0 ? 1 : 0}
-          >
-            {Array.from(
-              { length: rows[index] ?? 0 },
-              (_, line) => `item ${index} row ${line}`,
-            ).map((text) => (
-              <Text key={text}>{text}</Text>
-            ))}
+          // Production shape: the wrapper carries no margin and the item draws its
+          // own leading gap — that is what `TranscriptItemView` does, and counting
+          // it a second time in the measure is what left the band's bottom blank.
+          <Box key={index} flexDirection="column" flexShrink={0}>
+            <Box
+              flexDirection="column"
+              flexShrink={0}
+              marginTop={index > 0 ? 1 : 0}
+            >
+              {Array.from(
+                { length: rows[index] ?? 0 },
+                (_, line) => `item ${index} row ${line}`,
+              ).map((text) => (
+                <Text key={text}>{text}</Text>
+              ))}
+            </Box>
           </Box>
         ))}
       </Box>
@@ -174,6 +189,58 @@ function appliedRows(rows: readonly number[]): number {
 /** Frame writes carry the frame's newlines; the sync markers do not. */
 function frames(chunks: readonly string[]): string[] {
   return chunks.filter((chunk) => chunk.includes("\n"));
+}
+
+/**
+ * The ambient terminal size, which the item renderer reads for itself
+ * (`useTerminalWidth`/`useTerminalRows`) — the model has to be handed the same
+ * numbers or the two are measuring different layouts.
+ */
+const AMBIENT_COLUMNS = process.stdout.columns ?? 80;
+const AMBIENT_ROWS = process.stdout.rows ?? 24;
+const PROMPT = CLI_GLYPHS.prompt;
+const noDiffs = () => new Map<string, AdvancedDiffSuccess>();
+
+/** The height Ink lays an item out to: what the band ends up drawing for it. */
+async function measuredItemRows(
+  item: StaticItem,
+  index: number,
+): Promise<number> {
+  const stdout = new Capture();
+  stdout.columns = AMBIENT_COLUMNS;
+  stdout.rows = AMBIENT_ROWS;
+  const measured = { height: 0 };
+
+  function Probe() {
+    const ref = useRef<DOMElement | null>(null);
+    useEffect(() => {
+      if (ref.current) measured.height = measureElement(ref.current).height;
+    });
+    return (
+      <Box ref={ref}>
+        <TranscriptItemView
+          item={item}
+          index={index}
+          columns={AMBIENT_COLUMNS}
+          statusLinePrompt={PROMPT}
+          showCompactionsEnabled={false}
+          precomputedDiffs={noDiffs()}
+        />
+      </Box>
+    );
+  }
+
+  const instance = render(<Probe />, {
+    stdin: fakeStdin(),
+    stdout: stdout as unknown as NodeJS.WriteStream,
+    debug: false,
+    patchConsole: false,
+    exitOnCtrlC: false,
+  });
+  await sleep(150);
+  instance.unmount();
+  instance.cleanup();
+  return measured.height;
 }
 
 afterEach(() => {
@@ -245,6 +312,53 @@ describe("wheel scrolling on a real frame", () => {
       ]);
     } finally {
       stop();
+    }
+  });
+
+  test("the band's bottom row carries content, not the rows the model over-counted", async () => {
+    // Six four-row items, following the newest: the band is 12 rows, so it holds
+    // the newest three items and the gap rows between them, and its last row is
+    // the newest item's last row. When the measure counted the gap twice, the
+    // content was drawn one row per visible item too high and the band's bottom
+    // rows were blank — the artifact the user saw above the input.
+    const rows = Array.from({ length: 6 }, () => 4);
+    const { stop } = await mountViewport(rows);
+    try {
+      await sleep(150);
+      const frame = getTerminalFrame();
+      expect(frame?.text.at(-1)).toBe("item 5 row 3");
+      expect(frame?.lines.length).toBe(VIEWPORT_ROWS);
+    } finally {
+      stop();
+    }
+  });
+
+  test("the viewport's own weight is the height the item draws", async () => {
+    // The row model counts each item's leading gap, and `TranscriptItemView` draws
+    // that gap itself — so the weight the viewport reserves rows with must not
+    // count it a second time. When it did, the band's bottom rows came out blank,
+    // one per visible item. Weighed exactly, through the viewport's own function,
+    // against a real render of the component (index 1 so the gap is in both).
+    const cases: Array<{ item: StaticItem; index: number }> = [
+      { item: { kind: "separator", id: "separator-weight" }, index: 1 },
+      {
+        item: { kind: "user", id: "user-weight", text: "hello wheel" },
+        index: 2,
+      },
+    ];
+    for (const { item, index } of cases) {
+      const reserved = viewportItemRows(item, {
+        columns: AMBIENT_COLUMNS,
+        index,
+        terminalRows: AMBIENT_ROWS,
+        diffs: noDiffs(),
+        userPromptPrefix: `${PROMPT} `,
+      });
+      const drawn = await measuredItemRows(item, index);
+      expect(
+        drawn,
+        `${item.kind}: the band reserves ${reserved} rows for it`,
+      ).toBe(reserved);
     }
   });
 

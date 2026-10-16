@@ -17,7 +17,7 @@ import type { AppViewProps } from "./AppView";
 import { useChromeHeight, useMeasuredChromeHeight } from "./chrome-height";
 import { FocusedApproval } from "./FocusedApproval";
 import { buildVisibleItems, hasFocusedApprovalItem } from "./live-items";
-import { measureTranscriptItemRows } from "./row-model";
+import { measureTranscriptItemRows, type RowMeasureOptions } from "./row-model";
 import { TranscriptItemView } from "./TranscriptItem";
 import type { StaticItem } from "./types";
 import { ViewportPanel } from "./ViewportPanel";
@@ -38,6 +38,28 @@ export const CHROME_RESERVE_ROWS = 4;
 
 /** Hard cap on rendered items (bounded residency). */
 export const MAX_VIEWPORT_ITEMS = 200;
+
+/**
+ * The rows the full-screen viewport reserves for one item: exactly what
+ * `TranscriptItemView` draws for it, with nothing added.
+ *
+ * A seam, because this number and the drawing agreeing is invisible in a frame
+ * and expensive to get wrong. The row model already counts the one-row gap
+ * between two items, and the item draws that gap itself (`marginTop` on its own
+ * box); counting it a second time here reserved rows nothing filled, so the band's
+ * bottom rows came out blank — one per visible item, hiding the newest lines of
+ * the transcript above the input. `row-model.fidelity.test.tsx` weighs this
+ * function against a real render of the component for that reason. The two
+ * substituted approval nodes are the one case where the viewport's own wrapper
+ * carries the gap, and the model counts that gap through
+ * `substitutedApprovalRows` — so nothing is added here for them either.
+ */
+export function viewportItemRows(
+  item: StaticItem,
+  options: RowMeasureOptions & { index: number },
+): number {
+  return measureTranscriptItemRows(item, options);
+}
 
 /**
  * Full-screen transcript region (`ui_v2=on`).
@@ -209,38 +231,31 @@ export function ViewportTranscript(props: AppViewProps) {
       (index) => {
         const item = items[index];
         if (item === undefined) return 0;
-        // One row more than the row model counts for the item alone: this
-        // component wraps every item in a box that carries the same one-row gap
-        // `TranscriptItemView` draws itself, and the model counts the gap once.
-        // Measuring the item and drawing the wrapper (or the reverse) is what
-        // made the offset name rows the band was not showing.
-        return (
-          measureTranscriptItemRows(item, {
-            columns,
-            index,
-            terminalRows,
-            diffs: precomputedDiffs,
-            expandedToolCallId,
-            lastShellToolCallId,
-            userPromptPrefix: statusLinePrompt
-              ? `${statusLinePrompt} `
-              : undefined,
-            reasoningExpanded,
-            systemRemindersVisible,
-            systemRemindersExpanded,
-            recallDisplay,
-            substitutions: {
-              currentApproval,
-              currentApprovalContext,
-              approvalMap,
-              pendingIds,
-              queuedIds,
-              queuedDecisions,
-              stubDescriptions,
-              showPreview: showApprovalPreview,
-            },
-          }) + (index > 0 ? 1 : 0)
-        );
+        return viewportItemRows(item, {
+          columns,
+          index,
+          terminalRows,
+          diffs: precomputedDiffs,
+          expandedToolCallId,
+          lastShellToolCallId,
+          userPromptPrefix: statusLinePrompt
+            ? `${statusLinePrompt} `
+            : undefined,
+          reasoningExpanded,
+          systemRemindersVisible,
+          systemRemindersExpanded,
+          recallDisplay,
+          substitutions: {
+            currentApproval,
+            currentApprovalContext,
+            approvalMap,
+            pendingIds,
+            queuedIds,
+            queuedDecisions,
+            stubDescriptions,
+            showPreview: showApprovalPreview,
+          },
+        });
       },
       scrollAnchor,
     );
