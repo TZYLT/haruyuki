@@ -98,12 +98,48 @@ interface WindowWalk {
  * one. The caller passes `scroll + height`, or the history's total when it is
  * shorter than the viewport.
  */
-function walkWindow(
+/**
+ * One step of the walk: the items it accounts for, and the rows it covers.
+ *
+ * One item is the ordinary case. A whole page is the blocked one: when history is
+ * paged in, each page has a row count the viewport measured (F1-C), so a walk that
+ * is passing *over* a page entirely can account for it in one step instead of
+ * measuring every item in it. Nothing else about the two loops below changes,
+ * which is what keeps a blocked window and this one selecting the same rows.
+ */
+export interface WindowStep {
+  /** Items the step covers, counted downwards from the boundary. */
+  items: number;
+  /** Rows the step accounts for. */
+  rows: number;
+}
+
+/**
+ * The next step, ending at item `index` (exclusive): the items from `index` down
+ * to `index - items`. Called with the boundary the walk has reached.
+ */
+export type WindowStepAt = (index: number) => WindowStep;
+
+/** The step that walks one measured item — the unblocked walk. */
+export function itemStepAt(rowsAt: (index: number) => number): WindowStepAt {
+  return (index) => ({ items: 1, rows: rowsAt(index - 1) });
+}
+
+/**
+ * Walk from the newest item towards the oldest, in steps.
+ *
+ * Both loops are the original ones, with `rowsAt(index - 1)` replaced by the step
+ * the caller offers at that boundary. A multi-item step is only legal where the
+ * *whole* step lies below the edge being found: the top edge keeps `start = index
+ * - 1`, which names the item that crosses it, and that is the item above a block
+ * step rather than one inside it.
+ */
+export function walkWindow(
   count: number,
   limit: number,
   scroll: number,
   topLimit: number,
-  rowsAt: (index: number) => number,
+  stepAt: WindowStepAt,
 ): WindowWalk {
   let index = count;
   let rowsBelow = 0;
@@ -112,24 +148,20 @@ function walkWindow(
   // offset, so a run of them would otherwise be walked to the start of the
   // history — and the bound costs nothing for items that do have rows, where
   // each skipped item consumes at least one row of the offset.
-  while (
-    index > 0 &&
-    count - index < scroll + limit &&
-    rowsBelow + rowsAt(index - 1) <= scroll
-  ) {
-    rowsBelow += rowsAt(index - 1);
-    index -= 1;
+  while (index > 0 && count - index < scroll + limit) {
+    const step = stepAt(index);
+    if (rowsBelow + step.rows > scroll) break;
+    rowsBelow += step.rows;
+    index -= Math.max(1, step.items);
   }
   const end = index;
   const belowWindow = rowsBelow;
 
-  while (
-    index > 0 &&
-    end - index < limit &&
-    rowsBelow + rowsAt(index - 1) < topLimit
-  ) {
-    rowsBelow += rowsAt(index - 1);
-    index -= 1;
+  while (index > 0 && end - index < limit) {
+    const step = stepAt(index);
+    if (rowsBelow + step.rows >= topLimit) break;
+    rowsBelow += step.rows;
+    index -= Math.max(1, step.items);
   }
 
   // `index` is the item that crosses the top edge; the window starts there.
@@ -192,7 +224,13 @@ export function fitScrolledItemsFromEnd(
     applied = belowAnchor + Math.max(0, Math.trunc(anchor.delta));
   }
 
-  const first = walkWindow(count, limit, applied, applied + height, rowsAt);
+  const first = walkWindow(
+    count,
+    limit,
+    applied,
+    applied + height,
+    itemStepAt(rowsAt),
+  );
   const contentRows = (start: number, end: number): number => {
     let rows = 0;
     for (let index = start; index < end; index += 1) rows += rowsAt(index);
@@ -237,7 +275,7 @@ export function fitScrolledItemsFromEnd(
     limit,
     clamped,
     Math.min(clamped + height, total),
-    rowsAt,
+    itemStepAt(rowsAt),
   );
   return {
     start: second.start,
