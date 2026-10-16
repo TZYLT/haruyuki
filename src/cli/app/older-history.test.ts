@@ -8,7 +8,6 @@ import {
   HISTORY_PAGE_LIMIT,
   HISTORY_START_NOTICE,
   historyItemsForMessages,
-  MAX_OLDER_HISTORY_ITEMS,
   type OlderHistoryFetchRequest,
   olderHistoryCursor,
   requestOlderHistory,
@@ -392,7 +391,7 @@ describe("requesting a page", () => {
     expect(items.some((item) => item.id === "m950")).toBe(false);
   });
 
-  test("stops asking once the resident bound is reached", async () => {
+  test("does not stop at a resident bound, because eviction bounds it instead", async () => {
     seedWith(coreLines(3));
     const requests: OlderHistoryFetchRequest[] = [];
     let page = 0;
@@ -404,22 +403,15 @@ describe("requesting a page", () => {
       );
     });
 
-    let outcome = await requestOlderHistory(0);
-    for (let round = 0; round < 200 && outcome === "loaded"; round += 1) {
-      outcome = await requestOlderHistory(0);
+    // Well past the two thousand items a flat bound used to stop the walk at: what
+    // is resident is bounded by the window now, so the walk itself has no ceiling.
+    const rounds = Math.ceil(2_000 / HISTORY_PAGE_LIMIT) + 5;
+    for (let round = 0; round < rounds; round += 1) {
+      expect(await requestOlderHistory(0)).toBe("loaded");
     }
-
-    expect(outcome).toBe("cap");
-    expect(getOlderHistoryState().itemCount).toBe(MAX_OLDER_HISTORY_ITEMS);
-    // The bound is checked before the page is asked for, so the last request is
-    // the one that crossed it and nothing is fetched afterwards.
-    expect(requests.length).toBe(
-      Math.ceil(MAX_OLDER_HISTORY_ITEMS / HISTORY_PAGE_LIMIT),
-    );
-    expect(await requestOlderHistory(0)).toBe("cap");
-    expect(requests.length).toBe(
-      Math.ceil(MAX_OLDER_HISTORY_ITEMS / HISTORY_PAGE_LIMIT),
-    );
+    expect(requests.length).toBe(rounds);
+    expect(getOlderHistoryState().itemCount).toBe(rounds * HISTORY_PAGE_LIMIT);
+    expect(getOlderHistoryState().stopped).toBeNull();
   });
 
   test("drops a page that arrives after the conversation changed", async () => {

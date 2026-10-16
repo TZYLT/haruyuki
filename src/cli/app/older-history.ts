@@ -51,18 +51,7 @@ import {
 /** Messages asked for per page. */
 export const HISTORY_PAGE_LIMIT = 50;
 
-/**
- * How many items of older history stay resident.
- *
- * The bound is on the *oldest* side: a page that would cross it is not fetched at
- * all, so what is loaded is always a contiguous run ending at the core list, and
- * there is never a gap between the two. The last page may cross the bound by up to
- * one page's worth of items.
- */
-export const MAX_OLDER_HISTORY_ITEMS = 2_000;
-
 export const HISTORY_START_NOTICE = "已到这次会话的开头";
-export const HISTORY_CAP_NOTICE = "更早的历史已达上限（本次会话不再加载）";
 export const HISTORY_CURSOR_NOTICE = "更早的历史加载失败：游标已失效";
 
 /** How far "reach for older history" got. */
@@ -361,7 +350,6 @@ export async function requestOlderHistory(
   }
   if (loading) return "busy";
   if (stopped) return stopped;
-  if (items.length >= MAX_OLDER_HISTORY_ITEMS) return finish("cap");
 
   loading = true;
   publish();
@@ -373,14 +361,10 @@ export async function requestOlderHistory(
   }
 }
 
-function finish(outcome: "start" | "cap" | "refused"): OlderHistoryOutcome {
+function finish(outcome: "start" | "refused"): OlderHistoryOutcome {
   stopped = outcome;
   showNotice(
-    outcome === "start"
-      ? HISTORY_START_NOTICE
-      : outcome === "cap"
-        ? HISTORY_CAP_NOTICE
-        : HISTORY_CURSOR_NOTICE,
+    outcome === "start" ? HISTORY_START_NOTICE : HISTORY_CURSOR_NOTICE,
   );
   publish();
   return outcome;
