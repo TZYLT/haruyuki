@@ -6,6 +6,7 @@ import { backfillBuffers } from "@/cli/helpers/backfill";
 import { showNotice } from "@/cli/helpers/notice";
 import { debugWarn } from "@/utils/debug";
 import type { HistoryBlock } from "./history-blocks";
+import { countOnlyItems, evictBlocksBefore } from "./history-eviction";
 import type { StaticItem } from "./types";
 import {
   scrollTranscriptBy,
@@ -299,6 +300,35 @@ export function reportOlderHistoryBlockRows(key: string, rows: number): void {
   if (!changed) return;
   blocks = next;
   publish();
+}
+
+/**
+ * Evict the items of every page older than `index`, keeping their counts.
+ *
+ * `index` is the first page to **keep**. The rendered array loses exactly the items
+ * the eviction reports, and the parked anchor names an item *index*, so it moves
+ * down by the same amount — dropping one without the other is what a parked view
+ * moving on its own looks like (`history-eviction.ts`).
+ *
+ * Nothing is evicted while every page is resident, which is the state the frame
+ * tests weigh: the call is a no-op until the viewport starts asking for a window.
+ */
+export function evictOlderHistoryBlocksBefore(index: number): void {
+  const { blocks: next, droppedItems } = evictBlocksBefore(blocks, index);
+  if (next === blocks) return;
+  blocks = next;
+  items = items.slice(droppedItems);
+  publish();
+  shiftViewportAnchorByItems(-droppedItems);
+}
+
+/**
+ * Items the count-only prefix accounts for: how far a rendered item index sits below
+ * its index in the walk. The walk counts every page; the rendered array only the
+ * materialized ones.
+ */
+export function olderHistoryPrefixItems(): number {
+  return countOnlyItems(blocks);
 }
 
 /**
