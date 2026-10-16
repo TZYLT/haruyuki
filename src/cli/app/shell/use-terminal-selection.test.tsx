@@ -270,7 +270,7 @@ describe("terminal selection", () => {
     }
   });
 
-  test("a selection that reaches the band's last row never covers the chrome", async () => {
+  test("a band that shrinks under the selection keeps the drag that was made", async () => {
     const copied: string[] = [];
     const shell = mountSelection({ items: () => [ANSWER], copied });
     try {
@@ -279,19 +279,21 @@ describe("terminal selection", () => {
       await shell.send(LEFT_DRAG(11, 3), LEFT_RELEASE(11, 3));
       expect(getSelectedText()).toBe("alpha bravo\ncharlie delta\necho");
 
-      // The band shrinks under the standing selection — in the app that is what
-      // the leader's own hint line does when `ctrl+x` is pressed, so the rows the
-      // drag covered are one row lower than the band by the time it is copied.
+      // The band shrinks under the standing drag — in the app that is what the
+      // leader's own hint line does when `ctrl+x` is pressed, the key press right
+      // before the copy. What gets copied is the drag, not whatever the rows hold
+      // by then, and no highlight may be drawn over a row that has left the band.
       setViewportRows(2);
       const frame = await shell.press(CTRL_X);
 
-      // Only the rows that are still transcript rows are marked with inverse
-      // video; the row that became chrome is left exactly as Ink drew it, and
-      // nothing of the chrome is in the copied text.
-      expect(frame).toContain(`${ESC}[1;1H${INVERSE_ON}alpha bravo`);
-      expect(frame).toContain(`${ESC}[2;1H${INVERSE_ON}charlie delta`);
-      expect(frame).not.toContain(`${INVERSE_ON}echo`);
-      expect(getSelectedText()).toBe("alpha bravo\ncharlie del");
+      // No highlight is drawn over a row that has left the band: the relocation
+      // cannot place the drag on this frame, and refusing is the point (the frame
+      // itself repainted those rows, so there is nothing to put back).
+      expect(frame).not.toContain(INVERSE_ON);
+      expect(getSelectedText()).toBe("alpha bravo\ncharlie delta\necho");
+
+      await shell.press("y");
+      expect(copied).toEqual(["alpha bravo\ncharlie delta\necho"]);
     } finally {
       shell.unmount();
     }

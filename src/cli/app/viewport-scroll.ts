@@ -137,6 +137,17 @@ export function getViewportRows(): number {
   return viewportRows;
 }
 
+/**
+ * The offset the window last reported showing.
+ *
+ * A reader for the selection, which is written in screen rows and has to know how
+ * far the transcript moved underneath it: an increase here means older rows came
+ * in at the top, so everything on screen moved down by the same amount.
+ */
+export function getViewportScrollRows(): number {
+  return lastRows;
+}
+
 /** Resume following: pin to the newest row and drop the anchor. */
 export function jumpTranscriptToNewest(): void {
   if (request.kind === "rows" && request.rows === 0 && reported === null)

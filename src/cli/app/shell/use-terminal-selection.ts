@@ -9,9 +9,9 @@ import {
   copySourceFor,
   extendSelection,
   getSelectedText,
-  getSelection,
   lastAnswerText,
   subscribeToSelection,
+  visibleSelection,
 } from "@/cli/app/viewport-selection";
 import { LEADER_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { registerMouseHandler } from "@/cli/helpers/mouse-router";
@@ -39,8 +39,8 @@ import { debugWarn } from "@/utils/debug";
 /**
  * Drag selection over the rendered transcript, its highlight, and the copy key.
  *
- * The design decision this file carries out: the selection is judged against the
- * bytes Ink actually wrote (`terminal-frame.ts`) rather than against a second
+ * The design decision this file carries out: what the drag covers is read from
+ * the bytes Ink actually wrote (`terminal-frame.ts`) rather than from a second
  * renderer of the transcript. That is what makes the copied text exactly what the
  * user dragged over — diffs, boxes and highlighted code included — and it is why
  * the highlight can be painted by splicing two escape sequences into the row's
@@ -54,10 +54,12 @@ import { debugWarn } from "@/utils/debug";
  * 2. **A frame erases the highlight.** Ink rewrites the frame (and on Windows in
  *    the alternate screen, clears it), so the painter repaints after every frame:
  *    it subscribes to the frame store, which is notified from inside the write
- *    that carried the frame.
+ *    that carried the frame. It paints where `visibleSelection` says the drag is
+ *    now, which follows the layout — a scroll, or the band losing a row — and
+ *    paints nothing when the rows no longer read as they did.
  * 3. **An unanchored frame is refused.** When the capture cannot prove which
- *    screen rows a frame occupies, no highlight is painted and the selection
- *    copies nothing — a wrong highlight over the wrong text is worse than none.
+ *    screen rows a frame occupies, no highlight is painted and the drag is not
+ *    remembered either — a wrong highlight over the wrong text is worse than none.
  * 4. **The capture is installed by the process entry**, not here
  *    (`full-screen-terminal.ts`): Ink writes its first frame inside `render()`,
  *    before any React effect runs, so a capture installed in an effect would miss
@@ -99,7 +101,7 @@ function paintSelection(): void {
     paintedFrame = frameVersion;
   }
 
-  const selection = getSelection();
+  const selection = visibleSelection();
   const target = new Map<number, string>();
   if (selection) {
     const { start, end } = orderSelection(selection);

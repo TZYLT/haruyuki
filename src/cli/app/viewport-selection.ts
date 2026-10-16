@@ -6,7 +6,7 @@ import {
   selectionText,
 } from "@/cli/helpers/text-selection";
 import type { StaticItem } from "./types";
-import { getViewportRows } from "./viewport-scroll";
+import { getViewportRows, getViewportScrollRows } from "./viewport-scroll";
 
 /**
  * The transcript selection, and what `Ctrl+X y` copies.
@@ -17,34 +17,43 @@ import { getViewportRows } from "./viewport-scroll";
  * highlight is painted into the terminal directly by `use-terminal-selection`,
  * which subscribes here.
  *
- * The selection is stored in **screen coordinates** — a row and a column — because
- * that is what the mouse reports and what the user dragged over. The text is
- * *derived* from the frame that is on screen when the copy happens
- * (`getSelectedText`), never captured at drag time, so what is copied is exactly
- * what the highlight covers.
+ * The drag is remembered in **screen coordinates** — a row and a column, which is
+ * what the mouse reports — and in the **text** it covered, read from the frame at
+ * the moment the drag was made. What `Ctrl+X y` copies is that text, never the
+ * text that happens to sit on those rows later. That is the terminal's own
+ * contract: the selection is what you dragged over, and it survives the
+ * transcript moving underneath it (a scroll, rows arriving while the view follows
+ * the newest, the leader's hint line taking a row off the band on the very key
+ * press before the copy).
  *
- * Position alone cannot keep that promise: a screen row is not content, and
- * anything that moves the transcript — a scroll, rows arriving while the view
- * follows the newest, a chrome row appearing under the band — moves the text
- * beneath those rows. Two consequences are handled here and one is deliberately
- * not:
- *
- * - What the selection may cover stops at the transcript band
- *   (`selectionWithinBand`): rows below it belong to the input, and the band
- *   shrinks by a row whenever the leader's hint appears — which is the key press
- *   right before the copy.
- * - A frame that could not be placed on screen yields no text at all
- *   (`getSelectedText`), the same refusal the painter makes.
- * - **A selection the transcript moved under is still read by position.** It
- *   highlights whatever now sits on those rows and copies that. Making it follow
- *   the content instead, or end when the content moves, is a behaviour decision
- *   that has not been taken yet — and one worth taking deliberately, because the
- *   two options differ in what the user gets after scrolling away from a drag.
+ * The *highlight* cannot be remembered that way — it has to be drawn on the frame
+ * in front of the user — so it is placed by following the layout: the band
+ * shrinking by a row moves the transcript up by a row, and a scroll offset
+ * growing by N moves it down by N. `visibleSelection` returns the rows that
+ * relocation lands on, and only when they still read what the drag covered; a
+ * selection the transcript has moved out from under (or reflowed, which no layout
+ * number describes) is simply not drawn. It is still copied, which is the one
+ * thing that must never be wrong.
  */
 
 let selection: FrameSelection | null = null;
 let version = 0;
 const listeners = new Set<() => void>();
+
+/**
+ * What the drag covered, and the layout it was read under.
+ *
+ * Rows are the whole-row text of the drag's rows, used to recognise the selection
+ * on a later frame; `text` is what a copy returns.
+ */
+interface CapturedSelection {
+  text: string;
+  rows: string[];
+  bandRows: number;
+  scrollRows: number;
+}
+
+let captured: CapturedSelection | null = null;
 
 function publish(): void {
   version += 1;
@@ -55,33 +64,89 @@ function samePoint(a: FramePoint, b: FramePoint): boolean {
   return a.row === b.row && a.column === b.column;
 }
 
-/**
- * The selection as the transcript band allows it, or `null` when it is entirely
- * below the band.
- *
- * Rows past the band are chrome — the input, the status line — and the band can
- * shrink while a selection is standing: the leader's own hint line appears on the
- * key press that precedes the copy, which costs the band its top row. Without
- * this, a selection that touched the band's last row would cover a row of the
- * input and copy its text, and the painter would draw a highlight over it.
- */
-export function selectionWithinBand(
+/** The same selection, with every row moved by `rows`. Columns are untouched. */
+function shiftedBy(
   frameSelection: FrameSelection,
-): FrameSelection | null {
+  rows: number,
+): FrameSelection {
+  return {
+    anchor: { ...frameSelection.anchor, row: frameSelection.anchor.row + rows },
+    head: { ...frameSelection.head, row: frameSelection.head.row + rows },
+  };
+}
+
+/**
+ * Read a selection off the frame it was dragged on.
+ *
+ * Rows past the band are chrome — the input, the status line — so they are not
+ * part of a selection at all, and a frame that cannot be located yields nothing:
+ * the same refusal the painter makes, for the same reason (a wrong row is worse
+ * than no row). The band is the limit here rather than a later clamp, because
+ * this text is what a copy returns and it must not be allowed to contain the
+ * input's own text.
+ */
+function captureSelection(
+  frameSelection: FrameSelection,
+): CapturedSelection | null {
+  const frame = getTerminalFrame();
+  if (!frame?.anchored) return null;
   const band = Math.max(1, getViewportRows());
   const { start, end } = orderSelection(frameSelection);
   if (start.row > band) return null;
-  if (end.row <= band) return frameSelection;
+  const last = Math.min(end.row, band, frame.lines.length);
+  const rows: string[] = [];
+  for (let row = Math.max(1, start.row); row <= last; row += 1) {
+    rows.push(frame.lines[row - 1] ?? "");
+  }
+  if (rows.length === 0) return null;
   return {
-    anchor: {
-      ...frameSelection.anchor,
-      row: Math.min(frameSelection.anchor.row, band),
-    },
-    head: {
-      ...frameSelection.head,
-      row: Math.min(frameSelection.head.row, band),
-    },
+    text: selectionText(frame, {
+      anchor: {
+        ...frameSelection.anchor,
+        row: Math.min(frameSelection.anchor.row, last),
+      },
+      head: {
+        ...frameSelection.head,
+        row: Math.min(frameSelection.head.row, last),
+      },
+    }),
+    rows,
+    bandRows: getViewportRows(),
+    scrollRows: getViewportScrollRows(),
   };
+}
+
+/**
+ * Where the selection is on screen now, or `null` when the frame no longer holds
+ * it.
+ *
+ * Relocated from the layout the drag was made under, not from the last frame: the
+ * band losing a row moves the transcript up by a row, and the scroll offset
+ * growing by N moves it down by N. The rows it lands on are then checked against
+ * the ones the drag covered, so a frame that moved for some other reason (rows
+ * arriving while the view follows the newest) draws nothing instead of a
+ * highlight over text nobody selected.
+ */
+export function visibleSelection(): FrameSelection | null {
+  if (selection === null || captured === null) return null;
+  const frame = getTerminalFrame();
+  if (frame === null) return null;
+  const shift =
+    getViewportScrollRows() -
+    captured.scrollRows +
+    (getViewportRows() - captured.bandRows);
+  const candidate = shift === 0 ? selection : shiftedBy(selection, shift);
+
+  const { start, end } = orderSelection(candidate);
+  let compared = 0;
+  for (let index = 0; index < captured.rows.length; index += 1) {
+    const row = start.row + index;
+    if (row > end.row) break;
+    if (row < 1 || row > frame.lines.length) continue;
+    if (frame.lines[row - 1] !== captured.rows[index]) return null;
+    compared += 1;
+  }
+  return compared > 0 ? candidate : null;
 }
 
 export function getSelection(): FrameSelection | null {
@@ -113,6 +178,7 @@ export function beginSelection(point: FramePoint): void {
     return;
   }
   selection = { anchor: point, head: point };
+  captured = captureSelection(selection);
   publish();
 }
 
@@ -121,28 +187,28 @@ export function extendSelection(point: FramePoint): void {
   if (!selection) return;
   if (samePoint(selection.head, point)) return;
   selection = { anchor: selection.anchor, head: point };
+  // Re-read on every move: a drag that grows over a frame boundary (the newest
+  // item just streamed a row) would otherwise keep a stale row of text.
+  captured = captureSelection(selection);
   publish();
 }
 
 export function clearSelection(): void {
   if (selection === null) return;
   selection = null;
+  captured = null;
   publish();
 }
 
 /**
- * The text the selection covers, read from the frame that is on screen now.
+ * What `Ctrl+X y` copies: the text the drag covered.
  *
- * An unanchored frame yields nothing, for the same reason the painter refuses to
- * draw on one: if the capture cannot prove which screen rows the frame occupies,
- * the selection's rows may point at different text, and copying the wrong text is
- * worse than copying nothing.
+ * Read at drag time, so it is the same text however the transcript moved since —
+ * which is what a terminal does with a selection, and the only reading that
+ * cannot copy something the user never dragged over.
  */
 export function getSelectedText(): string {
-  const frame = getTerminalFrame();
-  if (!frame?.anchored) return "";
-  const withinBand = selection && selectionWithinBand(selection);
-  return selectionText(frame, withinBand || null);
+  return captured?.text ?? "";
 }
 
 /** Whether a selection could be placed on the screen right now. */
@@ -207,6 +273,7 @@ export function copySourceFor(
 /** Test seam. */
 export function resetViewportSelectionForTests(): void {
   selection = null;
+  captured = null;
   version = 0;
   listeners.clear();
 }

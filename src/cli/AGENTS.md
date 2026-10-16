@@ -37,17 +37,25 @@ file to change.
   `helpers/mouse-tracking.ts`: every enable is paired with a disable — unmount,
   process exit, and a `Ctrl+Z` hand-over all give the mouse back, because a
   terminal left in mouse mode prints escape garbage into the user's shell.
-- **The selection copies what is on screen, so it reads Ink's frame.** Ink 7
-  writes a whole frame per write, and `helpers/terminal-frame.ts` captures it;
-  selection text and the highlight both come from those bytes, never from a second
-  renderer of the transcript. The highlight is spliced into the rows' own escape
-  sequences and written *outside* the frame bookkeeping, so it neither drops the
-  row's colours nor becomes text a copy would read back. The capture is installed
-  by the process entry (`app/shell/full-screen-terminal.ts`), because Ink writes
-  its first frame inside `render()`, before any effect runs. Copying goes out over
-  OSC 52 **and** the platform command (`helpers/terminal-clipboard.ts`): OSC 52
-  cannot report failure, so treating the local command as a fallback that waits
-  for one would silently do nothing on terminals that block OSC 52.
+- **The selection copies the drag, and reads Ink's frame to do it.** Ink 7 writes
+  a whole frame per write, and `helpers/terminal-frame.ts` captures it; the text a
+  drag covers is read from those bytes at drag time, never from a second renderer
+  of the transcript, and that text is what `Ctrl+X y` returns — the selection is
+  what the user dragged over, and it survives the transcript moving underneath it
+  (a scroll, rows arriving while the view follows the newest, the band losing a row
+  to the leader's hint on the key press before the copy). The *highlight* cannot be
+  remembered that way, so it is placed by following the layout and drawn only when
+  those rows still read as the drag did: `app/viewport-selection.ts` owns the
+  capture and the relocation, and the painter splices the inverse sequence into the
+  rows' own bytes and writes it *outside* the frame bookkeeping, so it neither
+  drops the row's colours nor becomes text a copy would read back. A drag made on a
+  frame that cannot be placed is refused outright, the same refusal the painter
+  makes. The capture is installed by the process entry
+  (`app/shell/full-screen-terminal.ts`), because Ink writes its first frame inside
+  `render()`, before any effect runs. Copying goes out over OSC 52 **and** the
+  platform command (`helpers/terminal-clipboard.ts`): OSC 52 cannot report failure,
+  so treating the local command as a fallback that waits for one would silently do
+  nothing on terminals that block OSC 52.
 
 ## Verification
 

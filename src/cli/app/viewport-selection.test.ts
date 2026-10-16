@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { StaticItem } from "@/cli/app/types";
 import {
+  reportViewportPosition,
   resetViewportScroll,
+  scrollTranscriptWheel,
   setViewportRows,
 } from "@/cli/app/viewport-scroll";
 import {
@@ -17,9 +19,9 @@ import {
   lastAnswerText,
   resetViewportSelectionForTests,
   subscribeToSelection,
+  visibleSelection,
 } from "@/cli/app/viewport-selection";
 import {
-  getTerminalFrame,
   installTerminalFrameCapture,
   resetTerminalFrameForTests,
 } from "@/cli/helpers/terminal-frame";
@@ -94,7 +96,7 @@ describe("viewport selection", () => {
     expect(getSelectedText()).toBe("");
   });
 
-  test("refuses a frame the screen cannot place", () => {
+  test("refuses a drag the screen cannot place", () => {
     const stream = {
       isTTY: true,
       write(_chunk: string) {
@@ -103,22 +105,91 @@ describe("viewport selection", () => {
     };
     installTerminalFrameCapture(stream);
 
+    // No clear and no fresh screen: the rows cannot be proven to be screen rows,
+    // so the painter refuses such a frame. The drag is refused with it — what a
+    // copy returns is read from the frame the drag was made on, so a drag on a
+    // frame that cannot be placed has nothing to remember.
+    stream.write("alpha bravo\nsecond\n");
+    expect(canSelectOnScreen()).toBe(false);
     beginSelection({ row: 1, column: 1 });
     extendSelection({ row: 1, column: 5 });
-
-    // No clear and no fresh screen: the rows cannot be proven to be screen rows,
-    // so the selection copies nothing — the painter refuses such a frame for the
-    // same reason. The frame is still readable as text; the gate is the point.
-    stream.write("alpha bravo\nsecond\n");
-    expect(getTerminalFrame()?.text).toEqual(["alpha bravo", "second"]);
     expect(getSelectedText()).toBe("");
-    expect(canSelectOnScreen()).toBe(false);
 
-    // A frame that clears the screen can be placed, and the same selection reads
-    // from it.
+    // A frame that clears the screen can be placed, and the same drag reads from
+    // it.
     stream.write(`\u001B[2J\u001B[Halpha bravo\nsecond\n`);
     expect(canSelectOnScreen()).toBe(true);
+    beginSelection({ row: 1, column: 1 });
+    extendSelection({ row: 1, column: 5 });
     expect(getSelectedText()).toBe("alpha");
+  });
+
+  test("the copy is what the drag covered, whatever the frame does after", () => {
+    const stream = {
+      isTTY: true,
+      write(_chunk: string) {
+        return true;
+      },
+    };
+    installTerminalFrameCapture(stream);
+    const draw = (rows: readonly string[]) =>
+      stream.write(`\u001B[2J\u001B[H${rows.join("\n")}\n`);
+    setViewportRows(3);
+
+    draw(["alpha bravo", "charlie delta", "echo", "input row"]);
+    beginSelection({ row: 1, column: 1 });
+    extendSelection({ row: 3, column: 4 });
+    expect(getSelectedText()).toBe("alpha bravo\ncharlie delta\necho");
+    expect(visibleSelection()).toEqual({
+      anchor: { row: 1, column: 1 },
+      head: { row: 3, column: 4 },
+    });
+
+    // The leader's hint takes a row off the band, so the transcript moves up by
+    // one: the highlight follows the rows that still read as the drag did, and
+    // the row that left the band is not drawn (but is still copied).
+    setViewportRows(2);
+    draw(["charlie delta", "echo", "input row", "hint row"]);
+    expect(visibleSelection()).toEqual({
+      anchor: { row: 0, column: 1 },
+      head: { row: 2, column: 4 },
+    });
+    expect(getSelectedText()).toBe("alpha bravo\ncharlie delta\necho");
+
+    // A frame that reflowed (rows arriving while the view follows the newest)
+    // matches neither: nothing is drawn, and the copy is still the drag.
+    draw(["something", "else", "entirely", "here"]);
+    expect(visibleSelection()).toBeNull();
+    expect(getSelectedText()).toBe("alpha bravo\ncharlie delta\necho");
+  });
+
+  test("a scroll keeps the drag on the same text", () => {
+    const stream = {
+      isTTY: true,
+      write(_chunk: string) {
+        return true;
+      },
+    };
+    installTerminalFrameCapture(stream);
+    const draw = (rows: readonly string[]) =>
+      stream.write(`\u001B[2J\u001B[H${rows.join("\n")}\n`);
+    setViewportRows(4);
+
+    draw(["r1", "r2", "r3", "r4", "r5", "r6"]);
+    beginSelection({ row: 2, column: 1 });
+    extendSelection({ row: 3, column: 2 });
+    expect(getSelectedText()).toBe("r2\nr3");
+
+    // Three rows up: older rows come in at the top, so everything moved down by
+    // three and the drag is now on rows 5 and 6.
+    scrollTranscriptWheel("up");
+    reportViewportPosition({ rows: 3, anchor: { end: 6, delta: 0 } });
+    draw(["older", "older", "older", "r1", "r2", "r3"]);
+    expect(visibleSelection()).toEqual({
+      anchor: { row: 5, column: 1 },
+      head: { row: 6, column: 2 },
+    });
+    expect(getSelectedText()).toBe("r2\nr3");
   });
 
   test("the copy stops at the transcript band", () => {
