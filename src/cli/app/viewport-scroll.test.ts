@@ -3,6 +3,7 @@ import {
   getViewportScrollRequest,
   getViewportScrollVersion,
   jumpTranscriptToNewest,
+  jumpTranscriptToOldest,
   reportViewportPosition,
   resetViewportScroll,
   scrollTranscriptBy,
@@ -61,10 +62,10 @@ describe("viewport scroll store", () => {
     scrollTranscriptWheel("up");
     scrollTranscriptWheel("up");
     expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 6 });
-    // The walk reached the oldest item and clamped: four rows is all there was.
-    reportViewportPosition({ rows: 4, anchor: { end: 12, delta: 0 } });
+    // The window honours the six rows it was asked for.
+    reportViewportPosition({ rows: 6, anchor: { end: 12, delta: 0 } });
     scrollTranscriptWheel("up");
-    expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 7 });
+    expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 9 });
   });
 
   test("scrolling back down cancels the moves that are still pending", () => {
@@ -87,6 +88,37 @@ describe("viewport scroll store", () => {
     expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 0 });
     scrollTranscriptWheel("up");
     expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 3 });
+  });
+
+  test("an up-move the window cannot honour publishes nothing", () => {
+    setViewportRows(20);
+    const seen: number[] = [];
+    subscribeToViewportScroll(() => seen.push(getViewportScrollVersion()));
+
+    // Jump to the oldest row: it asks for an absurd offset, and the window answers
+    // with the offset it could actually show. Asking for more than was shown is
+    // the one signal that the history ends there.
+    jumpTranscriptToOldest();
+    reportViewportPosition({ rows: 500, anchor: { end: 4, delta: 0 } });
+    const afterClamp = getViewportScrollVersion();
+    const publishes = seen.length;
+
+    for (let index = 0; index < 5; index += 1) scrollTranscriptWheel("up");
+    // Nothing moved and nothing was published: the frame would have been
+    // identical, and an unchanged frame is still cleared and repainted on
+    // Windows — a screen-wide flash for no movement, which is what holding the
+    // wheel at the top used to do.
+    expect(getViewportScrollVersion()).toBe(afterClamp);
+    expect(seen.length).toBe(publishes);
+    expect(getViewportScrollRequest()).toEqual({
+      kind: "anchor",
+      anchor: { end: 4, delta: 0 },
+    });
+
+    // Coming back down is honoured, and a report lifts the limit again.
+    scrollTranscriptWheel("down");
+    expect(getViewportScrollVersion()).toBeGreaterThan(afterClamp);
+    expect(getViewportScrollRequest()).toEqual({ kind: "rows", rows: 497 });
   });
 
   test("scrolling down past the newest row resumes following", () => {

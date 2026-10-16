@@ -39,6 +39,19 @@ let lastRows = 0;
 let pendingRows = 0;
 let viewportRows = 0;
 let reported: ViewportAnchor | null = null;
+/**
+ * The largest offset the window could actually apply, as far as it has said.
+ *
+ * Learned from a report that came back short of what was asked: that is the
+ * oldest row reachable, so every further up-move draws the same frame. Those are
+ * refused rather than published — a frame that does not change is still cleared
+ * and repainted on Windows, which is a screen-wide flash for nothing, and that
+ * flash is exactly what holding the wheel at the top produces.
+ *
+ * It is only as good as the last report: a report with nothing clamped (or an
+ * offset the window could honour in full) resets it to "no known limit".
+ */
+let topLimit = Number.POSITIVE_INFINITY;
 
 function publish(): void {
   version += 1;
@@ -79,7 +92,13 @@ export function setViewportRows(rows: number): void {
  * as "the wheel sometimes does nothing".
  */
 export function scrollTranscriptBy(rows: number): void {
-  const next = Math.max(0, Math.trunc(lastRows + pendingRows + rows));
+  const base = lastRows + pendingRows;
+  // Nothing above the oldest row: the window would clamp, the frame would come
+  // out identical, and the user would get a flash instead of a scroll. The
+  // bottom already behaved this way (a down-move at offset 0 is a no-op request);
+  // this is the same rule at the other end.
+  if (rows > 0 && base >= topLimit) return;
+  const next = Math.max(0, Math.trunc(base + rows));
   if (request.kind === "rows" && request.rows === next) return;
   pendingRows = next - lastRows;
   request = { kind: "rows", rows: next };
@@ -124,6 +143,7 @@ export function jumpTranscriptToNewest(): void {
     return;
   lastRows = 0;
   pendingRows = 0;
+  topLimit = Number.POSITIVE_INFINITY;
   request = { kind: "rows", rows: 0 };
   reported = null;
   publish();
@@ -139,6 +159,8 @@ export function jumpTranscriptToNewest(): void {
 export function jumpTranscriptToOldest(): void {
   // The sentinel is not a position, so it is not accumulated onto and the pending
   // relative moves are dropped with it: the next report is what pins the view.
+  // The known top limit is left as it is — the report that follows this jump is
+  // what says where the oldest row actually is.
   pendingRows = 0;
   request = { kind: "rows", rows: Number.MAX_SAFE_INTEGER };
   reported = null;
@@ -158,7 +180,13 @@ export function reportViewportPosition(position: {
   rows: number;
   anchor: ViewportAnchor;
 }): void {
+  // What the honoured request asked for, read before the request is replaced:
+  // asking for more than was shown is the one signal that the window is at the
+  // top of the history.
+  const asked = request.kind === "rows" ? request.rows : null;
   lastRows = Math.max(0, Math.trunc(position.rows));
+  topLimit =
+    asked !== null && asked > lastRows ? lastRows : Number.POSITIVE_INFINITY;
   // Whatever was asked for is answered by this report — including a request the
   // window clamped — so relative moves go back to measuring from here.
   pendingRows = 0;
@@ -193,6 +221,7 @@ export function resetViewportScroll(): void {
   request = { kind: "rows", rows: 0 };
   lastRows = 0;
   pendingRows = 0;
+  topLimit = Number.POSITIVE_INFINITY;
   viewportRows = 0;
   reported = null;
   listeners.clear();
