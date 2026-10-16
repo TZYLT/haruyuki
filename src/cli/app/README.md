@@ -32,6 +32,9 @@ file first.
     whose height is a layout of their own.
   - `viewport-window.ts`, `viewport-scroll.ts`: window selection (row band,
     anchors) and the scroll position store.
+  - `use-live-height.ts`: the append shell's live-area height estimate, which
+    subscribes to the transcript display state (ctrl+t / ctrl+r) so an expanded
+    body is measured as expanded.
 - `useSubmitHandler.ts`: slash-command and user-submit router.
 - `useConversationLoop.ts`: streaming turn loop, retry/recovery, tool execution,
   and reflection auto-launch.

@@ -214,7 +214,6 @@ import {
   providerTypeFromModelSettings,
   reasoningEffortLlmConfigPatch,
 } from "./model-config";
-import { measureTranscriptItemRows } from "./row-model";
 import { prepareSessionExit } from "./session";
 import type {
   ActiveOverlay,
@@ -230,6 +229,7 @@ import { useConversationLoop } from "./use-conversation-loop";
 import { useConversationSwitching } from "./use-conversation-switching";
 import { useFeedbackHandler } from "./use-feedback-handler";
 import { useInterruptHandler } from "./use-interrupt-handler";
+import { useEstimatedLiveHeight } from "./use-live-height";
 import { useQueuedApprovalSubmit } from "./use-queued-approval-submit";
 import { useReasoningCycle } from "./use-reasoning-cycle";
 import { useSubmitHandler } from "./use-submit-handler";
@@ -4322,41 +4322,19 @@ export function App({
 
   // Estimate live area height for overflow detection. Each live item is measured
   // by the transcript row model — the same measurement the full-screen viewport
-  // windows with — rather than by counting newlines, so the two agree.
-  const estimatedLiveHeight = useMemo(() => {
-    let liveItemsHeight = 0;
-    liveItems.forEach((item, index) => {
-      // Committed items precede the live area, so the first live item carries the
-      // separator blank line like every item after it.
-      liveItemsHeight += measureTranscriptItemRows(item, {
-        columns,
-        index: index + 1,
-        terminalRows,
-        diffs: precomputedDiffsRef.current,
-        expandedToolCallId,
-        lastShellToolCallId,
-      });
-    });
-
-    // Subagents: 4 lines each (description + URL + status + margin)
-    const LINES_PER_SUBAGENT = 4;
-    const subagentsHeight = subagents.length * LINES_PER_SUBAGENT;
-
-    // Fixed buffer for header, input area, status bar, margins
-    // Using larger buffer to catch edge cases and account for timing lag
-    const FIXED_BUFFER = 20;
-
-    const estimatedHeight = liveItemsHeight + subagentsHeight + FIXED_BUFFER;
-
-    return estimatedHeight;
-  }, [
-    liveItems,
-    subagents.length,
+  // windows with — rather than by counting newlines, so the two agree. The hook
+  // also subscribes to the transcript display state (ctrl+t / ctrl+r), because
+  // measuring an expanded body as its collapsed header is how the overflow
+  // heuristic stopped noticing that the screen had filled up.
+  const estimatedLiveHeight = useEstimatedLiveHeight({
+    items: liveItems,
     columns,
     terminalRows,
+    diffs: precomputedDiffsRef.current,
     expandedToolCallId,
     lastShellToolCallId,
-  ]);
+    subagentCount: subagents.length,
+  });
 
   // Overflow detection with hysteresis: disable quickly on overflow, re-enable
   // only after we've recovered extra headroom to avoid flap near the boundary.
