@@ -204,6 +204,7 @@ import {
   STABLE_WIDTH_SETTLE_MS,
   TOOL_CALL_COMMIT_DEFER_MS,
 } from "./constants";
+import { useExitAfterSummary } from "./exit-summary";
 import { uid } from "./ids";
 import {
   buildModelHandleFromLlmConfig,
@@ -410,6 +411,7 @@ export function App({
   const lastRunIdRef = useRef<string | null>(null);
 
   const resumeKey = useSuspend();
+  const exitWithSummary = useExitAfterSummary();
 
   // Pending conversation switch context — consumed on first message after a switch
   const pendingConversationSwitchRef = useRef<
@@ -3577,9 +3579,10 @@ export function App({
     setShowExitStats(true);
     // Give React time to render the stats, then exit
     setTimeout(() => {
-      process.exit(0);
+      exitWithSummary();
     }, 100);
   }, [
+    exitWithSummary,
     runEndHooks,
     agentId,
     projectDirectory,
@@ -4320,12 +4323,9 @@ export function App({
     getSubagentSnapshot,
   );
 
-  // Estimate live area height for overflow detection. Each live item is measured
-  // by the transcript row model — the same measurement the full-screen viewport
-  // windows with — rather than by counting newlines, so the two agree. The hook
-  // also subscribes to the transcript display state (ctrl+t / ctrl+r), because
-  // measuring an expanded body as its collapsed header is how the overflow
-  // heuristic stopped noticing that the screen had filled up.
+  // Estimate live area height for overflow detection: the row model the
+  // full-screen viewport measures with, plus the transcript display state
+  // (`use-live-height.ts` explains why that subscription lives there).
   const estimatedLiveHeight = useEstimatedLiveHeight({
     items: liveItems,
     columns,

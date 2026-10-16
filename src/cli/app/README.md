@@ -35,6 +35,9 @@ file first.
   - `use-live-height.ts`: the append shell's live-area height estimate, which
     subscribes to the transcript display state (ctrl+t / ctrl+r) so an expanded
     body is measured as expanded.
+  - `exit-summary.ts`: the exit-summary text both shells share, plus the
+    registration a full-screen shell uses so the summary survives Ink's teardown
+    of the alternate screen (`shell/use-exit-summary.ts`).
 - `useSubmitHandler.ts`: slash-command and user-submit router.
 - `useConversationLoop.ts`: streaming turn loop, retry/recovery, tool execution,
   and reflection auto-launch.
