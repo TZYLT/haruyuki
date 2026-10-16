@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { Writable } from "node:stream";
 import { type Key, render, useInput } from "ink";
+import { matchChord } from "@/cli/helpers/input-keys";
 import {
   shieldKeyEvent,
   terminalWorkaroundSequences,
 } from "@/cli/helpers/input-sequence";
+import { COMPOSER_KEY_CHORDS } from "@/cli/helpers/keymap";
 
 /**
  * The shield reads raw sequences itself so it can run before Ink's handlers and
@@ -266,13 +268,39 @@ describe("input sequence shield", () => {
   });
 
   test("each workaround is read as the key it stands for", () => {
-    // Both entries in the table mean "modified Enter" -- Option+Enter on
-    // terminals that send ESC LF, and the literal backslash-r a VS Code
-    // keybinding is commonly configured to send for Shift+Enter.
+    // Every entry is a modified Enter. *Which* modifier is the entry's whole
+    // point, so each sequence declares what it stands for here; an entry with no
+    // expectation fails the first assertion instead of being accepted silently.
+    const EXPECTED: Record<string, { meta: boolean; shift: boolean }> = {
+      // Option+Enter on terminals that send ESC LF.
+      [`${ESC}\n`]: { meta: true, shift: false },
+      // The literal backslash-r a VS Code keybinding is commonly configured to
+      // send for Shift+Enter.
+      ["\\r"]: { meta: true, shift: false },
+      // Shift+Enter on terminals in xterm's modifyOtherKeys mode 2. Ink reads
+      // this sequence as literal text, so the shield has to claim it.
+      [`${ESC}[27;2;13~`]: { meta: false, shift: true },
+    };
+    const declared = terminalWorkaroundSequences().map(
+      (entry) => entry.sequence,
+    );
+    expect([...declared].sort()).toEqual(Object.keys(EXPECTED).sort());
     for (const entry of terminalWorkaroundSequences()) {
       const event = shieldKeyEvent(entry.sequence);
       expect(event?.key.return).toBe(true);
-      expect(event?.key.meta).toBe(true);
+      expect(event?.key.meta).toBe(EXPECTED[entry.sequence]?.meta);
+      expect(event?.key.shift).toBe(EXPECTED[entry.sequence]?.shift);
     }
+  });
+
+  test("Shift+Enter reaches the newline binding on a modifyOtherKeys terminal", () => {
+    // The sequence is only useful if it lands on the binding that inserts the
+    // newline: Ink's own parse of it matches no chord at all.
+    const event = shieldKeyEvent(`${ESC}[27;2;13~`);
+    expect(event).toBeDefined();
+    const matches = COMPOSER_KEY_CHORDS.insertNewline.some(
+      (chord) => event !== undefined && matchChord(chord, event),
+    );
+    expect(matches).toBe(true);
   });
 });

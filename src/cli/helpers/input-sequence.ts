@@ -111,6 +111,15 @@ const TERMINAL_WORKAROUNDS: ReadonlyMap<
         'VS Code/Cursor keybindings are commonly configured to send a literal "\\r" for Shift+Enter',
     },
   ],
+  [
+    `${ESC}[27;2;13~`,
+    {
+      input: "\r",
+      key: { return: true, shift: true },
+      reason:
+        'xterm\'s modifyOtherKeys mode 2 sends CSI 27;2;13~ for Shift+Enter; Ink reads it as literal text (measured: input "[27;2;13~"), so the draft received the sequence instead of a newline',
+    },
+  ],
 ]);
 
 /** The workaround sequences and why each exists, for tests and diagnostics. */
