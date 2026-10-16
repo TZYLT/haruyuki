@@ -99,7 +99,7 @@ import {
   createSubagentGroupItem,
   hasInProgressTaskToolCalls,
 } from "@/cli/helpers/subagent-aggregation";
-import { buildStartupSystemPromptWarning } from "@/cli/helpers/system-prompt-warning.ts";
+import { buildStartupWarnings } from "@/cli/helpers/system-prompt-warning.ts";
 import { getRandomThinkingVerb } from "@/cli/helpers/thinking-messages";
 import {
   isFileEditTool,
@@ -2649,8 +2649,7 @@ export function App({
       // Build status lines with optional release notes above header
       const statusLines: string[] = [];
 
-      const startupSystemPromptWarning =
-        buildStartupSystemPromptWarning(agentState);
+      const startupWarnings = buildStartupWarnings(agentState);
 
       // Add release notes first (above everything) - same styling as rest of status block
       if (releaseNotes) {
@@ -2658,9 +2657,7 @@ export function App({
         statusLines.push(""); // blank line separator
       }
 
-      if (startupSystemPromptWarning) {
-        statusLines.push(startupSystemPromptWarning);
-      }
+      statusLines.push(...startupWarnings);
       statusLines.push(headerMessage);
       statusLines.push(...commandHints);
 
@@ -4492,8 +4489,7 @@ export function App({
       // Build status lines with optional release notes above header
       const statusLines: string[] = [];
 
-      const startupSystemPromptWarning =
-        buildStartupSystemPromptWarning(agentState);
+      const startupWarnings = buildStartupWarnings(agentState);
 
       // Add release notes first (above everything) - same styling as rest of status block
       if (releaseNotes) {
@@ -4501,9 +4497,7 @@ export function App({
         statusLines.push(""); // blank line separator
       }
 
-      if (startupSystemPromptWarning) {
-        statusLines.push(startupSystemPromptWarning);
-      }
+      statusLines.push(...startupWarnings);
       statusLines.push(headerMessage);
       statusLines.push(...commandHints);
 

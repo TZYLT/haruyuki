@@ -18,6 +18,50 @@ import type {
  */
 const ENABLED_TOGGLE_VALUES = new Set(["1", "true", "yes"]);
 
+/**
+ * Spellings that plainly ask for "on" while `ENABLED_TOGGLE_VALUES` rejects them.
+ *
+ * The accepted set stays narrow (see above), so `on`/`enabled` are still off;
+ * this set exists only so callers can say *why* a switch looks inert instead of
+ * leaving the user to guess. Values that mean "off" (`0`, `false`, `off`) are
+ * deliberately absent: they parse as off, which is what they ask for.
+ */
+const REJECTED_ON_VALUES = new Set(["on", "enable", "enabled", "y", "t"]);
+
+export interface RejectedEnvToggle {
+  id: ExperimentId;
+  envVar: string;
+  value: string;
+}
+
+/**
+ * Experiments whose env var holds a value that looks like "on" but is treated
+ * as off. Pure read: no logging and no dedupe — the caller owns the hint and
+ * decides how often to show it.
+ */
+export function findRejectedEnvToggles(): RejectedEnvToggle[] {
+  const rejected: RejectedEnvToggle[] = [];
+
+  for (const definition of EXPERIMENT_DEFINITIONS) {
+    const envVar = definition.envVar;
+    if (!envVar) {
+      continue;
+    }
+
+    const raw = process.env[envVar];
+    if (!raw) {
+      continue;
+    }
+
+    const value = raw.trim();
+    if (REJECTED_ON_VALUES.has(value.toLowerCase())) {
+      rejected.push({ id: definition.id, envVar, value });
+    }
+  }
+
+  return rejected;
+}
+
 const EXPERIMENT_DEFINITIONS: readonly ExperimentDefinition[] = [
   {
     id: "artifacts",
