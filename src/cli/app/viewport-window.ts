@@ -115,19 +115,25 @@ export interface WindowStep {
 }
 
 /**
- * The next step, ending at item `index` (exclusive): the items from `index` down
- * to `index - items`. Called with the boundary the walk has reached.
+ * What the walk can afford at this boundary.
  *
- * `remainingItems` is how many items the step may cover. Both loops bound the walk
- * by an item count and check it at the top, so a step that would *reach* that bound
- * has to be refused and fall back to one item: otherwise a step could pass a
- * boundary the per-item walk would have stopped at, and the two would select
- * different windows.
+ * `items` is the item-count bound the loops are under. `rows` is the rows the
+ * current loop condition would still accept, as the largest row count that
+ * satisfies it — the bottom edge allows `<=`, the top edge `<`.
+ *
+ * A step provider offering more than one item has to respect **both**. This is the
+ * trap the differential test caught: a page step that does not fit the rows budget
+ * has to be refused by the *provider*, because `walkWindow` breaks on a step that
+ * does not fit — which is right for one item (it is what the item walk does) and
+ * wrong for a page, since the item walk would have continued with single items and
+ * selected a different window.
  */
-export type WindowStepAt = (
-  index: number,
-  remainingItems: number,
-) => WindowStep;
+export interface StepBudget {
+  items: number;
+  rows: number;
+}
+
+export type WindowStepAt = (index: number, budget: StepBudget) => WindowStep;
 
 /** The step that walks one measured item — the unblocked walk. */
 export function itemStepAt(rowsAt: (index: number) => number): WindowStepAt {
@@ -158,7 +164,10 @@ export function walkWindow(
   // history — and the bound costs nothing for items that do have rows, where
   // each skipped item consumes at least one row of the offset.
   while (index > 0 && count - index < scroll + limit) {
-    const step = stepAt(index, scroll + limit - (count - index));
+    const step = stepAt(index, {
+      items: scroll + limit - (count - index),
+      rows: scroll - rowsBelow,
+    });
     if (rowsBelow + step.rows > scroll) break;
     rowsBelow += step.rows;
     index -= Math.max(1, step.items);
@@ -167,7 +176,10 @@ export function walkWindow(
   const belowWindow = rowsBelow;
 
   while (index > 0 && end - index < limit) {
-    const step = stepAt(index, limit - (end - index));
+    const step = stepAt(index, {
+      items: limit - (end - index),
+      rows: topLimit - rowsBelow - 1,
+    });
     if (rowsBelow + step.rows >= topLimit) break;
     rowsBelow += step.rows;
     index -= Math.max(1, step.items);
@@ -252,7 +264,10 @@ export function fitItemsFromEnd(input: FitItemsInput): ViewportWindow {
     let belowAnchor = 0;
     let index = count;
     while (index > anchorEnd) {
-      const step = stepAt(index, Number.POSITIVE_INFINITY);
+      const step = stepAt(index, {
+        items: Number.POSITIVE_INFINITY,
+        rows: Number.POSITIVE_INFINITY,
+      });
       if (step.items > 1 && index - step.items >= anchorEnd) {
         belowAnchor += step.rows;
         index -= step.items;
