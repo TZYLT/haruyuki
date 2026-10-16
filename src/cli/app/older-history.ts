@@ -1,5 +1,5 @@
 import type { Message } from "@letta-ai/letta-client/resources/agents/messages";
-import { type ConversationMessageListBody, getBackend } from "@/backend";
+import { getBackend } from "@/backend";
 import type { Buffers, Line } from "@/cli/helpers/accumulator";
 import { createBuffers } from "@/cli/helpers/accumulator";
 import { backfillBuffers } from "@/cli/helpers/backfill";
@@ -137,7 +137,7 @@ async function fetchPageFromBackend(
       // away stay unread even though the log still holds them (F1). A backend
       // that does not know the field answers exactly as it did before.
       include_out_of_context: true,
-    } as ConversationMessageListBody,
+    },
   );
   // `order: "desc"` hands back the newest first; everything on this side reads
   // history oldest first.

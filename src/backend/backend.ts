@@ -227,9 +227,19 @@ export interface Backend {
     options?: ConversationRecompileOptions,
   ): Promise<Awaited<ReturnType<APIClient["conversations"]["recompile"]>>>;
 
+  /**
+   * `include_out_of_context: true` asks for the conversation as the user saw it:
+   * the transcript log itself, which a compaction does not rewrite. Only the local
+   * backend answers it; one that does not know the field returns the in-context
+   * projection exactly as before, so a caller may always ask. The union keeps every
+   * existing caller untouched — an intersection would have made the extra field a
+   * weak type and rejected them.
+   */
   listConversationMessages(
     conversationId: string,
-    body?: ConversationMessageListBody,
+    body?:
+      | ConversationMessageListBody
+      | (ConversationMessageListBody & { include_out_of_context: true }),
     options?: ConversationMessageListOptions,
   ): Promise<
     Awaited<ReturnType<APIClient["conversations"]["messages"]["list"]>>
