@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { StaticItem } from "@/cli/app/types";
 import {
+  resetViewportScroll,
+  setViewportRows,
+} from "@/cli/app/viewport-scroll";
+import {
   beginSelection,
   canSelectOnScreen,
   clearSelection,
@@ -46,6 +50,7 @@ const CONTINUATION_ANSWER: StaticItem[] = [
 afterEach(() => {
   resetViewportSelectionForTests();
   resetTerminalFrameForTests();
+  resetViewportScroll();
 });
 
 describe("viewport selection", () => {
@@ -114,6 +119,31 @@ describe("viewport selection", () => {
     stream.write(`\u001B[2J\u001B[Halpha bravo\nsecond\n`);
     expect(canSelectOnScreen()).toBe(true);
     expect(getSelectedText()).toBe("alpha");
+  });
+
+  test("the copy stops at the transcript band", () => {
+    const stream = {
+      isTTY: true,
+      write(_chunk: string) {
+        return true;
+      },
+    };
+    installTerminalFrameCapture(stream);
+    stream.write(
+      `\u001B[2J\u001B[Halpha\nbravo\ncharlie\ninput row one\ninput row two\n`,
+    );
+
+    // Two rows belong to the transcript; the rest is the input and its chrome.
+    setViewportRows(2);
+    beginSelection({ row: 1, column: 1 });
+    extendSelection({ row: 4, column: 5 });
+    expect(getSelectedText()).toBe("alpha\nbravo");
+
+    // A selection that is entirely below the band covers nothing at all.
+    clearSelection();
+    beginSelection({ row: 3, column: 1 });
+    extendSelection({ row: 5, column: 3 });
+    expect(getSelectedText()).toBe("");
   });
 
   test("finds the last answer, not the last line", () => {

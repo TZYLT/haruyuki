@@ -270,6 +270,33 @@ describe("terminal selection", () => {
     }
   });
 
+  test("a selection that reaches the band's last row never covers the chrome", async () => {
+    const copied: string[] = [];
+    const shell = mountSelection({ items: () => [ANSWER], copied });
+    try {
+      setViewportRows(3);
+      await shell.press(LEFT_PRESS(1, 1));
+      await shell.send(LEFT_DRAG(11, 3), LEFT_RELEASE(11, 3));
+      expect(getSelectedText()).toBe("alpha bravo\ncharlie delta\necho");
+
+      // The band shrinks under the standing selection — in the app that is what
+      // the leader's own hint line does when `ctrl+x` is pressed, so the rows the
+      // drag covered are one row lower than the band by the time it is copied.
+      setViewportRows(2);
+      const frame = await shell.press(CTRL_X);
+
+      // Only the rows that are still transcript rows are marked with inverse
+      // video; the row that became chrome is left exactly as Ink drew it, and
+      // nothing of the chrome is in the copied text.
+      expect(frame).toContain(`${ESC}[1;1H${INVERSE_ON}alpha bravo`);
+      expect(frame).toContain(`${ESC}[2;1H${INVERSE_ON}charlie delta`);
+      expect(frame).not.toContain(`${INVERSE_ON}echo`);
+      expect(getSelectedText()).toBe("alpha bravo\ncharlie del");
+    } finally {
+      shell.unmount();
+    }
+  });
+
   test("a release alone commits nothing to the clipboard", async () => {
     const copied: string[] = [];
     const shell = mountSelection({ items: () => [ANSWER], copied });

@@ -103,7 +103,11 @@ function paintSelection(): void {
   const target = new Map<number, string>();
   if (selection) {
     const { start, end } = orderSelection(selection);
-    const lastRow = Math.min(end.row, frame.lines.length);
+    // Rows past the band are chrome: the band can shrink under a standing
+    // selection (the leader hint appears on the key press before the copy), and a
+    // highlight drawn over the input would both look wrong and be copied.
+    const band = Math.max(1, getViewportRows());
+    const lastRow = Math.min(end.row, frame.lines.length, band);
     for (let row = Math.max(1, start.row); row <= lastRow; row += 1) {
       const span = rowSelectionSpan(selection, row, frame.widths[row - 1] ?? 0);
       if (!span) continue;
