@@ -5,6 +5,7 @@ import { createBuffers } from "@/cli/helpers/accumulator";
 import { backfillBuffers } from "@/cli/helpers/backfill";
 import { showNotice } from "@/cli/helpers/notice";
 import { debugWarn } from "@/utils/debug";
+import { type HistoryBlock, withHistoryBlockRows } from "./history-blocks";
 import type { StaticItem } from "./types";
 import {
   scrollTranscriptBy,
@@ -146,6 +147,17 @@ async function fetchPageFromBackend(
 
 const EMPTY_ITEMS: readonly StaticItem[] = [];
 
+/**
+ * The block ledger (`history-blocks.ts`): one entry per page that was paged in,
+ * oldest first, in step with `items`.
+ *
+ * It exists so a deep history can be *walked* without materialising every page — the
+ * window fitter skips a whole page by its row count. `rows` stays `null` until the
+ * viewport measures it, because only the measuring path knows a page's height, and a
+ * page with no count cannot be skipped.
+ */
+let blocks: readonly HistoryBlock[] = [];
+
 let provider: (() => OlderHistorySeed) | null = null;
 let fetcher: OlderHistoryFetcher = fetchPageFromBackend;
 
@@ -226,6 +238,26 @@ export function getOlderHistoryState(): OlderHistoryState {
   };
 }
 
+/** The block ledger, for the viewport and for tests. */
+export function getOlderHistoryBlocks(): readonly HistoryBlock[] {
+  return blocks;
+}
+
+/**
+ * Record the rows the viewport measured for a page.
+ *
+ * Counts are reported on every frame, so this publishes only when a height actually
+ * moved (`withHistoryBlockRows` hands back the same list when it did not). A report
+ * that rendered every frame would be exactly the redraw the scroll path spent
+ * several rounds removing.
+ */
+export function reportOlderHistoryBlockRows(key: string, rows: number): void {
+  const next = withHistoryBlockRows(blocks, key, rows);
+  if (next === blocks) return;
+  blocks = next;
+  publish();
+}
+
 /**
  * Ask for the page above the oldest loaded row, and spend `rows` of the refused
  * move once it arrives.
@@ -248,6 +280,7 @@ export async function requestOlderHistory(
     conversationId = seed.conversationId;
     seededBefore = seed.cursor.before;
     items = [];
+    blocks = [];
     loadedRowIds = new Set<string>();
     cursor = seed.cursor.before;
     stopped = null;
@@ -361,6 +394,10 @@ async function loadPage(
     // re-based position. Between them the view would be shifted by rows that are
     // not in the tree yet.
     items = [...fresh, ...items];
+    // One ledger entry per page, at the same moment and in the same order as the
+    // items. The count is `fresh.length` — the rows actually inserted, which is also
+    // the number the anchor is re-based by just below.
+    blocks = [{ key: before, itemCount: fresh.length, rows: null }, ...blocks];
     publish();
     shiftViewportAnchorByItems(fresh.length);
     if (rows > 0) scrollTranscriptBy(rows);
@@ -484,6 +521,7 @@ export function resetOlderHistoryForTests(): void {
   conversationId = null;
   seededBefore = null;
   items = [];
+  blocks = [];
   loadedRowIds = new Set<string>();
   cursor = null;
   loading = false;

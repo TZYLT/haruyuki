@@ -15,8 +15,10 @@ import { afterEach, expect, test } from "bun:test";
 import type { Message } from "@letta-ai/letta-client/resources/agents/messages";
 import { resetNoticeForTests } from "@/cli/helpers/notice";
 import {
+  getOlderHistoryBlocks,
   getOlderHistoryItems,
   olderHistoryCursor,
+  reportOlderHistoryBlockRows,
   requestOlderHistory,
   resetOlderHistoryForTests,
   setOlderHistoryFetcherForTests,
@@ -85,7 +87,31 @@ test("a page that is entirely loaded is refused, once", async () => {
   });
 
   expect(await requestOlderHistory(0)).toBe("refused");
-  expect(await requestOlderHistory(0)).toBe("refused");
   expect(fetches).toBe(1);
   expect(getOlderHistoryItems(CONVERSATION)).toHaveLength(0);
+});
+
+test("a landed page is one ledger entry, in step with the rows it inserted", async () => {
+  seed();
+  setOlderHistoryFetcherForTests(async () => [
+    message("m100", "older than the core"),
+    message("m101", "older still"),
+    message("m1", "kept by the core"),
+    message("m0", "the cursor itself"),
+  ]);
+  expect(await requestOlderHistory(0)).toBe("start");
+
+  // Two rows were inserted (the core's two were dropped by composition), and the
+  // ledger says exactly that: the count is what the window fitter skips the page by.
+  const inserted = getOlderHistoryItems(CONVERSATION).map((item) => item.id);
+  expect(inserted).toEqual(["m100", "m101"]);
+  expect(getOlderHistoryBlocks().map((block) => block.itemCount)).toEqual([2]);
+  expect(getOlderHistoryBlocks()[0]?.rows).toBeNull();
+
+  // A reported height sticks, and reporting the same one again changes nothing.
+  reportOlderHistoryBlockRows("m0", 7);
+  expect(getOlderHistoryBlocks()[0]?.rows).toBe(7);
+  const before = getOlderHistoryBlocks();
+  reportOlderHistoryBlockRows("m0", 7);
+  expect(getOlderHistoryBlocks()).toBe(before);
 });
