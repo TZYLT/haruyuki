@@ -1,5 +1,6 @@
 import {
   type HistoryBlock,
+  historyBlockAt,
   historyBlockItems,
   historyBlocksForWindow,
 } from "./history-blocks";
@@ -97,12 +98,16 @@ export function fitBlockedItemsFromEnd(
         }
       }
       const single = rowsAt(index - 1);
-      // The walk had to measure this item, and it knows which page it belongs to.
-      // Counting them is how a page that nobody had measured gets a height: once
-      // every one of its items has been seen, the page is one step from then on.
-      if (block !== undefined) {
-        const entry = measured.get(block.key);
-        measured.set(block.key, {
+      // The walk had to measure this item, and it knows which page it belongs to. It
+      // is the item at `index - 1` that was measured, so the page is the one that
+      // *contains* it: asking which page ends at `index` would count only each page's
+      // last item, and no page would ever look fully measured.
+      const owningIndex = historyBlockAt(blocks, index - 1);
+      const owningBlock =
+        owningIndex === null ? undefined : blocks[owningIndex];
+      if (owningBlock !== undefined) {
+        const entry = measured.get(owningBlock.key);
+        measured.set(owningBlock.key, {
           rows: (entry?.rows ?? 0) + single,
           seen: (entry?.seen ?? 0) + 1,
         });

@@ -26,6 +26,7 @@ import {
   getOlderHistoryItems,
   olderHistoryCursor,
   olderHistoryPrefixItems,
+  reportOlderHistoryBlockRows,
   requestOlderHistory,
   setOlderHistoryProvider,
   subscribeToOlderHistory,
@@ -368,6 +369,16 @@ export function ViewportTranscript(props: AppViewProps) {
     const resident = window.resident;
     if (resident === null) return;
     evictOlderHistoryBlocksBefore(Math.max(0, resident.from - 1));
+  }, [window]);
+
+  // Hand the walk's own measurements back to the ledger. A page whose height is known
+  // is one step on the next walk instead of one measurement per item, which is the
+  // whole point of walking pages at all. The store publishes only when a height
+  // actually moved, so reporting every frame costs no render.
+  useEffect(() => {
+    for (const block of window.measuredBlocks) {
+      reportOlderHistoryBlockRows(block.key, block.rows);
+    }
   }, [window]);
 
   // Tell the store what was actually shown, in content terms: the window's bottom
