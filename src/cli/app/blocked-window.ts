@@ -38,6 +38,14 @@ export interface BlockedWindowInput {
 export interface BlockedViewportWindow extends ViewportWindow {
   /** Pages the window touches, and therefore has to be resident. */
   resident: { from: number; to: number } | null;
+  /**
+   * Pages the walk measured **in full** on the way, with the height it found.
+   *
+   * A page's height is the only thing that lets a later walk skip it in one step, and
+   * nobody else can produce it: the walk is what measures items. Reporting it is what
+   * makes the second visit cheap instead of the first.
+   */
+  measuredBlocks: readonly { key: string; rows: number }[];
 }
 
 export function fitBlockedItemsFromEnd(
@@ -68,12 +76,14 @@ export function fitBlockedItemsFromEnd(
     return -1;
   };
 
+  /** Heights this walk measured item by item, per page. */
+  const measured = new Map<string, { rows: number; seen: number }>();
+
   const steps =
     (rowsAt: (index: number) => number): WindowStepAt =>
     (index, budget: StepBudget) => {
-      if (index > 0) {
-        const blockIndex = pageEndingAt(index);
-        const block = blockIndex >= 0 ? blocks[blockIndex] : undefined;
+      const block = index > 0 ? blocks[pageEndingAt(index)] : undefined;
+      if (block !== undefined) {
         const rows = block?.rows;
         const items = Math.max(1, Math.trunc(block?.itemCount ?? 1));
         if (
@@ -86,7 +96,18 @@ export function fitBlockedItemsFromEnd(
           return { items, rows: Math.max(0, Math.trunc(rows)) };
         }
       }
-      return { items: 1, rows: rowsAt(index - 1) };
+      const single = rowsAt(index - 1);
+      // The walk had to measure this item, and it knows which page it belongs to.
+      // Counting them is how a page that nobody had measured gets a height: once
+      // every one of its items has been seen, the page is one step from then on.
+      if (block !== undefined) {
+        const entry = measured.get(block.key);
+        measured.set(block.key, {
+          rows: (entry?.rows ?? 0) + single,
+          seen: (entry?.seen ?? 0) + 1,
+        });
+      }
+      return { items: 1, rows: single };
     };
 
   const window = fitItemsFromEnd({
@@ -100,8 +121,19 @@ export function fitBlockedItemsFromEnd(
     steps,
   });
 
+  // Only pages the walk saw in full have a trustworthy height. A partly seen page has
+  // no total, and reporting a partial one would make the next walk skip rows it never
+  // accounted for.
+  const measuredBlocks = blocks.flatMap((block) => {
+    const entry = measured.get(block.key);
+    if (entry === undefined) return [];
+    if (entry.seen < Math.max(1, Math.trunc(block.itemCount))) return [];
+    return [{ key: block.key, rows: entry.rows }];
+  });
+
   return {
     ...window,
     resident: historyBlocksForWindow(blocks, window.start, window.end),
+    measuredBlocks,
   };
 }
