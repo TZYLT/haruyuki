@@ -20,6 +20,7 @@ function referenceWindow(
       start: 0,
       end: 0,
       scrollFromBottom: 0,
+      contentOffset: 0,
       anchor: { end: 0, delta: 0 },
     };
   }
@@ -29,6 +30,7 @@ function referenceWindow(
       start: 0,
       end: 0,
       scrollFromBottom: 0,
+      contentOffset: 0,
       anchor: { end: 0, delta: 0 },
     };
   }
@@ -59,11 +61,17 @@ function referenceWindow(
 
   // Rows in the items at and after `end` are the ones the offset passes over.
   const belowWindow = Math.max(0, total - running);
+  const delta = scroll - belowWindow;
+  let contentRows = 0;
+  for (let index = start; index < end; index += 1) {
+    contentRows += Math.max(0, heights[index] ?? 0);
+  }
   return {
     start,
     end,
     scrollFromBottom: scroll,
-    anchor: { end, delta: scroll - belowWindow },
+    contentOffset: height - contentRows + delta,
+    anchor: { end, delta },
   };
 }
 
@@ -152,6 +160,31 @@ describe("fitScrolledItemsFromEnd", () => {
       start: 0,
       end: 2,
     });
+  });
+
+  test("a history shorter than the band sits at the bottom", () => {
+    // Positive shift: the whole history is pushed down to the band's last rows,
+    // which is what the band did before it had an offset at all.
+    expect(windowOf([3, 3], 10, 100).contentOffset).toBe(4);
+  });
+
+  test("the offset moves the drawn rows, inside a single tall item", () => {
+    // One item taller than the band. The point of a row band is that its middle
+    // can be read, so the offset has to move the content even though the *item
+    // set* does not change — before this, every offset drew the same frame (see
+    // the real-frame wheel test), so a wheel notch moved nothing on screen.
+    const pinned = windowOf([100], 20, 200, 0);
+    expect(pinned.start).toBe(0);
+    expect(pinned.contentOffset).toBe(-80);
+
+    const threeUp = windowOf([100], 20, 200, 3);
+    expect(threeUp.start).toBe(0);
+    // Scrolling up moves the content down: three rows further up in the item are
+    // now at the band's top.
+    expect(threeUp.contentOffset - pinned.contentOffset).toBe(3);
+    expect(threeUp.contentOffset).toBe(-77);
+
+    expect(windowOf([100], 20, 200, 12).contentOffset).toBe(-68);
   });
 
   test("clamps an offset past the top and reports the offset shown", () => {

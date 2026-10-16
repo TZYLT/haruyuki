@@ -36,6 +36,22 @@ export interface ViewportWindow {
    */
   scrollFromBottom: number;
   /**
+   * Rows to shift the rendered window by: positive pushes it down, negative pulls
+   * it up so the band clips what is above it.
+   *
+   * The window is a row band, so the offset decides *which* rows of the bottom
+   * item are shown — and Ink, aligning a column to the end of its box, cannot
+   * express that on its own. It is expressed with a negative top margin instead:
+   * a content box `rows + contentOffset` tall, of which the band shows the middle.
+   *
+   * Without it the band was simply bottom-aligned, which made the offset
+   * invisible: a scroll that stayed inside an item taller than the band redrew an
+   * identical frame, so the wheel moved the offset and nothing on screen — and on
+   * Windows an unchanged frame is still cleared and repainted, which is the flash
+   * that comes with it.
+   */
+  contentOffset: number;
+  /**
    * The same position as content, for holding the view while rows arrive below:
    * the window's bottom item and the rows of it scrolled past.
    */
@@ -145,6 +161,7 @@ export function fitScrolledItemsFromEnd(
       start: 0,
       end: 0,
       scrollFromBottom: 0,
+      contentOffset: 0,
       anchor: { end: 0, delta: 0 },
     };
   }
@@ -176,11 +193,24 @@ export function fitScrolledItemsFromEnd(
   }
 
   const first = walkWindow(count, limit, applied, applied + height, rowsAt);
+  const contentRows = (start: number, end: number): number => {
+    let rows = 0;
+    for (let index = start; index < end; index += 1) rows += rowsAt(index);
+    return rows;
+  };
+
   if (!first.reachedStart) {
     return {
       start: first.start,
       end: first.end,
       scrollFromBottom: applied,
+      // `delta` rows of the bottom item sit below the band, so the band's top row
+      // is that much further up inside the content.
+      contentOffset:
+        height -
+        contentRows(first.start, first.end) +
+        applied -
+        first.belowWindow,
       anchor: { end: first.end, delta: applied - first.belowWindow },
     };
   }
@@ -196,6 +226,7 @@ export function fitScrolledItemsFromEnd(
       start: 0,
       end: 0,
       scrollFromBottom: 0,
+      contentOffset: 0,
       anchor: { end: 0, delta: 0 },
     };
   }
@@ -212,6 +243,11 @@ export function fitScrolledItemsFromEnd(
     start: second.start,
     end: second.end,
     scrollFromBottom: clamped,
+    contentOffset:
+      height -
+      contentRows(second.start, second.end) +
+      clamped -
+      second.belowWindow,
     anchor: { end: second.end, delta: clamped - second.belowWindow },
   };
 }

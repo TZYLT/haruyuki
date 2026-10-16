@@ -209,31 +209,38 @@ export function ViewportTranscript(props: AppViewProps) {
       (index) => {
         const item = items[index];
         if (item === undefined) return 0;
-        return measureTranscriptItemRows(item, {
-          columns,
-          index,
-          terminalRows,
-          diffs: precomputedDiffs,
-          expandedToolCallId,
-          lastShellToolCallId,
-          userPromptPrefix: statusLinePrompt
-            ? `${statusLinePrompt} `
-            : undefined,
-          reasoningExpanded,
-          systemRemindersVisible,
-          systemRemindersExpanded,
-          recallDisplay,
-          substitutions: {
-            currentApproval,
-            currentApprovalContext,
-            approvalMap,
-            pendingIds,
-            queuedIds,
-            queuedDecisions,
-            stubDescriptions,
-            showPreview: showApprovalPreview,
-          },
-        });
+        // One row more than the row model counts for the item alone: this
+        // component wraps every item in a box that carries the same one-row gap
+        // `TranscriptItemView` draws itself, and the model counts the gap once.
+        // Measuring the item and drawing the wrapper (or the reverse) is what
+        // made the offset name rows the band was not showing.
+        return (
+          measureTranscriptItemRows(item, {
+            columns,
+            index,
+            terminalRows,
+            diffs: precomputedDiffs,
+            expandedToolCallId,
+            lastShellToolCallId,
+            userPromptPrefix: statusLinePrompt
+              ? `${statusLinePrompt} `
+              : undefined,
+            reasoningExpanded,
+            systemRemindersVisible,
+            systemRemindersExpanded,
+            recallDisplay,
+            substitutions: {
+              currentApproval,
+              currentApprovalContext,
+              approvalMap,
+              pendingIds,
+              queuedIds,
+              queuedDecisions,
+              stubDescriptions,
+              showPreview: showApprovalPreview,
+            },
+          }) + (index > 0 ? 1 : 0)
+        );
       },
       scrollAnchor,
     );
@@ -308,88 +315,97 @@ export function ViewportTranscript(props: AppViewProps) {
       <Box
         height={height}
         flexDirection="column"
-        justifyContent="flex-end"
         overflow="hidden"
         flexShrink={0}
       >
-        {visible.map((item, offset) => {
-          const index = window.start + offset;
-          const marginTop = index > 0 ? 1 : 0;
-          const toolCallId =
-            item.kind === "tool_call" ? item.toolCallId : undefined;
-          const itemName = item.kind === "tool_call" ? item.name : undefined;
-          const isCurrentApproval =
-            toolCallId !== undefined &&
-            toolCallId === currentApproval?.toolCallId;
+        {/* The window's own offset: the band shows the rows this shift leaves
+            inside it. A negative shift is what puts the middle of a tall item on
+            screen, and what makes a wheel notch move the text instead of
+            repainting the same frame. */}
+        <Box
+          flexDirection="column"
+          flexShrink={0}
+          marginTop={window.contentOffset}
+        >
+          {visible.map((item, offset) => {
+            const index = window.start + offset;
+            const marginTop = index > 0 ? 1 : 0;
+            const toolCallId =
+              item.kind === "tool_call" ? item.toolCallId : undefined;
+            const itemName = item.kind === "tool_call" ? item.name : undefined;
+            const isCurrentApproval =
+              toolCallId !== undefined &&
+              toolCallId === currentApproval?.toolCallId;
 
-          if (isCurrentApproval && currentApproval) {
+            if (isCurrentApproval && currentApproval) {
+              return (
+                <Box
+                  key={item.id}
+                  flexDirection="column"
+                  marginTop={marginTop}
+                  {...shrinkProof}
+                >
+                  <FocusedApproval
+                    view={props}
+                    precomputedDiff={
+                      toolCallId
+                        ? precomputedDiffsRef.current.get(toolCallId)
+                        : undefined
+                    }
+                  />
+                </Box>
+              );
+            }
+
+            const isQueued =
+              toolCallId !== undefined && queuedIds.has(toolCallId);
+            const isPending =
+              toolCallId !== undefined && pendingIds.has(toolCallId);
+            if (isQueued || isPending) {
+              return (
+                <Box
+                  key={item.id}
+                  flexDirection="column"
+                  marginTop={marginTop}
+                  {...shrinkProof}
+                >
+                  <PendingApprovalStub
+                    toolName={
+                      (toolCallId
+                        ? approvalMap.get(toolCallId)?.toolName
+                        : null) ||
+                      itemName ||
+                      "Unknown"
+                    }
+                    description={
+                      toolCallId ? stubDescriptions.get(toolCallId) : undefined
+                    }
+                    decision={
+                      isQueued && toolCallId
+                        ? queuedDecisions.get(toolCallId)
+                        : undefined
+                    }
+                  />
+                </Box>
+              );
+            }
+
             return (
-              <Box
-                key={item.id}
-                flexDirection="column"
-                marginTop={marginTop}
-                {...shrinkProof}
-              >
-                <FocusedApproval
-                  view={props}
-                  precomputedDiff={
-                    toolCallId
-                      ? precomputedDiffsRef.current.get(toolCallId)
-                      : undefined
-                  }
+              <Box key={item.id} flexDirection="column" {...shrinkProof}>
+                <TranscriptItemView
+                  item={item}
+                  index={index}
+                  columns={columns}
+                  statusLinePrompt={statusLinePrompt}
+                  showCompactionsEnabled={showCompactionsEnabled}
+                  precomputedDiffs={precomputedDiffsRef.current}
+                  hiddenToolCallId={expandedToolCallId ?? undefined}
+                  lastShellToolCallId={lastShellToolCallId ?? undefined}
                 />
               </Box>
             );
-          }
-
-          const isQueued =
-            toolCallId !== undefined && queuedIds.has(toolCallId);
-          const isPending =
-            toolCallId !== undefined && pendingIds.has(toolCallId);
-          if (isQueued || isPending) {
-            return (
-              <Box
-                key={item.id}
-                flexDirection="column"
-                marginTop={marginTop}
-                {...shrinkProof}
-              >
-                <PendingApprovalStub
-                  toolName={
-                    (toolCallId
-                      ? approvalMap.get(toolCallId)?.toolName
-                      : null) ||
-                    itemName ||
-                    "Unknown"
-                  }
-                  description={
-                    toolCallId ? stubDescriptions.get(toolCallId) : undefined
-                  }
-                  decision={
-                    isQueued && toolCallId
-                      ? queuedDecisions.get(toolCallId)
-                      : undefined
-                  }
-                />
-              </Box>
-            );
-          }
-
-          return (
-            <Box key={item.id} flexDirection="column" {...shrinkProof}>
-              <TranscriptItemView
-                item={item}
-                index={index}
-                columns={columns}
-                statusLinePrompt={statusLinePrompt}
-                showCompactionsEnabled={showCompactionsEnabled}
-                precomputedDiffs={precomputedDiffsRef.current}
-                hiddenToolCallId={expandedToolCallId ?? undefined}
-                lastShellToolCallId={lastShellToolCallId ?? undefined}
-              />
-            </Box>
-          );
-        })}
+          })}
+        </Box>
       </Box>
 
       {/* Below the band, above the input: running subagents, and the focused
