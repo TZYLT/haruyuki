@@ -1,5 +1,5 @@
 import type { Message } from "@letta-ai/letta-client/resources/agents/messages";
-import { getBackend } from "@/backend";
+import { type ConversationMessageListBody, getBackend } from "@/backend";
 import type { Buffers, Line } from "@/cli/helpers/accumulator";
 import { createBuffers } from "@/cli/helpers/accumulator";
 import { backfillBuffers } from "@/cli/helpers/backfill";
@@ -131,7 +131,13 @@ async function fetchPageFromBackend(
       limit: request.limit,
       order: "desc",
       before: request.before,
-    },
+      // The conversation as the user saw it, compaction included. Without this
+      // the page is the *projection*, which a compaction has already rewritten:
+      // the walk stops at the summary row, and the messages the compaction sent
+      // away stay unread even though the log still holds them (F1). A backend
+      // that does not know the field answers exactly as it did before.
+      include_out_of_context: true,
+    } as ConversationMessageListBody,
   );
   // `order: "desc"` hands back the newest first; everything on this side reads
   // history oldest first.
@@ -307,11 +313,24 @@ async function loadPage(
     return "unavailable";
   }
 
+  // A page that reaches into the loaded rows is normally a cursor the backend did
+  // not find: it answered with the newest window instead of a slice, and walking
+  // that would duplicate the whole view. Only a page that is *entirely* already
+  // loaded says that. The raw log legitimately hands back rows the core also holds
+  // (the messages a compaction kept sit before the summary in the log), and
+  // refusing those would stop the walk at the summary again — the very thing F1
+  // removes.
   const newest = page[page.length - 1];
-  if (newest && seed.cursor?.loadedIds.has(newest.id)) {
+  const loaded = seed.cursor?.loadedIds;
+  if (
+    newest !== undefined &&
+    loaded !== undefined &&
+    loaded.has(newest.id) &&
+    page.every((message) => loaded.has(message.id))
+  ) {
     debugWarn(
       "history",
-      `cursor ${before} was not honoured: the page reaches back into the loaded rows`,
+      `cursor ${before} was not honoured: the page is entirely within the loaded rows`,
     );
     return finish("refused");
   }
