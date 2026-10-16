@@ -16,7 +16,7 @@ function page(
   key: string,
   itemCount: number,
   items: readonly unknown[] | null,
-  rows: number | null = null,
+  rows: number | null = 100,
 ): Page {
   return { key, page: [`message of ${key}`], itemCount, items, rows };
 }
@@ -57,6 +57,31 @@ describe("evicting the items of a page", () => {
     // Two evicted pages of ten: a rendered index sits twenty below its walk index.
     expect(countOnlyItems(blocks)).toBe(20);
     expect(countOnlyItems([])).toBe(0);
+  });
+
+  test("never evicts a page whose height nobody measured", () => {
+    const mixed = [
+      page("p0", 10, new Array(10).fill("i"), 100),
+      page("p1", 10, new Array(10).fill("i"), null),
+      page("p2", 10, new Array(10).fill("i"), 300),
+    ];
+    // The clamp stops at the first page with no height: the walk can only skip a page
+    // it has measured, so an unmeasured one has to stay materialized.
+    const { blocks, droppedItems } = evictBlocksBefore(mixed, 3);
+    expect(droppedItems).toBe(10);
+    expect(blocks.map((block) => block.items === null)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+
+    // Nothing measured above it, so there is nothing to evict at all.
+    const nothing = evictBlocksBefore(
+      [page("p0", 10, new Array(10).fill("i"), null)],
+      1,
+    );
+    expect(nothing.droppedItems).toBe(0);
+    expect(nothing.blocks[0]?.items).not.toBeNull();
   });
 
   test("evicting nothing is not a change", () => {

@@ -7,6 +7,7 @@ import {
   getOlderHistoryItems,
   olderHistoryCursor,
   olderHistoryPrefixItems,
+  reportOlderHistoryBlockRows,
   requestOlderHistory,
   resetOlderHistoryForTests,
   setOlderHistoryFetcherForTests,
@@ -70,6 +71,12 @@ test("evicting a page drops its items and moves the parked anchor by them", asyn
   expect(getOlderHistoryBlocks()).toHaveLength(2);
   expect(getOlderHistoryItems(CONVERSATION)).toHaveLength(2 * PAGE);
   expect(olderHistoryPrefixItems()).toBe(0);
+
+  // A page has to be measured before it can be evicted: the walk can only skip a page
+  // it has a height for, so the eviction rule clamps at the first unmeasured page.
+  for (const block of getOlderHistoryBlocks()) {
+    reportOlderHistoryBlockRows(block.key, 100);
+  }
 
   // Parked above the newest rows (`rows: 0` would mean following the bottom).
   reportViewportPosition({ rows: 30, anchor: { end: 120, delta: 4 } });

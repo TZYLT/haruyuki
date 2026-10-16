@@ -20,6 +20,8 @@ export interface EvictableBlock {
   itemCount: number;
   /** Its items, or `null` once it is only a count. */
   items: readonly unknown[] | null;
+  /** Measured rows, or `null` while nobody has measured the page. */
+  rows: number | null;
 }
 
 /**
@@ -28,12 +30,24 @@ export interface EvictableBlock {
  * Pages are oldest first, so this evicts the oldest ones; already-evicted pages are
  * left alone (and contribute nothing to `droppedItems`). When nothing changes the
  * caller's array is handed back unchanged, so a caller can publish on identity.
+ *
+ * **A page with no measured height is never evicted**, whatever `index` asks for:
+ * the walk can only skip a page it has a height for, and a page that is a count
+ * without a height would leave it measuring a rendered index that now belongs to
+ * another page's item — a silently wrong window rather than a visible failure.
  */
 export function evictBlocksBefore<T extends EvictableBlock>(
   blocks: readonly T[],
   index: number,
 ): { blocks: readonly T[]; droppedItems: number } {
-  const keep = Math.max(0, Math.trunc(index));
+  let keep = Math.max(0, Math.trunc(index));
+  for (let position = 0; position < keep; position += 1) {
+    const block = blocks[position];
+    if (block === undefined || block.rows === null) {
+      keep = position;
+      break;
+    }
+  }
   let droppedItems = 0;
   let changed = false;
   const next = blocks.map((block, position) => {
