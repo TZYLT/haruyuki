@@ -117,8 +117,17 @@ export interface WindowStep {
 /**
  * The next step, ending at item `index` (exclusive): the items from `index` down
  * to `index - items`. Called with the boundary the walk has reached.
+ *
+ * `remainingItems` is how many items the step may cover. Both loops bound the walk
+ * by an item count and check it at the top, so a step that would *reach* that bound
+ * has to be refused and fall back to one item: otherwise a step could pass a
+ * boundary the per-item walk would have stopped at, and the two would select
+ * different windows.
  */
-export type WindowStepAt = (index: number) => WindowStep;
+export type WindowStepAt = (
+  index: number,
+  remainingItems: number,
+) => WindowStep;
 
 /** The step that walks one measured item — the unblocked walk. */
 export function itemStepAt(rowsAt: (index: number) => number): WindowStepAt {
@@ -149,7 +158,7 @@ export function walkWindow(
   // history — and the bound costs nothing for items that do have rows, where
   // each skipped item consumes at least one row of the offset.
   while (index > 0 && count - index < scroll + limit) {
-    const step = stepAt(index);
+    const step = stepAt(index, scroll + limit - (count - index));
     if (rowsBelow + step.rows > scroll) break;
     rowsBelow += step.rows;
     index -= Math.max(1, step.items);
@@ -158,7 +167,7 @@ export function walkWindow(
   const belowWindow = rowsBelow;
 
   while (index > 0 && end - index < limit) {
-    const step = stepAt(index);
+    const step = stepAt(index, limit - (end - index));
     if (rowsBelow + step.rows >= topLimit) break;
     rowsBelow += step.rows;
     index -= Math.max(1, step.items);
@@ -178,16 +187,35 @@ export function walkWindow(
   };
 }
 
-export function fitScrolledItemsFromEnd(
-  itemCount: number,
-  height: number,
-  maxItems: number,
-  scrollFromBottom: number,
-  measure: (index: number) => number,
-  anchor?: ViewportAnchor,
-): ViewportWindow {
-  const count = Math.max(0, Math.trunc(itemCount));
-  const limit = Math.max(0, Math.trunc(maxItems));
+export interface FitItemsInput {
+  itemCount: number;
+  height: number;
+  maxItems: number;
+  scrollFromBottom: number;
+  measure: (index: number) => number;
+  anchor?: ViewportAnchor;
+  /**
+   * The steps the walk may take, built from the memoised row reader. Omitted means
+   * one measured item per step. This is the seam a paged history uses
+   * (`blocked-window.ts`): with a row count measured per page, a walk passing over
+   * a whole page accounts for it in one step instead of measuring every item.
+   */
+  steps?: (rowsAt: (index: number) => number) => WindowStepAt;
+}
+
+/**
+ * The window for one position, over steps the caller chooses.
+ *
+ * `fitScrolledItemsFromEnd` is this with the default one-item steps. Keeping one
+ * implementation of the orchestration — the anchor translation, the two walks, the
+ * offset clamp, `contentOffset` — is what leaves a step provider as the *only*
+ * thing a paged history has to get right, and a differential test able to isolate
+ * exactly it.
+ */
+export function fitItemsFromEnd(input: FitItemsInput): ViewportWindow {
+  const count = Math.max(0, Math.trunc(input.itemCount));
+  const limit = Math.max(0, Math.trunc(input.maxItems));
+  const height = input.height;
   if (count === 0 || height < 1 || limit === 0) {
     return {
       start: 0,
@@ -204,7 +232,7 @@ export function fitScrolledItemsFromEnd(
   const rowsAt = (index: number): number => {
     const cached = heights.get(index);
     if (cached !== undefined) return cached;
-    const measured = measure(index);
+    const measured = input.measure(index);
     const rows = Number.isFinite(measured)
       ? Math.max(0, Math.trunc(measured))
       : 0;
@@ -212,25 +240,31 @@ export function fitScrolledItemsFromEnd(
     return rows;
   };
 
+  const stepAt = (input.steps ?? itemStepAt)(rowsAt);
+
   // An anchor is translated back into an offset here, and only here: it needs the
-  // rows that have arrived below it, which is exactly what the walk measures.
-  let applied = Math.max(0, Math.trunc(scrollFromBottom));
+  // rows that have arrived below it, which is exactly what the walk measures. It
+  // steps like the walk does, so a paged history does not pay per item here either.
+  let applied = Math.max(0, Math.trunc(input.scrollFromBottom));
+  const anchor = input.anchor;
   if (anchor) {
     const anchorEnd = Math.min(Math.max(0, Math.trunc(anchor.end)), count);
     let belowAnchor = 0;
-    for (let index = count; index > anchorEnd; index -= 1) {
+    let index = count;
+    while (index > anchorEnd) {
+      const step = stepAt(index, Number.POSITIVE_INFINITY);
+      if (step.items > 1 && index - step.items >= anchorEnd) {
+        belowAnchor += step.rows;
+        index -= step.items;
+        continue;
+      }
       belowAnchor += rowsAt(index - 1);
+      index -= 1;
     }
     applied = belowAnchor + Math.max(0, Math.trunc(anchor.delta));
   }
 
-  const first = walkWindow(
-    count,
-    limit,
-    applied,
-    applied + height,
-    itemStepAt(rowsAt),
-  );
+  const first = walkWindow(count, limit, applied, applied + height, stepAt);
   const contentRows = (start: number, end: number): number => {
     let rows = 0;
     for (let index = start; index < end; index += 1) rows += rowsAt(index);
@@ -275,7 +309,7 @@ export function fitScrolledItemsFromEnd(
     limit,
     clamped,
     Math.min(clamped + height, total),
-    itemStepAt(rowsAt),
+    stepAt,
   );
   return {
     start: second.start,
@@ -288,4 +322,27 @@ export function fitScrolledItemsFromEnd(
       second.belowWindow,
     anchor: { end: second.end, delta: clamped - second.belowWindow },
   };
+}
+
+/**
+ * The window for one position over a fully materialised list: one measured item per
+ * step. Kept as its own name because that is what every caller and test reads, and
+ * because it is the oracle a paged history is weighed against.
+ */
+export function fitScrolledItemsFromEnd(
+  itemCount: number,
+  height: number,
+  maxItems: number,
+  scrollFromBottom: number,
+  measure: (index: number) => number,
+  anchor?: ViewportAnchor,
+): ViewportWindow {
+  return fitItemsFromEnd({
+    itemCount,
+    height,
+    maxItems,
+    scrollFromBottom,
+    measure,
+    anchor,
+  });
 }
