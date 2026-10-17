@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Third-party expression that ships with this fork but does NOT come from the",
-    "npm dependency closure or from vendor/, so the dependency walk in",
+    "npm dependency closure, so the dependency walk in",
     "scripts/generate-third-party-notices.cjs cannot discover it. Consumed by that",
     "script to emit the 'Non-npm third-party sources' section of",
     "THIRD-PARTY-NOTICES.md. Keep every entry's licenseText byte-exact to the",

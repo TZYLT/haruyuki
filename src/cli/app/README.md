@@ -57,6 +57,18 @@ file first.
   - `exit-summary.ts`: the exit-summary text both shells share, plus the
     registration a full-screen shell uses so the summary survives Ink's teardown
     of the alternate screen (`shell/use-exit-summary.ts`).
+- **Paged history** (rows older than the resumed window, fetched from the backend):
+  - `older-history.ts`: the page store — the cursor is a stored message id, pages are
+    composed with the same assembler the resume path uses, and a page that is only a
+    count is materialized again from the messages it already holds.
+  - `history-blocks.ts`: the page ledger (each page's item count and its measured
+    height), which is what lets the walk skip a whole page.
+  - `history-eviction.ts`: turning a page's items into a count, and reporting the
+    items that leave the rendered array.
+  - `blocked-window.ts`: the window walk over a paged history — the same orchestration
+    as `viewport-window.ts`, with a measured page as one step.
+  - `viewport-selection.ts`: the drag selection's captured text and how it is
+    relocated when the transcript moves underneath it.
 - `useSubmitHandler.ts`: slash-command and user-submit router.
 - `useConversationLoop.ts`: streaming turn loop, retry/recovery, tool execution,
   and reflection auto-launch.

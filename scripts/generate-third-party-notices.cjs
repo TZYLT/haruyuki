@@ -3,10 +3,10 @@
  * Regenerates THIRD-PARTY-NOTICES.md.
  *
  * Why this exists: the published package ships `haruyuki.js`, a single-file
- * bundle that inlines nearly every production dependency, plus patched copies of
- * Ink and ink-text-input under `vendor/`. Redistributing that code requires
- * carrying its copyright lines and permission notices (MIT/BSD/ISC/Apache-2.0
- * all say so), and a hand-maintained list would rot on the next `bun install`.
+ * bundle that inlines nearly every production dependency. Redistributing that code
+ * requires carrying its copyright lines and permission notices (MIT/BSD/ISC/
+ * Apache-2.0 all say so), and a hand-maintained list would rot on the next
+ * `bun install`.
  *
  * Scope: the transitive closure of `dependencies` + `optionalDependencies` in
  * package.json, resolved against the installed `node_modules`. devDependencies

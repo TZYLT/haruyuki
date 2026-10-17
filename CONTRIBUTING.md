@@ -29,7 +29,7 @@
 ## 常用命令
 
 ```bash
-bun install --frozen-lockfile    # 安装依赖（会执行 vendor 补丁 postinstall-patches）
+bun install --frozen-lockfile    # 安装依赖（无 postinstall 补丁步骤）
 bun run dev                      # 从 TypeScript 源码直接运行（改完即生效）
 bun run dev -- -p "Hello"        # 带参数运行
 
@@ -57,8 +57,10 @@ node scripts/generate-tutor-avatar.cjs          # → assets/tutor-profile.png
    **并追加到本文件的 §相对上游的改动清单**。
 3. **护栏保留**：`bun run check` 必须全绿；如自研代码触及 `file-size` 上限，允许在
    `scripts/source-file-size-baseline.json` 中按需上调（不删护栏本身）。
-4. **依赖策略**：依赖钉死精确版本；需要改供应商适配行为时，用 `vendor/` +
-   `scripts/postinstall-patches.js` 的既有补丁机制，而不是跟随上游升级。
+4. **依赖策略**：依赖钉死精确版本；**不**用 `vendor/` ＋ 字符串补丁改上游行为
+   （`vendor/` 与 `scripts/postinstall-patches.js` 已于 Ink 7 升级时删除，见 `AGENTS.md`
+   「No Upstream Patching (Ink)」）。需要不同的行为时，改为**本仓自有的实现**或**显式的适配层**，
+   不跟随上游升级也不改 `node_modules`。
 5. **不接收上游补丁**：上游 release / 安全公告仅作参考，不做 cherry-pick。
 6. **法务要件不可删**：`LICENSE`（含上游版权行与 Brand Assets Exclusion）与 `NOTICE` **原样保留**；
    `THIRD-PARTY-NOTICES.md` 是生成物，**改依赖后必须重跑**生成器。
