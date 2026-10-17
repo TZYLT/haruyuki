@@ -5,7 +5,7 @@ import { createBuffers } from "@/cli/helpers/accumulator";
 import { backfillBuffers } from "@/cli/helpers/backfill";
 import { showNotice } from "@/cli/helpers/notice";
 import { debugWarn } from "@/utils/debug";
-import type { HistoryBlock } from "./history-blocks";
+import type { HistoryBlock, WalkIndex } from "./history-blocks";
 import { countOnlyItems, evictBlocksBefore } from "./history-eviction";
 import { HISTORY_PAGE_LIMIT, RESIDENT_PAGE_BUDGET } from "./history-window";
 import type { StaticItem } from "./types";
@@ -549,6 +549,37 @@ export function materializeOlderHistoryBlocks(
 export function olderHistoryPrefixItems(conversationIdForRead: string): number {
   if (conversationIdForRead !== conversationId) return 0;
   return countOnlyItems(blocks);
+}
+
+/** A range of the viewport's own array: older pages in front, then the core. */
+export interface RenderedRange {
+  readonly from: number;
+  readonly to: number;
+}
+
+/**
+ * The slice of the viewport's array that covers walk indices `[start, end)`.
+ *
+ * The conversion the viewport may not do itself: it has one array (materialized pages in
+ * front, then the core) and the walk numbers over a second, which counts the pages
+ * eviction reduced to counts. Three defects grew in that seam, so the offset lives here,
+ * next to the prefix it depends on — with the same scoping rule as the prefix.
+ *
+ * It is only the *offset* the store can answer: which array the result indexes into is the
+ * viewport's business, because the core's items are the viewport's. Reading an item is
+ * therefore `items[walkIndex - olderHistoryPrefixItems(conversationId)]` on that side.
+ */
+export function olderHistoryRenderedRange(
+  start: WalkIndex,
+  end: WalkIndex,
+  conversationIdForRead: string,
+): RenderedRange {
+  const prefix =
+    conversationIdForRead === conversationId ? countOnlyItems(blocks) : 0;
+  return {
+    from: Math.max(0, start - prefix),
+    to: Math.max(0, end - prefix),
+  };
 }
 
 /**

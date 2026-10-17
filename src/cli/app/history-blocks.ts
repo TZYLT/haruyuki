@@ -23,6 +23,27 @@ export interface HistoryBlock {
   rows: number | null;
 }
 
+declare const walkIndexBrand: unique symbol;
+
+/**
+ * An index in the **walk's** item space: every page counts, materialized or not.
+ *
+ * That space is defined by the block list above — block 0 starts at item 0, a page's items
+ * are contiguous, and the core follows the last block — and it is *not* the viewport's
+ * array, which holds only the materialized pages. Three separate defects came out of
+ * subtracting the difference by hand in the viewport (a slice taken with walk indices, a
+ * parked anchor compensated in a space that had not moved, a height recorded against the
+ * wrong index). This name marks the walk's side; `olderHistoryItemAt` and
+ * `olderHistoryRenderedRange` in `older-history.ts` are the only way across, because only
+ * the store knows which pages are cut down to counts.
+ */
+export type WalkIndex = number & { readonly [walkIndexBrand]: true };
+
+/** The walk's numbering, named. The walk and its steps are the only callers. */
+export function asWalkIndex(index: number): WalkIndex {
+  return index as WalkIndex;
+}
+
 function blockItems(block: HistoryBlock | undefined): number {
   return Math.max(0, Math.trunc(block?.itemCount ?? 0));
 }

@@ -17,6 +17,7 @@ import type { AppViewProps } from "./AppView";
 import { fitBlockedItemsFromEnd } from "./blocked-window";
 import { useChromeHeight, useMeasuredChromeHeight } from "./chrome-height";
 import { FocusedApproval } from "./FocusedApproval";
+import type { WalkIndex } from "./history-blocks";
 import { historyBlockAt, historyBlockItems } from "./history-blocks";
 import { MAX_VIEWPORT_ITEMS } from "./history-window";
 import { buildVisibleItems, hasFocusedApprovalItem } from "./live-items";
@@ -28,6 +29,7 @@ import {
   materializeOlderHistoryBlocks,
   olderHistoryCursor,
   olderHistoryPrefixItems,
+  olderHistoryRenderedRange,
   reportOlderHistoryBlockRows,
   requestOlderHistory,
   requestOlderHistoryPages,
@@ -347,6 +349,20 @@ export function ViewportTranscript(props: AppViewProps) {
   );
 
   const window = useMemo(() => {
+    /**
+     * The item a walk index points at, in this component's own array.
+     *
+     * The one place the walk's numbering meets the array being drawn: the walk counts every
+     * page (evicted ones included, by `itemCount`), while `items` holds only the
+     * materialized pages in front of the core — so a walk index sits `olderPrefix` above
+     * its position here. Doing that subtraction anywhere else is what produced three
+     * defects in this seam (`history-blocks.ts` names the walk's side).
+     *
+     * Declared here rather than beside the other locals so the memo does not have to
+     * depend on a function identity that changes every render.
+     */
+    const itemAtWalkIndex = (index: WalkIndex): StaticItem | undefined =>
+      items[index - olderPrefix];
     return fitBlockedItemsFromEnd({
       blocks: olderBlocks,
       coreItemCount: Math.max(
@@ -362,9 +378,9 @@ export function ViewportTranscript(props: AppViewProps) {
       // whole dropped page consume no offset at all), so the page's own average stands
       // in — while `isMaterialized` keeps that number out of the ledger, because a
       // page recorded from rows nobody measured can never be drawn again.
-      isMaterialized: (index) => items[index - olderPrefix] !== undefined,
+      isMaterialized: (index) => itemAtWalkIndex(index) !== undefined,
       measure: (index) => {
-        const item = items[index - olderPrefix];
+        const item = itemAtWalkIndex(index);
         if (item === undefined) {
           const owning = historyBlockAt(olderBlocks, index);
           const block = owning === null ? undefined : olderBlocks[owning];
@@ -478,13 +494,17 @@ export function ViewportTranscript(props: AppViewProps) {
 
   // The window is fitted in the **walk's** item space, which counts every page —
   // including the ones eviction reduced to a count. The rendered array only holds the
-  // materialized pages, so it sits `olderPrefix` items below the walk: reading the
-  // slice without that offset shows rows from the wrong part of the transcript, and
-  // once the walk is inside the evicted prefix it shows nothing at all.
-  const visible = items.slice(
-    Math.max(0, window.start - olderPrefix),
-    Math.max(0, window.end - olderPrefix),
+  // materialized pages, so reading the slice without converting shows rows from the
+  // wrong part of the transcript, and once the walk is inside the evicted prefix it
+  // shows nothing at all. The conversion is the store's (`older-history.ts`), which owns
+  // both numbering spaces: doing the subtraction here is exactly what went wrong three
+  // times.
+  const visibleRange = olderHistoryRenderedRange(
+    window.start,
+    window.end,
+    conversationId,
   );
+  const visible = items.slice(visibleRange.from, visibleRange.to);
 
   // Whether the focused approval is on screen. Its tool call can be missing from
   // the item list entirely (the backfill cap dropped it) or sit outside the

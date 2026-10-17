@@ -1,8 +1,10 @@
 import {
+  asWalkIndex,
   type HistoryBlock,
   historyBlockAt,
   historyBlockItems,
   historyBlocksForWindow,
+  type WalkIndex,
 } from "./history-blocks";
 import {
   fitItemsFromEnd,
@@ -33,7 +35,7 @@ export interface BlockedWindowInput {
   scrollFromBottom: number;
   anchor?: ViewportAnchor;
   /** Rows of one item. Only indices the walk descends into are asked for. */
-  measure: (index: number) => number;
+  measure: (index: WalkIndex) => number;
   /**
    * Whether the item at this index is actually in the rendered list.
    *
@@ -43,10 +45,13 @@ export interface BlockedWindowInput {
    * ledger — a page recorded as zero rows is skipped by every later walk, so its rows
    * can never be drawn again. Defaults to "everything is materialized".
    */
-  isMaterialized?: (index: number) => boolean;
+  isMaterialized?: (index: WalkIndex) => boolean;
 }
 
 export interface BlockedViewportWindow extends ViewportWindow {
+  /** The window's bounds, in the walk's own numbering (`WalkIndex`). */
+  start: WalkIndex;
+  end: WalkIndex;
   /** Pages the window touches, and therefore has to be resident. */
   resident: { from: number; to: number } | null;
   /**
@@ -127,7 +132,8 @@ export function fitBlockedItemsFromEnd(
         owningIndex === null ? undefined : blocks[owningIndex];
       // Only a row that was really there counts as a height. An item whose page is
       // only a count has no rows to measure, whatever the caller's fallback reads.
-      const measuredHere = input.isMaterialized?.(index - 1) ?? true;
+      const measuredHere =
+        input.isMaterialized?.(asWalkIndex(index - 1)) ?? true;
       if (owningBlock !== undefined && measuredHere) {
         let perItem = seenRows.get(owningBlock.key);
         if (perItem === undefined) {
@@ -145,7 +151,10 @@ export function fitBlockedItemsFromEnd(
     height: input.height,
     maxItems: input.maxItems,
     scrollFromBottom: input.scrollFromBottom,
-    measure: input.measure,
+    // The generic walk hands its steps plain numbers; in this caller they are walk
+    // indices by construction, which is what `asWalkIndex` names (and the only place the
+    // two are allowed to meet).
+    measure: (index: number) => input.measure(asWalkIndex(index)),
     anchor: input.anchor,
     steps,
   });
@@ -164,6 +173,8 @@ export function fitBlockedItemsFromEnd(
 
   return {
     ...window,
+    start: asWalkIndex(window.start),
+    end: asWalkIndex(window.end),
     resident: historyBlocksForWindow(blocks, window.start, window.end),
     measuredBlocks,
   };
