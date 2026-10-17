@@ -97,7 +97,10 @@ describe("recall injection wiring", () => {
   });
 
   test("the transcript renders the recall row", () => {
-    expect(sourceOf("../cli/app/StaticTranscript.tsx")).toContain(
+    // The item renderers moved out of `StaticTranscript` — it became a shell that
+    // forwards to `TranscriptItemView` — when the full-screen viewport landed.
+    // The recall row is still rendered, so assert against the file that owns it.
+    expect(sourceOf("../cli/app/TranscriptItem.tsx")).toContain(
       'item.kind === "recall"',
     );
   });
