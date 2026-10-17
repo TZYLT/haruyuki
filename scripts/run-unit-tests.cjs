@@ -4,6 +4,7 @@ const { existsSync, readFileSync, readdirSync } = require("node:fs");
 const { availableParallelism } = require("node:os");
 const path = require("node:path");
 const { shardTestFiles } = require("./test-sharding.cjs");
+const { partitionTestFilesForParallel } = require("./test-runtime-groups.cjs");
 const {
   buildFamilyImpactIndex,
   getGitChangedFiles,
@@ -112,6 +113,7 @@ const allTestFiles = [
   ...rootTestFiles,
   "scripts/unit-test-impact.test.cjs",
   "scripts/test-sharding.test.cjs",
+  "scripts/test-runtime-groups.test.cjs",
 ].sort();
 const discoveredPaths = new Set(allTestFiles);
 
@@ -129,6 +131,7 @@ const wholeSuiteTargets = [
   ...rootTestFiles,
   "scripts/unit-test-impact.test.cjs",
   "scripts/test-sharding.test.cjs",
+  "scripts/test-runtime-groups.test.cjs",
 ];
 
 for (const entry of isolatedTests) {
@@ -150,7 +153,11 @@ function runTests(files, timeoutMs, env = {}, extraArgs = []) {
       stdio: "inherit",
       // Unit tests must never emit product telemetry or make test fixtures look
       // like real users. Only isolated telemetry contract tests may opt back in.
-      env: { ...process.env, HARUYUKI_CODE_TELEM: "0", ...env },
+      env: {
+        ...process.env,
+        HARUYUKI_CODE_TELEM: "0",
+        ...env,
+      },
     },
   );
 }
@@ -281,7 +288,8 @@ function selectTestFiles() {
 
 let exitCode = 0;
 const shardIndex = process.argv.indexOf("--shard");
-const shard = shardIndex === -1 ? undefined : (process.argv[shardIndex + 1] ?? "");
+const shard =
+  shardIndex === -1 ? undefined : (process.argv[shardIndex + 1] ?? "");
 // Validate outside selection's full-suite fallback: an invalid shard must fail,
 // not make several jobs duplicate the entire suite or silently run nothing.
 shardTestFiles([], shard);
@@ -308,10 +316,22 @@ const envEntries = isolatedTests.filter(
 const envPaths = new Set(envEntries.map((entry) => entry.path));
 const batchFiles = selectedTestFiles.filter((file) => !envPaths.has(file));
 
+// Files `bun test --parallel` cannot load — everything that reaches ink — run the way
+// the escape hatch runs them: one process, bounded chunks. Handing them to a worker
+// does not fail their tests, it *drops* them (no test is registered at all), which is
+// why the split is on the file set rather than on the outcome (`test-runtime-groups.cjs`
+// has the reproduction).
+const runtimeGroups =
+  parallelWorkers > 0
+    ? partitionTestFilesForParallel({ testFiles: batchFiles })
+    : { parallel: batchFiles, serial: [] };
+const parallelBatchFiles = runtimeGroups.parallel;
+const serialRuntimePaths = runtimeGroups.serial;
+
 if (parallelWorkers > 0) {
   // `--parallel` isolates the module registry, not the environment, so the
-  // manifest entries that need a specific env var still get a process of their
-  // own; everything else is covered by the parallel batch below.
+  // manifest entries that need a specific env var still get a process of their own;
+  // everything else is covered by the parallel batch below.
   for (const entry of envEntries) {
     try {
       runTests([entry.path], entry.timeoutMs, entry.env);
@@ -320,19 +340,25 @@ if (parallelWorkers > 0) {
     }
   }
 
+  if (serialRuntimePaths.length > 0) {
+    console.log(
+      `unit-test runtime: running ${serialRuntimePaths.length} ink-rendering files serially (bun --parallel cannot load them)`,
+    );
+  }
+
   // Whole-suite runs use path filters, so the argument list stays far below
   // CreateProcess's 32k limit and bun can balance the files across workers.
   // A narrowed selection (impact analysis, or a shard) is small enough to pass
   // explicitly, which keeps this runner's own shard semantics unchanged.
   const wholeSuite = fullSuite && shard === undefined;
-  const targets = wholeSuite ? wholeSuiteTargets : batchFiles;
+  const targets = wholeSuite ? wholeSuiteTargets : parallelBatchFiles;
   const extraArgs = [`--parallel=${parallelWorkers}`];
   if (wholeSuite) {
-    for (const testPath of envPaths) {
+    for (const testPath of [...envPaths, ...serialRuntimePaths]) {
       extraArgs.push(`--path-ignore-patterns=${toIgnoreGlob(testPath)}`);
     }
   }
-  if (batchFiles.length > 0) {
+  if (parallelBatchFiles.length > 0 || (wholeSuite && envPaths.size === 0)) {
     // The manifest's longest registered timeout (30s), so a batch is never
     // stricter than the per-entry timeouts it replaces — matching the behaviour
     // of the chunked serial path, which also ran every shared-process file with
@@ -342,7 +368,21 @@ if (parallelWorkers > 0) {
     } catch (error) {
       exitCode = error.status ?? 1;
     }
-  } else if (envPaths.size === 0) {
+  }
+
+  for (const batch of chunkByCommandLength(serialRuntimePaths)) {
+    try {
+      runTests(batch, 15000);
+    } catch (error) {
+      exitCode = error.status ?? 1;
+    }
+  }
+
+  if (
+    parallelBatchFiles.length === 0 &&
+    envPaths.size === 0 &&
+    serialRuntimePaths.length === 0
+  ) {
     // Nothing was selected and nothing ran. Say so instead of exiting 0 on an
     // empty run (`--shard` with an out-of-range index, or an empty impact plan).
     console.error("unit-test: no test files selected; nothing ran");
