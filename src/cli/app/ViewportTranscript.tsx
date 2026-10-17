@@ -18,6 +18,7 @@ import { fitBlockedItemsFromEnd } from "./blocked-window";
 import { useChromeHeight, useMeasuredChromeHeight } from "./chrome-height";
 import { FocusedApproval } from "./FocusedApproval";
 import { historyBlockAt, historyBlockItems } from "./history-blocks";
+import { MAX_VIEWPORT_ITEMS } from "./history-window";
 import { buildVisibleItems, hasFocusedApprovalItem } from "./live-items";
 import {
   composeTranscriptItems,
@@ -52,9 +53,6 @@ import {
 
 /** Fallback chrome reserve used until the shell reports its measured height. */
 export const CHROME_RESERVE_ROWS = 4;
-
-/** Hard cap on rendered items (bounded residency). */
-export const MAX_VIEWPORT_ITEMS = 200;
 
 /**
  * The rows the full-screen viewport reserves for one item: exactly what

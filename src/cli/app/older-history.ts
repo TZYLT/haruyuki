@@ -7,6 +7,7 @@ import { showNotice } from "@/cli/helpers/notice";
 import { debugWarn } from "@/utils/debug";
 import type { HistoryBlock } from "./history-blocks";
 import { countOnlyItems, evictBlocksBefore } from "./history-eviction";
+import { HISTORY_PAGE_LIMIT } from "./history-window";
 import type { StaticItem } from "./types";
 import {
   scrollTranscriptBy,
@@ -47,9 +48,6 @@ import {
  * — the cap those constants set is exactly what this module makes obsolete for
  * rendering, and the resume path still uses it for the initial window.
  */
-
-/** Messages asked for per page. */
-export const HISTORY_PAGE_LIMIT = 50;
 
 export const HISTORY_START_NOTICE = "已到这次会话的开头";
 export const HISTORY_CURSOR_NOTICE = "更早的历史加载失败：游标已失效";

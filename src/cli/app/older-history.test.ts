@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Message } from "@letta-ai/letta-client/resources/agents/messages";
+import { HISTORY_PAGE_LIMIT } from "@/cli/app/history-window";
 import {
   composeTranscriptItems,
   getOlderHistoryItems,
   getOlderHistoryState,
   HISTORY_CURSOR_NOTICE,
-  HISTORY_PAGE_LIMIT,
   HISTORY_START_NOTICE,
   historyItemsForMessages,
   type OlderHistoryFetchRequest,

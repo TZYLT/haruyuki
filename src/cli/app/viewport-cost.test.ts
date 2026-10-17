@@ -20,12 +20,10 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { MAX_VIEWPORT_ITEMS } from "@/cli/app/history-window";
 import { measureTranscriptItemRows } from "@/cli/app/row-model";
 import type { StaticItem } from "@/cli/app/types";
-import {
-  CHROME_RESERVE_ROWS,
-  MAX_VIEWPORT_ITEMS,
-} from "@/cli/app/ViewportTranscript";
+import { CHROME_RESERVE_ROWS } from "@/cli/app/ViewportTranscript";
 import { fitScrolledItemsFromEnd } from "@/cli/app/viewport-window";
 import type { Line } from "@/cli/helpers/accumulator";
 
