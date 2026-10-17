@@ -334,7 +334,16 @@ mock.module("./runtime", () => ({
 // this factory omits (attachment-download.ts imports
 // `materializeSlackAttachment`, which only the real module has). Importing the
 // real module here is side-effect-free — it reads no config and opens no client.
-const realMedia = await import("./media");
+//
+// Loaded with `require`, not `await import`, and that is load-bearing: a top-level
+// `await` suspends this module's evaluation, and a `bun test --parallel` worker
+// starts the importing file's tests while it is still suspended (a function
+// declaration is hoisted, so `installSlackAdapterTestHooks` is callable before the
+// bindings below it exist). Every test in the file then dies on
+// `Cannot access 'fetchMock' before initialization`. `require` is synchronous, so
+// the module is complete before any hook can run — and Bun's `mock.module` applies
+// to it exactly as it does to a dynamic import.
+const realMedia = require("./media") as typeof import("./media");
 
 mock.module("./media", () => ({
   ...realMedia,
@@ -351,8 +360,12 @@ mock.module("./attachment-download", () => ({
   downloadSlackAttachmentById: downloadSlackAttachmentByIdMock,
 }));
 
-const adapterModule = await import("@/channels/slack/adapter");
-const accountDisplayModule = await import("@/channels/slack/account-display");
+// After the mocks, so the adapter it loads is the mocked one (`require` again, for
+// the reason above).
+const adapterModule =
+  require("@/channels/slack/adapter") as typeof import("@/channels/slack/adapter");
+const accountDisplayModule =
+  require("@/channels/slack/account-display") as typeof import("@/channels/slack/account-display");
 export const createSlackAdapter = adapterModule.createSlackAdapter;
 export const resolveSlackAccountDisplayName =
   accountDisplayModule.resolveSlackAccountDisplayName;

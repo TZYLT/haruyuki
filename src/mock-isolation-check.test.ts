@@ -143,6 +143,58 @@ test("uses top-level mock", () => {});
   );
 });
 
+test("mock isolation checker rejects a mocking helper that awaits at the top level", async () => {
+  fixtureRoot = mkdtempSync(join(tmpdir(), "mock-isolation-helper-await-"));
+  // A helper is not a test file, so it can never be registered as isolated: its
+  // module-scope state has to exist before any hook can reach it.
+  writeFixtureFile(
+    "src/channels/slack/adapter-test-harness.ts",
+    `import { beforeEach, mock } from "bun:test";
+
+mock.module("./runtime", () => ({ installed: () => true }));
+
+const late = await import("./runtime");
+
+export function installHooks(): void {
+  beforeEach(() => {
+    void late;
+  });
+}
+`,
+  );
+
+  const result = await runChecker();
+
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain(
+    "mock.module() in a module that also awaits at the top level",
+  );
+});
+
+test("mock isolation checker allows a mocking helper that loads synchronously", async () => {
+  fixtureRoot = mkdtempSync(join(tmpdir(), "mock-isolation-helper-sync-"));
+  writeFixtureFile(
+    "src/channels/slack/adapter-test-harness.ts",
+    `import { beforeEach, mock } from "bun:test";
+
+mock.module("./runtime", () => ({ installed: () => true }));
+
+const runtime = require("./runtime") as { installed: () => boolean };
+
+export function installHooks(): void {
+  beforeEach(() => {
+    void runtime.installed();
+  });
+}
+`,
+  );
+
+  const result = await runChecker();
+
+  expect(result.exitCode).toBe(0);
+  expect(result.output).toContain("No unsafe mock.module() usage found");
+});
+
 test("mock isolation checker rejects partial channel runtime mocks", async () => {
   fixtureRoot = mkdtempSync(join(tmpdir(), "mock-isolation-partial-"));
   writeFixtureFile(

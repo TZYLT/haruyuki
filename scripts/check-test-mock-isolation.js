@@ -3,13 +3,21 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const TESTS_DIR_ENV = "HARUYUKI_MOCK_ISOLATION_TESTS_DIR";
+const SOURCE_DIR_ENV = "HARUYUKI_MOCK_ISOLATION_SOURCE_DIR";
 
 const rootDir = process.cwd();
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const testsDir = process.env[TESTS_DIR_ENV]
   ? resolve(process.env[TESTS_DIR_ENV])
+  : join(rootDir, "src");
+// Helpers are scanned too: a shared test helper that installs module mocks cannot be
+// registered in `isolated-unit-tests.json` (it is not a test file), so the rules that
+// keep one file's mocks from breaking another have to reach it as well.
+const sourceDir = process.env[SOURCE_DIR_ENV]
+  ? resolve(process.env[SOURCE_DIR_ENV])
   : join(rootDir, "src");
 const isolationManifest = JSON.parse(
   readFileSync(join(scriptDir, "isolated-unit-tests.json"), "utf8"),
@@ -67,6 +75,29 @@ function collectTestFiles(dir) {
       entry.isFile() &&
       (entry.name.endsWith(".test.ts") || entry.name.endsWith(".test.tsx"))
     ) {
+      files.push(fullPath);
+    }
+  }
+
+  return files;
+}
+
+/** Every TypeScript source file, tests included: helpers install mocks too. */
+function collectSourceFiles(dir) {
+  if (!existsSync(dir)) {
+    return [];
+  }
+
+  const entries = readdirSync(dir, { withFileTypes: true });
+  const files = [];
+
+  for (const entry of entries) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectSourceFiles(fullPath));
+      continue;
+    }
+    if (entry.isFile() && /\.tsx?$/u.test(entry.name)) {
       files.push(fullPath);
     }
   }
@@ -203,6 +234,60 @@ function extractMockCallText(sourceText, index) {
   return sourceText.slice(index, closeParenIndex + 1);
 }
 
+const FUNCTION_LIKE_KINDS = new Set([
+  ts.SyntaxKind.FunctionDeclaration,
+  ts.SyntaxKind.FunctionExpression,
+  ts.SyntaxKind.ArrowFunction,
+  ts.SyntaxKind.MethodDeclaration,
+  ts.SyntaxKind.Constructor,
+  ts.SyntaxKind.GetAccessor,
+  ts.SyntaxKind.SetAccessor,
+]);
+
+/**
+ * Whether the module itself awaits, rather than a function inside it.
+ *
+ * `bun test --parallel` runs each file in a worker that can start the file's hooks
+ * and tests while a top-level `await` is still resolving. A file that also calls
+ * `mock.module()` is hit hardest: the mock factories and the hooks that clean them up
+ * are written against module-scope state that a suspended evaluation has not reached
+ * yet, and a hoisted `function` declaration makes them reachable anyway.
+ * `src/channels/slack/adapter-test-harness.ts` broke seven files that way — every
+ * test failed on `Cannot access 'fetchMock' before initialization` — and the fix was
+ * to load the mocked modules synchronously. A registered isolated test is exempt: it
+ * runs in a process of its own, where nothing races the evaluation.
+ */
+function hasTopLevelAwait(sourceText, fileName) {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    // `setParentNodes`, because the walk below climbs to the module scope to tell a
+    // top-level await from one inside a callback.
+    true,
+  );
+  let found = false;
+
+  const visit = (node) => {
+    if (found) return;
+    if (ts.isAwaitExpression(node)) {
+      let current = node.parent;
+      let insideFunction = false;
+      while (current && current !== sourceFile) {
+        if (FUNCTION_LIKE_KINDS.has(current.kind)) {
+          insideFunction = true;
+          break;
+        }
+        current = current.parent;
+      }
+      if (!insideFunction) found = true;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found;
+}
+
 function resolveMockTargetPath(filePath, moduleSpecifier) {
   const basePath = resolve(dirname(filePath), moduleSpecifier);
   const candidates = [
@@ -334,8 +419,18 @@ function getMockedObjectKeys(mockCallText) {
 
 const failures = [];
 
-for (const filePath of collectTestFiles(testsDir)) {
+/** Tests first (the manifest is keyed by test path), then every other source file. */
+function collectScanFiles() {
+  const files = new Set(collectTestFiles(testsDir));
+  for (const file of collectSourceFiles(sourceDir)) files.add(file);
+  return [...files].sort();
+}
+
+for (const filePath of collectScanFiles()) {
   const sourceText = readFileSync(filePath, "utf8");
+  // Cheap gate: only a file that installs a module mock is subject to any rule here,
+  // and the helper scan otherwise reads every source file in the repo.
+  if (!sourceText.includes("mock.module(")) continue;
   const mockedModules = Array.from(
     sourceText.matchAll(mockModulePattern),
   ).filter(
@@ -347,6 +442,23 @@ for (const filePath of collectTestFiles(testsDir)) {
   if (mockedModules.length === 0) continue;
 
   const relativePath = relative(rootDir, filePath).replaceAll("\\", "/");
+  const isTestFile = /\.test\.tsx?$/u.test(filePath);
+  const isRegistered = ISOLATED_TEST_FILES.has(relativePath);
+
+  if (!isRegistered && hasTopLevelAwait(sourceText, filePath)) {
+    failures.push({
+      type: "top-level-await-mock",
+      filePath: relativePath,
+      mockedModules: mockedModules.map(
+        (match) => match[2] ?? "<dynamic module>",
+      ),
+    });
+  }
+
+  // The remaining rules are about how one *test file* mocks; a helper is not a test
+  // file and cannot be registered, so only the rule above applies to it.
+  if (!isTestFile) continue;
+
   const hasRestoreHook =
     restoreHookPattern.test(sourceText) ||
     restoreHookFunctionPattern.test(sourceText);
@@ -381,7 +493,7 @@ for (const filePath of collectTestFiles(testsDir)) {
       isRelativeInternalModule(moduleSpecifier) &&
       isTopLevelMockCall(sourceText, match.index ?? 0)
     ) {
-      if (!ISOLATED_TEST_FILES.has(relativePath)) {
+      if (!isRegistered) {
         failures.push({
           type: "top-level-mock",
           filePath: relativePath,
@@ -462,6 +574,16 @@ if (failures.length > 0) {
         );
         console.error(
           "  Runtime module mocks must include every runtime export so later imports do not fail with missing ESM exports.",
+        );
+        break;
+      case "top-level-await-mock":
+        console.error(`- ${failure.filePath}`);
+        console.error(
+          "  mock.module() in a module that also awaits at the top level",
+        );
+        console.error(`  mocked modules: ${failure.mockedModules.join(", ")}`);
+        console.error(
+          "  bun test --parallel can run this module's hooks and tests while the await is still resolving, so module-scope state they close over is uninitialized (Cannot access 'x' before initialization). Load the mocked modules synchronously (require), move the await into a function, or register the file as an isolated test.",
         );
         break;
     }
