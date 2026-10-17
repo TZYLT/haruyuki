@@ -1,6 +1,11 @@
 {
   "tests": [
     {
+      "path": "src/websocket/listener/channel-route-isolation.test.ts",
+      "timeoutMs": 15000,
+      "reason": "Pins the shared preload's per-test channel-route cleanup: two consecutive cases deliberately reuse one chat id and rely on the preload's afterEach to clear it between them. `bun test --parallel` applies the preload's environment but not its test hooks, so this file must run where that hook is registered."
+    },
+    {
       "path": "src/websocket/ask-user-question-async.test.ts",
       "timeoutMs": 30000,
       "reason": "Runs a real local App Server with isolated HOME, settings, backend, and WebSocket clients to verify nonblocking questions and later responses."

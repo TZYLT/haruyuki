@@ -337,14 +337,21 @@ if (shard) {
 const selectedTestPaths = new Set(selectedTestFiles);
 const parallelWorkers = resolveParallelWorkers();
 
-// Manifest entries that need a specific environment, restricted to this run's
-// selection. They never join the parallel batch below.
-const envEntries = isolatedTests.filter(
-  (entry) => entry.env && selectedTestPaths.has(entry.path),
+// Manifest entries for this run's selection. None of them joins the parallel
+// batch: the manifest means "this file needs a process of its own", and
+// `--parallel` covers only one of the reasons it is used. It isolates the module
+// registry, but it does not scope a file's environment (the `env` block) and it
+// does not keep the shared preload's test hooks attached to the file under test —
+// that hook half is what `channel-route-isolation` pins. The serial escape hatch
+// below already runs every entry; this branch now agrees with it.
+const isolatedEntries = isolatedTests.filter((entry) =>
+  selectedTestPaths.has(entry.path),
 );
 
-const envPaths = new Set(envEntries.map((entry) => entry.path));
-const batchFiles = selectedTestFiles.filter((file) => !envPaths.has(file));
+const runIsolatedPaths = new Set(isolatedEntries.map((entry) => entry.path));
+const batchFiles = selectedTestFiles.filter(
+  (file) => !runIsolatedPaths.has(file),
+);
 
 // Files `bun test --parallel` cannot load — everything that reaches ink — run the way
 // the escape hatch runs them: one process, bounded chunks. Handing them to a worker
@@ -359,10 +366,9 @@ const parallelBatchFiles = runtimeGroups.parallel;
 const serialRuntimePaths = runtimeGroups.serial;
 
 if (parallelWorkers > 0) {
-  // `--parallel` isolates the module registry, not the environment, so the
-  // manifest entries that need a specific env var still get a process of their own;
-  // everything else is covered by the parallel batch below.
-  for (const entry of envEntries) {
+  // Every selected entry gets a process of its own before the batch runs; see the
+  // note on `isolatedEntries` above for why the parallel batch cannot stand in.
+  for (const entry of isolatedEntries) {
     try {
       runTests([entry.path], entry.timeoutMs, entry.env);
     } catch (error) {
@@ -384,11 +390,11 @@ if (parallelWorkers > 0) {
   const targets = wholeSuite ? wholeSuiteTargets : parallelBatchFiles;
   const extraArgs = [`--parallel=${parallelWorkers}`];
   if (wholeSuite) {
-    for (const testPath of [...envPaths, ...serialRuntimePaths]) {
+    for (const testPath of [...runIsolatedPaths, ...serialRuntimePaths]) {
       extraArgs.push(`--path-ignore-patterns=${toIgnoreGlob(testPath)}`);
     }
   }
-  if (parallelBatchFiles.length > 0 || (wholeSuite && envPaths.size === 0)) {
+  if (parallelBatchFiles.length > 0 || (wholeSuite && runIsolatedPaths.size === 0)) {
     // The manifest's longest registered timeout (30s), so a batch is never
     // stricter than the per-entry timeouts it replaces — matching the behaviour
     // of the chunked serial path, which also ran every shared-process file with
@@ -410,7 +416,7 @@ if (parallelWorkers > 0) {
 
   if (
     parallelBatchFiles.length === 0 &&
-    envPaths.size === 0 &&
+    runIsolatedPaths.size === 0 &&
     serialRuntimePaths.length === 0
   ) {
     // Nothing was selected and nothing ran. Say so instead of exiting 0 on an
