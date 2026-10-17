@@ -172,6 +172,16 @@ interface OlderHistoryBlock {
   itemCount: number;
   /** Rows the viewport measured for the whole page, or `null` until it has. */
   rows: number | null;
+  /**
+   * The layout the rows were measured under (see `setOlderHistoryRowsKey`).
+   *
+   * A page's height is a function of the column count, the terminal height, the
+   * transcript's display state and the diffs it draws, and the walk *skips* a page it
+   * has a height for. Without this a resize or a `Ctrl+T` would leave every loaded page
+   * skipped by a height that describes the layout the user just left, for the rest of
+   * the session.
+   */
+  rowsKey: string | null;
 }
 
 let blocks: readonly OlderHistoryBlock[] = [];
@@ -288,23 +298,54 @@ export function getOlderHistoryBlocks(
 }
 
 /**
- * Record the rows the viewport measured for a page.
+ * Record the rows the viewport measured for a page, and the layout they belong to.
  *
- * Counts are reported on every frame, so this publishes only when a height actually
- * moved (`withHistoryBlockRows` hands back the same list when it did not). A report
- * that rendered every frame would be exactly the redraw the scroll path spent
- * several rounds removing.
+ * Counts are reported on every frame, so this publishes only when something actually
+ * moved (a height, or the layout key it was measured under). A report that rendered
+ * every frame would be exactly the redraw the scroll path spent several rounds
+ * removing.
  */
-export function reportOlderHistoryBlockRows(key: string, rows: number): void {
+export function reportOlderHistoryBlockRows(
+  key: string,
+  rows: number,
+  rowsKey: string | null = null,
+): void {
   let changed = false;
   const next = blocks.map((block) => {
-    if (block.key !== key || block.rows === rows) return block;
+    if (block.key !== key) return block;
+    if (block.rows === rows && block.rowsKey === rowsKey) return block;
     changed = true;
-    return { ...block, rows };
+    return { ...block, rows, rowsKey };
   });
   if (!changed) return;
   blocks = next;
   publish();
+}
+
+/**
+ * Forget the heights that were measured under a different layout.
+ *
+ * The viewport calls this with a key describing everything a page's height depends on
+ * (columns, terminal rows, the transcript display state, the diffs it can draw). A page
+ * whose recorded height belongs to another layout is treated as unmeasured, so the walk
+ * measures it again instead of skipping it with a number that describes the layout the
+ * user has left. Nothing is evicted by this: an unmeasured page is one the eviction rule
+ * refuses to drop.
+ *
+ * Returns whether anything changed, so a caller can tell a real invalidation from the
+ * steady state (which is every frame).
+ */
+export function setOlderHistoryRowsKey(rowsKey: string): boolean {
+  let changed = false;
+  const next = blocks.map((block) => {
+    if (block.rows === null || block.rowsKey === rowsKey) return block;
+    changed = true;
+    return { ...block, rows: null, rowsKey: null };
+  });
+  if (!changed) return false;
+  blocks = next;
+  publish();
+  return true;
 }
 
 /**
@@ -532,6 +573,7 @@ async function loadPage(
         items: fresh,
         itemCount: fresh.length,
         rows: null,
+        rowsKey: null,
       },
       ...blocks,
     ];

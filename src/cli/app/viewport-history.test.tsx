@@ -349,8 +349,10 @@ const REAL_CORE: Message[] = Array.from(
 
 function RealHistoryViewport({
   conversationId = CONVERSATION,
+  columns = 40,
 }: {
   conversationId?: string;
+  columns?: number;
 }) {
   const buffersRef = useRef<ReturnType<typeof createBuffers> | null>(null);
   if (buffersRef.current === null) {
@@ -367,7 +369,7 @@ function RealHistoryViewport({
       {...({
         staticItems,
         liveItems: [],
-        columns: 40,
+        columns,
         agentId: "agent-1",
         conversationId,
         buffersRef,
@@ -419,6 +421,35 @@ function SwitchableViewport() {
   const [conversationId, setConversationId] = useState(CONVERSATION);
   switchConversation = setConversationId;
   return <RealHistoryViewport conversationId={conversationId} />;
+}
+
+/** The viewport with a column count the test can change, as a resize does. */
+let switchColumns: ((columns: number) => void) | null = null;
+
+function RelayoutViewport() {
+  const [columns, setColumns] = useState(40);
+  switchColumns = setColumns;
+  return <RealHistoryViewport columns={columns} />;
+}
+
+async function mountRelayoutViewport(): Promise<{ stop: () => void }> {
+  const stdout = new Capture();
+  installTerminalFrameCapture(stdout);
+  const instance = render(<RelayoutViewport />, {
+    stdin: fakeStdin(),
+    stdout: stdout as unknown as NodeJS.WriteStream,
+    debug: false,
+    patchConsole: false,
+    exitOnCtrlC: false,
+    alternateScreen: true,
+  });
+  await sleep(150);
+  return {
+    stop() {
+      instance.unmount();
+      instance.cleanup();
+    },
+  };
 }
 
 async function mountSwitchableViewport(): Promise<{ stop: () => void }> {
@@ -582,6 +613,44 @@ describe("a conversation switch with pages loaded", () => {
       // Following the newest, the band is the tail of the new core.
       expect(frameText()).toContain("core message");
       expect(frameText()).not.toContain("older page 0 item");
+    } finally {
+      stop();
+    }
+  });
+});
+
+/**
+ * A page's height belongs to the layout it was measured under.
+ *
+ * The walk *skips* a page it has a height for, so a height recorded under the previous
+ * columns would keep that page skipped for the rest of the session: the window would be
+ * selected from numbers that no longer describe the rows, and nothing would ever
+ * re-measure them (a page step is preferred, and the walk only reports pages it
+ * measured in full). Weighed on the ledger itself: the same page has to come back with a
+ * different height once the columns change.
+ */
+describe("a layout change with pages measured", () => {
+  test("makes the recorded page heights be measured again", async () => {
+    pageIn(() =>
+      Array.from({ length: 50 }, (_, index) =>
+        historyMessage(`p0-${index}`, `older page 0 item ${index}`),
+      ),
+    );
+    const { stop } = await mountRelayoutViewport();
+    try {
+      expect(await requestOlderHistory(0)).toBe("loaded");
+      jumpTranscriptToOldest();
+      await sleep(300);
+      const wide = getOlderHistoryBlocks(CONVERSATION)[0]?.rows;
+      expect(wide).not.toBeNull();
+      expect(wide).not.toBeUndefined();
+
+      // Half the columns: every row of that page wraps differently, so a height that
+      // is still the old one proves the ledger was not invalidated.
+      switchColumns?.(20);
+      await sleep(300);
+      const narrow = getOlderHistoryBlocks(CONVERSATION)[0]?.rows;
+      expect(narrow).not.toBe(wide);
     } finally {
       stop();
     }

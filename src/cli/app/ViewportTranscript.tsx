@@ -30,6 +30,7 @@ import {
   reportOlderHistoryBlockRows,
   requestOlderHistory,
   setOlderHistoryProvider,
+  setOlderHistoryRowsKey,
   subscribeToOlderHistory,
   transcriptLines,
 } from "./older-history";
@@ -375,6 +376,52 @@ export function ViewportTranscript(props: AppViewProps) {
     olderPrefix,
   ]);
 
+  // Everything a paged item's height depends on, as one string. A page's height is
+  // measured, then *skipped* by every later walk, so a resize, a `Ctrl+T`/`Ctrl+R`
+  // toggle or an expanded tool call would otherwise leave the ledger describing the
+  // layout the reader just left — and the walk would keep selecting a window from
+  // numbers that no longer match the rows.
+  //
+  // `precomputedDiffs.size` stands in for the diffs themselves: the map is mutated in
+  // place (its identity is stable by design), so its size is the cheap signal that a
+  // tool call now draws rows it did not draw when the page was measured.
+  const rowsKey = useMemo(
+    () =>
+      [
+        columns,
+        terminalRows,
+        reasoningExpanded,
+        systemRemindersVisible,
+        systemRemindersExpanded,
+        recallDisplay,
+        expandedToolCallId ?? "",
+        lastShellToolCallId ?? "",
+        showApprovalPreview,
+        currentApproval?.toolCallId ?? "",
+        precomputedDiffs.size,
+      ].join("|"),
+    [
+      columns,
+      terminalRows,
+      reasoningExpanded,
+      systemRemindersVisible,
+      systemRemindersExpanded,
+      recallDisplay,
+      expandedToolCallId,
+      lastShellToolCallId,
+      showApprovalPreview,
+      currentApproval?.toolCallId,
+      precomputedDiffs,
+    ],
+  );
+
+  // Forget the heights measured under the previous layout, so the walk re-measures
+  // those pages instead of skipping them with a stale number. Publishes only on a real
+  // change (a layout change, not a frame).
+  useEffect(() => {
+    setOlderHistoryRowsKey(rowsKey);
+  }, [rowsKey]);
+
   // Keep the pages the window needs, and drop the ones it has left behind. The walk
   // counts **every** page — an evicted one still contributes its `itemCount` and its
   // measured rows — so the window is only drawable where the pages are materialized.
@@ -394,9 +441,9 @@ export function ViewportTranscript(props: AppViewProps) {
   // actually moved, so reporting every frame costs no render.
   useEffect(() => {
     for (const block of window.measuredBlocks) {
-      reportOlderHistoryBlockRows(block.key, block.rows);
+      reportOlderHistoryBlockRows(block.key, block.rows, rowsKey);
     }
-  }, [window]);
+  }, [window, rowsKey]);
 
   // Tell the store what was actually shown, in content terms: the window's bottom
   // item and the rows of it below the viewport. From that point the position is

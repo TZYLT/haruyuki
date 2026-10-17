@@ -13,6 +13,7 @@ import {
   resetOlderHistoryForTests,
   setOlderHistoryFetcherForTests,
   setOlderHistoryProvider,
+  setOlderHistoryRowsKey,
 } from "./older-history";
 import {
   getViewportScrollRequest,
@@ -139,4 +140,38 @@ test("a page the window comes back to is materialized from what is held", async 
   expect(fetches).toBe(2);
   // Already materialized: no change, so a caller loop converges.
   expect(materializeOlderHistoryBlocks(0, 1)).toBe(false);
+});
+
+test("a height measured under another layout is forgotten", async () => {
+  seed();
+  let page = 0;
+  setOlderHistoryFetcherForTests(async () => {
+    page += 1;
+    return Array.from({ length: PAGE }, (_, index) =>
+      message(`p${page}-${index}`),
+    );
+  });
+  expect(await requestOlderHistory(0)).toBe("loaded");
+  const key = getOlderHistoryBlocks(CONVERSATION)[0]?.key ?? "";
+  expect(key).not.toBe("");
+
+  // Measured under one layout...
+  reportOlderHistoryBlockRows(key, 100, "wide");
+  expect(getOlderHistoryBlocks(CONVERSATION)[0]?.rows).toBe(100);
+  // ...the same layout reports nothing new...
+  expect(setOlderHistoryRowsKey("wide")).toBe(false);
+  expect(getOlderHistoryBlocks(CONVERSATION)[0]?.rows).toBe(100);
+
+  // ...and a different one makes the page unmeasured again, so the walk measures it
+  // instead of skipping it by a height that belongs to the layout the user left.
+  expect(setOlderHistoryRowsKey("narrow")).toBe(true);
+  expect(getOlderHistoryBlocks(CONVERSATION)[0]?.rows).toBeNull();
+  expect(setOlderHistoryRowsKey("narrow")).toBe(false);
+
+  // A fresh measurement under the new layout sticks.
+  reportOlderHistoryBlockRows(key, 140, "narrow");
+  expect(getOlderHistoryBlocks(CONVERSATION)[0]?.rows).toBe(140);
+  expect(setOlderHistoryRowsKey("narrow")).toBe(false);
+  expect(setOlderHistoryRowsKey("wide")).toBe(true);
+  expect(getOlderHistoryBlocks(CONVERSATION)[0]?.rows).toBeNull();
 });
