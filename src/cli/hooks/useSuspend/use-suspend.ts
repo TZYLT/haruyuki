@@ -18,20 +18,55 @@ export function waitForResumeSignal(): Promise<void> {
 }
 
 /**
+ * How long a hand-over waits for `SIGCONT` before the watchdog restores the terminal.
+ *
+ * A `SIGTSTP`'d process runs no JavaScript, so this timer can only fire while the
+ * process is *running*: reaching the deadline therefore means the stop either never
+ * happened (no job control — containers with no controlling terminal) or the resume
+ * signal is never coming. Either way the terminal would stay handed over with no way
+ * back, because Ink restores it only when the callback it was given settles.
+ */
+export const SUSPEND_WATCHDOG_MS = 2000;
+
+/**
+ * Settle `promise`, or give up after `ms`.
+ *
+ * The timer is cleared as soon as either side wins, and `unref`'d so a pending
+ * watchdog never holds the event loop open (a real resume usually arrives first).
+ */
+function withWatchdog(promise: Promise<void>, ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      resolve();
+    }, ms);
+    timer.unref?.();
+    void promise.then(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+/**
  * Stop the process and resolve once it is resumed.
  *
  * The resume listener is armed **before** the stop request on purpose: a
  * self-delivered `SIGTSTP` can stop the process before the call returns, so
  * registering afterwards would wait for a signal that already fired and leave
  * the terminal handed over forever (raw mode off, no way back).
+ *
+ * It also resolves on the watchdog, for the case where `SIGCONT` never arrives (see
+ * `SUSPEND_WATCHDOG_MS`): resolving is what makes Ink restore the terminal, so a
+ * missing signal has to degrade to a late restore rather than to a dead session.
  */
 export function stopUntilResumed(
   stop: () => void,
   waitForResume: () => Promise<void> = waitForResumeSignal,
+  watchdogMs: number = SUSPEND_WATCHDOG_MS,
 ): Promise<void> {
   const resumed = waitForResume();
   stop();
-  return resumed;
+  return withWatchdog(resumed, watchdogMs);
 }
 
 export function useSuspend() {
@@ -74,6 +109,10 @@ export function useSuspend() {
             // forces a full redraw. Doing it by hand (raw mode only) left the
             // subshell reading kitty-encoded keys with its prompt drawn in the
             // alternate screen.
+            // The hand-over is bounded: `stopUntilResumed` resolves on the watchdog
+            // even if `SIGCONT` never arrives, so a session with no job control
+            // (a container without a controlling terminal) gets its terminal back
+            // instead of staying handed over for good.
             void suspendTerminal(() =>
               stopUntilResumed(() => process.kill(process.pid, "SIGTSTP")),
             )

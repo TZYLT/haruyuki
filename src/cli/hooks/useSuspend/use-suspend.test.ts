@@ -78,4 +78,46 @@ describe("stopUntilResumed", () => {
     expect(resumedDuringStop).toBe(true);
     expect(outcome).not.toBe("timeout");
   });
+
+  test("resolves on the watchdog when SIGCONT never arrives", async () => {
+    // The container case: there is no controlling terminal, so the stop is a no-op
+    // and nothing will ever send `SIGCONT`. Ink restores the terminal only when the
+    // callback it was given settles, so a hand-over that never settles is a terminal
+    // left handed over with no way back.
+    let stopped = false;
+    const outcome = await withTimeout(
+      stopUntilResumed(
+        () => {
+          stopped = true;
+        },
+        () => new Promise<void>(() => {}), // never resumed
+        20,
+      ),
+      200,
+    );
+
+    expect(stopped).toBe(true);
+    expect(outcome).toBeUndefined();
+  });
+
+  test("a real resume wins over the watchdog", async () => {
+    // The watchdog must not turn a normal resume into a late one: it resolves only if
+    // the signal promise has not settled first, and clearing its timer is what keeps a
+    // parked `Ctrl+Z` from restoring the terminal a second time.
+    let resumed = false;
+    const outcome = await withTimeout(
+      stopUntilResumed(
+        () => {},
+        () => {
+          resumed = true;
+          return Promise.resolve();
+        },
+        1000,
+      ),
+      200,
+    );
+
+    expect(resumed).toBe(true);
+    expect(outcome).toBeUndefined();
+  });
 });
