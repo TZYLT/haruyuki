@@ -1,8 +1,14 @@
 // Paste-aware text input wrapper that:
-// 1. Detects large pastes (>5 lines or >500 chars) and replaces with placeholders
+// 1. Detects large pastes (>5 lines or >500 chars) and replaces them with a
+//    placeholder in the *display* value — the value the parent renders, stores and
+//    submits; placeholders are resolved downstream
+//    (`buildMessageContentFromDisplay`, `resolvePlaceholders`).
 // 2. Supports image pasting (iTerm2 inline, data URLs, file paths, macOS clipboard)
-// 3. Maintains separate display value (with placeholders) vs actual value (full content)
-// 4. Resolves placeholders on submit
+//
+// There is deliberately no second "actual" copy of the draft in here: every
+// insertion below builds the display string, and the one resolution point is the
+// submit path. Keeping a shadow copy invited offset arithmetic on a string whose
+// placeholders make display and resolved offsets differ.
 
 // Bracketed paste arrives on Ink's own channel; the key bindings live in the
 // input router's table (see cli/helpers/keymap.ts).
@@ -15,10 +21,7 @@ import {
 import type { KeyBindingTable } from "@/cli/helpers/input-keys";
 import { forwardInputEvent } from "@/cli/helpers/input-router";
 import { COMPOSER_KEY_CHORDS } from "@/cli/helpers/keymap";
-import {
-  allocatePaste,
-  resolvePlaceholders,
-} from "@/cli/helpers/paste-registry";
+import { allocatePaste } from "@/cli/helpers/paste-registry";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useInternalEventEmitter } from "@/cli/hooks/use-internal-event-emitter";
 import { TextInput } from "./TextInput";
@@ -135,28 +138,20 @@ export function PasteAwareTextInput({
   // `TextInput`; the private name lives in one accessor module.
   const internalEventEmitter = useInternalEventEmitter();
   const [displayValue, setDisplayValue] = useState(value);
-  // The sync effect below skips renders that already display `value`, so
-  // resolve placeholders for the initial value here instead of on mount.
-  const [actualValue, setActualValue] = useState(() =>
-    resolvePlaceholders(value),
-  );
   const caretOffsetRef = useRef<number>((value || "").length);
   const [nudgeCursorOffset, setNudgeCursorOffset] = useState<
     number | undefined
   >(undefined);
   const displayValueRef = useRef(displayValue);
-  const actualValueRef = useRef(actualValue);
   const focusRef = useRef(focus);
 
-  // Keep display + actual in refs as well as state: a sequence of edits can
-  // arrive before React re-renders (back-to-back pastes, an IME commit split
-  // across reads), and each one must read the previous result rather than a
-  // stale `displayValue` from the last render.
-  const setDraft = useCallback((nextDisplay: string, nextActual: string) => {
+  // Keep the draft in a ref as well as state: a sequence of edits can arrive before
+  // React re-renders (back-to-back pastes, an IME commit split across reads), and each
+  // one must read the previous result rather than a stale `displayValue` from the last
+  // render.
+  const setDraft = useCallback((nextDisplay: string) => {
     displayValueRef.current = nextDisplay;
-    actualValueRef.current = nextActual;
     setDisplayValue(nextDisplay);
-    setActualValue(nextActual);
   }, []);
 
   useEffect(() => {
@@ -195,9 +190,7 @@ export function PasteAwareTextInput({
     if (value === displayValue) {
       return;
     }
-    // Recompute ACTUAL by substituting placeholders via shared registry
-    const resolved = resolvePlaceholders(value);
-    setDraft(value, resolved);
+    setDraft(value);
 
     // Keep caret in bounds when parent updates value (e.g. clearing input).
     // This also ensures mode-switch hotkeys that depend on caret position behave correctly.
@@ -223,7 +216,7 @@ export function PasteAwareTextInput({
       "\n" +
       displayValueRef.current.slice(at);
 
-    setDraft(newValue, newValue); // Display and actual are same (both have \n)
+    setDraft(newValue); // A visual newline is one character in the draft too
     onChangeRef.current(newValue);
 
     const nextCaret = at + 1;
@@ -247,11 +240,7 @@ export function PasteAwareTextInput({
       const base = displayValueRef.current;
       const at = Math.max(0, Math.min(caretOffsetRef.current, base.length));
       const newDisplay = base.slice(0, at) + placeholder + base.slice(at);
-      const newActual =
-        actualValueRef.current.slice(0, at) +
-        placeholder +
-        actualValueRef.current.slice(at);
-      setDraft(newDisplay, newActual);
+      setDraft(newDisplay);
       onChangeRef.current(newDisplay);
       const nextCaret = at + placeholder.length;
       setNudgeCursorOffset(nextCaret);
@@ -301,7 +290,7 @@ export function PasteAwareTextInput({
     const newDisplay =
       displayValueRef.current.slice(0, wordStart) +
       displayValueRef.current.slice(curPos);
-    setDraft(newDisplay, resolvePlaceholders(newDisplay));
+    setDraft(newDisplay);
     onChangeRef.current(newDisplay);
     setNudgeCursorOffset(wordStart);
     caretOffsetRef.current = wordStart;
@@ -315,7 +304,7 @@ export function PasteAwareTextInput({
     const newDisplay =
       displayValueRef.current.slice(0, cursorPos) +
       displayValueRef.current.slice(cursorPos + 1);
-    setDraft(newDisplay, resolvePlaceholders(newDisplay));
+    setDraft(newDisplay);
     // Update refs synchronously for consecutive operations
     caretOffsetRef.current = cursorPos;
     onChangeRef.current(newDisplay);
@@ -448,11 +437,7 @@ export function PasteAwareTextInput({
         const pasteId = allocatePaste(value);
         const placeholder = `[Pasted text #${pasteId} +${countLines(value)} lines]`;
         const newDisplay = base.slice(0, at) + placeholder + base.slice(at);
-        const newActual =
-          actualValueRef.current.slice(0, at) +
-          value +
-          actualValueRef.current.slice(at);
-        setDraft(newDisplay, newActual);
+        setDraft(newDisplay);
         onChange(newDisplay);
         const nextCaret = at + placeholder.length;
         setNudgeCursorOffset(nextCaret);
@@ -460,11 +445,7 @@ export function PasteAwareTextInput({
       } else {
         const displayText = sanitizeForDisplay(value);
         const newDisplay = base.slice(0, at) + displayText + base.slice(at);
-        const newActual =
-          actualValueRef.current.slice(0, at) +
-          value +
-          actualValueRef.current.slice(at);
-        setDraft(newDisplay, newActual);
+        setDraft(newDisplay);
         onChange(newDisplay);
         const nextCaret = at + displayText.length;
         setNudgeCursorOffset(nextCaret);
@@ -559,9 +540,6 @@ export function PasteAwareTextInput({
     }
 
     const translated = translatePasteForImages(text);
-    const actual = actualValueRef.current;
-    // Map the display offset to the actual offset (placeholders expand).
-    const actualStart = resolvePlaceholders(display.slice(0, start)).length;
 
     if (countLines(translated) > 5 || translated.length > 500) {
       const pasteId = allocatePaste(translated);
@@ -570,11 +548,7 @@ export function PasteAwareTextInput({
         display.slice(0, start) +
         placeholder +
         display.slice(start + text.length);
-      const newActual =
-        actual.slice(0, actualStart) +
-        translated +
-        actual.slice(actualStart + text.length);
-      setDraft(newDisplay, newActual);
+      setDraft(newDisplay);
       onChangeRef.current(newDisplay);
       const nextCaret = start + placeholder.length;
       setNudgeCursorOffset(nextCaret);
@@ -592,11 +566,7 @@ export function PasteAwareTextInput({
       display.slice(0, start) +
       displayText +
       display.slice(start + text.length);
-    const newActual =
-      actual.slice(0, actualStart) +
-      translated +
-      actual.slice(actualStart + text.length);
-    setDraft(newDisplay, newActual);
+    setDraft(newDisplay);
     onChangeRef.current(newDisplay);
     const nextCaret = start + displayText.length;
     setNudgeCursorOffset(nextCaret);
@@ -637,8 +607,8 @@ export function PasteAwareTextInput({
     const previousValue = displayValueRef.current;
     const addedLen = newValue.length - previousValue.length;
 
-    // Normal typing/edits - update display and compute actual by substituting placeholders
-    setDraft(newValue, resolvePlaceholders(newValue));
+    // Normal typing/edits: the draft is the display string, placeholders and all.
+    setDraft(newValue);
     onChange(newValue);
     // Note: caretOffsetRef is updated by onCursorOffsetChange callback (called before onChange)
 
