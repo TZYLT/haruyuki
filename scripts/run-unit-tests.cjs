@@ -46,6 +46,35 @@ function resolveBunExecutable() {
 
 const BUN_EXECUTABLE = resolveBunExecutable();
 
+/**
+ * The PATH a test process runs with: the runner's own, plus the directory of the `bun`
+ * it resolved for itself.
+ *
+ * Tests that launch the CLI resolve `bun` by name (`spawn("bun", ["run", "dev", …])`),
+ * and on Windows CreateProcess only appends `.exe` — so on a machine whose only install
+ * is the npm shim (`bun.cmd`) every one of those tests dies with
+ * `ENOENT: no such file or directory, uv_spawn 'bun'`. That was ~110 failures in a full
+ * run, none of them about the code under test. Handing the child the executable this
+ * runner already resolved keeps the two from disagreeing about where bun is.
+ */
+function childPathEnv() {
+  if (!path.isAbsolute(BUN_EXECUTABLE)) return {};
+  const directory = path.dirname(BUN_EXECUTABLE);
+  const key =
+    Object.keys(process.env).find((name) => name.toUpperCase() === "PATH") ??
+    "PATH";
+  const current = process.env[key] ?? "";
+  const entries = current.split(path.delimiter).filter(Boolean);
+  if (
+    entries.some((entry) => path.normalize(entry) === path.normalize(directory))
+  ) {
+    return {};
+  }
+  return {
+    [key]: [directory, ...entries].join(path.delimiter),
+  };
+}
+
 // Unit test directories — bun discovers *.test.ts / *.test.tsx within each.
 // Listed explicitly so we skip src/integration-tests (API-gated).
 const dirs = [
@@ -155,6 +184,7 @@ function runTests(files, timeoutMs, env = {}, extraArgs = []) {
       // like real users. Only isolated telemetry contract tests may opt back in.
       env: {
         ...process.env,
+        ...childPathEnv(),
         HARUYUKI_CODE_TELEM: "0",
         ...env,
       },
