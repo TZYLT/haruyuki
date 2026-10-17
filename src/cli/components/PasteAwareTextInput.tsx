@@ -267,10 +267,12 @@ export function PasteAwareTextInput({
   }, [insertClipboardImage]);
 
   // Backspace on an empty draft is handled here because `handleChange` never
-  // fires (the value does not change when backspacing on empty).
+  // fires (the value does not change when backspacing on empty). The callback's
+  // answer is what decides whether the key is consumed: the prop documents "return
+  // true to consume", and returning `undefined` here made every decline a swallow.
   const backspaceAtEmpty = useCallback((): boolean | void => {
     if (displayValueRef.current !== "") return false;
-    onBackspaceAtEmptyRef.current?.();
+    return onBackspaceAtEmptyRef.current?.();
   }, []);
 
   const caretPreviousWord = useCallback(() => {

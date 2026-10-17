@@ -25,6 +25,11 @@ import type { KeyEvent } from "./input-keys";
  * pinned against real `useInput` output, and the third is checked to be
  * disjoint from them, in `input-sequence.equivalence.test.tsx`.
  *
+ * The third table is the exception to that "costs nothing" rule, and the caller
+ * has to treat it as one: a workaround exists *because* Ink reads those bytes
+ * wrongly, so a decline there must consume the payload rather than hand it back
+ * (`isTerminalWorkaround`).
+ *
  * The single-character rule is also the seed of the raw layer the mouse
  * milestone needs, where the question is the same one: is this raw input a key
  * the app owns, or something else entirely?
@@ -131,6 +136,20 @@ export function terminalWorkaroundSequences(): {
     sequence,
     reason: entry.reason,
   }));
+}
+
+/**
+ * Whether Ink reads this payload as something *other* than what the shield read.
+ *
+ * True only for the `TERMINAL_WORKAROUNDS` table. The tables above it are pinned to
+ * Ink's own parse, so a key they decline can still travel the ordinary path and work
+ * unshielded. A workaround is by definition a sequence Ink reads differently — literal
+ * text (`ESC[27;2;13~`), or two characters where the terminal meant one key — so a
+ * decline there has to **consume** the payload: handing it back is what put the bytes
+ * into the draft the entry was written to fix.
+ */
+export function isTerminalWorkaround(raw: string): boolean {
+  return TERMINAL_WORKAROUNDS.has(raw);
 }
 
 /**

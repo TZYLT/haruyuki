@@ -4,6 +4,7 @@ import type { KeyBinding, KeyBindingTable, KeyEvent } from "./input-keys";
 import { describeChord, matchingBindings } from "./input-keys";
 import {
   filterRawInput,
+  isTerminalWorkaround,
   noteModifiedEnter,
   shieldKeyEvent,
 } from "./input-sequence";
@@ -26,17 +27,25 @@ import { parseMouseReport } from "./mouse-sequence";
  * release, and every visible effect is local to that emitter instance.
  *
  * The route itself is declarative: tables from `keymap.ts`, priority chain from
- * `focus-ledger.ts`. Two kinds of event reach the router:
+ * `focus-ledger.ts`. Three kinds of event reach the router:
  *
- * 1. Sequences `input-sequence.ts` reads on its own (single characters, plus an
- *    exact table of the multi-character sequences the app binds). When a binding
- *    consumes one, it is swallowed.
- * 2. Anything else is dispatched unchanged and re-routed by the router's own
- *    `useInput` fallback (see `use-cli-input-router`), which sees Ink's parse.
- *    The key still works; it is simply not shielded from legacy handlers, which
- *    is exactly why every chord in the table had to be taken away from the
- *    legacy handler that used to own it. An unfamiliar terminal encoding thus
- *    degrades to "works, unshielded" instead of "silently dropped".
+ * 1. Sequences `input-sequence.ts` reads the way Ink would (single characters,
+ *    plus an exact table of the multi-character sequences the app binds). When a
+ *    binding consumes one, it is swallowed. When none does, the payload still
+ *    travels for the *text* path — and the fallback is told this dispatch was
+ *    already routed, because Ink's parse of those bytes is the reading the tables
+ *    were just offered: offering it a second time runs a declining binding twice.
+ * 2. Anything the shield does not understand is dispatched unchanged and
+ *    re-routed by the router's own `useInput` fallback (see `use-cli-input-router`),
+ *    which sees Ink's parse. The key still works; it is simply not shielded from
+ *    legacy handlers, which is exactly why every chord in the table had to be
+ *    taken away from the legacy handler that used to own it. An unfamiliar
+ *    terminal encoding thus degrades to "works, unshielded" instead of "silently
+ *    dropped".
+ * 3. The terminal workarounds are sequences Ink reads *differently* — that is why
+ *    they are listed apart — so a decline there consumes the payload instead of
+ *    dispatching it (`isTerminalWorkaround`): Ink's reading of those bytes is the
+ *    one the entry exists to correct, and letting it through types them.
  */
 
 interface BindingSource {
@@ -81,6 +90,17 @@ let forwarding = false;
  */
 let fallbackArmed = false;
 let fallbackConsumed = false;
+/**
+ * Set when the shield already read this dispatch, so the fallback must not offer the
+ * same event to the tables a second time.
+ *
+ * The shield's reading and Ink's are the same one for everything it claims, and the
+ * raw path has just offered it; the fallback is for sequences the shield did *not*
+ * read. Without this, a binding that declines ran twice for one keystroke (measured:
+ * one Backspace, `run` called twice) — harmless only while every declining binding
+ * was side-effect free.
+ */
+let fallbackAlreadyRouted = false;
 
 /** Registers a component's binding tables. Call the result on unmount. */
 export function registerBindingOwner(
@@ -159,7 +179,7 @@ export function leaderEntries(): {
  * dispatch once between them, and only while the router is dispatching it.
  */
 export function routeFallbackEvent(event: KeyEvent): void {
-  if (!fallbackArmed || fallbackConsumed) return;
+  if (!fallbackArmed || fallbackConsumed || fallbackAlreadyRouted) return;
   if (routeKeyEvent(event)) fallbackConsumed = true;
 }
 
@@ -275,6 +295,9 @@ export function installInputRouter(
     if (type !== "input" || forwarding) {
       return originalEmit.apply(this, [type, ...args] as never);
     }
+    // Only ever set again below, immediately before a dispatch; cleared at the start
+    // so no early return can leave it armed for the next keystroke.
+    fallbackAlreadyRouted = false;
     const raw = inputPayloadToString(args[0]);
     let payload = raw;
     if (raw !== null) {
@@ -292,7 +315,19 @@ export function installInputRouter(
         return true;
       }
       const claimed = shieldKeyEvent(payload);
-      if (claimed && routeKeyEvent(claimed)) return true;
+      if (claimed) {
+        if (routeKeyEvent(claimed)) return true;
+        if (payload !== null && isTerminalWorkaround(payload)) {
+          // Ink's reading of these bytes is the wrong one (that is why the entry
+          // exists), so a decline consumes the payload instead of typing it.
+          return true;
+        }
+        // The shield read this payload the way Ink would, so a decline means the key
+        // still has to reach the text path — but not the *tables* again: the event
+        // just offered to them was this same reading, and the `useInput` fallback
+        // would offer it a second time (one declining binding, run twice).
+        fallbackAlreadyRouted = true;
+      }
     }
     const dispatched =
       payload !== null && payload !== raw ? [payload, ...args.slice(1)] : args;
@@ -305,6 +340,7 @@ export function installInputRouter(
       forwarding = false;
       fallbackArmed = false;
       fallbackConsumed = false;
+      fallbackAlreadyRouted = false;
     }
   };
 

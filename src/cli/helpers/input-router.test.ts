@@ -14,7 +14,7 @@ import {
   routeFallbackEvent,
   routeKeyEvent,
 } from "@/cli/helpers/input-router";
-import { keyEventFrom } from "@/cli/helpers/input-sequence";
+import { keyEventFrom, shieldKeyEvent } from "@/cli/helpers/input-sequence";
 import { LEADER_KEY_CHORDS } from "@/cli/helpers/keymap";
 import {
   armLeader,
@@ -440,6 +440,78 @@ describe("input router", () => {
     const { emitter, legacy, uninstall } = harness(shells(() => true));
     forwardInputEvent(emitter, "pasted text");
     expect(legacy).toEqual(["pasted text"]);
+    uninstall();
+  });
+
+  test("a declined shielded key is offered to the tables once", () => {
+    // The app always has a `useInput` fallback installed (every `useKeyBindings`
+    // caller adds one), so a declined key used to be routed a second time during the
+    // same dispatch: the shield's reading and Ink's are the same one for a sequence
+    // the shield claims, and the fallback exists for sequences it does not claim.
+    const emitter = new EventEmitter();
+    const legacy: string[] = [];
+    emitter.on("input", (raw: string) => legacy.push(String(raw)));
+    let runs = 0;
+    registerBindingOwner("test", () => [
+      {
+        scope: "app",
+        bindings: [
+          {
+            id: "test.declineBackspace",
+            chords: [{ key: "backspace" }],
+            run: () => {
+              runs += 1;
+              return false; // decline
+            },
+          },
+        ],
+      },
+    ]);
+    // The fallback, as Ink delivers it: the same event Ink parses the payload into.
+    emitter.on("input", (raw: string) => {
+      const parsed = shieldKeyEvent(String(raw));
+      if (parsed) routeFallbackEvent(parsed);
+    });
+    const uninstall = installInputRouter(emitter);
+
+    emitter.emit("input", "\u007F");
+
+    expect(runs).toBe(1);
+    // ...and the payload still reaches the text path, which is why the decline was
+    // not a swallow.
+    expect(legacy).toEqual(["\u007F"]);
+    uninstall();
+  });
+
+  test("a declined workaround never reaches Ink's reading of it", () => {
+    // Ink reads `ESC[27;2;13~` as literal text (the entry's own reason says so). The
+    // shield reads Shift+Enter; when its owner declines, handing the payload back is
+    // what types `[27;2;13~` into a field that has no paste-aware input.
+    const emitter = new EventEmitter();
+    const legacy: string[] = [];
+    emitter.on("input", (raw: string) => legacy.push(String(raw)));
+    let runs = 0;
+    registerBindingOwner("test", () => [
+      {
+        scope: "app",
+        bindings: [
+          {
+            id: "test.declineShiftEnter",
+            chords: [{ key: "return", shift: true }],
+            run: () => {
+              runs += 1;
+              return false; // decline
+            },
+          },
+        ],
+      },
+    ]);
+    const uninstall = installInputRouter(emitter);
+
+    emitter.emit("input", "\u001B[27;2;13~");
+
+    expect(runs).toBe(1);
+    expect(legacy).toEqual([]);
     uninstall();
   });
 
