@@ -406,9 +406,16 @@ if (parallelWorkers > 0) {
     }
   }
 
+  // These chunks carry the serial runtime group — everything that reaches ink — and
+  // they therefore include the slowest suites in the tree. Give them the same budget
+  // as the parallel batch above. At 15s a file here hits its budget, abandons the
+  // work it started (`listen-model-update` leaves a rejected backend lookup behind),
+  // and the process then spins at 100% of a core forever: the run never finishes.
+  // Measured on this machine: `listen-model-update.test.ts` passes in ~28s of suite
+  // time with a 30s budget and livelocks the chunk with 15s.
   for (const batch of chunkByCommandLength(serialRuntimePaths)) {
     try {
-      runTests(batch, 15000);
+      runTests(batch, 30000);
     } catch (error) {
       exitCode = error.status ?? 1;
     }
@@ -447,10 +454,12 @@ if (parallelWorkers > 0) {
 
   // Passing argv directly avoids cmd.exe's shorter shell command-line limit on
   // Windows. Bounded batches also stay below CreateProcess's 32k limit as the
-  // suite grows.
+  // suite grows. Same budget as the parallel batch: one chunk runs the whole
+  // selection, including the slowest suites, and a timeout here strands work that
+  // can spin the process (see the note on the serial runtime chunks above).
   for (const batch of chunkByCommandLength(sharedProcessTests)) {
     try {
-      runTests(batch, 15000);
+      runTests(batch, 30000);
     } catch (error) {
       exitCode = error.status ?? 1;
     }
