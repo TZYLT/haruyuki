@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import type { Message } from "@letta-ai/letta-client/resources/agents/messages";
 import { resetNoticeForTests } from "@/cli/helpers/notice";
+import { RESIDENT_PAGE_BUDGET } from "./history-window";
 import {
   evictOlderHistoryBlocksBefore,
   getOlderHistoryBlocks,
@@ -10,6 +11,7 @@ import {
   olderHistoryPrefixItems,
   reportOlderHistoryBlockRows,
   requestOlderHistory,
+  requestOlderHistoryPages,
   resetOlderHistoryForTests,
   setOlderHistoryFetcherForTests,
   setOlderHistoryProvider,
@@ -174,4 +176,62 @@ test("a height measured under another layout is forgotten", async () => {
   expect(setOlderHistoryRowsKey("narrow")).toBe(false);
   expect(setOlderHistoryRowsKey("wide")).toBe(true);
   expect(getOlderHistoryBlocks(CONVERSATION)[0]?.rows).toBeNull();
+});
+
+test("pages beyond the residency budget have their messages read back", async () => {
+  // Eviction keeps a page's messages so walking back into it costs a re-assembly, which
+  // means a session that paged through a long history held every message it had ever
+  // paged. Beyond `RESIDENT_PAGE_BUDGET` pages the messages are let go and read again
+  // from the cursor — the pages nearest the reader keep theirs.
+  seed();
+  const pages = new Map<string, Message[]>();
+  let page = 0;
+  let fetches = 0;
+  setOlderHistoryFetcherForTests(async (request) => {
+    fetches += 1;
+    const known = pages.get(request.before);
+    if (known) return known;
+    page += 1;
+    const fetched = Array.from({ length: PAGE }, (_, index) =>
+      message(`p${page}-${index}`),
+    );
+    pages.set(request.before, fetched);
+    return fetched;
+  });
+
+  const total = RESIDENT_PAGE_BUDGET + 3;
+  for (let i = 0; i < total; i += 1) {
+    expect(await requestOlderHistory(0)).toBe("loaded");
+  }
+  const loaded = getOlderHistoryBlocks(CONVERSATION).map((block) => block.key);
+  expect(loaded).toHaveLength(total);
+  for (const block of getOlderHistoryBlocks(CONVERSATION)) {
+    reportOlderHistoryBlockRows(block.key, 100);
+  }
+
+  // Follow the newest: every page is behind the window, so all of them are evicted and
+  // only the newest few keep their messages.
+  evictOlderHistoryBlocksBefore(total);
+  expect(getOlderHistoryItems(CONVERSATION)).toHaveLength(0);
+  expect(olderHistoryPrefixItems(CONVERSATION)).toBe(total * PAGE);
+
+  // The page nearest the core still comes back from what is held...
+  const newest = total - 1;
+  expect(materializeOlderHistoryBlocks(newest, newest)).toBe(true);
+  expect(getOlderHistoryItems(CONVERSATION)).toHaveLength(PAGE);
+
+  // ...while the oldest one has to be read again, from the cursor it was fetched with.
+  const before = fetches;
+  expect(materializeOlderHistoryBlocks(0, 0)).toBe(false);
+  expect(requestOlderHistoryPages(0, 0)).toBe(true);
+  expect(fetches).toBe(before + 1);
+  // The read is in flight until it settles; the caller must not ask twice for it.
+  expect(requestOlderHistoryPages(0, 0)).toBe(true);
+  expect(fetches).toBe(before + 1);
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(materializeOlderHistoryBlocks(0, 0)).toBe(true);
+  expect(getOlderHistoryItems(CONVERSATION).map((item) => item.id)).toContain(
+    "p1-0",
+  );
 });

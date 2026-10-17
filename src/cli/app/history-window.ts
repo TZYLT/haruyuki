@@ -31,3 +31,18 @@ export const HISTORY_PAGE_LIMIT = 50;
  * `MAX_VIEWPORT_ITEMS` entries rather than growing the array without bound.
  */
 export const MAX_VIEWPORT_ITEMS = 200;
+
+/**
+ * Evicted pages whose **messages** stay in memory, counted from the newest one.
+ *
+ * Dropping a page's items is cheap to undo — the page's own messages are held for exactly
+ * that — so the messages were kept forever, and a session that paged back through a long
+ * history kept every message it had ever paged *plus* the core window, whatever the
+ * "bounded residency" notes said. Beyond this budget a page keeps its cursor (`key`), its
+ * `itemCount`, its measured `rows` and its `itemIds`, and its messages are re-read from
+ * the backend when a window comes back into it (one page-sized read on the local path).
+ *
+ * The pages nearest the core are the ones a reader is most likely to walk back into, so
+ * they are the ones kept.
+ */
+export const RESIDENT_PAGE_BUDGET = 4;

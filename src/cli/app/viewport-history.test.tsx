@@ -20,6 +20,7 @@ import {
   requestOlderHistory,
   resetOlderHistoryForTests,
   setOlderHistoryFetcherForTests,
+  setOlderHistoryPageBudgetForTests,
   setOlderHistoryProvider,
   subscribeToOlderHistory,
 } from "@/cli/app/older-history";
@@ -697,6 +698,66 @@ describe("following the newest with pages loaded", () => {
       // the rendered array.
       expect(frameText()).toContain("core message");
       expect(frameText()).not.toContain("older page");
+    } finally {
+      stop();
+    }
+  });
+});
+
+/**
+ * Bounded residency, from the reader's side.
+ *
+ * Beyond the residency budget a page keeps its cursor and its count but not its messages,
+ * so coming back into it costs one backend read. What the reader must not see is a band
+ * that stays a hint: the re-read has to land, materialize, and draw the same rows that
+ * were there before.
+ */
+describe("a page whose messages were released", () => {
+  test("is read back and drawn again when the reader returns to it", async () => {
+    // One page of slack: enough to cross the budget with three pages, which is what the
+    // walk's item budget allows a frame test to anchor.
+    setOlderHistoryPageBudgetForTests(1);
+    // Keyed by cursor, so a re-read returns the same page rather than inventing a new
+    // one (which is what makes this test about re-reading and not about new pages).
+    const byCursor = new Map<string, ReturnType<typeof historyMessage>[]>();
+    let page = 0;
+    pageIn((before) => {
+      const known = byCursor.get(before);
+      if (known) return known;
+      page += 1;
+      const fetched = Array.from({ length: 50 }, (_, index) =>
+        historyMessage(`p${page}-${index}`, `older page ${page} item ${index}`),
+      );
+      byCursor.set(before, fetched);
+      return fetched;
+    });
+    const { stop } = await mountRelayoutViewport();
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        expect(await requestOlderHistory(0)).toBe("loaded");
+      }
+      await sleep(150);
+
+      // Read through them once, so every page has a height (an unmeasured page is never
+      // evicted, and only evicted pages release their messages) ...
+      // Pages are prepended as they are fetched, so the highest number is the *oldest*:
+      // it is the one the release rule lets go of first.
+      const oldest = "older page 3 item";
+      jumpTranscriptToOldest();
+      await sleep(300);
+      expect(frameText()).toContain(oldest);
+      expect(olderHistoryPrefixItems(CONVERSATION)).toBe(0);
+
+      // ... then follow the newest, which evicts them and releases the oldest messages.
+      jumpTranscriptToNewest();
+      await sleep(300);
+      expect(olderHistoryPrefixItems(CONVERSATION)).toBeGreaterThan(0);
+
+      // Back into the released page: the band has to draw its rows again.
+      jumpTranscriptToOldest();
+      await sleep(400);
+      expect(frameText()).toContain(oldest);
+      expect(getOlderHistoryItems(CONVERSATION).length).toBeGreaterThan(0);
     } finally {
       stop();
     }

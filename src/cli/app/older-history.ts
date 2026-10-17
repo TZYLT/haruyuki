@@ -7,7 +7,7 @@ import { showNotice } from "@/cli/helpers/notice";
 import { debugWarn } from "@/utils/debug";
 import type { HistoryBlock } from "./history-blocks";
 import { countOnlyItems, evictBlocksBefore } from "./history-eviction";
-import { HISTORY_PAGE_LIMIT } from "./history-window";
+import { HISTORY_PAGE_LIMIT, RESIDENT_PAGE_BUDGET } from "./history-window";
 import type { StaticItem } from "./types";
 import {
   scrollTranscriptBy,
@@ -206,6 +206,20 @@ let cursor: string | null = null;
 let loading = false;
 /** Set once there is nothing more to ask for. */
 let stopped: "start" | "refused" | null = null;
+/**
+ * Pages whose released messages are being read back, by the cursor they were fetched
+ * with. Keeps the residency effect from asking for the same page on every frame while the
+ * read is in flight.
+ */
+const restoring = new Set<string>();
+/**
+ * How many evicted pages keep their messages (`RESIDENT_PAGE_BUDGET`).
+ *
+ * A variable so a frame test can exercise the release/re-read path with a handful of
+ * pages: the viewport walks at most `MAX_VIEWPORT_ITEMS` items, so a test that has to
+ * cross the *real* budget would need more items than one frame can anchor.
+ */
+let pageBudget = RESIDENT_PAGE_BUDGET;
 const listeners = new Set<() => void>();
 
 function publish(): void {
@@ -368,6 +382,102 @@ export function evictOlderHistoryBlocksBefore(index: number): void {
   if (next === blocks) return;
   blocks = next;
   items = items.slice(droppedItems);
+  releaseOldPageMessages();
+  publish();
+}
+
+/**
+ * Let go of the messages of the pages nobody is going to reach soon.
+ *
+ * Eviction keeps a page's messages so that walking back into it costs a re-assembly
+ * instead of a fetch — which means a long session holds every message it ever paged.
+ * Beyond `RESIDENT_PAGE_BUDGET` pages (newest first, since those are nearest the reader's
+ * position) a page keeps what makes the walk work without it: `key`, `itemCount`, `rows`
+ * and `itemIds`. `page` becomes `null`, and `requestOlderHistoryPages` reads it again when
+ * a window lands there.
+ *
+ * The block itself is never dropped. A page is part of the walk's numbering — dropping it
+ * would shift every position above it, which the reader sees as the transcript jumping.
+ */
+function releaseOldPageMessages(): void {
+  const evicted: number[] = [];
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    if (block !== undefined && block.items === null && block.page !== null) {
+      evicted.push(index);
+    }
+  }
+  const releasable = Math.max(0, evicted.length - pageBudget);
+  if (releasable === 0) return;
+  const releasing = new Set(evicted.slice(0, releasable));
+  blocks = blocks.map((block, index) =>
+    releasing.has(index) ? { ...block, page: null } : block,
+  ) as OlderHistoryBlock[];
+}
+
+/**
+ * Read the messages of the pages in `[from, to]` whose messages were released.
+ *
+ * Returns whether the caller has to wait — either because a read is already in flight or
+ * because this call started one. `false` means the range needs nothing, which is what the
+ * viewport's residency effect keys its eviction decision on.
+ */
+export function requestOlderHistoryPages(from: number, to: number): boolean {
+  const seed = provider?.() ?? null;
+  if (!seed) return false;
+  const first = Math.max(0, Math.trunc(from));
+  const last = Math.min(blocks.length - 1, Math.trunc(to));
+  let waiting = false;
+  for (let index = first; index <= last; index += 1) {
+    const block = blocks[index];
+    if (block === undefined || block.page !== null) continue;
+    if (restoring.has(block.key)) {
+      waiting = true;
+      continue;
+    }
+    restoring.add(block.key);
+    void restorePageMessages(block.key, seed).finally(() => {
+      restoring.delete(block.key);
+    });
+    waiting = true;
+  }
+  return waiting;
+}
+
+/**
+ * Read one released page back in, keyed by the cursor it was fetched with.
+ *
+ * The conversation is re-read from the live provider rather than captured, because a
+ * switch while the read was in flight means these messages belong to a transcript that is
+ * no longer on screen — the same rule the paging path follows.
+ */
+async function restorePageMessages(
+  key: string,
+  seed: OlderHistorySeed,
+): Promise<void> {
+  let page: readonly Message[];
+  try {
+    page = await fetcher({
+      conversationId: seed.conversationId,
+      agentId: seed.agentId,
+      before: key,
+      limit: HISTORY_PAGE_LIMIT,
+    });
+  } catch (error) {
+    debugWarn(
+      "history",
+      `re-reading the page before ${key} failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
+
+  const current = provider?.() ?? null;
+  if (!current || current.conversationId !== seed.conversationId) return;
+  const target = blocks.findIndex((block) => block.key === key);
+  if (target < 0) return;
+  blocks = blocks.map((block, index) =>
+    index === target ? { ...block, page } : block,
+  );
   publish();
 }
 
@@ -401,12 +511,24 @@ export function materializeOlderHistoryBlocks(
     if (block === undefined) continue;
     // The pages after the first resident one are already in the rendered array.
     if (block.items !== null) break;
+    // Released messages have to be read back before this page can be drawn; the
+    // caller asks for that with `requestOlderHistoryPages` and re-fits afterwards.
+    if (block.page === null) break;
     const contributed = new Set(block.itemIds);
     const page = historyItemsForMessages(block.page).filter((item) =>
       contributed.has(item.id),
     );
     restored.push(...page);
-    materialized.set(index, { ...block, items: page });
+    materialized.set(
+      index,
+      // A page re-read after being released can hold a different set of entries
+      // (the conversation may have been rewritten since). If it does, the items are
+      // the truth and the recorded height is not: taking them keeps the band aligned,
+      // and dropping `rows` makes the walk measure the page again.
+      page.length === block.itemCount
+        ? { ...block, items: page }
+        : { ...block, items: page, itemCount: page.length, rows: null },
+    );
   }
   if (materialized.size === 0) return false;
 
@@ -703,5 +825,12 @@ export function resetOlderHistoryForTests(): void {
   cursor = null;
   loading = false;
   stopped = null;
+  restoring.clear();
+  pageBudget = RESIDENT_PAGE_BUDGET;
   listeners.clear();
+}
+
+/** Test seam: how many evicted pages keep their messages. */
+export function setOlderHistoryPageBudgetForTests(budget: number): void {
+  pageBudget = Math.max(0, Math.trunc(budget));
 }

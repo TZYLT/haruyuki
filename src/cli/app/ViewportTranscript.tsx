@@ -30,6 +30,7 @@ import {
   olderHistoryPrefixItems,
   reportOlderHistoryBlockRows,
   requestOlderHistory,
+  requestOlderHistoryPages,
   setOlderHistoryProvider,
   setOlderHistoryRowsKey,
   subscribeToOlderHistory,
@@ -438,6 +439,10 @@ export function ViewportTranscript(props: AppViewProps) {
       return;
     }
     if (materializeOlderHistoryBlocks(resident.from - 1, resident.to)) return;
+    // A page whose messages were released beyond the residency budget has to be read
+    // back before it can be drawn; asking for it is what moves the window forward, and
+    // evicting in the same frame would only report the same page again.
+    if (requestOlderHistoryPages(resident.from - 1, resident.to)) return;
     evictOlderHistoryBlocksBefore(Math.max(0, resident.from - 1));
   }, [window, olderBlocks.length]);
 
