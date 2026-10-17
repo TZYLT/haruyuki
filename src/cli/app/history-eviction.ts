@@ -3,18 +3,14 @@
  * messages.
  *
  * A page's residency is atomic — either its items are materialized and its rows
- * measured, or it is a count. This module owns the first half: turning a
- * materialized page into a count, and reporting what the caller has to do about it.
- * `droppedItems` is the whole report: the caller drops that many items from the front
- * of its rendered array **and** moves a parked anchor — which names an item index — by
- * the same amount. `older-history.ts` does both in one place, next to the notice that
- * tells the frame they arrived together.
+ * measured, or it is a count. This module owns the first half: turning a materialized
+ * page into a count, and reporting what the caller has to do about it. `droppedItems`
+ * is a report about the caller's **rendered** array: that many items leave its front.
  *
- * `droppedItems` is that report, and it is the whole reason this returns a value
- * rather than mutating: the caller's rendered item array has to lose exactly those
- * items from its **front**, and a parked anchor — which names an item *index* —
- * has to move down by exactly that many. Dropping the items without shifting the
- * anchor is what "the parked view moves on its own" looks like.
+ * It says nothing about the walk. The walk numbers items over every page, and an
+ * evicted page still contributes its `itemCount`, so a parked position does **not**
+ * move when items are dropped — compensating one here moves the view by exactly the
+ * rows that were dropped, which reads as the transcript going empty.
  */
 
 /** The part of a page entry eviction cares about; callers keep their own fields. */

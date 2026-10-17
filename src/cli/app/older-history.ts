@@ -155,6 +155,13 @@ interface OlderHistoryBlock {
    */
   page: readonly Message[];
   /**
+   * The ids of the entries this page actually contributed, after composition dropped
+   * the ones the core (or an earlier page) already draws. Re-assembling `page` alone
+   * would bring those duplicates back, so the id set is what a re-materialized page
+   * is filtered by.
+   */
+  itemIds: readonly string[];
+  /**
    * Entries the page contributed, after composition dropped duplicates, or `null`
    * once the page is **evicted**: its rows are then only a count. `itemCount` is
    * kept separately for exactly that state — a page that is not materialized still
@@ -294,9 +301,15 @@ export function reportOlderHistoryBlockRows(key: string, rows: number): void {
  * Evict the items of every page older than `index`, keeping their counts.
  *
  * `index` is the first page to **keep**. The rendered array loses exactly the items
- * the eviction reports, and the parked anchor names an item *index*, so it moves
- * down by the same amount — dropping one without the other is what a parked view
- * moving on its own looks like (`history-eviction.ts`).
+ * the eviction reports.
+ *
+ * **The parked anchor does not move.** Its index is a position in the *walk's* item
+ * space, which counts every page — evicted ones included, because a page that is
+ * only a count still contributes `itemCount` to the walk and to every index above
+ * it. Eviction changes which pages are *drawn*, not the numbering the walk uses, so
+ * compensating the anchor here would move the view by exactly the rows that were
+ * dropped (measured from the machine as "the transcript goes empty once a page is
+ * dropped").
  *
  * Nothing is evicted while every page is resident, which is the state the frame
  * tests weigh: the call is a no-op until the viewport starts asking for a window.
@@ -307,7 +320,51 @@ export function evictOlderHistoryBlocksBefore(index: number): void {
   blocks = next;
   items = items.slice(droppedItems);
   publish();
-  shiftViewportAnchorByItems(-droppedItems);
+}
+
+/**
+ * Put the items of the pages a window needs back into the rendered array.
+ *
+ * A page whose `rows` the viewport measured is one step for the walk, so a walk
+ * *passing over* it needs only its count. A walk that lands **inside** one needs its
+ * items: the window's row heights come from measuring them, and the band can only
+ * draw what is in the rendered array. An evicted page therefore has to come back
+ * before the window can enter it — the page's own messages are still held for
+ * exactly this (`page` + `itemIds`), so it costs a re-assembly and no fetch.
+ *
+ * Evicted pages are always the *oldest* ones, so the materialized pages are always a
+ * contiguous prefix in front of the rendered array: this prepends them in order.
+ * Returns whether anything changed — the caller re-fits the window on the next
+ * render, because the frame it just computed was measured without these rows.
+ */
+export function materializeOlderHistoryBlocks(
+  from: number,
+  to: number,
+): boolean {
+  const first = Math.max(0, Math.trunc(from));
+  const last = Math.min(blocks.length - 1, Math.trunc(to));
+  if (last < first) return false;
+
+  const restored: StaticItem[] = [];
+  const materialized = new Map<number, OlderHistoryBlock>();
+  for (let index = first; index <= last; index += 1) {
+    const block = blocks[index];
+    if (block === undefined) continue;
+    // The pages after the first resident one are already in the rendered array.
+    if (block.items !== null) break;
+    const contributed = new Set(block.itemIds);
+    const page = historyItemsForMessages(block.page).filter((item) =>
+      contributed.has(item.id),
+    );
+    restored.push(...page);
+    materialized.set(index, { ...block, items: page });
+  }
+  if (materialized.size === 0) return false;
+
+  blocks = blocks.map((block, index) => materialized.get(index) ?? block);
+  items = [...restored, ...items];
+  publish();
+  return true;
 }
 
 /**
@@ -454,7 +511,14 @@ async function loadPage(
     // items. The count is `fresh.length` — the rows actually inserted, which is also
     // the number the anchor is re-based by just below.
     blocks = [
-      { key: before, page, items: fresh, itemCount: fresh.length, rows: null },
+      {
+        key: before,
+        page,
+        itemIds: fresh.map((item) => item.id),
+        items: fresh,
+        itemCount: fresh.length,
+        rows: null,
+      },
       ...blocks,
     ];
     publish();

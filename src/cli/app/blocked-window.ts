@@ -34,6 +34,16 @@ export interface BlockedWindowInput {
   anchor?: ViewportAnchor;
   /** Rows of one item. Only indices the walk descends into are asked for. */
   measure: (index: number) => number;
+  /**
+   * Whether the item at this index is actually in the rendered list.
+   *
+   * A page whose items were dropped is still walked by its count, but the walk can
+   * land **inside** one, and then the item heights it reads are not measurements: the
+   * rows are not there to be measured. Reporting those as a page height poisons the
+   * ledger — a page recorded as zero rows is skipped by every later walk, so its rows
+   * can never be drawn again. Defaults to "everything is materialized".
+   */
+  isMaterialized?: (index: number) => boolean;
 }
 
 export interface BlockedViewportWindow extends ViewportWindow {
@@ -105,7 +115,10 @@ export function fitBlockedItemsFromEnd(
       const owningIndex = historyBlockAt(blocks, index - 1);
       const owningBlock =
         owningIndex === null ? undefined : blocks[owningIndex];
-      if (owningBlock !== undefined) {
+      // Only a row that was really there counts as a height. An item whose page is
+      // only a count has no rows to measure, whatever the caller's fallback reads.
+      const measuredHere = input.isMaterialized?.(index - 1) ?? true;
+      if (owningBlock !== undefined && measuredHere) {
         const entry = measured.get(owningBlock.key);
         measured.set(owningBlock.key, {
           rows: (entry?.rows ?? 0) + single,

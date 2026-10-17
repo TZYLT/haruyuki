@@ -5,6 +5,7 @@ import {
   evictOlderHistoryBlocksBefore,
   getOlderHistoryBlocks,
   getOlderHistoryItems,
+  materializeOlderHistoryBlocks,
   olderHistoryCursor,
   olderHistoryPrefixItems,
   reportOlderHistoryBlockRows,
@@ -22,10 +23,12 @@ import {
 /**
  * Eviction is where the paging store and the parked position have to agree.
  *
- * A parked anchor names an item **index**, so dropping items from the front of the
- * rendered array moves it. Doing one without the other is exactly what a parked view
- * moving on its own looks like, and no single-file test can see it: the store and
- * the scroll position are two modules.
+ * The walk numbers items over **every** page — an evicted one still contributes its
+ * count — while the rendered array only holds the materialized ones. Two things can
+ * go wrong where those two spaces meet, and neither is visible in a single module:
+ * compensating the parked anchor for items that were dropped (the walk never
+ * renumbered, so the view jumps), and walking into a page that is only a count (its
+ * rows cannot be measured, and its items cannot be drawn).
  */
 
 const CONVERSATION = "conv-eviction";
@@ -56,7 +59,7 @@ afterEach(() => {
   resetNoticeForTests();
 });
 
-test("evicting a page drops its items and moves the parked anchor by them", async () => {
+test("evicting a page drops its items and leaves the parked anchor alone", async () => {
   seed();
   let page = 0;
   setOlderHistoryFetcherForTests(async () => {
@@ -81,14 +84,17 @@ test("evicting a page drops its items and moves the parked anchor by them", asyn
   // Parked above the newest rows (`rows: 0` would mean following the bottom).
   reportViewportPosition({ rows: 30, anchor: { end: 120, delta: 4 } });
 
-  // The older page becomes a count: its items leave the rendered array, and the
-  // index the anchor names moves down by exactly that many.
+  // The older page becomes a count: its items leave the rendered array. The anchor
+  // does **not** move — it names a position in the walk's item space, which counts
+  // every page whether it is materialized or only a count, so eviction does not
+  // renumber anything. Moving it here is what made a dropped page take the parked
+  // view with it.
   evictOlderHistoryBlocksBefore(1);
   expect(getOlderHistoryItems(CONVERSATION)).toHaveLength(PAGE);
   expect(olderHistoryPrefixItems()).toBe(PAGE);
   const parked = getViewportScrollRequest();
   expect(parked.kind === "anchor" ? parked.anchor : null).toEqual({
-    end: 120 - PAGE,
+    end: 120,
     delta: 4,
   });
 
@@ -97,4 +103,40 @@ test("evicting a page drops its items and moves the parked anchor by them", asyn
   evictOlderHistoryBlocksBefore(1);
   expect(getOlderHistoryItems(CONVERSATION)).toBe(rendered);
   expect(olderHistoryPrefixItems()).toBe(PAGE);
+});
+
+test("a page the window comes back to is materialized from what is held", async () => {
+  seed();
+  let page = 0;
+  let fetches = 0;
+  setOlderHistoryFetcherForTests(async () => {
+    page += 1;
+    fetches += 1;
+    return Array.from({ length: PAGE }, (_, index) =>
+      message(`p${page}-${index}`),
+    );
+  });
+
+  expect(await requestOlderHistory(0)).toBe("loaded");
+  expect(await requestOlderHistory(0)).toBe("loaded");
+  for (const block of getOlderHistoryBlocks()) {
+    reportOlderHistoryBlockRows(block.key, 100);
+  }
+  const whole = getOlderHistoryItems(CONVERSATION).map((item) => item.id);
+
+  evictOlderHistoryBlocksBefore(1);
+  expect(getOlderHistoryItems(CONVERSATION)).toHaveLength(PAGE);
+  expect(olderHistoryPrefixItems()).toBe(PAGE);
+
+  // The walk counts both pages, so a window can land in the evicted one: those items
+  // have to come back, in front of the rendered array and in the same order.
+  expect(materializeOlderHistoryBlocks(0, 1)).toBe(true);
+  expect(getOlderHistoryItems(CONVERSATION).map((item) => item.id)).toEqual(
+    whole,
+  );
+  expect(olderHistoryPrefixItems()).toBe(0);
+  // Nothing was re-fetched: the page's own messages were still held.
+  expect(fetches).toBe(2);
+  // Already materialized: no change, so a caller loop converges.
+  expect(materializeOlderHistoryBlocks(0, 1)).toBe(false);
 });

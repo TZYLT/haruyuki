@@ -9,6 +9,7 @@ import {
   getOlderHistoryItems,
   historyItemsForMessages,
   olderHistoryCursor,
+  olderHistoryPrefixItems,
   requestOlderHistory,
   resetOlderHistoryForTests,
   setOlderHistoryFetcherForTests,
@@ -19,9 +20,11 @@ import { ViewportTranscript } from "@/cli/app/ViewportTranscript";
 import {
   getViewportScrollRequest,
   getViewportScrollVersion,
+  jumpTranscriptToNewest,
   jumpTranscriptToOldest,
   reportViewportPosition,
   resetViewportScroll,
+  scrollTranscriptBy,
   scrollTranscriptWheel,
   setViewportRows,
   subscribeToViewportScroll,
@@ -437,6 +440,68 @@ describe("the paging wiring inside the viewport", () => {
 
       expect(getOlderHistoryItems(CONVERSATION).length).toBe(1);
       expect(frameText()).toBe(parked);
+    } finally {
+      stop();
+    }
+  });
+});
+
+/**
+ * Residency, on a real frame.
+ *
+ * A page whose items are dropped still occupies item numbers in the walk, so the
+ * band has to be read with that offset and the page has to come back before a window
+ * can land inside it. Both failures are invisible in a store test and both end in the
+ * same report from the machine: the reader cannot get back to the older rows.
+ */
+describe("a page dropped behind the view", () => {
+  const PAGES = 4;
+  const PAGE_SIZE = 50;
+
+  function pageFetcher(): { fetches: () => number } {
+    let fetches = 0;
+    setOlderHistoryFetcherForTests(async () => {
+      fetches += 1;
+      const page = fetches;
+      return Array.from({ length: PAGE_SIZE }, (_, index) =>
+        historyMessage(`p${page}-${index}`, `older page ${page} item ${index}`),
+      );
+    });
+    return { fetches: () => fetches };
+  }
+
+  test("the rows behind the reader coming back do not empty the band", async () => {
+    pageFetcher();
+    const { stop } = await mountRealViewport();
+    try {
+      for (let page = 0; page < PAGES; page += 1) {
+        expect(await requestOlderHistory(0)).toBe("loaded");
+      }
+      await sleep(150);
+
+      // Read up to the oldest loaded row first: a page's height is only known once the
+      // walk has measured it, and an unmeasured page is never dropped.
+      jumpTranscriptToOldest();
+      await sleep(250);
+
+      // Now park in the middle of the loaded history: pages sit on both sides of the
+      // window, which is what makes eviction drop the ones behind it.
+      jumpTranscriptToNewest();
+      await sleep(150);
+      scrollTranscriptBy(80);
+      await sleep(250);
+      expect(olderHistoryPrefixItems()).toBeGreaterThan(0);
+
+      // Whatever the residency did, the band is drawing rows and the reader's
+      // position still resolves to content.
+      expect(frameText().trim().length).toBeGreaterThan(0);
+
+      // And the oldest rows the walk can reach are reachable again: the pages that
+      // were reduced to a count have to be materialized from what is held, not
+      // dropped for good.
+      jumpTranscriptToOldest();
+      await sleep(250);
+      expect(frameText()).toContain(`older page ${PAGES} item 0`);
     } finally {
       stop();
     }

@@ -17,13 +17,14 @@ import type { AppViewProps } from "./AppView";
 import { fitBlockedItemsFromEnd } from "./blocked-window";
 import { useChromeHeight, useMeasuredChromeHeight } from "./chrome-height";
 import { FocusedApproval } from "./FocusedApproval";
-import { historyBlockItems } from "./history-blocks";
+import { historyBlockAt, historyBlockItems } from "./history-blocks";
 import { buildVisibleItems, hasFocusedApprovalItem } from "./live-items";
 import {
   composeTranscriptItems,
   evictOlderHistoryBlocksBefore,
   getOlderHistoryBlocks,
   getOlderHistoryItems,
+  materializeOlderHistoryBlocks,
   olderHistoryCursor,
   olderHistoryPrefixItems,
   reportOlderHistoryBlockRows,
@@ -303,9 +304,24 @@ export function ViewportTranscript(props: AppViewProps) {
       maxItems: MAX_VIEWPORT_ITEMS,
       scrollFromBottom: scrollRows,
       anchor: scrollAnchor,
+      // An item whose page is currently only a count cannot be measured. Its rows
+      // still have to be *counted* for the walk to find the window (zero would let a
+      // whole dropped page consume no offset at all), so the page's own average stands
+      // in — while `isMaterialized` keeps that number out of the ledger, because a
+      // page recorded from rows nobody measured can never be drawn again.
+      isMaterialized: (index) => items[index - olderPrefix] !== undefined,
       measure: (index) => {
         const item = items[index - olderPrefix];
-        if (item === undefined) return 0;
+        if (item === undefined) {
+          const owning = historyBlockAt(olderBlocks, index);
+          const block = owning === null ? undefined : olderBlocks[owning];
+          const rows = block?.rows ?? null;
+          if (rows === null) return 1;
+          return Math.max(
+            1,
+            Math.ceil(rows / Math.max(1, block?.itemCount ?? 1)),
+          );
+        }
         return viewportItemRows(item, {
           columns,
           index,
@@ -361,13 +377,16 @@ export function ViewportTranscript(props: AppViewProps) {
     olderPrefix,
   ]);
 
-  // Evict the pages the window has left behind, keeping one page of slack above it:
-  // paging up by a row should not have to materialize a page in the same frame that
-  // it evicts one. This is what bounds residency while the walk stays free to reach
-  // the conversation's first row.
+  // Keep the pages the window needs, and drop the ones it has left behind. The walk
+  // counts **every** page — an evicted one still contributes its `itemCount` and its
+  // measured rows — so the window is only drawable where the pages are materialized.
+  // Materializing publishes, and the re-render re-fits the window with those rows
+  // measured; that second pass is why this returns early instead of evicting in the
+  // same frame.
   useEffect(() => {
     const resident = window.resident;
     if (resident === null) return;
+    if (materializeOlderHistoryBlocks(resident.from - 1, resident.to)) return;
     evictOlderHistoryBlocksBefore(Math.max(0, resident.from - 1));
   }, [window]);
 
@@ -401,7 +420,15 @@ export function ViewportTranscript(props: AppViewProps) {
     );
   }
 
-  const visible = items.slice(window.start, window.end);
+  // The window is fitted in the **walk's** item space, which counts every page —
+  // including the ones eviction reduced to a count. The rendered array only holds the
+  // materialized pages, so it sits `olderPrefix` items below the walk: reading the
+  // slice without that offset shows rows from the wrong part of the transcript, and
+  // once the walk is inside the evicted prefix it shows nothing at all.
+  const visible = items.slice(
+    Math.max(0, window.start - olderPrefix),
+    Math.max(0, window.end - olderPrefix),
+  );
 
   // Whether the focused approval is on screen. Its tool call can be missing from
   // the item list entirely (the backfill cap dropped it) or sit outside the
