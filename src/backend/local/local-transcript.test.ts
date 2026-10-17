@@ -533,6 +533,17 @@ describe("in-context tail window and unread head validation", () => {
     // compaction, which is exactly what the in-context projection cannot do.
     const oldestFirst = [...raw].reverse();
     expect(JSON.stringify(oldestFirst[0])).toContain("turn-0-");
+
+    // Which is also the whole difference between the two orders this read can be in
+    // (`backend.ts`'s `TranscriptRowOrder`). The log is append order, so the
+    // compaction's summary sits *after* the rows it replaced — the order the user
+    // watched them arrive in. The in-context list is the substitution order, so the
+    // same summary sits *first*, in the place of everything it replaced. A page read
+    // without knowing which one it holds draws the summary in the wrong place.
+    const summaryId = projected[0]?.id ?? "";
+    expect(oldestFirst.at(-1)?.id).toBe(summaryId);
+    expect(projected.at(-1)?.id).not.toBe(summaryId);
+
     // And paging before that row finds nothing: that is the true start.
     const older = store.listConversationMessages("default", {
       agent_id: agentId,

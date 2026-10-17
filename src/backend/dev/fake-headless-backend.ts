@@ -10,6 +10,7 @@ import type {
   Backend,
   BackendCapabilities,
   ConversationCreateBody,
+  ConversationHistoryPage,
   ConversationMessageCreateBody,
   ConversationMessageListBody,
   ConversationMessageStreamBody,
@@ -302,6 +303,33 @@ export class HeadlessBackend implements Backend {
     return createPage(
       this.store.listConversationMessages(conversationId, body),
     ) as never;
+  }
+
+  /**
+   * The transcript log, paged by stored message id (`older-history.ts`'s read).
+   *
+   * The store's `include_out_of_context` read is the log: it drops the in-context
+   * filter a compaction rewrites, so a row the compaction sent away is readable
+   * again. The store hands that read back **newest first** — `order: "desc"` is the
+   * only order its tail fast path serves — while a page is oldest first, so it is
+   * reversed here and the order is stated on the page rather than left to the
+   * caller's memory (`TranscriptRowOrder` in `backend.ts`).
+   */
+  async listConversationHistoryPage(
+    conversationId: string,
+    body: { agent_id: string; before: string; limit: number },
+  ): Promise<ConversationHistoryPage> {
+    const logBody: ConversationMessageListBody & {
+      include_out_of_context: true;
+    } = {
+      agent_id: body.agent_id,
+      before: body.before,
+      limit: body.limit,
+      order: "desc",
+      include_out_of_context: true,
+    };
+    const rows = this.store.listConversationMessages(conversationId, logBody);
+    return { order: "log", messages: [...rows].reverse() };
   }
 
   async compactConversationMessages(

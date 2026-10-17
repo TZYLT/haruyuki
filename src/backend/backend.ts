@@ -93,6 +93,41 @@ export type ConversationMessageListBody = ConversationMessageListParams[1];
 export type ConversationMessageListOptions = ConversationMessageListParams[2];
 export const DEFAULT_CONVERSATION_MESSAGE_ORDER = "desc";
 
+/**
+ * The order a transcript read came back in.
+ *
+ * `"log"` is the transcript **log**'s order: the file's append order, so a
+ * compaction's summary sits where the compaction was appended — after the rows it
+ * replaced, which is also the order the user watched them arrive in. `"logical"` is
+ * the in-context list's order: every summary takes the place of the rows it
+ * replaced, so a reader meets it *before* them.
+ *
+ * The two disagree exactly at a compaction, which is what makes the difference
+ * load-bearing rather than cosmetic. Walked backwards, a log-ordered read reaches
+ * the conversation's first message; the same walk over the logical order stops at
+ * the oldest summary. A caller that cannot tell the two apart reports that stop as
+ * the start of the conversation (`已到这次会话的开头`) while the messages the
+ * compaction sent away are still unread — measured from the machine as "the
+ * transcript will not scroll back past the compaction".
+ */
+export type TranscriptRowOrder = "log" | "logical";
+
+/**
+ * One page of the transcript log, oldest first, with the backend's own statement of
+ * the order it read it in.
+ *
+ * A minimal projection rather than a list, deliberately: a page is a *slice of the
+ * log*, and a slice is not the conversation. Read on its own it draws a compaction's
+ * summary after the rows it replaced — the order the user saw, and not the order the
+ * in-context list draws — so a caller that renders a page directly has to know which
+ * of the two orders it holds. `order` is that statement; `older-history.ts` refuses a
+ * page that is not `"log"`.
+ */
+export interface ConversationHistoryPage {
+  order: TranscriptRowOrder;
+  messages: Message[];
+}
+
 export type ConversationMessageCompactParams = Parameters<
   APIClient["conversations"]["messages"]["compact"]
 >;
@@ -244,6 +279,25 @@ export interface Backend {
   ): Promise<
     Awaited<ReturnType<APIClient["conversations"]["messages"]["list"]>>
   >;
+
+  /**
+   * Read a page of the transcript **log**, backwards from a stored message id.
+   *
+   * Optional, like `deleteConversation`: only a backend that owns the transcript can
+   * answer it, and only such a backend can page past a compaction. `before` is
+   * exclusive — the page holds the rows the log keeps before it — and the page is
+   * **oldest first**, so an empty page is the log's own first row.
+   *
+   * A backend that does not implement this cannot say which order it would have
+   * answered in, and the in-context list is not a substitute: its oldest row is a
+   * compaction's summary, so a caller that walks it reports the conversation's start
+   * where the rows the compaction sent away still are. `older-history.ts` refuses to
+   * walk without this method for exactly that reason.
+   */
+  listConversationHistoryPage?(
+    conversationId: string,
+    body: { agent_id: string; before: string; limit: number },
+  ): Promise<ConversationHistoryPage>;
 
   compactConversationMessages(
     conversationId: string,

@@ -6,6 +6,7 @@ import type {
   AgentCreateBody,
   ConversationCreateBody,
   ConversationMessageCreateBody,
+  ConversationMessageListBody,
   ConversationUpdateBody,
 } from "@/backend";
 import { FakeHeadlessBackend } from "@/backend/dev/fake-headless-backend";
@@ -344,5 +345,78 @@ describe("FakeHeadlessBackend", () => {
     expect(JSON.stringify(adapter.lastInput?.uiMessages)).toContain(
       "survives the failure",
     );
+  });
+
+  /**
+   * The paging read (`Backend.listConversationHistoryPage`), which is what lets the
+   * TUI scroll past a compaction and what tells it which order it is walking.
+   */
+  describe("paging the transcript log", () => {
+    /** The rows of a list result, whichever shape the backend returned. */
+    function pageItems(page: unknown): Array<{ id: string }> {
+      return (
+        page as { getPaginatedItems(): Array<{ id: string }> }
+      ).getPaginatedItems();
+    }
+
+    test("states its order, oldest first, and stops at the log's own start", async () => {
+      const storageDir = await mkdtemp(
+        join(tmpdir(), "fake-headless-history-"),
+      );
+      const backend = new FakeHeadlessBackend("agent-history", undefined, {
+        storageDir,
+        strictAgentAccess: false,
+        strictConversationAccess: false,
+      });
+      const conversation = await backend.createConversation({
+        agent_id: "agent-history",
+      });
+      for (const text of ["one", "two", "three"]) {
+        await collect(
+          await backend.createConversationMessageStream(conversation.id, {
+            agent_id: "agent-history",
+            messages: [{ role: "user", content: text }],
+          } as ConversationMessageCreateBody),
+        );
+      }
+
+      // Nothing has been compacted here, so the in-context list *is* the log; the
+      // newest-first read is the same rows the page has to reverse.
+      const newestFirst = pageItems(
+        await backend.listConversationMessages(conversation.id, {
+          agent_id: "agent-history",
+          order: "desc",
+          limit: 50,
+        } as ConversationMessageListBody),
+      );
+      expect(newestFirst.length).toBeGreaterThan(2);
+
+      // `before` is exclusive: a page holds the rows the log keeps *before* the
+      // cursor, oldest first — and it says so, rather than leaving the caller to
+      // remember which order it is in.
+      const page = await backend.listConversationHistoryPage(conversation.id, {
+        agent_id: "agent-history",
+        before: newestFirst[0]?.id ?? "",
+        limit: 50,
+      });
+      expect(page.order).toBe("log");
+      expect(page.messages.map((message) => message.id)).toEqual(
+        newestFirst
+          .slice(1)
+          .map((message) => message.id)
+          .reverse(),
+      );
+
+      // The log's own first row is where the walk stops: an empty page. A page of
+      // the in-context list would stop at a compaction's summary instead, which is
+      // the "已到这次会话的开头" lie this method exists to make impossible.
+      const older = await backend.listConversationHistoryPage(conversation.id, {
+        agent_id: "agent-history",
+        before: page.messages[0]?.id ?? "",
+        limit: 50,
+      });
+      expect(older.order).toBe("log");
+      expect(older.messages).toEqual([]);
+    });
   });
 });

@@ -8,11 +8,13 @@ import {
   HISTORY_CURSOR_NOTICE,
   HISTORY_START_NOTICE,
   historyItemsForMessages,
+  logOrderedMessages,
   type OlderHistoryFetchRequest,
   olderHistoryCursor,
   requestOlderHistory,
   resetOlderHistoryForTests,
   setOlderHistoryFetcherForTests,
+  setOlderHistoryLogReaderForTests,
   setOlderHistoryProvider,
 } from "@/cli/app/older-history";
 import {
@@ -176,6 +178,76 @@ describe("assembling a page", () => {
 
   test("draws nothing for a message type the renderer does not know", () => {
     expect(historyItemsForMessages([unknownMessage("m1")])).toEqual([]);
+  });
+});
+
+describe("the order a page says it is in", () => {
+  test("a log-ordered page is used as it came", () => {
+    const messages = [message("m1", "one"), message("m2", "two")];
+    expect(logOrderedMessages({ order: "log", messages })).toEqual(messages);
+    // The rows are handed on as a copy: a caller that re-orders its page must not be
+    // able to reach back into the backend's answer.
+    const copy = logOrderedMessages({ order: "log", messages });
+    copy.reverse();
+    expect(messages.map((item) => item.id)).toEqual(["m1", "m2"]);
+  });
+
+  test("a page in the in-context order is refused", () => {
+    // The order that cannot be walked: its oldest row is a compaction's summary, so
+    // treating it as the log would put that summary below the rows it replaced (and
+    // its empty page would report the conversation's start while the rows the
+    // compaction sent away are still unread).
+    expect(() =>
+      logOrderedMessages({
+        order: "logical",
+        messages: [message("m1", "one")],
+      }),
+    ).toThrow("logical-ordered page");
+  });
+
+  test("a page the backend says is not the log's is refused, not prepended", async () => {
+    seedWith(coreLines(3));
+    setOlderHistoryLogReaderForTests(async () => ({
+      order: "logical",
+      messages: [message("m1000", "the in-context list's oldest row")],
+    }));
+
+    // `failed`, not `loaded`: the walk is left where it is — and above all not told
+    // it has reached the conversation's start.
+    expect(await requestOlderHistory(0)).toBe("failed");
+    expect(getOlderHistoryItems("conv-1")).toEqual([]);
+    expect(getOlderHistoryState().stopped).toBeNull();
+  });
+
+  test("a backend that cannot read the log is refused the same way", async () => {
+    seedWith(coreLines(3));
+    setOlderHistoryLogReaderForTests(null);
+
+    expect(await requestOlderHistory(0)).toBe("failed");
+    expect(getOlderHistoryItems("conv-1")).toEqual([]);
+    expect(getOlderHistoryState().stopped).toBeNull();
+  });
+
+  test("a log-ordered page is walked and drawn", async () => {
+    seedWith(coreLines(3));
+    const asked: string[] = [];
+    setOlderHistoryLogReaderForTests(async (_conversationId, body) => {
+      asked.push(body.before);
+      // A full page, so the walk continues instead of reporting the log's start.
+      return {
+        order: "log",
+        messages: Array.from({ length: HISTORY_PAGE_LIMIT }, (_, index) =>
+          message(`m${900 + index}`, `older row ${index}`),
+        ),
+      };
+    });
+
+    expect(await requestOlderHistory(0)).toBe("loaded");
+    expect(asked).toEqual(["m1000"]);
+    const items = getOlderHistoryItems("conv-1");
+    expect(items.length).toBe(HISTORY_PAGE_LIMIT);
+    expect(items[0]?.id).toBe("m900");
+    expect(items.at(-1)?.id).toBe(`m${900 + HISTORY_PAGE_LIMIT - 1}`);
   });
 });
 

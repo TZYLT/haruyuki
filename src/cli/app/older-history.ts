@@ -1,5 +1,9 @@
 import type { Message } from "@letta-ai/letta-client/resources/agents/messages";
-import { getBackend } from "@/backend";
+import {
+  type Backend,
+  type ConversationHistoryPage,
+  getBackend,
+} from "@/backend";
 import type { Buffers, Line } from "@/cli/helpers/accumulator";
 import { createBuffers } from "@/cli/helpers/accumulator";
 import { backfillBuffers } from "@/cli/helpers/backfill";
@@ -105,31 +109,80 @@ export type OlderHistoryFetcher = (
   request: OlderHistoryFetchRequest,
 ) => Promise<Message[]>;
 
-function paginatedItems<T>(value: T[] | { getPaginatedItems(): T[] }): T[] {
-  return Array.isArray(value) ? value : value.getPaginatedItems();
+/**
+ * A backend's log-page read, as this module uses it.
+ *
+ * The method is optional on `Backend` (`backend.ts`), so the reader is a value that
+ * can be absent — which is exactly the case the fetch below has to refuse.
+ */
+type OlderHistoryLogReader = NonNullable<
+  Backend["listConversationHistoryPage"]
+>;
+
+/**
+ * The reader a page is fetched through. `null` means "no override": the process
+ * backend's, when it has one.
+ *
+ * The wrapper object exists so an override can be `null` — "this backend cannot read
+ * the log" — without being indistinguishable from having no override at all.
+ */
+let logReaderOverride: { reader: OlderHistoryLogReader | null } | null = null;
+
+/** Test seam. */
+export function setOlderHistoryLogReaderForTests(
+  reader: OlderHistoryLogReader | null,
+): void {
+  logReaderOverride = { reader };
+}
+
+function logReaderForPages(): OlderHistoryLogReader | null {
+  if (logReaderOverride) return logReaderOverride.reader;
+  const backend = getBackend();
+  const read = backend.listConversationHistoryPage;
+  return read ? read.bind(backend) : null;
+}
+
+/**
+ * The rows of a page, once the backend has said which order they are in.
+ *
+ * The one place the paging read checks what it was handed. A log-ordered page walks
+ * backwards to the conversation's first message and prepends correctly; a page the
+ * backend *says* is ordered as the in-context list is one whose oldest row is a
+ * compaction's summary, and prepending it would put that summary below the rows it
+ * replaced — the very position the user never saw. So a page whose stated order is
+ * not the log's is refused rather than used, and the caller leaves the walk where it
+ * is (`loadPage` logs the refusal; it must not report the conversation's start).
+ */
+export function logOrderedMessages(page: ConversationHistoryPage): Message[] {
+  if (page.order !== "log") {
+    throw new Error(
+      `older history: the backend answered a ${page.order}-ordered page`,
+    );
+  }
+  return [...page.messages];
 }
 
 async function fetchPageFromBackend(
   request: OlderHistoryFetchRequest,
 ): Promise<Message[]> {
-  const page = await getBackend().listConversationMessages(
-    request.conversationId,
-    {
+  const readLogPage = logReaderForPages();
+  // A backend that cannot read the log cannot page, and it cannot be *asked* to say
+  // so: the in-context list is the only thing it would return, and walking that is
+  // how "已到这次会话的开头" became a lie past a compaction. No backend in this fork
+  // is in that position (the local one owns the transcript), so refusing is the
+  // honest answer for one that is, rather than a silent fallback that stops early.
+  if (!readLogPage) {
+    throw new Error(
+      "older history: this backend cannot read the transcript log order",
+    );
+  }
+  return logOrderedMessages(
+    await readLogPage(request.conversationId, {
       agent_id: request.agentId,
-      limit: request.limit,
-      order: "desc",
       before: request.before,
-      // The conversation as the user saw it, compaction included. Without this
-      // the page is the *projection*, which a compaction has already rewritten:
-      // the walk stops at the summary row, and the messages the compaction sent
-      // away stay unread even though the log still holds them (F1). A backend
-      // that does not know the field answers exactly as it did before.
-      include_out_of_context: true,
-    },
+      limit: request.limit,
+    }),
   );
-  // `order: "desc"` hands back the newest first; everything on this side reads
-  // history oldest first.
-  return [...paginatedItems(page)].reverse();
 }
 
 const EMPTY_ITEMS: readonly StaticItem[] = [];
@@ -832,6 +885,7 @@ export function resetOlderHistoryForTests(): void {
   stopped = null;
   restoring.clear();
   pageBudget = RESIDENT_PAGE_BUDGET;
+  logReaderOverride = null;
   listeners.clear();
 }
 
