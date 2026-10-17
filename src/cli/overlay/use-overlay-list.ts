@@ -38,6 +38,13 @@ import {
  * - **State stays in this leaf.** Nothing here touches `AppCoordinator`/`AppView`
  *   state; an overlay is one component, and a module-level store would leak across
  *   mounts and between tests.
+ *
+ * **Policy stays with the caller.** The list says which keys apply and hands over
+ * the item's key and index; it does not decide what a `disabled` row means. The
+ * two pickers decided differently and neither was wrong — a blocked row in the
+ * single-select confirmed nothing, while the multi-select confirmed the whole
+ * selection from wherever the cursor stood — so the decision belongs where the
+ * history is. The key is consumed either way.
  */
 
 export type OverlayInputScope = Extract<InputScope, "overlay" | "modal">;
@@ -60,11 +67,17 @@ export interface UseOverlayListOptions {
   navigationEnabled?: boolean;
   /** Whether plain `j`/`k` navigate. On by default, as the pickers had them. */
   vimKeys?: boolean;
-  /** Enter on the item at the cursor. A `disabled` item confirms nothing. */
+  /**
+   * Enter on the item at the cursor. Called for a `disabled` item too: whether
+   * that confirms is the caller's policy, and the key is consumed either way.
+   */
   onConfirm?: (key: string, index: number) => void;
   /** Escape / Ctrl+C. */
   onCancel: () => void;
-  /** Space on the item at the cursor. A `disabled` item toggles nothing. */
+  /**
+   * Space on the item at the cursor. Called for a `disabled` item too, for the
+   * same reason as `onConfirm`.
+   */
   onToggle?: (key: string, index: number) => void;
   /** The left and right arrows on the item at the cursor. */
   onMoveItem?: (direction: "up" | "down", index: number) => void;
@@ -120,7 +133,7 @@ export function useOverlayList(
         onConfirm: onConfirm
           ? () => {
               const item = itemAt(items, cursor);
-              if (!item || item.disabled) return;
+              if (!item) return;
               onConfirm(item.key, cursor);
             }
           : undefined,
@@ -131,7 +144,7 @@ export function useOverlayList(
         onToggle: onToggle
           ? () => {
               const item = itemAt(items, cursor);
-              if (!item || item.disabled) return;
+              if (!item) return;
               onToggle(item.key, cursor);
             }
           : undefined,

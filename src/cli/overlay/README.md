@@ -50,6 +50,12 @@ directory exists to be the *one* copy.
    the frame declares its container's layer; both are ref-counted, so the app's
    shell can claim the same layer from the open route without either having to
    know about the other.
+7. **A `disabled` row is the caller's policy, not the list's.** The key is always
+   consumed, and `onConfirm`/`onToggle` are called for a blocked row too; whether
+   that acts is decided where the row's meaning lives. The two pickers disagreed
+   and both were right: a blocked row in the single-select confirmed nothing,
+   while the multi-select confirmed its whole selection from wherever the cursor
+   stood — which is what keeps a list of nothing but blocked rows closable.
 
 ## Why the keys are data
 

@@ -196,7 +196,7 @@ describe("useOverlayList", () => {
     }
   });
 
-  test("confirms the item under the cursor, and a disabled item confirms nothing", async () => {
+  test("confirms the item under the cursor, and hand a disabled one through too", async () => {
     const confirmed: string[] = [];
     const enabled = mountProbe({
       items: rows(3),
@@ -217,10 +217,11 @@ describe("useOverlayList", () => {
     });
     try {
       await disabled.press(ENTER);
-      // Nothing to confirm, but the key stays consumed: Enter on a disabled row
-      // did nothing in the pickers, it did not fall through to whatever else is
-      // listening.
-      expect(confirmed).toEqual(["k1"]);
+      // The list does not decide what a blocked row means — the caller does
+      // (`SingleSelectPicker` confirms nothing there, `MultiSelectPicker`
+      // confirms the selection from there). What the list guarantees is that the
+      // key is spent rather than falling through to whatever else listens.
+      expect(confirmed).toEqual(["k1", "only"]);
       expect(disabled.unrouted).toEqual([]);
     } finally {
       disabled.stop();
@@ -263,7 +264,7 @@ describe("useOverlayList", () => {
     }
   });
 
-  test("Space toggles, and a disabled row toggles nothing", async () => {
+  test("Space toggles the item under the cursor, blocked rows included", async () => {
     const toggled: string[] = [];
     const enabled = mountProbe({
       items: rows(3),
@@ -284,7 +285,8 @@ describe("useOverlayList", () => {
     });
     try {
       await disabled.press(SPACE);
-      expect(toggled).toEqual(["k1"]);
+      // Handed through, like Enter: the caller owns the disabled policy.
+      expect(toggled).toEqual(["k1", "only"]);
       expect(disabled.unrouted).toEqual([]);
     } finally {
       disabled.stop();
