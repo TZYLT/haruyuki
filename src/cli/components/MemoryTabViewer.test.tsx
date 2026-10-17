@@ -9,7 +9,9 @@ import {
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentState } from "@letta-ai/letta-client/resources/agents/agents";
 import type { Block } from "@letta-ai/letta-client/resources/agents/blocks";
+import { useState } from "react";
 import { getBackend } from "@/backend";
 import { MemoryTabViewer } from "@/cli/components/MemoryTabViewer";
 import {
@@ -119,6 +121,51 @@ function mountViewer(
 }
 
 describe("MemoryTabViewer", () => {
+  test("a shell that keeps re-rendering does not refetch the agent", async () => {
+    // The fetch is counted by wrapping the singleton's own method — object-level
+    // stubbing, not a module mock — and the wrapper still calls the real one, so
+    // the failing fetch the viewer falls back from is the real one.
+    const backend = getBackend();
+    const realRetrieve = backend.retrieveAgent;
+    let fetches = 0;
+    backend.retrieveAgent = ((...args: Parameters<typeof realRetrieve>) => {
+      fetches += 1;
+      return realRetrieve.apply(backend, args);
+    }) as typeof realRetrieve;
+
+    // A shell shaped like the real call site: the agent state may be missing, and
+    // the blocks come straight off it.
+    let bump: () => void = () => {};
+    function Shell({ agentState }: { agentState?: AgentState }) {
+      const [, setRenders] = useState(0);
+      bump = () => setRenders((renders) => renders + 1);
+      return (
+        <MemoryTabViewer
+          blocks={agentState?.memory?.blocks}
+          agentId={NO_SUCH_AGENT}
+          onClose={() => {}}
+        />
+      );
+    }
+
+    const tty = mountInkTty(<Shell />, { columns: 80 });
+    try {
+      expect(await settled(tty)).toContain("No memory attached to this agent.");
+      expect(fetches).toBe(1);
+
+      // Each of these is another render of the shell, which is what the effect's
+      // dependency has to survive: the shell paints on every streaming chunk.
+      for (let render = 0; render < 3; render += 1) {
+        bump();
+        await tty.rows();
+      }
+      expect(fetches).toBe(1);
+    } finally {
+      tty.stop();
+      backend.retrieveAgent = realRetrieve;
+    }
+  });
+
   test("paints the frame, the strip and the value pane", async () => {
     const tty = mountViewer();
     try {

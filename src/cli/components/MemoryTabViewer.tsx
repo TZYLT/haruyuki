@@ -18,8 +18,26 @@ const TITLE = "View your agent's memory";
 
 const VISIBLE_LINES = 12; // Visible lines for value content
 
+/**
+ * What "this agent has no memory blocks yet" is, as one array.
+ *
+ * The mount effect below keys on `[agentId, blocks]`, so the *identity* of the
+ * `blocks` prop is a dependency: a caller that hands over a fresh `[]` on every
+ * render — `agent?.memory?.blocks || []` is the obvious way to write that — makes
+ * the effect run again on each of those renders, and each run is another
+ * `retrieveAgent`. The shell re-renders continuously while a turn streams, so the
+ * overlay issued a fetch per frame for as long as it was open.
+ *
+ * So the empty case is the viewer's default rather than the caller's business:
+ * `undefined` means this array, and `AppView` passes `agentState?.memory?.blocks`
+ * untouched. Anything else that hands over a fabricated array still pays for it,
+ * which is why the default is here and not left to each call site.
+ */
+const NO_BLOCKS: Block[] = [];
+
 interface MemoryTabViewerProps {
-  blocks: Block[];
+  /** The agent's memory blocks; omitted means "not loaded yet", not "no memory". */
+  blocks?: Block[];
   agentId: string;
   onClose: () => void;
   conversationId?: string;
@@ -52,7 +70,7 @@ function formatCharCount(current: number, limit: number | null): string {
  *   this face declares its own table instead of using `useOverlayList`.
  */
 export function MemoryTabViewer({
-  blocks,
+  blocks = NO_BLOCKS,
   agentId,
   onClose,
   conversationId,

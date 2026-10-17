@@ -1325,7 +1325,7 @@ export function AppView(props: AppViewRenderProps) {
                 />
               ) : (
                 <MemoryTabViewer
-                  blocks={agentState?.memory?.blocks || []}
+                  blocks={agentState?.memory?.blocks}
                   agentId={agentId}
                   onClose={closeOverlay}
                   conversationId={conversationId}
