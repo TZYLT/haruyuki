@@ -196,14 +196,23 @@ function runTests(files, timeoutMs, env = {}, extraArgs = []) {
  * How many test files to run concurrently.
  *
  * `bun test --parallel=N` fans files out over N worker processes and implies
- * `--isolate`, so each file gets a fresh global/module registry. That is exactly
- * the guarantee the isolation manifest exists to provide, which is why only the
- * entries that need a specific env var still get a process of their own.
+ * `--isolate`, so each file gets a fresh global/module registry. That covers module
+ * mocks, but not the shared preload's test hooks: under `--parallel` the preload's
+ * environment applies while its hooks never fire, so every manifest entry still gets a
+ * process of its own.
  *
  * `HARUYUKI_TEST_PARALLEL=0` restores the old chunked, single-process-per-chunk
  * behaviour; any positive integer overrides the worker count.
  */
-const DEFAULT_PARALLEL_WORKERS = 8;
+/**
+ * Worker count used when `HARUYUKI_TEST_PARALLEL` is unset.
+ *
+ * More workers means fewer files per worker, and the suite is sensitive to that:
+ * measured on a 24-core machine, 4 workers report 36 failures where 8 report 27, which
+ * is the shape of cross-file state leaking inside a worker. 16 keeps the per-worker
+ * file count low without over-subscribing the box.
+ */
+const DEFAULT_PARALLEL_WORKERS = 16;
 
 function resolveParallelWorkers() {
   const raw = process.env.HARUYUKI_TEST_PARALLEL;
