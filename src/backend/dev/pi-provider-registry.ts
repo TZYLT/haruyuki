@@ -27,6 +27,28 @@ export const LOCAL_KIMI_CODE_PROVIDER_NAME = "lc-kimi-code";
 export const LOCAL_GOOGLE_AI_PROVIDER_NAME = "lc-gemini";
 export const LOCAL_BEDROCK_PROVIDER_NAME = "lc-bedrock";
 
+/**
+ * Test-facing gate: keep a run away from every local model endpoint.
+ *
+ * `ensureEndpointProvider` registers every managed endpoint whether or not it is
+ * configured, because a keyless local daemon is usable the moment it answers. That is
+ * right for a person at a terminal and wrong for a test that only wants the "no model
+ * catalog" path: on a machine with Ollama running, the endpoint is discovered, a model
+ * is picked from it, and `resolveTurn` asks Ollama to *load* that model to learn its
+ * served context window — a 120s budget, against the 30s a startup test allows. The
+ * suite must not depend on the machine's model layer, so tests set this and the
+ * registry contributes no local endpoints at all.
+ */
+export const DISABLE_LOCAL_MODEL_DISCOVERY_ENV =
+  "HARUYUKI_DISABLE_LOCAL_MODEL_DISCOVERY";
+
+/** True when this run must not autodetect local model daemons. `1` only. */
+export function localModelDiscoveryDisabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env[DISABLE_LOCAL_MODEL_DISCOVERY_ENV] === "1";
+}
+
 export type LocalEndpointProvider =
   | "ollama"
   | "ollama-cloud"

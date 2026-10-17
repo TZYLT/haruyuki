@@ -41,6 +41,10 @@ async function runCli(
         env: createIsolatedCliTestEnv({
           HOME: homeDir,
           HARUYUKI_DISABLE_MODS: "1",
+          // The CLI autodetects local model daemons. A test that only wants the
+          // "no catalog" path must not inherit whatever the machine is running —
+          // here a discovered Ollama was asked to load a model (120s budget).
+          HARUYUKI_DISABLE_LOCAL_MODEL_DISCOVERY: "1",
         }),
       });
       proc.stdin?.end();
@@ -192,6 +196,7 @@ async function runMcpEcho(
             HARUYUKI_AGENT_ID: MCP_TEST_AGENT_ID,
             HARUYUKI_DEBUG: "0",
             HARUYUKI_DISABLE_MODS: "1",
+            HARUYUKI_DISABLE_LOCAL_MODEL_DISCOVERY: "1",
             LETTA_LOCAL_BACKEND_DIR: storageDir,
             HARUYUKI_LOCAL_BACKEND_EXPERIMENTAL: "1",
           }),

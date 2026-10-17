@@ -46,6 +46,7 @@ import {
 } from "./pi-provider-mod-registry";
 import {
   getPiProviderSpec,
+  localModelDiscoveryDisabled,
   OPENAI_COMPATIBLE_PI_PROVIDER_ID,
   type PiProvider,
 } from "./pi-provider-registry";
@@ -499,6 +500,10 @@ export class LocalPiModelsRuntime {
   private ensureEndpointProvider(providerId: string): void {
     const create = MANAGED_ENDPOINT_PROVIDERS.get(providerId);
     if (!create) return;
+    // A run that must not depend on the machine's model layer registers no local
+    // endpoint at all: no discovery probe, no autodetected daemon, and therefore no
+    // 120s "load the model to learn its context window" preflight either.
+    if (localModelDiscoveryDisabled()) return;
     const connection = resolveLocalEndpointConnection(
       providerId,
       this.storageDir,
