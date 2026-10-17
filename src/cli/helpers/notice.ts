@@ -65,6 +65,7 @@ export function showNotice(text: string, ms: number = DEFAULT_NOTICE_MS): void {
   notify();
 }
 
+/** Clear the notice early (a pinned notice's counterpart, and a test seam). */
 export function clearNotice(): void {
   clearTimer();
   if (notice === null) return;

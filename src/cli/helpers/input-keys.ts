@@ -131,9 +131,15 @@ export function matchChord(chord: KeyChord, event: KeyEvent): boolean {
   return event.input.toLowerCase() === chord.key.toLowerCase();
 }
 
-/** Whether `value` names a non-printable key this module can match. */
+/**
+ * Whether `value` names a non-printable key this module can match.
+ *
+ * `Object.hasOwn`, not `in`: `in` walks the prototype chain, so `constructor`,
+ * `toString` and friends would pass a validation meant to catch a misspelled key name
+ * — and `matchChord` would then index a non-flag and match nothing.
+ */
 export function isNamedKey(value: string): value is NamedKey {
-  return value === "space" || value in NAMED_KEY_FLAGS;
+  return value === "space" || Object.hasOwn(NAMED_KEY_FLAGS, value);
 }
 
 /**
@@ -167,7 +173,7 @@ export function* matchingBindings(
   if (catchAll) yield catchAll;
 }
 
-/** The binding that would claim this event first, if any. */
+/** The binding that would claim this event first, if any. Tests and diagnostics. */
 export function resolveBinding(
   bindings: readonly KeyBinding[],
   event: KeyEvent,
@@ -186,7 +192,7 @@ export function describeChord(chord: KeyChord): string {
   return parts.join("+");
 }
 
-/** Two chords are the same chord when every modifier and the key agree. */
+/** Two chords are the same chord when every modifier and the key agree. Tests. */
 export function chordsEqual(a: KeyChord, b: KeyChord): boolean {
   return (
     a.key.toLowerCase() === b.key.toLowerCase() &&

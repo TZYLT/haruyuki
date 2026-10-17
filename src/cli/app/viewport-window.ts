@@ -341,8 +341,11 @@ export function fitItemsFromEnd(input: FitItemsInput): ViewportWindow {
 
 /**
  * The window for one position over a fully materialised list: one measured item per
- * step. Kept as its own name because that is what every caller and test reads, and
- * because it is the oracle a paged history is weighed against.
+ * step.
+ *
+ * The viewport itself goes through `fitBlockedItemsFromEnd` (a paged history is walked
+ * one *page* at a time); this is the **oracle** those walks are weighed against, and the
+ * shape the cost and differential tests read.
  */
 export function fitScrolledItemsFromEnd(
   itemCount: number,

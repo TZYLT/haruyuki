@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { Writable } from "node:stream";
 import { type Key, render, useInput } from "ink";
-import { matchChord } from "@/cli/helpers/input-keys";
+import { describeChord, matchChord } from "@/cli/helpers/input-keys";
 import {
+  shieldedSequences,
   shieldKeyEvent,
   terminalWorkaroundSequences,
 } from "@/cli/helpers/input-sequence";
-import { COMPOSER_KEY_CHORDS } from "@/cli/helpers/keymap";
+import { APP_KEY_CHORDS, COMPOSER_KEY_CHORDS } from "@/cli/helpers/keymap";
 
 /**
  * The shield reads raw sequences itself so it can run before Ink's handlers and
@@ -151,30 +152,86 @@ const MUST_BE_SHIELDED = [
   `${ESC}`, // Escape
 ];
 
-/** Field-by-field projection, so `undefined` versus missing cannot mask a diff. */
-const KEY_FIELDS = [
-  "upArrow",
-  "downArrow",
-  "leftArrow",
-  "rightArrow",
-  "pageDown",
-  "pageUp",
-  "home",
-  "end",
-  "return",
-  "escape",
-  "ctrl",
-  "shift",
-  "tab",
-  "backspace",
-  "delete",
-  "meta",
-  "super",
-  "hyper",
-  "capsLock",
-  "numLock",
-  "eventType",
-] as const;
+/**
+ * Chords the shield deliberately does not read, each with the reason it can be left
+ * to Ink's own parse: the legacy handler that would otherwise double-act declines the
+ * key (the raw `TextInput` returns early for `meta`, and ignores `delete` so the
+ * parent owns it), or the encoding is one only a kitty-capable terminal sends.
+ *
+ * The point of listing them is that the set cannot grow by accident: a new chord either
+ * gets a shielded sequence or a line here.
+ */
+const UNSHIELDED_BY_DESIGN = new Map<string, string>([
+  [
+    "caretPreviousWord: alt+shift+leftArrow",
+    "the wider Option+Arrow encodings (CSI 1;4/1;5/1;6/1;7); Ink parses them, and the leaf editor declines arrows carrying meta",
+  ],
+  [
+    "caretPreviousWord: ctrl+alt+leftArrow",
+    "the wider Option+Arrow encodings (CSI 1;4/1;5/1;6/1;7); Ink parses them, and the leaf editor declines arrows carrying meta",
+  ],
+  [
+    "caretPreviousWord: ctrl+alt+shift+leftArrow",
+    "the wider Option+Arrow encodings (CSI 1;4/1;5/1;6/1;7); Ink parses them, and the leaf editor declines arrows carrying meta",
+  ],
+  [
+    "caretNextWord: alt+shift+rightArrow",
+    "the wider Option+Arrow encodings (CSI 1;4/1;5/1;6/1;7); Ink parses them, and the leaf editor declines arrows carrying meta",
+  ],
+  [
+    "caretNextWord: ctrl+alt+rightArrow",
+    "the wider Option+Arrow encodings (CSI 1;4/1;5/1;6/1;7); Ink parses them, and the leaf editor declines arrows carrying meta",
+  ],
+  [
+    "caretNextWord: ctrl+alt+shift+rightArrow",
+    "the wider Option+Arrow encodings (CSI 1;4/1;5/1;6/1;7); Ink parses them, and the leaf editor declines arrows carrying meta",
+  ],
+  [
+    "deleteNextChar: shift+delete",
+    "the modified fn+Delete encodings (CSI 3;2/3;5/3;6); Ink parses them, and the leaf editor leaves delete to the parent",
+  ],
+  [
+    "deleteNextChar: ctrl+delete",
+    "the modified fn+Delete encodings (CSI 3;2/3;5/3;6); Ink parses them, and the leaf editor leaves delete to the parent",
+  ],
+  [
+    "deleteNextChar: ctrl+shift+delete",
+    "the modified fn+Delete encodings (CSI 3;2/3;5/3;6); Ink parses them, and the leaf editor leaves delete to the parent",
+  ],
+  [
+    "pasteImage: alt+v",
+    "ESC v and the kitty form; Ink parses them, and the leaf editor filters a modified letter as a control sequence, so only the table acts",
+  ],
+  [
+    "pasteImage: ctrl+shift+v",
+    "ESC v and the kitty form; Ink parses them, and the leaf editor filters a modified letter as a control sequence, so only the table acts",
+  ],
+]);
+
+/** Field-by-field projection, so `undefined` versus missing cannot mask a diff. */ const KEY_FIELDS =
+  [
+    "upArrow",
+    "downArrow",
+    "leftArrow",
+    "rightArrow",
+    "pageDown",
+    "pageUp",
+    "home",
+    "end",
+    "return",
+    "escape",
+    "ctrl",
+    "shift",
+    "tab",
+    "backspace",
+    "delete",
+    "meta",
+    "super",
+    "hyper",
+    "capsLock",
+    "numLock",
+    "eventType",
+  ] as const;
 
 function canonical(event: { input: string; key: Key }): string {
   const projected: Record<string, unknown> = { input: event.input };
@@ -244,6 +301,49 @@ describe("input sequence shield", () => {
       (sequence) => shieldKeyEvent(sequence) === undefined,
     );
     expect(uncovered).toEqual([]);
+  });
+
+  test("every chord the app binds is shielded, or classified as one Ink delivers", () => {
+    // The shield's whole job is "one key, one action": a chord with no shielded
+    // sequence is one the legacy `useInput` handlers see *and* the tables see. The
+    // shield is deliberately a small, sound-by-construction set, so not every chord is
+    // in it — but every chord has to be *accounted for*, either by a sequence the shield
+    // reads or by a reason it is left to Ink. Derived from the keymap, so a chord added
+    // later cannot slip in unclassified.
+    const probes = [
+      ...shieldedSequences(),
+      ...terminalWorkaroundSequences().map((entry) => entry.sequence),
+      // The single-character rule (`input-sequence.ts`): a control character below
+      // `0x1b` is Ctrl+letter, anything printable is itself.
+      ...Array.from({ length: 26 }, (_, index) =>
+        String.fromCharCode(index + 1),
+      ),
+      " ",
+    ];
+    const shieldedEvents = probes
+      .map((sequence) => shieldKeyEvent(sequence))
+      .filter((event) => event !== undefined);
+
+    const declared = [
+      ...Object.entries(APP_KEY_CHORDS),
+      ...Object.entries(COMPOSER_KEY_CHORDS),
+    ];
+    const unclassified: string[] = [];
+    for (const [table, chords] of declared) {
+      for (const chord of chords) {
+        // A printable chord's raw sequence is the character itself.
+        const candidates = /^[\x20-\x7e]$/.test(chord.key)
+          ? [...shieldedEvents, shieldKeyEvent(chord.key)].filter(
+              (event) => event !== undefined,
+            )
+          : shieldedEvents;
+        if (candidates.some((event) => matchChord(chord, event))) continue;
+        if (UNSHIELDED_BY_DESIGN.has(`${table}: ${describeChord(chord)}`))
+          continue;
+        unclassified.push(`${table}: ${describeChord(chord)}`);
+      }
+    }
+    expect(unclassified).toEqual([]);
   });
 
   test("does not claim shapes that are not keys", () => {

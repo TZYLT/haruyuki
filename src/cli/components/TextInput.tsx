@@ -77,7 +77,6 @@ export interface TextInputProps {
   placeholder?: string;
   focus?: boolean;
   mask?: string;
-  showCursor?: boolean;
   /** Parent-driven caret position (applied once, then reported back). */
   externalCursorOffset?: number;
   onCursorOffsetChange?: (offset: number) => void;
@@ -90,7 +89,6 @@ export function TextInput({
   placeholder = "",
   focus = true,
   mask,
-  showCursor = true,
   externalCursorOffset,
   onCursorOffsetChange,
 }: TextInputProps) {
@@ -113,7 +111,7 @@ export function TextInput({
   // Clamp the caret when the value shrinks from the parent.
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-clamp when the incoming value changes
   useEffect(() => {
-    if (!focus || !showCursor) {
+    if (!focus) {
       return;
     }
     const next = latestValueRef.current;
@@ -121,7 +119,7 @@ export function TextInput({
       cursorOffsetRef.current = next.length;
       setCursorOffset(next.length);
     }
-  }, [originalValue, focus, showCursor]);
+  }, [originalValue, focus]);
 
   // Apply a parent-driven caret nudge.
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-run when the nudge or value changes
@@ -157,9 +155,7 @@ export function TextInput({
 
       if (key.leftArrow || key.rightArrow) {
         if (key.meta) return; // Option+Arrow = word navigation (parent)
-        if (showCursor) {
-          nextCursor += key.leftArrow ? -1 : 1;
-        }
+        nextCursor += key.leftArrow ? -1 : 1;
       } else if (key.upArrow || key.downArrow) {
         return; // parent decides (wrapped-line navigation)
       } else if (key.backspace) {
@@ -227,7 +223,7 @@ export function TextInput({
 
   // Fake caret: render the character under it (or a trailing space) in inverse
   // video. Ink does not expose a real terminal cursor here.
-  if (showCursor && focus) {
+  if (focus) {
     renderedPlaceholder =
       placeholder.length > 0
         ? chalk.inverse(placeholder[0]) + chalk.grey(placeholder.slice(1))

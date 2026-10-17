@@ -55,10 +55,12 @@ export function owningInputScope(): InputScope {
  * the system layer only. A key the owner does not bind falls through to the
  * legacy handlers rather than down the chain, so an overlay that still owns its
  * keys through Ink cannot be shadowed by an app-level binding.
+ *
+ * `owningInputScope()` never returns `system` (the system layer claims no keys), so
+ * `system` is always the second entry rather than a case of its own.
  */
 export function consultedInputScopes(): readonly InputScope[] {
-  const owner = owningInputScope();
-  return owner === "system" ? ["system"] : [owner, "system"];
+  return [owningInputScope(), "system"];
 }
 
 /** Test seam: drop every claim. */

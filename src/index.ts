@@ -2031,10 +2031,10 @@ async function main(): Promise<void> {
     }),
     {
       exitOnCtrlC: false, // We handle CTRL-C manually with double-press guard
-      // Kitty keyboard protocol (flag 1: disambiguate escape codes). Ink owns
-      // detection and teardown; "enabled" force-enables on TTYs, matching the
-      // previous in-house detector's best-effort behavior instead of requiring
-      // a query reply. HARUYUKI_DISABLE_KITTY=1 remains the escape hatch.
+      // Kitty keyboard protocol (flag 1: disambiguate escape codes). "enabled" turns
+      // it on for every TTY without asking — the `CSI ? u` query is Ink's `auto` mode
+      // — matching the retired detector's best-effort behaviour; Ink writes `CSI < u`
+      // on unmount, and HARUYUKI_DISABLE_KITTY=1 remains the escape hatch.
       kittyKeyboard: {
         mode:
           process.env.HARUYUKI_DISABLE_KITTY === "1" ? "disabled" : "enabled",

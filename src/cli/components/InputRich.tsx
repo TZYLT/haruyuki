@@ -1356,8 +1356,8 @@ export function Input({
 
   // Ctrl+D used to toggle the queue's hold/release mode here. Nothing could set
   // that mode on a local agent (`deferModeSupported` is false for every
-  // `agent-local-*` id), so the key is reclaimed: it is a scroll binding now
-  // (`transcript.scrollToNewest`, registered by the full-screen viewport).
+  // `agent-local-*` id), so the mode and the key were both retired: Ctrl+D is bound
+  // to nothing (`keymap.ts`), and the jump to the newest row is Shift+PageDown.
 
   // Note: bash mode entry/exit is implemented inside PasteAwareTextInput so we can
   // consume the keystroke before it renders (no flicker).

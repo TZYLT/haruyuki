@@ -75,6 +75,10 @@ export function historyBlocksForWindow(
  * Record a measured block height. Returns the same list when nothing changed, so a
  * caller can use identity to decide whether a re-render is needed — the viewport
  * reports on every frame, but a height only moves when the layout does.
+ *
+ * This is the ledger builder for tests and for diagnostics: the viewport's own path
+ * records heights through `reportOlderHistoryBlockRows` in `older-history.ts`, which
+ * also keeps the layout key and the page's items.
  */
 export function withHistoryBlockRows(
   blocks: readonly HistoryBlock[],

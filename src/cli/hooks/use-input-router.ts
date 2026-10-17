@@ -23,10 +23,10 @@ import { useInternalEventEmitter } from "@/cli/hooks/use-internal-event-emitter"
 export function useInputRouter(): void {
   const internalEventEmitter = useInternalEventEmitter();
 
-  useEffect(() => {
-    if (!internalEventEmitter) return undefined;
-    return installInputRouter(internalEventEmitter);
-  }, [internalEventEmitter]);
+  useEffect(
+    () => installInputRouter(internalEventEmitter),
+    [internalEventEmitter],
+  );
 
   // The fallback. Everything the raw layer did not claim arrives here with Ink's
   // own parse, so an unusual terminal encoding still reaches its binding instead

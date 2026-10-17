@@ -27,7 +27,13 @@ export interface ClipboardStream {
   isTTY?: boolean;
 }
 
-/** Roughly 200 KB of base64, past which OSC 52 stops being trustworthy. */
+/**
+ * Roughly 200 KB of **text** bytes, past which OSC 52 stops being trustworthy.
+ *
+ * The guard compares the text's own byte length (`copyText`), so the base64 actually
+ * written is about a third larger; the threshold is a trust boundary for the terminal,
+ * not a size limit for the sequence.
+ */
 export const MAX_OSC52_BYTES = 200_000;
 
 export type ClipboardMethod = "osc52+local" | "osc52" | "local" | "none";

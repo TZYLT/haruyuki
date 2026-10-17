@@ -18,10 +18,10 @@ import {
  * measured is one step, so a walk passing over it costs arithmetic instead of
  * measuring every item in it (a deep position otherwise measures the whole history).
  *
- * A page is one step only when the boundary is its own first item, its rows are
- * measured, and it fits **both** budgets. The row budget is the trap a differential
- * test caught: `walkWindow` breaks on a step that does not fit, right for one item
- * and wrong for a page, so the refusal has to happen here.
+ * A page is one step only when the walk's boundary is that page's **end** (its last
+ * item, plus one), its rows are measured, and it fits **both** budgets. The row budget
+ * is the trap a differential test caught: `walkWindow` breaks on a step that does not
+ * fit, right for one item and wrong for a page, so the refusal has to happen here.
  */
 export interface BlockedWindowInput {
   /** Pages, oldest first, contiguous from item 0 (`history-blocks.ts`). */
