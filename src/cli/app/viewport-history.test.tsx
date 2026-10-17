@@ -2,10 +2,17 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Readable, Writable } from "node:stream";
 import type { Message } from "@letta-ai/letta-client/resources/agents/messages";
 import { Box, render, Text } from "ink";
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { AppViewProps } from "@/cli/app/AppView";
 import {
   composeTranscriptItems,
+  getOlderHistoryBlocks,
   getOlderHistoryItems,
   historyItemsForMessages,
   olderHistoryCursor,
@@ -340,7 +347,11 @@ const REAL_CORE: Message[] = Array.from(
     }) as unknown as Message,
 );
 
-function RealHistoryViewport() {
+function RealHistoryViewport({
+  conversationId = CONVERSATION,
+}: {
+  conversationId?: string;
+}) {
   const buffersRef = useRef<ReturnType<typeof createBuffers> | null>(null);
   if (buffersRef.current === null) {
     // The resume path's own assembler, so the cursor is derived exactly as the app
@@ -358,7 +369,7 @@ function RealHistoryViewport() {
         liveItems: [],
         columns: 40,
         agentId: "agent-1",
-        conversationId: CONVERSATION,
+        conversationId,
         buffersRef,
         statusLinePrompt: ">",
         showCompactionsEnabled: false,
@@ -385,6 +396,35 @@ async function mountRealViewport(): Promise<{ stop: () => void }> {
   const stdout = new Capture();
   installTerminalFrameCapture(stdout);
   const instance = render(<RealHistoryViewport />, {
+    stdin: fakeStdin(),
+    stdout: stdout as unknown as NodeJS.WriteStream,
+    debug: false,
+    patchConsole: false,
+    exitOnCtrlC: false,
+    alternateScreen: true,
+  });
+  await sleep(150);
+  return {
+    stop() {
+      instance.unmount();
+      instance.cleanup();
+    },
+  };
+}
+
+/** The viewport with a conversation the test can switch, as the app does. */
+let switchConversation: ((id: string) => void) | null = null;
+
+function SwitchableViewport() {
+  const [conversationId, setConversationId] = useState(CONVERSATION);
+  switchConversation = setConversationId;
+  return <RealHistoryViewport conversationId={conversationId} />;
+}
+
+async function mountSwitchableViewport(): Promise<{ stop: () => void }> {
+  const stdout = new Capture();
+  installTerminalFrameCapture(stdout);
+  const instance = render(<SwitchableViewport />, {
     stdin: fakeStdin(),
     stdout: stdout as unknown as NodeJS.WriteStream,
     debug: false,
@@ -490,7 +530,7 @@ describe("a page dropped behind the view", () => {
       await sleep(150);
       scrollTranscriptBy(80);
       await sleep(250);
-      expect(olderHistoryPrefixItems()).toBeGreaterThan(0);
+      expect(olderHistoryPrefixItems(CONVERSATION)).toBeGreaterThan(0);
 
       // Whatever the residency did, the band is drawing rows and the reader's
       // position still resolves to content.
@@ -502,6 +542,46 @@ describe("a page dropped behind the view", () => {
       jumpTranscriptToOldest();
       await sleep(250);
       expect(frameText()).toContain(`older page ${PAGES} item 0`);
+    } finally {
+      stop();
+    }
+  });
+});
+
+/**
+ * Paging state outlives the conversation it belongs to.
+ *
+ * The rows a reader pages in belong to one conversation, and the ledger that describes
+ * them is read every frame. Both have to be read through the conversation on screen:
+ * a ledger left unscoped still counts the previous conversation's pages, so the walk's
+ * total is those pages and the new core occupies none of its indices — the window then
+ * falls outside the rendered array and the band draws nothing at all.
+ */
+describe("a conversation switch with pages loaded", () => {
+  test("still draws the new conversation's transcript", async () => {
+    // A full page, so the ledger really counts something: the unscoped ledger made the
+    // walk's total the old page's items and left the new core with no indices at all.
+    pageIn(() =>
+      Array.from({ length: 50 }, (_, index) =>
+        historyMessage(`p0-${index}`, `older page 0 item ${index}`),
+      ),
+    );
+    const { stop } = await mountSwitchableViewport();
+    try {
+      expect(await requestOlderHistory(0)).toBe("loaded");
+      await sleep(150);
+      expect(getOlderHistoryItems(CONVERSATION).length).toBe(50);
+
+      switchConversation?.("conv-other");
+      await sleep(250);
+
+      // Read through the new conversation: its pages are not loaded, so the ledger is
+      // empty and the band is the new core.
+      expect(getOlderHistoryBlocks("conv-other")).toHaveLength(0);
+      expect(olderHistoryPrefixItems("conv-other")).toBe(0);
+      // Following the newest, the band is the tail of the new core.
+      expect(frameText()).toContain("core message");
+      expect(frameText()).not.toContain("older page 0 item");
     } finally {
       stop();
     }

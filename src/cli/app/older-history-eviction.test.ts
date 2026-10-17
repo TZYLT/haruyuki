@@ -71,13 +71,13 @@ test("evicting a page drops its items and leaves the parked anchor alone", async
 
   expect(await requestOlderHistory(0)).toBe("loaded");
   expect(await requestOlderHistory(0)).toBe("loaded");
-  expect(getOlderHistoryBlocks()).toHaveLength(2);
+  expect(getOlderHistoryBlocks(CONVERSATION)).toHaveLength(2);
   expect(getOlderHistoryItems(CONVERSATION)).toHaveLength(2 * PAGE);
-  expect(olderHistoryPrefixItems()).toBe(0);
+  expect(olderHistoryPrefixItems(CONVERSATION)).toBe(0);
 
   // A page has to be measured before it can be evicted: the walk can only skip a page
   // it has a height for, so the eviction rule clamps at the first unmeasured page.
-  for (const block of getOlderHistoryBlocks()) {
+  for (const block of getOlderHistoryBlocks(CONVERSATION)) {
     reportOlderHistoryBlockRows(block.key, 100);
   }
 
@@ -91,7 +91,7 @@ test("evicting a page drops its items and leaves the parked anchor alone", async
   // view with it.
   evictOlderHistoryBlocksBefore(1);
   expect(getOlderHistoryItems(CONVERSATION)).toHaveLength(PAGE);
-  expect(olderHistoryPrefixItems()).toBe(PAGE);
+  expect(olderHistoryPrefixItems(CONVERSATION)).toBe(PAGE);
   const parked = getViewportScrollRequest();
   expect(parked.kind === "anchor" ? parked.anchor : null).toEqual({
     end: 120,
@@ -102,7 +102,7 @@ test("evicting a page drops its items and leaves the parked anchor alone", async
   const rendered = getOlderHistoryItems(CONVERSATION);
   evictOlderHistoryBlocksBefore(1);
   expect(getOlderHistoryItems(CONVERSATION)).toBe(rendered);
-  expect(olderHistoryPrefixItems()).toBe(PAGE);
+  expect(olderHistoryPrefixItems(CONVERSATION)).toBe(PAGE);
 });
 
 test("a page the window comes back to is materialized from what is held", async () => {
@@ -119,14 +119,14 @@ test("a page the window comes back to is materialized from what is held", async 
 
   expect(await requestOlderHistory(0)).toBe("loaded");
   expect(await requestOlderHistory(0)).toBe("loaded");
-  for (const block of getOlderHistoryBlocks()) {
+  for (const block of getOlderHistoryBlocks(CONVERSATION)) {
     reportOlderHistoryBlockRows(block.key, 100);
   }
   const whole = getOlderHistoryItems(CONVERSATION).map((item) => item.id);
 
   evictOlderHistoryBlocksBefore(1);
   expect(getOlderHistoryItems(CONVERSATION)).toHaveLength(PAGE);
-  expect(olderHistoryPrefixItems()).toBe(PAGE);
+  expect(olderHistoryPrefixItems(CONVERSATION)).toBe(PAGE);
 
   // The walk counts both pages, so a window can land in the evicted one: those items
   // have to come back, in front of the rendered array and in the same order.
@@ -134,7 +134,7 @@ test("a page the window comes back to is materialized from what is held", async 
   expect(getOlderHistoryItems(CONVERSATION).map((item) => item.id)).toEqual(
     whole,
   );
-  expect(olderHistoryPrefixItems()).toBe(0);
+  expect(olderHistoryPrefixItems(CONVERSATION)).toBe(0);
   // Nothing was re-fetched: the page's own messages were still held.
   expect(fetches).toBe(2);
   // Already materialized: no change, so a caller loop converges.

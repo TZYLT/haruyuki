@@ -281,17 +281,15 @@ export function ViewportTranscript(props: AppViewProps) {
   // Nothing is evicted yet, so the page list is a partition of `items`: the blocks
   // are the older part, in the same order, and the core is everything after them.
   // The differential test holds this window equal to the item walk's for that case.
-  const olderBlocks = useSyncExternalStore(
-    subscribeToOlderHistory,
-    getOlderHistoryBlocks,
+  const olderBlocks = useSyncExternalStore(subscribeToOlderHistory, () =>
+    getOlderHistoryBlocks(conversationId),
   );
   const olderBlockItems = historyBlockItems(olderBlocks);
   // Items the evicted pages still account for. The walk counts every page; the
   // rendered array only the materialized ones, so a walk index sits this far above
   // its rendered one.
-  const olderPrefix = useSyncExternalStore(
-    subscribeToOlderHistory,
-    olderHistoryPrefixItems,
+  const olderPrefix = useSyncExternalStore(subscribeToOlderHistory, () =>
+    olderHistoryPrefixItems(conversationId),
   );
   const window = useMemo(() => {
     return fitBlockedItemsFromEnd({

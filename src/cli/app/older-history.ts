@@ -258,15 +258,25 @@ export function getOlderHistoryState(): OlderHistoryState {
 
 let blocksView: readonly HistoryBlock[] = [];
 let blocksViewSource: readonly OlderHistoryBlock[] | null = null;
+const EMPTY_BLOCKS: readonly HistoryBlock[] = [];
 
 /**
  * The ledger in the shape the window fitter reads (`history-blocks.ts`): page
  * counts and measured heights, without the pages themselves.
  *
+ * Read through the conversation id, like the rows themselves: after a switch the
+ * rendered rows already belong to the new conversation while the reset waits for the
+ * first page request, and a ledger left unscoped would be fitted against a transcript
+ * that is no longer on screen (the walk's total would be the *old* pages' items, the
+ * new core would occupy no indices, and the band would draw nothing).
+ *
  * Memoised by the ledger's identity, because a caller reads this every frame and a
  * fresh array per call would defeat the memoisation that keeps those frames cheap.
  */
-export function getOlderHistoryBlocks(): readonly HistoryBlock[] {
+export function getOlderHistoryBlocks(
+  conversationIdForRead: string,
+): readonly HistoryBlock[] {
+  if (conversationIdForRead !== conversationId) return EMPTY_BLOCKS;
   if (blocksViewSource === blocks) return blocksView;
   blocksView = blocks.map((block) => ({
     key: block.key,
@@ -371,8 +381,12 @@ export function materializeOlderHistoryBlocks(
  * Items the count-only prefix accounts for: how far a rendered item index sits below
  * its index in the walk. The walk counts every page; the rendered array only the
  * materialized ones.
+ *
+ * Conversation-scoped for the same reason as the ledger: the prefix describes the
+ * loaded pages, and after a switch those pages are not in the rendered array.
  */
-export function olderHistoryPrefixItems(): number {
+export function olderHistoryPrefixItems(conversationIdForRead: string): number {
+  if (conversationIdForRead !== conversationId) return 0;
   return countOnlyItems(blocks);
 }
 

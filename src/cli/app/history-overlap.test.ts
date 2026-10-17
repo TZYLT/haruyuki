@@ -105,13 +105,15 @@ test("a landed page is one ledger entry, in step with the rows it inserted", asy
   // ledger says exactly that: the count is what the window fitter skips the page by.
   const inserted = getOlderHistoryItems(CONVERSATION).map((item) => item.id);
   expect(inserted).toEqual(["m100", "m101"]);
-  expect(getOlderHistoryBlocks().map((block) => block.itemCount)).toEqual([2]);
-  expect(getOlderHistoryBlocks()[0]?.rows).toBeNull();
+  expect(
+    getOlderHistoryBlocks(CONVERSATION).map((block) => block.itemCount),
+  ).toEqual([2]);
+  expect(getOlderHistoryBlocks(CONVERSATION)[0]?.rows).toBeNull();
 
   // A reported height sticks, and reporting the same one again changes nothing.
   reportOlderHistoryBlockRows("m0", 7);
-  expect(getOlderHistoryBlocks()[0]?.rows).toBe(7);
-  const before = getOlderHistoryBlocks();
+  expect(getOlderHistoryBlocks(CONVERSATION)[0]?.rows).toBe(7);
+  const before = getOlderHistoryBlocks(CONVERSATION);
   reportOlderHistoryBlockRows("m0", 7);
-  expect(getOlderHistoryBlocks()).toBe(before);
+  expect(getOlderHistoryBlocks(CONVERSATION)).toBe(before);
 });
