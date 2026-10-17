@@ -265,12 +265,12 @@ export function useTerminalSelection(
             );
             if (source === "none") {
               showNotice("没有可复制的内容");
-              return true;
+              return "consumed";
             }
             showNotice(
               copyNotice(copyText(text, { stream, copyLocally }), source, text),
             );
-            return true;
+            return "consumed";
           },
         },
       ],

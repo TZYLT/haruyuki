@@ -78,6 +78,31 @@ export interface KeyEvent {
   key: Key;
 }
 
+/**
+ * What a binding decided about the key it matched.
+ *
+ * Spelled out instead of the old `boolean | void`, where `undefined` *meant* consumed:
+ * a handler that merely forgot to return anything silently swallowed the key, and a
+ * callback documented as "return true to consume" (`onBackspaceAtEmpty`) consumed every
+ * decline. "Who owns this key?" is now a question every binding answers, and the
+ * compiler asks it — there is no third state to fall into.
+ */
+export type KeyOutcome = "consumed" | "declined";
+
+/**
+ * Adapt a handler still written as "return false to decline".
+ *
+ * The composer's handlers predate `KeyOutcome`, are shared with callers that are not
+ * bindings, and live in a size-ratcheted file, so the old shape survives *there*. This is
+ * the one place it is translated — which is the point: the rule ("only an explicit
+ * `false` declines, anything else consumes") is stated once, by name, instead of being
+ * re-derived at every binding, and a *new* binding cannot fall into it by forgetting to
+ * return anything (the binding contract has no third state).
+ */
+export function consumeKey(handler: () => boolean | void): () => KeyOutcome {
+  return () => (handler() === false ? "declined" : "consumed");
+}
+
 export interface KeyBinding {
   id: string;
   /**
@@ -86,11 +111,11 @@ export interface KeyBinding {
    */
   chords?: readonly KeyChord[];
   /**
-   * Handle the key. Returning `false` means "matched but not consumed": the
-   * router keeps looking, and finally hands the key to the legacy handlers, so a
-   * binding can claim a key only in the state where it applies.
+   * Handle the key. `DECLINED` means "matched but not consumed": the router keeps
+   * looking, and finally hands the key to the legacy handlers, so a binding can claim a
+   * key only in the state where it applies.
    */
-  run: (event: KeyEvent) => boolean | void;
+  run: (event: KeyEvent) => KeyOutcome;
   /**
    * Reachable only as the second key of the leader prefix, and *only* while the
    * prefix is armed. A plain letter is normally the text editor's; behind the
@@ -152,8 +177,7 @@ export function isNamedKey(value: string): value is NamedKey {
  * empty-draft Backspace is one: it leaves bash mode only when there is nothing
  * to delete and must let the text input have the key otherwise), and the router
  * then has to keep looking.
- */
-export function* matchingBindings(
+ */ export function* matchingBindings(
   bindings: readonly KeyBinding[],
   event: KeyEvent,
 ): Generator<KeyBinding, void, void> {

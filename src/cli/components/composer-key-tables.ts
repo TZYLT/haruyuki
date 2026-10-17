@@ -1,4 +1,5 @@
 import type { KeyBindingTable } from "@/cli/helpers/input-keys";
+import { consumeKey } from "@/cli/helpers/input-keys";
 import { APP_KEY_CHORDS, LEADER_KEY_CHORDS } from "@/cli/helpers/keymap";
 
 /**
@@ -61,11 +62,11 @@ export function composerKeyTables(
         {
           id: "profile.confirm",
           chords: [{ key: "return" }],
-          run: handlers.profileConfirm,
+          run: consumeKey(handlers.profileConfirm),
         },
         // Anything else cancels. A catch-all only runs when no chord above
         // matched, so it cannot shadow the confirm binding.
-        { id: "profile.cancel", run: handlers.profileCancel },
+        { id: "profile.cancel", run: consumeKey(handlers.profileCancel) },
       ],
     });
   }
@@ -76,49 +77,49 @@ export function composerKeyTables(
       {
         id: "transcript.toggleShellOutput",
         chords: APP_KEY_CHORDS.toggleShellOutput,
-        run: handlers.toggleShellOutput,
+        run: consumeKey(handlers.toggleShellOutput),
       },
       {
         id: "transcript.toggleSystemReminders",
         chords: APP_KEY_CHORDS.toggleSystemReminders,
-        run: handlers.toggleSystemReminders,
+        run: consumeKey(handlers.toggleSystemReminders),
       },
       {
         id: "transcript.toggleThinking",
         chords: APP_KEY_CHORDS.toggleThinking,
-        run: handlers.toggleThinking,
+        run: consumeKey(handlers.toggleThinking),
       },
       {
         id: "app.interrupt",
         chords: APP_KEY_CHORDS.interrupt,
-        run: handlers.interrupt,
+        run: consumeKey(handlers.interrupt),
       },
       {
         id: "app.clearOrExit",
         chords: APP_KEY_CHORDS.clearOrExit,
-        run: handlers.clearOrExit,
+        run: consumeKey(handlers.clearOrExit),
       },
       {
         id: "app.cycleReasoningEffort",
         chords: APP_KEY_CHORDS.cycleReasoningEffort,
-        run: handlers.cycleReasoningEffort,
+        run: consumeKey(handlers.cycleReasoningEffort),
       },
       {
         id: "app.cyclePermissionMode",
         chords: APP_KEY_CHORDS.cyclePermissionMode,
-        run: handlers.cyclePermissionMode,
+        run: consumeKey(handlers.cyclePermissionMode),
       },
       {
         id: "leader.activate",
         chords: LEADER_KEY_CHORDS.activate,
-        run: handlers.armLeader,
+        run: consumeKey(handlers.armLeader),
       },
       {
         id: "leader.help",
         leader: true,
         chords: LEADER_KEY_CHORDS.help,
         label: "列出可用键",
-        run: handlers.leaderHelp,
+        run: consumeKey(handlers.leaderHelp),
       },
     ],
   });

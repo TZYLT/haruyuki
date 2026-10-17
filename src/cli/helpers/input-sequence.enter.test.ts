@@ -98,7 +98,7 @@ const RETURN_TABLE: KeyBindingTable[] = [
       {
         id: "test.return",
         chords: [{ key: "return" }],
-        run: () => true,
+        run: () => "consumed",
       },
     ],
   },

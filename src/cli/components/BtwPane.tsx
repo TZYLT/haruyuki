@@ -52,9 +52,9 @@ export const BtwPane = memo(
             id: "btw.dismiss",
             chords: [{ key: "escape" }],
             run: () => {
-              if (!complete) return false;
+              if (!complete) return "declined";
               onDismiss?.();
-              return true;
+              return "consumed";
             },
           },
           {
@@ -63,9 +63,9 @@ export const BtwPane = memo(
             chords: [{ key: "j" }],
             label: "切到分叉会话",
             run: () => {
-              if (!complete || !state.forkedConversationId) return false;
+              if (!complete || !state.forkedConversationId) return "declined";
               onJumpToConversation?.(state.forkedConversationId);
-              return true;
+              return "consumed";
             },
           },
         ],

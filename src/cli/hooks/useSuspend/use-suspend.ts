@@ -94,7 +94,9 @@ export function useSuspend() {
             // uncaught exception and a process exit. The key is inert on
             // Windows.
             if (process.platform === "win32") {
-              return;
+              // Inert *and* consumed, which is what the implicit fall-through used to
+              // mean: the key is the shell's, and nothing else should act on it.
+              return "consumed";
             }
 
             // Mouse reporting is not part of Ink's hand-over, and it must not
@@ -124,6 +126,7 @@ export function useSuspend() {
               .finally(() => {
                 if (mouseWasOn) enableMouseTracking();
               });
+            return "consumed";
           },
         },
       ],

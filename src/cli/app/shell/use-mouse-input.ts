@@ -74,6 +74,7 @@ export function useMouseInput(
                 ? "鼠标上报已开启（拖拽选择 → ctrl+x y 复制；终端原生选择用 shift 拖拽）"
                 : "鼠标上报已关闭（终端原生选择与右键菜单恢复；ctrl+x m 可再开）",
             );
+            return "consumed";
           },
         },
       ],

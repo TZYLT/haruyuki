@@ -18,7 +18,8 @@ import {
   translatePasteForImages,
   tryImportClipboardImageMac,
 } from "@/cli/helpers/clipboard";
-import type { KeyBindingTable } from "@/cli/helpers/input-keys";
+import type { KeyBindingTable, KeyOutcome } from "@/cli/helpers/input-keys";
+import { consumeKey } from "@/cli/helpers/input-keys";
 import { forwardInputEvent } from "@/cli/helpers/input-router";
 import { COMPOSER_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { allocatePaste } from "@/cli/helpers/paste-registry";
@@ -324,11 +325,11 @@ export function PasteAwareTextInput({
   }, []);
 
   /** A binding that applies only while this input is the focused one. */
-  const whileFocused = (run: () => void): (() => boolean | void) => {
+  const whileFocused = (run: () => void): (() => KeyOutcome) => {
     return () => {
-      if (!focusRef.current) return false;
+      if (!focusRef.current) return "declined";
       run();
-      return true;
+      return "consumed";
     };
   };
 
@@ -381,8 +382,8 @@ export function PasteAwareTextInput({
         id: `${scope}.editor.pasteImageMac`,
         chords: COMPOSER_KEY_CHORDS.pasteImageMac,
         run: () => {
-          if (!focusRef.current) return false;
-          return pasteImageMac();
+          if (!focusRef.current) return "declined";
+          return consumeKey(pasteImageMac)();
         },
       },
       {
@@ -396,8 +397,8 @@ export function PasteAwareTextInput({
         id: `${scope}.editor.backspaceAtEmpty`,
         chords: COMPOSER_KEY_CHORDS.backspaceAtEmpty,
         run: () => {
-          if (!focusRef.current) return false;
-          return backspaceAtEmpty();
+          if (!focusRef.current) return "declined";
+          return consumeKey(backspaceAtEmpty)();
         },
       },
     ],

@@ -219,7 +219,7 @@ describe("BtwPane", () => {
             chords: [{ key: "o", ctrl: true }],
             run: () => {
               runs.push("run");
-              return true;
+              return "consumed";
             },
           },
         ],

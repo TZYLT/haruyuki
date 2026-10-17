@@ -78,7 +78,7 @@ function registerLeaderBindings(extra = true): void {
           leader: true,
           chords: LEADER_KEY_CHORDS.help,
           label: "列出可用键",
-          run: () => {},
+          run: () => "consumed",
         },
         ...(extra
           ? [
@@ -87,7 +87,7 @@ function registerLeaderBindings(extra = true): void {
                 leader: true,
                 chords: [{ key: "m" }],
                 label: "切换鼠标上报",
-                run: () => {},
+                run: () => "consumed" as const,
               },
             ]
           : []),

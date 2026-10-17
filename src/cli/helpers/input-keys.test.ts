@@ -108,9 +108,17 @@ describe("matchChord", () => {
 
 function bindings(): KeyBinding[] {
   return [
-    { id: "first", chords: [{ key: "o", ctrl: true }], run: () => true },
-    { id: "declining", chords: [{ key: "o", ctrl: true }], run: () => false },
-    { id: "catch-all", run: () => true },
+    {
+      id: "first",
+      chords: [{ key: "o", ctrl: true }],
+      run: () => "consumed",
+    },
+    {
+      id: "declining",
+      chords: [{ key: "o", ctrl: true }],
+      run: () => "declined",
+    },
+    { id: "catch-all", run: () => "consumed" },
   ];
 }
 
@@ -132,7 +140,11 @@ describe("matchingBindings", () => {
 
   test("yields nothing when there is no match and no catch-all", () => {
     const chordOnly: KeyBinding[] = [
-      { id: "only", chords: [{ key: "o", ctrl: true }], run: () => true },
+      {
+        id: "only",
+        chords: [{ key: "o", ctrl: true }],
+        run: () => "consumed",
+      },
     ];
     expect([...matchingBindings(chordOnly, event(CTRL_G))]).toEqual([]);
     expect(resolveBinding(chordOnly, event(CTRL_G))).toBeUndefined();

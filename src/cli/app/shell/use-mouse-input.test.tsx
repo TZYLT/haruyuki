@@ -98,6 +98,7 @@ function mountMouse(stream: MouseTrackingStream) {
             chords: LEADER_KEY_CHORDS.activate,
             run: () => {
               armLeader();
+              return "consumed";
             },
           },
         ],

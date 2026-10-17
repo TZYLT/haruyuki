@@ -107,7 +107,7 @@ describe("keymap", () => {
                 id: "leader.help",
                 leader: true,
                 chords: LEADER_KEY_CHORDS.help,
-                run: () => {},
+                run: () => "consumed",
               },
             ],
             event as never,

@@ -230,7 +230,7 @@ function routeScopes(
     const bindings = bindingsForScope(scope, options);
     if (bindings.length === 0) continue;
     for (const binding of matchingBindings(bindings, event)) {
-      if (binding.run(event) === false) continue;
+      if (binding.run(event) === "declined") continue;
       return true;
     }
   }

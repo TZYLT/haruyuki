@@ -5,6 +5,7 @@ import {
   resetInputScopes,
 } from "@/cli/helpers/focus-ledger";
 import type { KeyBindingTable } from "@/cli/helpers/input-keys";
+import { consumeKey } from "@/cli/helpers/input-keys";
 import {
   forwardInputEvent,
   installInputRouter,
@@ -43,7 +44,7 @@ function shiftLeftTable(runs: string[]): KeyBindingTable[] {
           chords: [{ key: "leftArrow", shift: true }],
           run: () => {
             runs.push("run");
-            return true;
+            return "consumed";
           },
         },
       ],
@@ -65,11 +66,15 @@ function harness(tables: KeyBindingTable[]) {
   return { emitter, legacy, uninstall };
 }
 
-const shells = (run: () => boolean | void): KeyBindingTable[] => [
+const shells = (handler: () => boolean | void): KeyBindingTable[] => [
   {
     scope: "app",
     bindings: [
-      { id: "transcript.shell", chords: [{ key: "o", ctrl: true }], run },
+      {
+        id: "transcript.shell",
+        chords: [{ key: "o", ctrl: true }],
+        run: consumeKey(handler),
+      },
     ],
   },
 ];
@@ -92,6 +97,7 @@ function leaderTables(runs: string[]): KeyBindingTable[] {
           run: () => {
             runs.push("arm");
             armLeader();
+            return "consumed";
           },
         },
         {
@@ -100,6 +106,7 @@ function leaderTables(runs: string[]): KeyBindingTable[] {
           chords: LEADER_KEY_CHORDS.help,
           run: () => {
             runs.push("help");
+            return "consumed";
           },
         },
         // An ordinary app chord, to prove a second key does not reach it through
@@ -109,6 +116,7 @@ function leaderTables(runs: string[]): KeyBindingTable[] {
           chords: [{ key: "o", ctrl: true }],
           run: () => {
             runs.push("shell");
+            return "consumed";
           },
         },
       ],
@@ -147,6 +155,7 @@ describe("the leader prefix in the router", () => {
             chords: LEADER_KEY_CHORDS.activate,
             run: () => {
               armLeader();
+              return "consumed";
             },
           },
           {
@@ -156,6 +165,7 @@ describe("the leader prefix in the router", () => {
             run: () => {
               runs.push("help");
               armLeader({ help: true });
+              return "consumed";
             },
           },
         ],
@@ -209,6 +219,7 @@ describe("the leader prefix in the router", () => {
             chords: [{ key: "escape" }],
             run: () => {
               interrupted.push("interrupt");
+              return "consumed";
             },
           },
         ],
@@ -280,12 +291,12 @@ describe("input router", () => {
           {
             id: "first.declines",
             chords: [{ key: "o", ctrl: true }],
-            run: () => false,
+            run: () => "declined",
           },
           {
             id: "second.consumes",
             chords: [{ key: "o", ctrl: true }],
-            run: () => true,
+            run: () => "consumed",
           },
         ],
       },
@@ -325,7 +336,7 @@ describe("input router", () => {
             chords: [{ key: "z", ctrl: true }],
             run: () => {
               ran.push("suspend");
-              return true;
+              return "consumed";
             },
           },
         ],
@@ -350,7 +361,7 @@ describe("input router", () => {
             chords: [{ key: "o", ctrl: true }],
             run: () => {
               order.push("first");
-              return true;
+              return "consumed";
             },
           },
         ],
@@ -365,7 +376,7 @@ describe("input router", () => {
             chords: [{ key: "o", ctrl: true }],
             run: () => {
               order.push("second");
-              return true;
+              return "consumed";
             },
           },
         ],
@@ -424,7 +435,7 @@ describe("input router", () => {
             chords: [{ key: "o", ctrl: true }],
             run: () => {
               seen += 1;
-              return false; // decline, so the event is forwarded
+              return "declined"; // so the event is forwarded
             },
           },
         ],
@@ -461,7 +472,7 @@ describe("input router", () => {
             chords: [{ key: "backspace" }],
             run: () => {
               runs += 1;
-              return false; // decline
+              return "declined";
             },
           },
         ],
@@ -500,7 +511,7 @@ describe("input router", () => {
             chords: [{ key: "return", shift: true }],
             run: () => {
               runs += 1;
-              return false; // decline
+              return "declined";
             },
           },
         ],

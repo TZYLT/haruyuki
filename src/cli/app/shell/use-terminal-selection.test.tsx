@@ -111,6 +111,7 @@ function mountSelection(options: {
             chords: LEADER_KEY_CHORDS.activate,
             run: () => {
               armLeader();
+              return "consumed";
             },
           },
         ],

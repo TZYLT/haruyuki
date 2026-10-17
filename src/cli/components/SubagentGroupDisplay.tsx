@@ -362,6 +362,7 @@ export const SubagentGroupDisplay = memo(() => {
           chords: APP_KEY_CHORDS.toggleSubagents,
           run: () => {
             toggleExpanded();
+            return "consumed";
           },
         },
       ],

@@ -239,6 +239,7 @@ export function ViewportTranscript(props: AppViewProps) {
           chords: APP_KEY_CHORDS.scrollPageUp,
           run: () => {
             scrollTranscriptPage("up");
+            return "consumed";
           },
         },
         {
@@ -246,6 +247,7 @@ export function ViewportTranscript(props: AppViewProps) {
           chords: APP_KEY_CHORDS.scrollPageDown,
           run: () => {
             scrollTranscriptPage("down");
+            return "consumed";
           },
         },
         {
@@ -253,6 +255,7 @@ export function ViewportTranscript(props: AppViewProps) {
           chords: APP_KEY_CHORDS.scrollToNewest,
           run: () => {
             jumpTranscriptToNewest();
+            return "consumed";
           },
         },
         {
@@ -260,6 +263,7 @@ export function ViewportTranscript(props: AppViewProps) {
           chords: APP_KEY_CHORDS.scrollToOldest,
           run: () => {
             jumpTranscriptToOldest();
+            return "consumed";
           },
         },
       ],
