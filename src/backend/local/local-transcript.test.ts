@@ -19,6 +19,7 @@ import {
   restrictLocalTranscriptToResidentMessages,
   spliceOutOfContextMessages,
 } from "@/backend/local/local-transcript";
+import type { StoredMessage } from "@/backend/local/local-types";
 
 const temporaryDirectories: string[] = [];
 
@@ -541,6 +542,63 @@ describe("in-context tail window and unread head validation", () => {
       include_out_of_context: true,
     } as ConversationMessageListBody);
     expect(older).toHaveLength(0);
+  });
+
+  test("a walk of pages reaches the first turn, and no further", async () => {
+    // The paging contract the viewport depends on: every page is full until the
+    // log's own start, the walk lands on the first turn, and a page asked for from
+    // there is empty. A short page is the *only* signal of "this is the start", so
+    // the walk stopping earlier than the log does is a silent ceiling (measured from
+    // the machine as "the transcript will not scroll back any further").
+    const storageDir = await seedTranscript({ compactKeep: 2 });
+    const store = freshStore(storageDir);
+
+    // The window the TUI resumes with: the in-context projection, so after a
+    // compaction its oldest row is the summary and paging starts from there.
+    const core = store.listConversationMessages("default", {
+      agent_id: agentId,
+      limit: 40,
+      order: "desc",
+    } as ConversationMessageListBody);
+    const coreIds = new Set(core.map((message) => message.id));
+
+    let cursor = core.at(-1)?.id ?? "";
+    const pageLengths: number[] = [];
+    const walked: StoredMessage[] = [];
+    for (let page = 0; page < 10; page += 1) {
+      const desc = store.listConversationMessages("default", {
+        agent_id: agentId,
+        limit: 50,
+        order: "desc",
+        before: cursor,
+        include_out_of_context: true,
+      } as ConversationMessageListBody);
+      pageLengths.push(desc.length);
+      if (desc.length === 0) break;
+      // Oldest first, exactly as the viewport assembles a page.
+      const oldestFirst = [...desc].reverse();
+      walked.unshift(...oldestFirst);
+      cursor = oldestFirst[Math.min(1, oldestFirst.length - 1)]?.id ?? "";
+      if (oldestFirst.length < 50) break;
+    }
+
+    // Full pages until the log's start, then the short one.
+    expect(pageLengths[0]).toBe(50);
+    expect(pageLengths.at(-1)).toBeLessThan(50);
+    // The walk landed on the conversation's first turn...
+    expect(JSON.stringify(walked[0])).toContain("turn-0-");
+    // ...and it walked past the compaction, not just up to it.
+    expect(walked.some((message) => !coreIds.has(message.id))).toBe(true);
+    // Nothing is left before it.
+    expect(
+      store.listConversationMessages("default", {
+        agent_id: agentId,
+        limit: 50,
+        order: "desc",
+        before: walked[0]?.id ?? "",
+        include_out_of_context: true,
+      } as ConversationMessageListBody),
+    ).toHaveLength(0);
   });
 });
 
