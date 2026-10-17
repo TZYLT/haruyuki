@@ -119,6 +119,85 @@ export interface RowMeasureOptions {
   substitutions?: ApprovalSubstitutions;
 }
 
+/**
+ * Everything that changes an item's measured **height**, as one value.
+ *
+ * The viewport records a page's height once and then *skips* that page on every later
+ * walk, so a layout change has to invalidate the recorded number (`older-history.ts`,
+ * `setOlderHistoryRowsKey`). That only works if the key and the measurement are built
+ * from the same values — which is what this type is for: the viewport builds one of
+ * these, measures with it, and derives the key from it, so the two cannot drift.
+ *
+ * `Record<keyof RowLayoutOptions, true>` below makes this list **exhaustive at
+ * compile time**: adding a field here without adding it to `LAYOUT_FIELDS` (and so to
+ * the key) is a type error, and the test walks every field to prove the key moves.
+ * Add any new height-affecting display input to both.
+ */
+export interface RowLayoutOptions {
+  /** Total terminal columns. */
+  columns: number;
+  /** Total terminal rows; sizes the approval preview budgets. */
+  terminalRows?: number;
+  /** Full prompt prefix for user rows; defaults to `<glyph> `. */
+  userPromptPrefix?: string;
+  /** Whether collapsed reasoning rows render their body (`Ctrl+T`). */
+  reasoningExpanded?: boolean;
+  /** Whether system-reminder blocks render at all (`Ctrl+R`). */
+  systemRemindersVisible?: boolean;
+  /** Whether reminder and recall blocks render their full body (`Ctrl+R`). */
+  systemRemindersExpanded?: boolean;
+  /** Tier the transcript renders recall blocks with. */
+  recallDisplay?: RecallDisplay;
+  /** Tool call whose shell output the user expanded (`Ctrl+O`). */
+  expandedToolCallId?: string | null;
+  /** Shell tool call that owns the `Ctrl+O` expand hint. */
+  lastShellToolCallId?: string | null;
+  /**
+   * How many diffs are in the frame's precomputed map.
+   *
+   * The map is mutated in place, so its identity says nothing; a number that grows
+   * when a diff arrives is the cheap signal that a tool row now draws rows it did not
+   * draw when the page was measured.
+   */
+  diffCount: number;
+  /**
+   * Signature of the frame's approval substitutions.
+   *
+   * Which tool call is being approved, whether its preview is shown, and how many
+   * pending/queued stubs there are all change a tool row's height (a stub is shorter
+   * than the tool call it stands in for).
+   */
+  substitutionsSignature: string;
+}
+
+/** The fields `rowLayoutKey` reads. Exhaustive by construction (see the type). */
+export const LAYOUT_FIELDS: Record<keyof RowLayoutOptions, true> = {
+  columns: true,
+  terminalRows: true,
+  userPromptPrefix: true,
+  reasoningExpanded: true,
+  systemRemindersVisible: true,
+  systemRemindersExpanded: true,
+  recallDisplay: true,
+  expandedToolCallId: true,
+  lastShellToolCallId: true,
+  diffCount: true,
+  substitutionsSignature: true,
+};
+
+/**
+ * The key a measured height was recorded under.
+ *
+ * Deliberately a string: it is stored on the ledger entry and compared for equality,
+ * never parsed. `undefined` and `""` collapse together, which is what we want — a
+ * field being absent is not a different layout from it being empty.
+ */
+export function rowLayoutKey(options: RowLayoutOptions): string {
+  return (Object.keys(LAYOUT_FIELDS) as (keyof RowLayoutOptions)[])
+    .map((field) => `${field}=${options[field] ?? ""}`)
+    .join("|");
+}
+
 /** The subset of the measure options the approval layout needs. */
 function approvalMeasureOptions(
   options: RowMeasureOptions,

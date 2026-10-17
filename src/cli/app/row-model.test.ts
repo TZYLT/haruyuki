@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { measureLineRows } from "@/cli/app/row-model";
+import {
+  LAYOUT_FIELDS,
+  measureLineRows,
+  type RowLayoutOptions,
+  rowLayoutKey,
+} from "@/cli/app/row-model";
 import {
   layoutMarkdownTable,
   parseMarkdownTable,
@@ -489,5 +494,58 @@ describe("paddedRows row width (A7)", () => {
     const rows = paddedRows([{ text: "x".repeat(78) }, { text: "你" }], 80, 0);
     expect(rows).toHaveLength(1);
     expect(rowWidth(rows[0] ?? [])).toBe(80);
+  });
+});
+
+/**
+ * The ledger key a measured page height is recorded under.
+ *
+ * The viewport *skips* a page it has a height for, so a layout field missing from this
+ * key is a page whose recorded number silently describes the layout the reader has
+ * left. `LAYOUT_FIELDS` is exhaustive by type (`Record<keyof RowLayoutOptions, true>`),
+ * and this walks it: every field has to move the key on its own.
+ */
+describe("rowLayoutKey", () => {
+  const BASE: RowLayoutOptions = {
+    columns: 80,
+    terminalRows: 24,
+    userPromptPrefix: "> ",
+    reasoningExpanded: false,
+    systemRemindersVisible: true,
+    systemRemindersExpanded: false,
+    recallDisplay: "summary",
+    expandedToolCallId: null,
+    lastShellToolCallId: null,
+    diffCount: 0,
+    substitutionsSignature: "",
+  };
+
+  /** A value different from `value`, of the same kind where that matters. */
+  function otherValue(value: unknown): unknown {
+    if (typeof value === "number") return value + 1;
+    if (typeof value === "boolean") return !value;
+    if (typeof value === "string") return `${value}x`;
+    return "set";
+  }
+
+  test("moves for every field that can change an item's height", () => {
+    const base = rowLayoutKey(BASE);
+    const unmoved: string[] = [];
+    for (const field of Object.keys(
+      LAYOUT_FIELDS,
+    ) as (keyof RowLayoutOptions)[]) {
+      const changed = { ...BASE, [field]: otherValue(BASE[field]) };
+      if (rowLayoutKey(changed) === base) unmoved.push(field);
+    }
+    expect(unmoved).toEqual([]);
+  });
+
+  test("is stable for the same layout, and treats absent as empty", () => {
+    expect(rowLayoutKey(BASE)).toBe(rowLayoutKey({ ...BASE }));
+    // A field that is absent and one that is empty are the same layout: the key is a
+    // comparison token, not a serialization.
+    expect(rowLayoutKey({ ...BASE, userPromptPrefix: undefined })).toBe(
+      rowLayoutKey({ ...BASE, userPromptPrefix: "" }),
+    );
   });
 });

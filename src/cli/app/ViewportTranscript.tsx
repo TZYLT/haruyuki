@@ -35,7 +35,12 @@ import {
   subscribeToOlderHistory,
   transcriptLines,
 } from "./older-history";
-import { measureTranscriptItemRows, type RowMeasureOptions } from "./row-model";
+import {
+  measureTranscriptItemRows,
+  type RowLayoutOptions,
+  type RowMeasureOptions,
+  rowLayoutKey,
+} from "./row-model";
 import { TranscriptItemView } from "./TranscriptItem";
 import type { StaticItem } from "./types";
 import { ViewportPanel } from "./ViewportPanel";
@@ -290,6 +295,52 @@ export function ViewportTranscript(props: AppViewProps) {
   const olderPrefix = useSyncExternalStore(subscribeToOlderHistory, () =>
     olderHistoryPrefixItems(conversationId),
   );
+  // Everything an item's height depends on, built **once** and used for both the
+  // measurement below and the ledger key: a page's height is measured and then
+  // *skipped* by every later walk, so a resize, a `Ctrl+T`/`Ctrl+R` toggle or an
+  // expanded tool call would otherwise leave the ledger describing the layout the
+  // reader just left. Deriving the key from the same value that measures is what keeps
+  // the two from drifting (`row-model.ts` owns the field list and the exhaustiveness
+  // check).
+  const layout = useMemo<RowLayoutOptions>(
+    () => ({
+      columns,
+      terminalRows,
+      userPromptPrefix: statusLinePrompt ? `${statusLinePrompt} ` : undefined,
+      reasoningExpanded,
+      systemRemindersVisible,
+      systemRemindersExpanded,
+      recallDisplay,
+      expandedToolCallId,
+      lastShellToolCallId,
+      diffCount: precomputedDiffs.size,
+      substitutionsSignature: [
+        currentApproval?.toolCallId ?? "",
+        showApprovalPreview ? "preview" : "",
+        pendingIds.size,
+        queuedIds.size,
+        stubDescriptions.size,
+      ].join(","),
+    }),
+    [
+      columns,
+      terminalRows,
+      statusLinePrompt,
+      reasoningExpanded,
+      systemRemindersVisible,
+      systemRemindersExpanded,
+      recallDisplay,
+      expandedToolCallId,
+      lastShellToolCallId,
+      precomputedDiffs,
+      currentApproval?.toolCallId,
+      showApprovalPreview,
+      pendingIds.size,
+      queuedIds.size,
+      stubDescriptions.size,
+    ],
+  );
+
   const window = useMemo(() => {
     return fitBlockedItemsFromEnd({
       blocks: olderBlocks,
@@ -320,19 +371,9 @@ export function ViewportTranscript(props: AppViewProps) {
           );
         }
         return viewportItemRows(item, {
-          columns,
+          ...layout,
           index,
-          terminalRows,
           diffs: precomputedDiffs,
-          expandedToolCallId,
-          lastShellToolCallId,
-          userPromptPrefix: statusLinePrompt
-            ? `${statusLinePrompt} `
-            : undefined,
-          reasoningExpanded,
-          systemRemindersVisible,
-          systemRemindersExpanded,
-          recallDisplay,
           substitutions: {
             currentApproval,
             currentApprovalContext,
@@ -348,17 +389,9 @@ export function ViewportTranscript(props: AppViewProps) {
     });
   }, [
     items,
-    columns,
     height,
-    terminalRows,
+    layout,
     precomputedDiffs,
-    expandedToolCallId,
-    lastShellToolCallId,
-    statusLinePrompt,
-    reasoningExpanded,
-    systemRemindersVisible,
-    systemRemindersExpanded,
-    recallDisplay,
     currentApproval,
     currentApprovalContext,
     approvalMap,
@@ -374,44 +407,7 @@ export function ViewportTranscript(props: AppViewProps) {
     olderPrefix,
   ]);
 
-  // Everything a paged item's height depends on, as one string. A page's height is
-  // measured, then *skipped* by every later walk, so a resize, a `Ctrl+T`/`Ctrl+R`
-  // toggle or an expanded tool call would otherwise leave the ledger describing the
-  // layout the reader just left — and the walk would keep selecting a window from
-  // numbers that no longer match the rows.
-  //
-  // `precomputedDiffs.size` stands in for the diffs themselves: the map is mutated in
-  // place (its identity is stable by design), so its size is the cheap signal that a
-  // tool call now draws rows it did not draw when the page was measured.
-  const rowsKey = useMemo(
-    () =>
-      [
-        columns,
-        terminalRows,
-        reasoningExpanded,
-        systemRemindersVisible,
-        systemRemindersExpanded,
-        recallDisplay,
-        expandedToolCallId ?? "",
-        lastShellToolCallId ?? "",
-        showApprovalPreview,
-        currentApproval?.toolCallId ?? "",
-        precomputedDiffs.size,
-      ].join("|"),
-    [
-      columns,
-      terminalRows,
-      reasoningExpanded,
-      systemRemindersVisible,
-      systemRemindersExpanded,
-      recallDisplay,
-      expandedToolCallId,
-      lastShellToolCallId,
-      showApprovalPreview,
-      currentApproval?.toolCallId,
-      precomputedDiffs,
-    ],
-  );
+  const rowsKey = useMemo(() => rowLayoutKey(layout), [layout]);
 
   // Forget the heights measured under the previous layout, so the walk re-measures
   // those pages instead of skipping them with a stale number. Publishes only on a real
