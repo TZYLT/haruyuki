@@ -656,3 +656,49 @@ describe("a layout change with pages measured", () => {
     }
   });
 });
+
+/**
+ * Bounded residency in the steady state.
+ *
+ * Following the newest leaves every paged page behind the window, which is exactly when
+ * they can be dropped: the walk counts them whether or not they are materialized, so a
+ * page comes back from the messages it already holds. Keeping them all is what made a
+ * long session's transcript grow without bound while the band showed a dozen rows.
+ */
+describe("following the newest with pages loaded", () => {
+  test("keeps only the neighbourhood of the window materialized", async () => {
+    let pages = 0;
+    pageIn(() => {
+      pages += 1;
+      const page = pages;
+      return Array.from({ length: 50 }, (_, index) =>
+        historyMessage(`p${page}-${index}`, `older page ${page} item ${index}`),
+      );
+    });
+    const { stop } = await mountRelayoutViewport();
+    try {
+      for (let page = 0; page < 4; page += 1) {
+        expect(await requestOlderHistory(0)).toBe("loaded");
+      }
+      await sleep(150);
+      // Read through them once, so the pages have heights (an unmeasured page is never
+      // dropped) ...
+      jumpTranscriptToOldest();
+      await sleep(300);
+      expect(olderHistoryPrefixItems(CONVERSATION)).toBe(0);
+
+      // ... then follow the newest again: everything but the page next to the core is
+      // now behind the window and becomes a count.
+      jumpTranscriptToNewest();
+      await sleep(300);
+      expect(olderHistoryPrefixItems(CONVERSATION)).toBeGreaterThan(0);
+      expect(getOlderHistoryItems(CONVERSATION).length).toBeLessThanOrEqual(50);
+      // The band still draws: the walk counts the dropped pages, they are just not in
+      // the rendered array.
+      expect(frameText()).toContain("core message");
+      expect(frameText()).not.toContain("older page");
+    } finally {
+      stop();
+    }
+  });
+});

@@ -430,10 +430,18 @@ export function ViewportTranscript(props: AppViewProps) {
   // same frame.
   useEffect(() => {
     const resident = window.resident;
-    if (resident === null) return;
+    if (resident === null) {
+      // The window is entirely in the core: *every* page is behind it, which is the
+      // steady state while following the newest — the one place residency has to be
+      // bounded, or a session keeps every page it ever paged materialized. One page is
+      // kept so that a window hovering on the core's edge does not evict and
+      // materialize the same page on alternating frames.
+      evictOlderHistoryBlocksBefore(Math.max(0, olderBlocks.length - 1));
+      return;
+    }
     if (materializeOlderHistoryBlocks(resident.from - 1, resident.to)) return;
     evictOlderHistoryBlocksBefore(Math.max(0, resident.from - 1));
-  }, [window]);
+  }, [window, olderBlocks.length]);
 
   // Hand the walk's own measurements back to the ledger. A page whose height is known
   // is one step on the next walk instead of one measurement per item, which is the
