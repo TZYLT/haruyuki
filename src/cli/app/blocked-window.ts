@@ -87,8 +87,18 @@ export function fitBlockedItemsFromEnd(
     return -1;
   };
 
-  /** Heights this walk measured item by item, per page. */
-  const measured = new Map<string, { rows: number; seen: number }>();
+  /**
+   * Heights this walk measured item by item, per page, **by item index**.
+   *
+   * Keyed by index rather than accumulated per call on purpose: the step provider is
+   * asked more than once at the same boundary (the first walk breaks on a step that
+   * does not fit and the second restarts there; the anchor translation and the
+   * fold-back re-walk go over the same ground), and counting calls made a page look
+   * "seen in full" with a height of roughly twice its rows. A height recorded that way
+   * is skipped by every later walk, so the window it selects drifts from the rows on
+   * screen.
+   */
+  const seenRows = new Map<string, Map<number, number>>();
 
   const steps =
     (rowsAt: (index: number) => number): WindowStepAt =>
@@ -119,11 +129,12 @@ export function fitBlockedItemsFromEnd(
       // only a count has no rows to measure, whatever the caller's fallback reads.
       const measuredHere = input.isMaterialized?.(index - 1) ?? true;
       if (owningBlock !== undefined && measuredHere) {
-        const entry = measured.get(owningBlock.key);
-        measured.set(owningBlock.key, {
-          rows: (entry?.rows ?? 0) + single,
-          seen: (entry?.seen ?? 0) + 1,
-        });
+        let perItem = seenRows.get(owningBlock.key);
+        if (perItem === undefined) {
+          perItem = new Map();
+          seenRows.set(owningBlock.key, perItem);
+        }
+        perItem.set(index - 1, single);
       }
       return { items: 1, rows: single };
     };
@@ -143,10 +154,12 @@ export function fitBlockedItemsFromEnd(
   // no total, and reporting a partial one would make the next walk skip rows it never
   // accounted for.
   const measuredBlocks = blocks.flatMap((block) => {
-    const entry = measured.get(block.key);
-    if (entry === undefined) return [];
-    if (entry.seen < Math.max(1, Math.trunc(block.itemCount))) return [];
-    return [{ key: block.key, rows: entry.rows }];
+    const perItem = seenRows.get(block.key);
+    if (perItem === undefined) return [];
+    if (perItem.size < Math.max(1, Math.trunc(block.itemCount))) return [];
+    let rows = 0;
+    for (const value of perItem.values()) rows += value;
+    return [{ key: block.key, rows }];
   });
 
   return {
