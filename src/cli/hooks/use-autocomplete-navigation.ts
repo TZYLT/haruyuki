@@ -24,6 +24,23 @@ interface UseAutocompleteNavigationResult {
 }
 
 /**
+ * Whether a modifier is held with the key.
+ *
+ * Tab and Return are only this hook's while they are *plain*: the key table owns
+ * Shift+Tab (cycle the permission mode) and Shift+Enter (insert a newline), and under
+ * the kitty protocol those arrive as CSI-u sequences that the raw shield deliberately
+ * does not cover, so both consumers would act on one keystroke — the permission mode
+ * flipped *and* the highlighted completion accepted.
+ */
+function hasModifier(key: {
+  shift?: boolean;
+  ctrl?: boolean;
+  meta?: boolean;
+}): boolean {
+  return key.shift === true || key.ctrl === true || key.meta === true;
+}
+
+/**
  * Shared hook for autocomplete keyboard navigation.
  * Handles up/down arrow keys for selection and Tab/Enter for confirmation.
  */
@@ -74,7 +91,7 @@ export function useAutocompleteNavigation<T>({
       setSelectedIndex((prev) => (prev > 0 ? prev - 1 : maxIndex));
     } else if (key.downArrow) {
       setSelectedIndex((prev) => (prev < maxIndex ? prev + 1 : 0));
-    } else if (key.tab) {
+    } else if (key.tab && !hasModifier(key)) {
       const selected = matches[selectedIndex];
       if (selected) {
         // Tab: use onAutocomplete if provided, otherwise fall back to onSelect
@@ -84,7 +101,7 @@ export function useAutocompleteNavigation<T>({
           onSelect(selected);
         }
       }
-    } else if (key.return && onSelect) {
+    } else if (key.return && !hasModifier(key) && onSelect) {
       const selected = matches[selectedIndex];
       if (selected) {
         onSelect(selected);

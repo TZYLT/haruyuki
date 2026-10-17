@@ -602,4 +602,24 @@ describe("mouse reports in the router", () => {
     expect(legacy).toEqual([SHIFT_LEFT_ARROW]);
     uninstall();
   });
+
+  test("a report with a zero coordinate is still a report, never text", () => {
+    // The shape is matched, so it has already been kept away from the text editor:
+    // returning "not a report" for a coordinate outside the 1-based grammar put the
+    // bytes into the draft instead. Both coordinates are clamped by the parser and
+    // the report is spent like any other.
+    const { emitter, legacy, uninstall } = harness(shells(() => true));
+    const seen: string[] = [];
+    registerMouseHandler((report) => {
+      seen.push(`${report.column},${report.row}`);
+      return true;
+    });
+
+    emitter.emit("input", `${ESC}[<0;0;5M`);
+    emitter.emit("input", `${ESC}[<0;10;0M`);
+
+    expect(seen).toEqual(["1,5", "10,1"]);
+    expect(legacy).toEqual([]);
+    uninstall();
+  });
 });

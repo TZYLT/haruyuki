@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  isMouseReport,
   type MouseReport,
   parseMouseReport,
 } from "@/cli/helpers/mouse-sequence";
@@ -93,7 +92,11 @@ describe("mouse report parsing", () => {
     });
   });
 
-  test("reads the X10 form, which is what a terminal sends without 1006", () => {
+  test("reads the X10 form when a caller sees the whole payload", () => {
+    // A parse-level guard only: Ink's parser splits `ESC [ M` from its three payload
+    // bytes, so the app never receives this shape and X10-only terminals are covered
+    // by `Ctrl+X m` instead. The branch stays because the caller's contract is that no
+    // report-shaped payload reaches the text path.
     expect(summary(parseMouseReport(x10(0, 1, 2)))).toEqual({
       kind: "press",
       button: "left",
@@ -114,6 +117,18 @@ describe("mouse report parsing", () => {
     expect(parseMouseReport(sgr(131, 1, 1))).toBeDefined();
   });
 
+  test("claims a report whose coordinates are outside the grammar", () => {
+    // `undefined` means "not a report" and nothing else. A report that matched the
+    // grammar has already been kept away from the text editor at this point, so a
+    // coordinate of 0 (X10 payloads below 0x20, an off-screen position some reporters
+    // round down) must be clamped rather than rejected: rejecting it here is what put
+    // the bytes back into the draft.
+    expect(summary(parseMouseReport(sgr(0, 0, 5)))?.position).toEqual([1, 5]);
+    expect(summary(parseMouseReport(sgr(0, 10, 0)))?.position).toEqual([10, 1]);
+    // An X10 payload byte below 0x20 decodes to a negative coordinate.
+    expect(summary(parseMouseReport(x10(0, -32, 1)))?.position).toEqual([1, 1]);
+  });
+
   test("rejects everything that is not a mouse report", () => {
     const notMouse = [
       "hello",
@@ -123,21 +138,12 @@ describe("mouse report parsing", () => {
       `${ESC}[<0;10;5X`, // unknown final byte
       `${ESC}[<;10;5M`,
       `${ESC}[<0;10;5`, // truncated
-      `${ESC}[<0;0;5M`, // columns and rows are 1-based
-      `${ESC}[<0;10;0M`,
       `${ESC}[M`, // X10 header without its payload
-      `${ESC}[Mab`, // payload byte below 0x20
+      `${ESC}[Mab`, // five bytes: too short for the three-byte payload
       `${ESC}[25;2;13~`,
     ];
     for (const raw of notMouse) {
       expect([raw, parseMouseReport(raw)]).toEqual([raw, undefined]);
-      expect(isMouseReport(raw)).toBe(false);
-    }
-  });
-
-  test("agrees with itself through the boolean helper", () => {
-    for (const raw of [sgr(0, 1, 1), sgr(64, 9, 9), x10(0, 1, 1)]) {
-      expect(isMouseReport(raw)).toBe(true);
     }
   });
 });

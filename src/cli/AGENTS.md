@@ -31,11 +31,14 @@ file to change.
   competing raw stdin listeners.
 - **A mouse report is not a key and must never become text.** Ink has no mouse
   API, so a report nobody claims is parsed as input and typed into the draft
-  (`[<0;10;5M`). The input router claims the two encodings before the key path
-  (`helpers/mouse-sequence.ts`), and `helpers/mouse-router.ts` dispatches them to
-  the shell that knows what a wheel notch should do. The terminal modes live in
-  `helpers/mouse-tracking.ts`: every enable is paired with a disable — unmount,
-  process exit, and a `Ctrl+Z` hand-over all give the mouse back, because a
+  (`[<0;10;5M`). The input router claims **SGR** reports (the `1006` mode the shell
+  enables) before the key path (`helpers/mouse-sequence.ts`), and
+  `helpers/mouse-router.ts` dispatches them to the shell that knows what a wheel
+  notch should do. An X10-only terminal is **not** covered: Ink's parser splits
+  `ESC [ M` from its payload before any consumer sees the report, so `Ctrl+X m`
+  (give the mouse back to the terminal) is the escape hatch there. The terminal
+  modes live in `helpers/mouse-tracking.ts`: every enable is paired with a disable —
+  unmount, process exit, and a `Ctrl+Z` hand-over all give the mouse back, because a
   terminal left in mouse mode prints escape garbage into the user's shell.
 - **The selection copies the drag, and reads Ink's frame to do it.** Ink 7 writes
   a whole frame per write, and `helpers/terminal-frame.ts` captures it; the text a
