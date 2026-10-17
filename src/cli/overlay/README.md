@@ -18,7 +18,7 @@ directory exists to be the *one* copy.
 | `list-model.ts` | Pure list behaviour: cursor clamping, the visible window, filtering, multi-select ordering, reordering. No React, no Ink. |
 | `list-view.tsx` | Rendering a window: rows, the "(current)" marker, the "↑/↓ N more" indicators, and the loading/empty/error states. |
 | `list-bindings.ts` | Pure key data: arrows, `j`/`k`, PageUp/PageDown, Home/End, Enter, Escape, Space, ←/→. |
-| `use-overlay-list.ts` | Wiring the model and the key table to the input router, and keeping the state in the leaf. |
+| `use-overlay-list.ts` | Wiring the model and the key table to the input router — including claiming the scope — and keeping the state in the leaf. |
 | `pagination.ts` | Incremental page fetching: generation guard, identity de-duplication, the idle/loading/more/end/error machine. |
 | `text-view.tsx` | The text sub-view — reuses `TextInput`/`PasteAwareTextInput` rather than growing a second editor. |
 | `confirm.tsx` | Option-style and type-to-confirm confirmations. |
@@ -44,6 +44,12 @@ directory exists to be the *one* copy.
    component, never in `AppCoordinator`/`AppView` (see `src/cli/AGENTS.md`) and
    never in a module-level store: an overlay is one component, and a store would
    leak across mounts and tests.
+6. **Claim the scope you bind in.** The router consults only the owning scope plus
+   `system`, so a list that binds `overlay` keys without claiming the `overlay`
+   layer is wired correctly and receives nothing. `useOverlayList` claims it, and
+   the frame declares its container's layer; both are ref-counted, so the app's
+   shell can claim the same layer from the open route without either having to
+   know about the other.
 
 ## Why the keys are data
 
