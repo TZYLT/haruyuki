@@ -25,6 +25,14 @@ export interface OverlayListItem {
   description?: string;
   /** The active value; rendered as `(current)`. */
   isCurrent?: boolean;
+  /**
+   * What the active row says instead of `(current)`, when that is not the whole
+   * story. The toolset list is the one that needs it: its `Auto` row names the
+   * preset the preference resolves to (`Auto (current - Claude)`), so the marker
+   * varies by row and by state. Defaults to `" (current)"` — what every other
+   * list in this tree shows — and is ignored while `isCurrent` is false.
+   */
+  currentLabel?: string;
   /** Rendered dimmed, and a confirm on it is a no-op. */
   disabled?: boolean;
   /** Rendered dimmed but still selectable (the picker's original distinction). */

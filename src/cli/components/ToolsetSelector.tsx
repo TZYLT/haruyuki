@@ -1,15 +1,20 @@
-// Import useInput from vendored Ink for bracketed paste support
-import { Box, useInput } from "ink";
-import { useState } from "react";
-import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
+// Toolset selector.
+//
+// The toolkit's list, not a list of its own: the same frame, the same key table
+// and the same row shape the other overlay lists use. What this face contributes
+// is data — its `Auto` row's marker names the preset the preference resolves to
+// (`currentLabel`), because "which toolset am I actually on" is the question this
+// overlay exists to answer, and `Auto (current)` would not answer it.
+
+import { useCallback, useMemo } from "react";
+import {
+  type SingleSelectItem,
+  SingleSelectPicker,
+} from "@/cli/overlay/adapters";
+import { OverlayFrame } from "@/cli/overlay/frame";
 import type { ToolsetName, ToolsetPreference } from "@/tools/toolset";
 import { TOOLSET_OPTIONS } from "@/tools/toolset-catalog";
 import { formatToolsetName } from "@/tools/toolset-labels";
-import { colors } from "./colors";
-import { Text } from "./Text";
-
-// Horizontal line character (matches approval dialogs)
-const SOLID_LINE = "─";
 
 interface ToolsetSelectorProps {
   currentToolset?: ToolsetName;
@@ -24,91 +29,41 @@ export function ToolsetSelector({
   onSelect,
   onCancel,
 }: ToolsetSelectorProps) {
-  const terminalWidth = useTerminalWidth();
-  const solidLine = SOLID_LINE.repeat(Math.max(terminalWidth, 10));
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const items = useMemo<SingleSelectItem[]>(
+    () =>
+      TOOLSET_OPTIONS.map((toolset) => {
+        const isCurrent = toolset.id === currentPreference;
+        return {
+          key: toolset.id,
+          label: toolset.id === "auto" ? "Auto" : toolset.label,
+          description: toolset.description,
+          isCurrent,
+          // Only `auto` has something extra to say: the preset it resolves to
+          // right now. Every other row takes the standard `(current)` marker.
+          currentLabel:
+            toolset.id === "auto" && isCurrent
+              ? ` (current - ${formatToolsetName(currentToolset)})`
+              : undefined,
+        };
+      }),
+    [currentPreference, currentToolset],
+  );
 
-  useInput((input, key) => {
-    // CTRL-C: immediately cancel
-    if (key.ctrl && input === "c") {
-      onCancel();
-      return;
-    }
-
-    if (key.upArrow) {
-      setSelectedIndex((prev) => Math.max(0, prev - 1));
-    } else if (key.downArrow) {
-      setSelectedIndex((prev) =>
-        Math.min(TOOLSET_OPTIONS.length - 1, prev + 1),
-      );
-    } else if (key.return) {
-      const selectedToolset = TOOLSET_OPTIONS[selectedIndex];
-      if (selectedToolset) {
-        onSelect(selectedToolset.id);
-      }
-    } else if (key.escape) {
-      onCancel();
-    }
-  });
+  const handleSelect = useCallback(
+    (key: string) => {
+      const toolset = TOOLSET_OPTIONS.find((option) => option.id === key);
+      if (toolset) onSelect(toolset.id);
+    },
+    [onSelect],
+  );
 
   return (
-    <Box flexDirection="column">
-      {/* Command header */}
-      <Text dimColor>{"> /toolset"}</Text>
-      <Text dimColor>{solidLine}</Text>
-
-      <Box height={1} />
-
-      {/* Title */}
-      <Box marginBottom={1}>
-        <Text bold color={colors.selector.title}>
-          Swap your agent's toolset
-        </Text>
-      </Box>
-
-      <Box flexDirection="column">
-        {TOOLSET_OPTIONS.map((toolset, index) => {
-          const isSelected = index === selectedIndex;
-          const isCurrent = toolset.id === currentPreference;
-
-          const labelText =
-            toolset.id === "auto"
-              ? isCurrent
-                ? `Auto (current - ${formatToolsetName(currentToolset)})`
-                : "Auto"
-              : isCurrent
-                ? `${toolset.label} (current)`
-                : toolset.label;
-
-          return (
-            <Box key={toolset.id} flexDirection="row">
-              <Text
-                color={isSelected ? colors.selector.itemHighlighted : undefined}
-              >
-                {isSelected ? "> " : "  "}
-              </Text>
-              <Text
-                bold={isSelected}
-                color={
-                  isSelected
-                    ? colors.selector.itemHighlighted
-                    : isCurrent
-                      ? colors.selector.itemCurrent
-                      : undefined
-                }
-              >
-                {labelText}
-              </Text>
-              <Text dimColor>{` · ${toolset.description}`}</Text>
-            </Box>
-          );
-        })}
-      </Box>
-
-      {/* Footer */}
-      <Box marginTop={1}>
-        <Text dimColor>{"  Enter select · ↑↓ navigate · Esc cancel"}</Text>
-      </Box>
-    </Box>
+    <OverlayFrame command="/toolset" title="Swap your agent's toolset">
+      <SingleSelectPicker
+        items={items}
+        onSelect={handleSelect}
+        onCancel={onCancel}
+      />
+    </OverlayFrame>
   );
 }

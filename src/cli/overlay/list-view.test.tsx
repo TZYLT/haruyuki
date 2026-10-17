@@ -98,12 +98,25 @@ describe("OverlayListView", () => {
         items={[
           { key: "a", label: "Alpha", description: "first", isCurrent: true },
           { key: "b", label: "Beta", dimLabel: true },
+          // The marker belongs to the row, not to the list: the toolset `Auto`
+          // row names the preset it resolves to instead of saying `(current)`.
+          {
+            key: "c",
+            label: "Auto",
+            description: "auto-select",
+            isCurrent: true,
+            currentLabel: " (current - Claude)",
+          },
         ]}
         cursor={0}
       />,
     );
 
-    expect(painted).toEqual(["> Alpha (current) · first", "  Beta"]);
+    expect(painted).toEqual([
+      "> Alpha (current) · first",
+      "  Beta",
+      "  Auto (current - Claude) · auto-select",
+    ]);
   });
 
   test("renders only the window, with the hidden counts on either side", async () => {

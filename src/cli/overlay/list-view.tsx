@@ -71,7 +71,7 @@ function defaultRow(item: OverlayListItem, isCursor: boolean, key: string) {
         dimColor={isDisabled || isDimLabel}
       >
         {item.label}
-        {isCurrent && " (current)"}
+        {isCurrent && (item.currentLabel ?? " (current)")}
       </Text>
       {item.description && <Text dimColor>{` · ${item.description}`}</Text>}
     </Box>

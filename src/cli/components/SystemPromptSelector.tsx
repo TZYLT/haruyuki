@@ -3,9 +3,11 @@
 
 import { memo, useCallback, useMemo, useState } from "react";
 import { SYSTEM_PROMPTS } from "@/agent/prompt-assets";
-import { OverlayShell } from "./OverlayShell";
-import type { SelectableItem } from "./SingleSelectPicker";
-import { SingleSelectPicker } from "./SingleSelectPicker";
+import {
+  type SingleSelectItem,
+  SingleSelectPicker,
+} from "@/cli/overlay/adapters";
+import { OverlayFrame } from "@/cli/overlay/frame";
 
 const SHOW_ALL_KEY = "__show_all__";
 
@@ -36,8 +38,8 @@ export const SystemPromptSelector = memo(function SystemPromptSelector({
   const hasShowAllOption =
     !showAll && visiblePrompts.length < SYSTEM_PROMPTS.length;
 
-  const items = useMemo<SelectableItem[]>(() => {
-    const promptItems: SelectableItem[] = visiblePrompts.map((prompt) => ({
+  const items = useMemo<SingleSelectItem[]>(() => {
+    const promptItems: SingleSelectItem[] = visiblePrompts.map((prompt) => ({
       key: prompt.id,
       label: prompt.label,
       description: prompt.description,
@@ -65,12 +67,12 @@ export const SystemPromptSelector = memo(function SystemPromptSelector({
   );
 
   return (
-    <OverlayShell command="/prompt" title="Swap your agent's system prompt">
+    <OverlayFrame command="/system" title="Swap your agent's system prompt">
       <SingleSelectPicker
         items={items}
         onSelect={handleSelect}
         onCancel={onCancel}
       />
-    </OverlayShell>
+    </OverlayFrame>
   );
 });

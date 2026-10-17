@@ -2,9 +2,9 @@
 // Wraps MultiSelectPicker with experiment-specific logic.
 
 import { memo, useCallback, useMemo } from "react";
+import { MultiSelectPicker } from "@/cli/overlay/adapters";
+import { OverlayFrame } from "@/cli/overlay/frame";
 import type { ExperimentId, ExperimentSnapshot } from "@/experiments/types";
-import { MultiSelectPicker } from "./MultiSelectPicker";
-import { OverlayShell } from "./OverlayShell";
 
 interface ExperimentSelectorProps {
   experiments: ExperimentSnapshot[];
@@ -56,13 +56,13 @@ export const ExperimentSelector = memo(function ExperimentSelector({
   );
 
   return (
-    <OverlayShell command="/experiments" title="Toggle Experiments">
+    <OverlayFrame command="/experiments" title="Toggle Experiments">
       <MultiSelectPicker
         items={items}
         selected={initialSelected}
         onConfirm={handleConfirm}
         onCancel={onCancel}
       />
-    </OverlayShell>
+    </OverlayFrame>
   );
 });
