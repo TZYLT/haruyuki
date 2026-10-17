@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { Box, useInput } from "ink";
+import { Box } from "ink";
 import Link from "ink-link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getScopedMemoryFilesystemRoot } from "@/agent/memory-filesystem";
@@ -11,15 +11,19 @@ import {
   type TreeNode,
 } from "@/agent/memory-scanner";
 import { buildChatUrl, isLocalAgentId } from "@/cli/helpers/app-urls";
+import type { KeyBinding, KeyOutcome } from "@/cli/helpers/input-keys";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
+import { OverlayFrame } from "@/cli/overlay/frame";
 import type { ContextUsageSnapshot } from "@/web/context-usage";
 import { generateAndOpenMemoryViewer } from "@/web/generate-memory-viewer";
 import { colors } from "./colors";
 import { Text } from "./Text";
 
 // Line characters
-const SOLID_LINE = "─";
 const DOTTED_LINE = "╌";
+
+const TITLE = "View your agent's memory";
 
 // Tree view constants
 const TREE_VISIBLE_LINES = 15;
@@ -53,7 +57,6 @@ export function MemfsTreeViewer({
   contextUsage,
 }: MemfsTreeViewerProps) {
   const terminalWidth = useTerminalWidth();
-  const solidLine = SOLID_LINE.repeat(Math.max(terminalWidth, 10));
   const isTmux = Boolean(process.env.TMUX);
   const isLocalAgent = isLocalAgentId(agentId);
   const adeUrl = isLocalAgent
@@ -111,151 +114,178 @@ export function MemfsTreeViewer({
     contentLines.length - FULL_VIEW_VISIBLE_LINES,
   );
 
-  // Handle input
-  useInput((input, key) => {
-    // CTRL-C: immediately close
-    if (key.ctrl && input === "c") {
-      onClose();
-      return;
-    }
-
-    // O: open memory viewer in browser (works in both split and full view)
-    if ((input === "o" || input === "O") && hasGitRepo) {
-      showStatus("Opening in browser...", 10000);
-      generateAndOpenMemoryViewer(agentId, {
-        agentName,
-        conversationId:
-          conversationId !== "default" ? conversationId : undefined,
-        contextUsage,
-      })
-        .then((result) => {
-          if (result.opened) {
-            showStatus("Opened in browser", 3000);
-          } else {
-            showStatus(`Run: open ${result.filePath}`, 15000);
-          }
-        })
-        .catch((err: unknown) =>
-          showStatus(
-            err instanceof Error ? err.message : "Failed to open viewer",
-            5000,
-          ),
-        );
-      return;
-    }
-
-    // ESC: close or return from full view
-    if (key.escape) {
-      if (viewMode === "full") {
-        setViewMode("split");
-        setFullViewScrollOffset(0);
-      } else {
-        onClose();
-      }
-      return;
-    }
-
-    if (viewMode === "split") {
-      // Up/down to navigate files
-      if (key.upArrow) {
-        if (selectedIndex > 0) {
-          // Navigate to previous file
-          const newIndex = selectedIndex - 1;
-          setSelectedIndex(newIndex);
-          // Find where this file is in the full tree (including directories)
-          const newFile = fileNodes[newIndex];
-          if (newFile) {
-            const nodeIndex = treeNodes.findIndex(
-              (n) => n.relativePath === newFile.relativePath,
-            );
-            // Scroll up to show the selected node with context
-            if (nodeIndex >= 0) {
-              const desiredOffset = Math.max(0, nodeIndex - 1);
-              if (desiredOffset < treeScrollOffset) {
-                setTreeScrollOffset(desiredOffset);
-              }
-            }
-          }
-        } else if (treeScrollOffset > 0) {
-          // Already at first file, but can still scroll tree up to show context
-          setTreeScrollOffset(treeScrollOffset - 1);
-        }
-      } else if (key.downArrow && selectedIndex < fileNodes.length - 1) {
-        const newIndex = selectedIndex + 1;
-        setSelectedIndex(newIndex);
-        // Find where this file is in the full tree (including directories)
-        const newFile = fileNodes[newIndex];
-        if (newFile) {
-          const nodeIndex = treeNodes.findIndex(
-            (n) => n.relativePath === newFile.relativePath,
-          );
-          // Scroll down if the selected node is below the visible area
-          if (
-            nodeIndex >= 0 &&
-            nodeIndex >= treeScrollOffset + TREE_VISIBLE_LINES
-          ) {
-            setTreeScrollOffset(nodeIndex - TREE_VISIBLE_LINES + 1);
-          }
-        }
-      } else if (key.return) {
-        // Enter to view full file
-        if (selectedFile) {
-          setViewMode("full");
-          setFullViewScrollOffset(0);
-        }
-      }
+  // Escape leaves the full view and closes from the split view; Ctrl+C closes
+  // from either. They are two bindings for that reason — the hand-written handler
+  // checked Ctrl+C *before* it looked at the mode, so a user in the full view who
+  // pressed it closed the overlay rather than stepping back one level.
+  const leaveOrClose = () => {
+    if (viewMode === "full") {
+      setViewMode("split");
+      setFullViewScrollOffset(0);
     } else {
-      // Full view mode - scroll with up/down
-      if (key.upArrow) {
-        setFullViewScrollOffset((prev) => Math.max(0, prev - 1));
-      } else if (key.downArrow) {
-        setFullViewScrollOffset((prev) =>
-          Math.min(maxFullViewScroll, prev + 1),
-        );
-      }
+      onClose();
     }
-  });
+  };
+
+  const openInBrowser = () => {
+    showStatus("Opening in browser...", 10000);
+    generateAndOpenMemoryViewer(agentId, {
+      agentName,
+      conversationId: conversationId !== "default" ? conversationId : undefined,
+      contextUsage,
+    })
+      .then((result) => {
+        if (result.opened) {
+          showStatus("Opened in browser", 3000);
+        } else {
+          showStatus(`Run: open ${result.filePath}`, 15000);
+        }
+      })
+      .catch((err: unknown) =>
+        showStatus(
+          err instanceof Error ? err.message : "Failed to open viewer",
+          5000,
+        ),
+      );
+  };
+
+  /**
+   * Move the file cursor one row, dragging the tree window with it.
+   *
+   * The cursor walks `fileNodes` while the window is over `treeNodes` — files and
+   * directories both — so a file's position in the tree is looked up rather than
+   * assumed. Declining at either end is what the hand-written handler did by
+   * falling through: nothing moved, and nothing else in this tree wants the key.
+   */
+  const navigateFile = (direction: -1 | 1): KeyOutcome => {
+    if (direction === -1 && selectedIndex === 0) {
+      // Already at the first file, but the tree can still scroll to show context.
+      if (treeScrollOffset === 0) return "declined";
+      setTreeScrollOffset(treeScrollOffset - 1);
+      return "consumed";
+    }
+
+    if (direction === 1 && selectedIndex >= fileNodes.length - 1) {
+      return "declined";
+    }
+
+    const newIndex = selectedIndex + direction;
+    setSelectedIndex(newIndex);
+    const newFile = fileNodes[newIndex];
+    if (!newFile) return "consumed";
+
+    const nodeIndex = treeNodes.findIndex(
+      (node) => node.relativePath === newFile.relativePath,
+    );
+    if (nodeIndex < 0) return "consumed";
+
+    if (direction === -1) {
+      // Scroll up to show the selected node with context.
+      const desiredOffset = Math.max(0, nodeIndex - 1);
+      if (desiredOffset < treeScrollOffset) {
+        setTreeScrollOffset(desiredOffset);
+      }
+    } else if (nodeIndex >= treeScrollOffset + TREE_VISIBLE_LINES) {
+      setTreeScrollOffset(nodeIndex - TREE_VISIBLE_LINES + 1);
+    }
+
+    return "consumed";
+  };
+
+  // The face's keys, as data. They are not list navigation — the cursor walks
+  // files while the window is over the tree, which `useOverlayList` cannot
+  // express — so the table is the face's own, and the router owns the keys.
+  const bindings: KeyBinding[] = [
+    {
+      id: "memfs-tree-viewer.close",
+      chords: [{ key: "c", ctrl: true }],
+      run: () => {
+        onClose();
+        return "consumed";
+      },
+    },
+    {
+      id: "memfs-tree-viewer.leave-full-view",
+      chords: [{ key: "escape" }],
+      run: () => {
+        leaveOrClose();
+        return "consumed";
+      },
+    },
+    {
+      id: "memfs-tree-viewer.open-browser",
+      chords: [{ key: "o" }, { key: "o", shift: true }],
+      run: () => {
+        // No git repo means no memory viewer to build: the key is not ours.
+        if (!hasGitRepo) return "declined";
+        openInBrowser();
+        return "consumed";
+      },
+    },
+    {
+      id: "memfs-tree-viewer.up",
+      chords: [{ key: "upArrow" }],
+      run: () => {
+        if (viewMode === "full") {
+          setFullViewScrollOffset((prev) => Math.max(0, prev - 1));
+          return "consumed";
+        }
+        return navigateFile(-1);
+      },
+    },
+    {
+      id: "memfs-tree-viewer.down",
+      chords: [{ key: "downArrow" }],
+      run: () => {
+        if (viewMode === "full") {
+          setFullViewScrollOffset((prev) =>
+            Math.min(maxFullViewScroll, prev + 1),
+          );
+          return "consumed";
+        }
+        return navigateFile(1);
+      },
+    },
+    {
+      id: "memfs-tree-viewer.open-file",
+      chords: [{ key: "return" }],
+      run: () => {
+        if (viewMode !== "split" || !selectedFile) return "declined";
+        setViewMode("full");
+        setFullViewScrollOffset(0);
+        return "consumed";
+      },
+    },
+  ];
+
+  useKeyBindings("memfs-tree-viewer", [{ scope: "overlay", bindings }]);
 
   // No memfs directory
   if (!memoryExists) {
     return (
-      <Box flexDirection="column">
-        <Text dimColor>{"> /memory"}</Text>
-        <Text dimColor>{solidLine}</Text>
-        <Box height={1} />
-        <Box marginBottom={1}>
-          <Text bold color={colors.selector.title}>
-            View your agent's memory
-          </Text>
-        </Box>
+      <OverlayFrame
+        command="/memory"
+        title={TITLE}
+        footer={<Text dimColor>{"  "}Esc cancel</Text>}
+      >
         <Text dimColor>
           {"  "}Memory filesystem not found at {memoryRoot}
         </Text>
         <Text dimColor>{"  "}Run /memfs enable to set up.</Text>
-        <Box marginTop={1}>
-          <Text dimColor>{"  "}Esc cancel</Text>
-        </Box>
-      </Box>
+      </OverlayFrame>
     );
   }
 
   // Empty state
   if (treeNodes.length === 0) {
     return (
-      <Box flexDirection="column">
-        <Text dimColor>{"> /memory"}</Text>
-        <Text dimColor>{solidLine}</Text>
-        <Box height={1} />
-        <Box marginBottom={1}>
-          <Text bold color={colors.selector.title}>
-            View your agent's memory
-          </Text>
-        </Box>
+      <OverlayFrame
+        command="/memory"
+        title={TITLE}
+        footer={<Text dimColor>{"  "}Esc cancel</Text>}
+      >
         <Text dimColor>{"  "}No files in memory filesystem.</Text>
-        <Box marginTop={1}>
-          <Text dimColor>{"  "}Esc cancel</Text>
-        </Box>
-      </Box>
+      </OverlayFrame>
     );
   }
 
@@ -270,18 +300,29 @@ export function MemfsTreeViewer({
     const barColor = colors.selector.itemHighlighted;
 
     return (
-      <Box flexDirection="column">
-        <Text dimColor>{"> /memory"}</Text>
-        <Text dimColor>{solidLine}</Text>
-        <Box height={1} />
-
-        {/* Title with file path */}
-        <Box marginBottom={1}>
-          <Text bold color={colors.selector.title}>
-            {selectedFile.relativePath}
-          </Text>
-        </Box>
-
+      <OverlayFrame
+        command="/memory"
+        title={selectedFile.relativePath}
+        footer={
+          <Box flexDirection="column">
+            <Text dimColor>
+              {"  "}
+              {charCount.toLocaleString()} chars
+            </Text>
+            {status ? (
+              <Text dimColor>
+                {"  "}
+                {status}
+              </Text>
+            ) : (
+              <Text dimColor>
+                {"  "}↑↓ scroll{hasGitRepo ? " · O open in browser" : ""} · Esc
+                back
+              </Text>
+            )}
+          </Box>
+        }
+      >
         {/* Content with left border */}
         <Box
           borderStyle="single"
@@ -304,26 +345,7 @@ export function MemfsTreeViewer({
         ) : maxFullViewScroll > 0 ? (
           <Text> </Text>
         ) : null}
-
-        {/* Footer */}
-        <Box flexDirection="column" marginTop={1}>
-          <Text dimColor>
-            {"  "}
-            {charCount.toLocaleString()} chars
-          </Text>
-          {status ? (
-            <Text dimColor>
-              {"  "}
-              {status}
-            </Text>
-          ) : (
-            <Text dimColor>
-              {"  "}↑↓ scroll{hasGitRepo ? " · O open in browser" : ""} · Esc
-              back
-            </Text>
-          )}
-        </Box>
-      </Box>
+      </OverlayFrame>
     );
   }
 
@@ -345,18 +367,33 @@ export function MemfsTreeViewer({
   const hasMorePreviewLines = contentLines.length > previewContentLines;
 
   return (
-    <Box flexDirection="column">
-      <Text dimColor>{"> /memory"}</Text>
-      <Text dimColor>{solidLine}</Text>
-      <Box height={1} />
-
-      {/* Title */}
-      <Box marginBottom={1}>
-        <Text bold color={colors.selector.title}>
-          View your agent's memory
-        </Text>
-      </Box>
-
+    <OverlayFrame
+      command="/memory"
+      title={TITLE}
+      footer={
+        <Box flexDirection="column">
+          {status ? (
+            <Text dimColor>
+              {"  "}
+              {status}
+            </Text>
+          ) : (
+            <Box>
+              <Text dimColor>{"  "}↑↓ navigate · Enter view · </Text>
+              {adeUrl && !isTmux && (
+                <Link url={adeUrl}>
+                  <Text dimColor>Edit in ADE</Text>
+                </Link>
+              )}
+              {adeUrl && isTmux && <Text dimColor>Edit in ADE: {adeUrl}</Text>}
+              {!adeUrl && <Text dimColor>Local agent: {agentId}</Text>}
+              {hasGitRepo && <Text dimColor> · O open in browser</Text>}
+              <Text dimColor> · Esc close</Text>
+            </Box>
+          )}
+        </Box>
+      }
+    >
       {/* Top dotted border - full width */}
       <Text dimColor>{DOTTED_LINE.repeat(terminalWidth)}</Text>
 
@@ -476,29 +513,6 @@ export function MemfsTreeViewer({
 
       {/* Bottom dotted border - full width */}
       <Text dimColor>{DOTTED_LINE.repeat(terminalWidth)}</Text>
-
-      {/* Footer */}
-      <Box flexDirection="column" marginTop={1}>
-        {status ? (
-          <Text dimColor>
-            {"  "}
-            {status}
-          </Text>
-        ) : (
-          <Box>
-            <Text dimColor>{"  "}↑↓ navigate · Enter view · </Text>
-            {adeUrl && !isTmux && (
-              <Link url={adeUrl}>
-                <Text dimColor>Edit in ADE</Text>
-              </Link>
-            )}
-            {adeUrl && isTmux && <Text dimColor>Edit in ADE: {adeUrl}</Text>}
-            {!adeUrl && <Text dimColor>Local agent: {agentId}</Text>}
-            {hasGitRepo && <Text dimColor> · O open in browser</Text>}
-            <Text dimColor> · Esc close</Text>
-          </Box>
-        )}
-      </Box>
-    </Box>
+    </OverlayFrame>
   );
 }

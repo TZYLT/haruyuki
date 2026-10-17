@@ -1,17 +1,20 @@
 import type { Block } from "@letta-ai/letta-client/resources/agents/blocks";
-import { Box, useInput } from "ink";
+import { Box } from "ink";
 import Link from "ink-link";
 import { useEffect, useState } from "react";
 import { getBackend } from "@/backend";
 import { buildChatUrl, isLocalAgentId } from "@/cli/helpers/app-urls";
+import type { KeyBinding } from "@/cli/helpers/input-keys";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
+import { OverlayFrame } from "@/cli/overlay/frame";
 import { debugLog } from "@/utils/debug";
 import { colors } from "./colors";
 import { MarkdownDisplay } from "./MarkdownDisplay";
+import { TabBar } from "./TabBar";
 import { Text } from "./Text";
 
-// Horizontal line character (matches approval dialogs)
-const SOLID_LINE = "─";
+const TITLE = "View your agent's memory";
 
 const VISIBLE_LINES = 12; // Visible lines for value content
 
@@ -32,6 +35,22 @@ function formatCharCount(current: number, limit: number | null): string {
   return `${current.toLocaleString()} / ${limit.toLocaleString()} chars`;
 }
 
+/**
+ * The tab-strip view of an agent's memory blocks (no memory filesystem).
+ *
+ * On the toolkit: the chrome is `OverlayFrame`'s, the strip is `TabBar`'s, and
+ * the keys are a table the router owns rather than an Ink `useInput` — the same
+ * three moves every overlay in this tree is making.
+ *
+ * Two details are deliberately kept from the hand-written version:
+ *
+ * - **The strip wraps.** An agent's block labels overflow 80 columns routinely,
+ *   and this strip sits in a column of the overlay; `TabBar`'s default row runs
+ *   past the frame instead.
+ * - **The keys are the keys it had.** Tab/→/← switch tabs and ↑/↓ scroll — the
+ *   arrows are *not* list navigation here (the cursor is a tab, not a row), so
+ *   this face declares its own table instead of using `useOverlayList`.
+ */
 export function MemoryTabViewer({
   blocks,
   agentId,
@@ -39,7 +58,6 @@ export function MemoryTabViewer({
   conversationId,
 }: MemoryTabViewerProps) {
   const terminalWidth = useTerminalWidth();
-  const solidLine = SOLID_LINE.repeat(Math.max(terminalWidth, 10));
   const isTmux = Boolean(process.env.TMUX);
   const isLocalAgent = isLocalAgentId(agentId);
   const adeUrl = isLocalAgent
@@ -76,6 +94,11 @@ export function MemoryTabViewer({
 
   // Get current block
   const currentBlock = displayBlocks[selectedTabIndex];
+  const tabKeys = displayBlocks.map(blockTabKey);
+  const tabLabels = new Map(
+    displayBlocks.map((block) => [blockTabKey(block), block.label ?? ""]),
+  );
+  const activeTabKey = currentBlock ? blockTabKey(currentBlock) : "";
   const valueLines = currentBlock?.value?.split("\n") || [];
   const maxScrollOffset = Math.max(0, valueLines.length - VISIBLE_LINES);
 
@@ -85,111 +108,87 @@ export function MemoryTabViewer({
     setScrollOffset(0);
   };
 
-  useInput((input, key) => {
-    // CTRL-C: immediately close
-    if (key.ctrl && input === "c") {
-      onClose();
-      return;
-    }
+  const switchTabBy = (delta: 1 | -1) => {
+    const count = displayBlocks.length;
+    // The two directions wrapped differently, and the arithmetic is kept as it
+    // was: forward is a modulo, backward turns the first tab into `count - 1`.
+    switchTab(
+      delta === 1
+        ? (selectedTabIndex + 1) % count
+        : selectedTabIndex === 0
+          ? count - 1
+          : selectedTabIndex - 1,
+    );
+  };
 
-    // ESC: close
-    if (key.escape) {
-      onClose();
-      return;
-    }
+  const bindings: KeyBinding[] = [
+    {
+      id: "memory-tab-viewer.next",
+      chords: [{ key: "tab" }, { key: "rightArrow" }],
+      run: () => {
+        switchTabBy(1);
+        return "consumed";
+      },
+    },
+    {
+      id: "memory-tab-viewer.previous",
+      chords: [{ key: "leftArrow" }],
+      run: () => {
+        switchTabBy(-1);
+        return "consumed";
+      },
+    },
+    {
+      id: "memory-tab-viewer.scroll-up",
+      chords: [{ key: "upArrow" }],
+      run: () => {
+        setScrollOffset((prev) => Math.max(prev - 1, 0));
+        return "consumed";
+      },
+    },
+    {
+      id: "memory-tab-viewer.scroll-down",
+      chords: [{ key: "downArrow" }],
+      run: () => {
+        setScrollOffset((prev) => Math.min(prev + 1, maxScrollOffset));
+        return "consumed";
+      },
+    },
+    {
+      id: "memory-tab-viewer.close",
+      chords: [{ key: "escape" }, { key: "c", ctrl: true }],
+      run: () => {
+        onClose();
+        return "consumed";
+      },
+    },
+  ];
 
-    // Tab or left/right to switch tabs
-    if (key.tab) {
-      const nextIndex = (selectedTabIndex + 1) % displayBlocks.length;
-      switchTab(nextIndex);
-      return;
-    }
-
-    if (key.leftArrow) {
-      const prevIndex =
-        selectedTabIndex === 0
-          ? displayBlocks.length - 1
-          : selectedTabIndex - 1;
-      switchTab(prevIndex);
-      return;
-    }
-
-    if (key.rightArrow) {
-      const nextIndex = (selectedTabIndex + 1) % displayBlocks.length;
-      switchTab(nextIndex);
-      return;
-    }
-
-    // Up/down to scroll content
-    if (key.upArrow) {
-      setScrollOffset((prev) => Math.max(prev - 1, 0));
-    } else if (key.downArrow) {
-      setScrollOffset((prev) => Math.min(prev + 1, maxScrollOffset));
-    }
-  });
-
-  // Render tab bar (no gap - spacing is handled by padding in each label)
-  const renderTabBar = () => (
-    <Box flexDirection="row" flexWrap="wrap">
-      {displayBlocks.map((block, index) => {
-        const isActive = index === selectedTabIndex;
-        return (
-          <Text
-            key={block.id || block.label}
-            backgroundColor={
-              isActive ? colors.selector.itemHighlighted : undefined
-            }
-            color={isActive ? "white" : undefined}
-            bold={isActive}
-          >
-            {` ${block.label} `}
-          </Text>
-        );
-      })}
-    </Box>
-  );
+  useKeyBindings("memory-tab-viewer", [{ scope: "overlay", bindings }]);
 
   // Loading state
   if (isLoading) {
     return (
-      <Box flexDirection="column">
-        <Text dimColor>{"> /memory"}</Text>
-        <Text dimColor>{solidLine}</Text>
-
-        <Box height={1} />
-
-        <Box marginBottom={1}>
-          <Text bold color={colors.selector.title}>
-            View your agent's memory
-          </Text>
-        </Box>
+      <OverlayFrame
+        command="/memory"
+        title={TITLE}
+        footer={<Text dimColor>{"  "}Esc cancel</Text>}
+      >
         <Text dimColor>{"  "}Loading memory...</Text>
-        <Box marginTop={1}>
-          <Text dimColor>{"  "}Esc cancel</Text>
-        </Box>
-      </Box>
+      </OverlayFrame>
     );
   }
 
   // Empty state
   if (displayBlocks.length === 0) {
     return (
-      <Box flexDirection="column">
-        <Text dimColor>{"> /memory"}</Text>
-        <Text dimColor>{solidLine}</Text>
-
-        <Box height={1} />
-
-        <Box marginBottom={1}>
-          <Text bold color={colors.selector.title}>
-            View your agent's memory
-          </Text>
-        </Box>
+      <OverlayFrame
+        command="/memory"
+        title={TITLE}
+        footer={<Text dimColor>{"  "}Esc cancel</Text>}
+      >
         <Text dimColor>{"  "}No memory attached to this agent.</Text>
-        <Box marginTop={1}>
-          <Text dimColor>{"  "}Esc cancel</Text>
-        </Box>
-      </Box>
+      </OverlayFrame>
     );
   }
 
@@ -202,23 +201,40 @@ export function MemoryTabViewer({
   const barColor = colors.selector.itemHighlighted;
 
   return (
-    <Box flexDirection="column">
-      {/* Command header */}
-      <Text dimColor>{"> /memory"}</Text>
-      <Text dimColor>{solidLine}</Text>
-
-      <Box height={1} />
-
-      {/* Title */}
-      <Box marginBottom={1}>
-        <Text bold color={colors.selector.title}>
-          View your agent's memory
-        </Text>
-      </Box>
-
-      {/* Tab bar */}
+    <OverlayFrame
+      command="/memory"
+      title={TITLE}
+      footer={
+        <Box flexDirection="column">
+          <Text dimColor>
+            {"  "}
+            {formatCharCount(charCount, currentBlock?.limit ?? null)}
+            {currentBlock?.read_only ? " · read-only" : " · read/write"}
+          </Text>
+          <Box>
+            <Text dimColor>{"  "}←→/Tab switch · ↑↓ scroll · </Text>
+            {adeUrl && !isTmux && (
+              <Link url={adeUrl}>
+                <Text dimColor>Edit in ADE</Text>
+              </Link>
+            )}
+            {adeUrl && isTmux && <Text dimColor>Edit in ADE: {adeUrl}</Text>}
+            {!adeUrl && <Text dimColor>Local agent: {agentId}</Text>}
+            <Text dimColor> · Esc cancel</Text>
+          </Box>
+        </Box>
+      }
+    >
+      {/* Tab bar. The strip's own padding is why the gaps are zero: the labels
+          carry a space on each side already. */}
       <Box flexDirection="column" paddingLeft={1} marginBottom={1}>
-        {renderTabBar()}
+        <TabBar
+          tabs={tabKeys}
+          activeTab={activeTabKey}
+          getLabel={(key) => tabLabels.get(key) ?? key}
+          wrap
+          gap={0}
+        />
         {currentBlock?.description && (
           <Box width={terminalWidth - 2}>
             <Text dimColor> </Text>
@@ -252,26 +268,16 @@ export function MemoryTabViewer({
           <Text> </Text>
         ) : null}
       </Box>
-
-      {/* Footer */}
-      <Box flexDirection="column" marginTop={1}>
-        <Text dimColor>
-          {"  "}
-          {formatCharCount(charCount, currentBlock?.limit ?? null)}
-          {currentBlock?.read_only ? " · read-only" : " · read/write"}
-        </Text>
-        <Box>
-          <Text dimColor>{"  "}←→/Tab switch · ↑↓ scroll · </Text>
-          {adeUrl && !isTmux && (
-            <Link url={adeUrl}>
-              <Text dimColor>Edit in ADE</Text>
-            </Link>
-          )}
-          {adeUrl && isTmux && <Text dimColor>Edit in ADE: {adeUrl}</Text>}
-          {!adeUrl && <Text dimColor>Local agent: {agentId}</Text>}
-          <Text dimColor> · Esc cancel</Text>
-        </Box>
-      </Box>
-    </Box>
+    </OverlayFrame>
   );
+}
+
+/**
+ * The tab key for a block: its id, or the label when it has none — the identity
+ * `TabBar` maps tabs by, and the one the hand-written strip keyed its rows with.
+ * `Block.id` and `Block.label` are both optional, so the empty key is the last
+ * resort; a block with neither cannot be told apart from another such block.
+ */
+function blockTabKey(block: Block): string {
+  return block.id || block.label || "";
 }
