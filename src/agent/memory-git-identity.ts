@@ -39,6 +39,13 @@ function readGlobalGitConfig(key: string): string | null {
     const value = execFileSync("git", ["config", "--global", "--get", key], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
+      // Hand the child the environment as it is *now*. Without this, Bun passes
+      // the environment captured when the process started, so a caller that
+      // repoints `GIT_CONFIG_GLOBAL` (or `HOME`/`USERPROFILE`) at runtime is
+      // ignored and git reads the operator's real global config instead — which
+      // is exactly what the cache key below exists to support. Node inherits the
+      // live `process.env` by default, so this closes a Bun/Node divergence.
+      env: { ...process.env },
     }).trim();
     return value.length > 0 ? value : null;
   } catch {
