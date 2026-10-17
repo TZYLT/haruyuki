@@ -12,6 +12,16 @@ import {
   startShellProcess,
 } from "@/tools/impl/shell-runner";
 
+// Bun on Windows blocks the first `stdio: "inherit"` spawn in a process for about
+// 3.3s — measured here at 3 221 / 3 224 / 3 276 / 3 358 ms, against ~30ms for
+// `pipe` and `ignore`. The launcher below cannot report its descendant's pid before
+// that, so a 500ms budget left the pid unparsed and `expectProcessExited` read NaN
+// on a machine where the kill itself was fine (the probe that proved it: the
+// descendant was gone 2s after the timeout fired). Budget for the launcher, then
+// assert that the kill stayed prompt. Each test gets the matching per-test allowance.
+const TREE_KILL_TEST_TIMEOUT_MS = 6000;
+const TREE_KILL_TEST_SLACK_MS = 4000;
+
 function stubbornProcessTreeLauncher(): string[] {
   const descendantScript = [
     'process.on("SIGTERM", () => {});',
@@ -232,7 +242,7 @@ describe("shared shell process", () => {
       await spawnWithLauncher(stubbornProcessTreeLauncher(), {
         cwd: process.cwd(),
         env: process.env,
-        timeoutMs: 500,
+        timeoutMs: TREE_KILL_TEST_TIMEOUT_MS,
         onOutput: (chunk) => {
           output += chunk;
         },
@@ -243,17 +253,22 @@ describe("shared shell process", () => {
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("Command timed out");
-    expect(Date.now() - startedAt).toBeLessThan(4000);
+    expect(Date.now() - startedAt).toBeLessThan(
+      TREE_KILL_TEST_TIMEOUT_MS + TREE_KILL_TEST_SLACK_MS,
+    );
 
     const descendantPid = Number(output.match(/descendant:(\d+)/)?.[1]);
     expectProcessExited(descendantPid);
-  }, 10_000);
+  }, 20_000);
 
   test("force-kills an aborted process tree that ignores graceful termination", async () => {
     const controller = new AbortController();
     let output = "";
     const startedAt = Date.now();
-    const abortTimer = setTimeout(() => controller.abort(), 500);
+    const abortTimer = setTimeout(
+      () => controller.abort(),
+      TREE_KILL_TEST_TIMEOUT_MS,
+    );
 
     let error: unknown;
     try {
@@ -274,9 +289,11 @@ describe("shared shell process", () => {
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).name).toBe("AbortError");
-    expect(Date.now() - startedAt).toBeLessThan(4000);
+    expect(Date.now() - startedAt).toBeLessThan(
+      TREE_KILL_TEST_TIMEOUT_MS + TREE_KILL_TEST_SLACK_MS,
+    );
 
     const descendantPid = Number(output.match(/descendant:(\d+)/)?.[1]);
     expectProcessExited(descendantPid);
-  }, 10_000);
+  }, 20_000);
 });
