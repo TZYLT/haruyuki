@@ -3,7 +3,10 @@ import { EventEmitter } from "node:events";
 import { Writable } from "node:stream";
 import { render, useInput } from "ink";
 import { resetInputScopes } from "@/cli/helpers/focus-ledger";
-import { resetBindingOwners } from "@/cli/helpers/input-router";
+import {
+  registerBindingOwner,
+  resetBindingOwners,
+} from "@/cli/helpers/input-router";
 import { armLeader, resetLeader } from "@/cli/helpers/leader";
 import { BtwPane, type BtwState } from "./BtwPane";
 
@@ -192,11 +195,44 @@ describe("BtwPane", () => {
   test("tells the reader how to close it without taking letters", async () => {
     await withPane(COMPLETE, async ({ frame }) => {
       const rendered = frame();
-      expect(rendered).toContain("ctrl+x j");
       expect(rendered).toContain("esc");
-      // The old single-letter dismissal is gone on purpose: it swallowed `j`
-      // and `q` from the draft.
+      expect(rendered).toContain("应用级快捷键暂停");
+      // The footer must not advertise what the `modal` claim makes unreachable: the
+      // leader prefix is app-scoped, so it cannot be armed while the pane shows.
+      expect(rendered).not.toContain("ctrl+x j");
+      // The old single-letter dismissal is gone on purpose: it swallowed `j` and `q`.
       expect(rendered).not.toContain("[j] Switch to fork");
+    });
+  });
+
+  test("suspends app-scope chords while it shows, and only then", async () => {
+    // The footer's claim, as behaviour. `modal` makes `consultedInputScopes()` return
+    // `[modal, system]`, so an app-scope binding is never consulted while the pane is
+    // up; with no pane there is no claim and the same key reaches it.
+    const runs: string[] = [];
+    registerBindingOwner("test-app", () => [
+      {
+        scope: "app",
+        bindings: [
+          {
+            id: "test.shellOutput",
+            chords: [{ key: "o", ctrl: true }],
+            run: () => {
+              runs.push("run");
+              return true;
+            },
+          },
+        ],
+      },
+    ]);
+
+    await withPane(COMPLETE, async ({ send }) => {
+      await send("\u000f"); // Ctrl+O
+      expect(runs).toEqual([]);
+    });
+    await withPane({ status: "idle" }, async ({ send }) => {
+      await send("\u000f");
+      expect(runs).toEqual(["run"]);
     });
   });
 

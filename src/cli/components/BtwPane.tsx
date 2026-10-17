@@ -24,16 +24,21 @@ type BtwPaneProps = {
  * Ephemeral pane for /btw responses.
  *
  * Renders alongside the main transcript, showing the forked conversation's
- * response. The main input keeps working while it is up: this pane reports a
- * finished side answer, it does not own the user's next message, and the
- * composer unmounting behind it left a blank input area that typed nothing.
+ * response. The composer stays **mounted** while it is up — unmounting it left a
+ * blank input area that typed nothing — and typing plus the leaf editor's own keys
+ * (arrows, Backspace, Home/End, `Ctrl+A/E/K/U/Y`, Enter) keep working, because those
+ * reach Ink's `useInput` rather than a table. What does **not** work is every
+ * app-scope chord: the pane claims the `modal` scope so its `Esc` wins, and
+ * `consultedInputScopes()` then returns `[modal, system]`, so the composer's own
+ * table (`Ctrl+W`, Option+Arrow, …) and the app table (`Ctrl+O/R/T` …) are not
+ * consulted at all. That is the accepted trade (《36》§I), which is why the footer
+ * must not advertise the leader prefix: `Ctrl+X` is app-scoped, so it cannot arm
+ * while the pane is up.
  *
  * Its own keys are therefore only the ones that cannot be someone typing:
- * `Esc` closes the pane, and switching to the fork sits behind the leader
- * prefix (`Ctrl+X` then `j`), which is what the prefix exists for — one more
- * usable key per entry without taking a letter away from the draft. The pane
- * claims the `modal` scope while it is showing so its `Esc` wins over the
- * composer's, and so the which-key hint lists its entry.
+ * `Esc` closes the pane, and switching to the fork sits behind the leader prefix
+ * (`Ctrl+X` then `j`) — reachable when the prefix was already armed before the pane
+ * appeared, and listed in the which-key hint for that reason.
  */
 export const BtwPane = memo(
   ({ state, onJumpToConversation, onDismiss }: BtwPaneProps) => {
@@ -128,7 +133,8 @@ export const BtwPane = memo(
             </Text>
             {onJumpToConversation && (
               <Text dimColor>
-                {"  "}[esc] 关闭 · ctrl+x j 切到分叉（输入框仍可用）
+                {"  "}[esc] 关闭 ·
+                面板期间应用级快捷键暂停（打字与基础编辑仍可用）
               </Text>
             )}
           </Box>
