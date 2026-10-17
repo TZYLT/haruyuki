@@ -3,6 +3,7 @@ import {
   buildVisibleItems,
   hasFocusedApprovalItem,
   shouldRenderLiveItem,
+  visibleLiveItems,
 } from "@/cli/app/live-items";
 import type { StaticItem } from "@/cli/app/types";
 import type { Line } from "@/cli/helpers/accumulator";
@@ -76,6 +77,27 @@ describe("buildVisibleItems", () => {
         queuedIds: EMPTY_IDS,
       }).map((item) => item.id),
     ).toEqual(["bash-1"]);
+  });
+});
+
+describe("visibleLiveItems", () => {
+  test("is the live half on its own, in order", () => {
+    // The full-screen shell composes the committed list by reference, so this is
+    // the only list it materializes; it has to be exactly the rows
+    // `buildVisibleItems` would have appended.
+    const live = [plainToolCall("read-1"), shellToolCall("bash-1")];
+    const ctx = {
+      currentApprovalToolCallId: undefined,
+      pendingIds: EMPTY_IDS,
+      queuedIds: EMPTY_IDS,
+    };
+
+    expect(visibleLiveItems(live, ctx).map((item) => item.id)).toEqual([
+      "read-1",
+    ]);
+    expect(
+      buildVisibleItems({ staticItems: [COMMITTED], liveItems: live, ...ctx }),
+    ).toEqual([COMMITTED, ...visibleLiveItems(live, ctx)]);
   });
 });
 

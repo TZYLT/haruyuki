@@ -1,17 +1,28 @@
 /**
- * Viewport frame-cost gate (M2).
+ * Viewport frame-cost gate (M2 and 建议 4).
  *
- * The full-screen shell makes two claims about cost: what it *renders* does not
- * grow with history length, and what it *measures* per frame stays cheap enough
- * to run on every frame. `row-model.fidelity.test.tsx` pins the per-item heights
- * themselves, but it renders a handful of items, so it cannot see either claim.
+ * The full-screen shell makes three claims about cost: what it *renders* does not
+ * grow with history length, what it *measures* per frame stays cheap enough to run
+ * on every frame, and what it *assembles* per frame is the band rather than the
+ * transcript. `row-model.fidelity.test.tsx` pins the per-item heights themselves,
+ * but it renders a handful of items, so it cannot see any of the three.
  *
- * Both claims are asserted here over the real measure path with a synthetic
+ * The first two are asserted here over the real measure path with a synthetic
  * history. Measuring used to be a full pass over the transcript (`items.map`),
  * which cost ~18us per item on every streaming frame — ~22ms at 1000 items and
  * ~280ms at 16000. The window is now fitted from the end with a lazy measure, so
  * the work is bounded by the window instead of the history, and the assertions
  * below fail if that regresses to a full pass.
+ *
+ * The third is asserted over the **real** assembly path: the last block mounts
+ * `ViewportTranscript` itself over a committed list whose index reads are counted,
+ * drives it the way streaming does (a new live list per chunk) and reads the
+ * counter. Composition used to build `[...committed, ...live]` plus a `Set` over
+ * every committed id on every chunk, which is O(session) per chunk for as long as
+ * the session runs; the view in `composed-transcript.ts` answers the band's
+ * indices and leaves the rest of the list where it is. Counting reads of the
+ * committed array itself is what makes that a gate rather than a hope: a
+ * regression to a copy shows up as one read per committed row per render.
  *
  * The timing guard is loose on purpose — an anti-quadratic net, not a frame
  * budget, because a wall-clock threshold in a unit test is a flake waiting to
@@ -19,13 +30,26 @@
  * are not comparable across runs (see the repo guide's note on measured figures).
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { Readable, Writable } from "node:stream";
+import { render } from "ink";
+import { useMemo, useRef, useState } from "react";
+import type { AppViewProps } from "@/cli/app/AppView";
 import { MAX_VIEWPORT_ITEMS } from "@/cli/app/history-window";
+import { resetOlderHistoryForTests } from "@/cli/app/older-history";
 import { measureTranscriptItemRows } from "@/cli/app/row-model";
 import type { StaticItem } from "@/cli/app/types";
-import { CHROME_RESERVE_ROWS } from "@/cli/app/ViewportTranscript";
+import {
+  CHROME_RESERVE_ROWS,
+  ViewportTranscript,
+} from "@/cli/app/ViewportTranscript";
+import { resetViewportScroll } from "@/cli/app/viewport-scroll";
 import { fitScrolledItemsFromEnd } from "@/cli/app/viewport-window";
-import type { Line } from "@/cli/helpers/accumulator";
+import { createBuffers, type Line } from "@/cli/helpers/accumulator";
+import {
+  installTerminalFrameCapture,
+  resetTerminalFrameForTests,
+} from "@/cli/helpers/terminal-frame";
 
 const COLUMNS = 100;
 const TERMINAL_ROWS = 30;
@@ -307,6 +331,203 @@ describe("viewport frame cost", () => {
           `${frame.ms.toFixed(3).padStart(8)}ms | ` +
           `measured ${String(frame.measured).padStart(3)} items | ` +
           `rendered ${renderedItems(frame)} items / ${frame.rows} rows`,
+      );
+    }
+  });
+});
+
+/**
+ * Assembly cost, on the real component and a real frame.
+ *
+ * `staticItems` is the list that grows for the whole session, and it is the list a
+ * frame must not walk. So the committed array handed to the mounted viewport is a
+ * `Proxy` that counts every index read, and each chunk is a real re-render: a new
+ * live list, exactly as a streaming update produces.
+ *
+ * The counted quantity is reads of the committed array per render, because that is
+ * the shape of the defect: a frame that copies the composition reads every committed
+ * row, a frame that reads the band reads the band. It is also what makes the gate
+ * faithful — the counter sits on the input the component is given, so it cannot be
+ * satisfied by the component reporting its own work.
+ */
+const ASSEMBLY_HISTORY_SIZES = [1_000, 16_000];
+
+/** Chunks driven through the mounted viewport, each one a streaming update. */
+const CHUNKS = 12;
+
+class Capture extends Writable {
+  columns = 100;
+  rows = 30;
+  isTTY = true;
+
+  override _write(
+    chunk: Buffer | string,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null) => void,
+  ) {
+    void chunk;
+    callback();
+  }
+}
+
+function fakeStdin(): NodeJS.ReadStream {
+  const stdin = new Readable({ read() {} }) as NodeJS.ReadStream;
+  stdin.isTTY = true;
+  stdin.setRawMode = () => stdin;
+  stdin.ref = () => stdin;
+  stdin.unref = () => stdin;
+  return stdin;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+interface CommittedHistory {
+  items: StaticItem[];
+  reads: () => number;
+  reset: () => void;
+}
+
+/** A committed list of `count` rows, counting every index read of it. */
+function countedHistory(count: number): CommittedHistory {
+  const items: StaticItem[] = Array.from({ length: count }, (_, index) => ({
+    kind: "user",
+    id: `item-${index}`,
+    text: `row ${index}`,
+  }));
+  let reads = 0;
+  const instrumented = new Proxy(items, {
+    get(target, property, receiver) {
+      if (typeof property === "string" && /^\d+$/.test(property)) reads += 1;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  return {
+    items: instrumented,
+    reads: () => reads,
+    reset: () => {
+      reads = 0;
+    },
+  };
+}
+
+/** Set by the mounted viewport so the test can push one chunk at a time. */
+let pushChunk: () => void = () => undefined;
+/** Renders of the mounted tree, counted in the component body. */
+let rendered = 0;
+
+function StreamingViewport({ history }: { history: CommittedHistory }) {
+  const [, setChunk] = useState(0);
+  rendered += 1;
+  pushChunk = () => setChunk((chunk) => chunk + 1);
+
+  const buffersRef = useRef<ReturnType<typeof createBuffers> | null>(null);
+  if (buffersRef.current === null) buffersRef.current = createBuffers();
+  const staticItems = history.items;
+  const liveItems = useMemo<Line[]>(
+    () => [{ kind: "assistant", id: "live", phase: "streaming", text: "…" }],
+    [],
+  );
+
+  return (
+    <ViewportTranscript
+      {...({
+        staticItems,
+        liveItems,
+        columns: 100,
+        agentId: "agent-1",
+        conversationId: "conv-cost",
+        buffersRef,
+        statusLinePrompt: ">",
+        showCompactionsEnabled: false,
+        precomputedDiffsRef: { current: new Map() },
+        expandedToolCallId: null,
+        lastShellToolCallId: null,
+        loadingState: "ready",
+        continueSession: false,
+        agentState: null,
+        currentApproval: undefined,
+        currentApprovalContext: undefined,
+        approvalMap: new Map(),
+        pendingIds: new Set(),
+        queuedIds: new Set(),
+        queuedDecisions: new Map(),
+        stubDescriptions: new Map(),
+        showApprovalPreview: false,
+      } as unknown as AppViewProps)}
+    />
+  );
+}
+
+async function streamHistory(count: number): Promise<{
+  reads: number;
+  renders: number;
+}> {
+  const history = countedHistory(count);
+  const stdout = new Capture();
+  installTerminalFrameCapture(stdout);
+  pushChunk = () => undefined;
+  rendered = 0;
+  const instance = render(<StreamingViewport history={history} />, {
+    stdin: fakeStdin(),
+    stdout: stdout as unknown as NodeJS.WriteStream,
+    debug: false,
+    patchConsole: false,
+    exitOnCtrlC: false,
+    alternateScreen: true,
+  });
+  await sleep(150);
+
+  // Drive the stream: one update per chunk, which is what a turn's streaming
+  // updates do. The counter starts here, so it weighs the streaming frames rather
+  // than the mount's.
+  history.reset();
+  const rendersBefore = rendered;
+  for (let chunk = 0; chunk < CHUNKS; chunk += 1) {
+    pushChunk();
+    await sleep(30);
+  }
+  const reads = history.reads();
+  const renders = rendered - rendersBefore;
+  instance.unmount();
+  instance.cleanup();
+
+  return { reads, renders };
+}
+
+afterEach(() => {
+  resetOlderHistoryForTests();
+  resetViewportScroll();
+  resetTerminalFrameForTests();
+});
+
+describe("the assembly a frame pays for", () => {
+  test("is the band, not the committed list", async () => {
+    const runs: Array<{ size: number; reads: number; renders: number }> = [];
+    for (const size of ASSEMBLY_HISTORY_SIZES) {
+      runs.push({ size, ...(await streamHistory(size)) });
+    }
+
+    for (const run of runs) {
+      expect(run.renders).toBeGreaterThan(0);
+      // Per render, the committed list is touched at most what the residency cap
+      // allows, plus a constant for the walk's own probes. A copy, a `Set` over the
+      // ids or a full pass shows up as one read per committed row per render — 74x
+      // this bound at the largest history below.
+      expect(run.reads).toBeLessThanOrEqual(
+        run.renders * (MAX_VIEWPORT_ITEMS + 16),
+      );
+      // The sharper claim, and the one 建议 4 makes: the whole streaming burst —
+      // every chunk, every render — touches the committed array fewer times than a
+      // *single* frame that copies the composition would.
+      expect(run.reads).toBeLessThan(run.size);
+    }
+
+    // The gate's evidence: what a stream of chunks costs, per history size.
+    for (const run of runs) {
+      console.log(
+        `viewport assembly cost: ${String(run.size).padStart(6)} committed items ` +
+          `| ${run.renders} renders | ${run.reads} index reads ` +
+          `(${(run.reads / Math.max(1, run.renders)).toFixed(1)} per render)`,
       );
     }
   });

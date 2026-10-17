@@ -28,10 +28,27 @@ export interface VisibleItemsInput extends LiveItemFilterContext {
  * tree, the full-screen one through its window — and the full-screen shell also
  * asks it whether an approval is on screen at all. Keeping the composition here
  * is what lets both answers come from one place.
+ *
+ * The full-screen shell wants the two halves apart, not joined: joining them is a
+ * copy of the whole committed list, which it does per chunk (`live-items.ts`'s
+ * `visibleLiveItems` and `composed-transcript.ts`).
  */
 export function buildVisibleItems(input: VisibleItemsInput): StaticItem[] {
-  const live = input.liveItems.filter((ln) => shouldRenderLiveItem(ln, input));
-  return [...input.staticItems, ...live];
+  return [...input.staticItems, ...visibleLiveItems(input.liveItems, input)];
+}
+
+/**
+ * The live rows that draw a row, in order.
+ *
+ * Split from `buildVisibleItems` for the full-screen shell: it composes the
+ * committed list by reference, so the only list it has to materialize is this one,
+ * and its length is the turn in flight rather than the session.
+ */
+export function visibleLiveItems(
+  liveItems: readonly Line[],
+  ctx: LiveItemFilterContext,
+): StaticItem[] {
+  return liveItems.filter((ln) => shouldRenderLiveItem(ln, ctx));
 }
 
 /**

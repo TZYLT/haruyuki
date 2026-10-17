@@ -16,13 +16,13 @@ import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
 import type { AppViewProps } from "./AppView";
 import { fitBlockedItemsFromEnd } from "./blocked-window";
 import { useChromeHeight, useMeasuredChromeHeight } from "./chrome-height";
+import { composeTranscript, transcriptCoreIds } from "./composed-transcript";
 import { FocusedApproval } from "./FocusedApproval";
 import type { WalkIndex } from "./history-blocks";
 import { historyBlockAt, historyBlockItems } from "./history-blocks";
 import { MAX_VIEWPORT_ITEMS } from "./history-window";
-import { buildVisibleItems, hasFocusedApprovalItem } from "./live-items";
+import { hasFocusedApprovalItem, visibleLiveItems } from "./live-items";
 import {
-  composeTranscriptItems,
   evictOlderHistoryBlocksBefore,
   getOlderHistoryBlocks,
   getOlderHistoryItems,
@@ -168,26 +168,39 @@ export function ViewportTranscript(props: AppViewProps) {
     [],
   );
 
-  const items = useMemo<StaticItem[]>(
+  // The committed ids, as the composition's duplicate check wants them. Built when a
+  // commit lands rather than when a chunk does: the committed list only ever grows,
+  // and this is the one pass over it that cannot be made lazy (`composed-transcript.ts`).
+  const committedIds = useMemo(
+    () => transcriptCoreIds(staticItems),
+    [staticItems],
+  );
+  // The live rows that draw a row. The turn in flight, not the session — the only
+  // list this component has to materialize now that the composition reads the
+  // committed one by reference.
+  const live = useMemo(
     () =>
-      composeTranscriptItems(
-        olderItems,
-        buildVisibleItems({
-          staticItems,
-          liveItems,
-          currentApprovalToolCallId: currentApproval?.toolCallId,
-          pendingIds,
-          queuedIds,
-        }),
-      ),
-    [
-      staticItems,
-      liveItems,
-      currentApproval?.toolCallId,
-      pendingIds,
-      queuedIds,
-      olderItems,
-    ],
+      visibleLiveItems(liveItems, {
+        currentApprovalToolCallId: currentApproval?.toolCallId,
+        pendingIds,
+        queuedIds,
+      }),
+    [liveItems, currentApproval?.toolCallId, pendingIds, queuedIds],
+  );
+
+  // The composed transcript is a **view** over the three lists, not a copy of them:
+  // reading a row costs that row. The committed list grows for the whole session, so
+  // an array built here would make every streaming chunk pay for the whole transcript
+  // (`composed-transcript.ts` has the reasoning and `viewport-cost.test.ts` the gate).
+  const items = useMemo(
+    () =>
+      composeTranscript({
+        older: olderItems,
+        committed: staticItems,
+        live,
+        committedIds,
+      }),
+    [staticItems, live, committedIds, olderItems],
   );
 
   // Read once per render: the map is mutated in place as diffs arrive, so its
@@ -362,7 +375,7 @@ export function ViewportTranscript(props: AppViewProps) {
      * depend on a function identity that changes every render.
      */
     const itemAtWalkIndex = (index: WalkIndex): StaticItem | undefined =>
-      items[index - olderPrefix];
+      items.at(index - olderPrefix);
     return fitBlockedItemsFromEnd({
       blocks: olderBlocks,
       coreItemCount: Math.max(

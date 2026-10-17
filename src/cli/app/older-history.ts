@@ -29,7 +29,7 @@ import {
  *    (what `listConversationMessages` returns as `message.id`); a line's own id
  *    may be the otid instead, which is a different id space entirely. Paging by
  *    a line id would either return the newest window or split the transcript.
- * 2. **Dedup happens where the two lists meet** (`composeTranscriptItems`), not
+ * 2. **Dedup happens where the two lists meet** (`composed-transcript.ts`), not
  *    once at load time: the core list keeps committing rows while a page is in
  *    flight, and dedup has to see both sides as they are at render time.
  * 3. **A cursor the backend did not find comes back as the newest window.** The
@@ -809,32 +809,6 @@ export function olderHistoryCursor(
     if ("messageId" in line && line.messageId) loadedIds.add(line.messageId);
   }
   return { before, coreIds, loadedIds };
-}
-
-/**
- * The rows both regions draw: older history in front of the core list, each row
- * once.
- *
- * A duplicate is kept from the **core** side, not from the older page: the core
- * was assembled with its own neighbours, so it holds the merged tool result that
- * a page assembled from a slice cannot see. The core's copy also already sits at
- * its own position in the transcript.
- */
-export function composeTranscriptItems(
-  older: readonly StaticItem[],
-  core: readonly StaticItem[],
-): StaticItem[] {
-  if (older.length === 0) return [...core];
-  const coreIds = new Set(core.map((item) => item.id));
-  const seen = new Set<string>();
-  const composed: StaticItem[] = [];
-  for (const item of older) {
-    if (coreIds.has(item.id) || seen.has(item.id)) continue;
-    seen.add(item.id);
-    composed.push(item);
-  }
-  composed.push(...core);
-  return composed;
 }
 
 /** Test seam. */

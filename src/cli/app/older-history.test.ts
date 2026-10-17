@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Message } from "@letta-ai/letta-client/resources/agents/messages";
+import { composeTranscriptItems } from "@/cli/app/composed-transcript";
 import { HISTORY_PAGE_LIMIT } from "@/cli/app/history-window";
 import {
-  composeTranscriptItems,
   getOlderHistoryItems,
   getOlderHistoryState,
   HISTORY_CURSOR_NOTICE,
@@ -15,7 +15,6 @@ import {
   setOlderHistoryFetcherForTests,
   setOlderHistoryProvider,
 } from "@/cli/app/older-history";
-import type { StaticItem } from "@/cli/app/types";
 import {
   getViewportScrollRequest,
   getViewportScrollRows,
@@ -177,37 +176,6 @@ describe("assembling a page", () => {
 
   test("draws nothing for a message type the renderer does not know", () => {
     expect(historyItemsForMessages([unknownMessage("m1")])).toEqual([]);
-  });
-});
-
-describe("composing the two lists", () => {
-  test("drops a row the core already has, keeping the core's copy", () => {
-    const core: StaticItem[] = [
-      { kind: "user", id: "dup", text: "from the core" },
-    ];
-    const older: StaticItem[] = [
-      { kind: "user", id: "dup", text: "from a page" },
-    ];
-    expect(composeTranscriptItems(older, core)).toEqual([
-      { kind: "user", id: "dup", text: "from the core" },
-    ]);
-  });
-
-  test("keeps the newest copy of a row two pages both produced", () => {
-    const older: StaticItem[] = [
-      { kind: "user", id: "dup", text: "the page fetched later" },
-      { kind: "user", id: "only-old", text: "older" },
-      { kind: "user", id: "dup", text: "the page fetched first" },
-    ];
-    expect(composeTranscriptItems(older, [])).toEqual([
-      { kind: "user", id: "dup", text: "the page fetched later" },
-      { kind: "user", id: "only-old", text: "older" },
-    ]);
-  });
-
-  test("is the core list, unchanged, while nothing has been paged", () => {
-    const core: StaticItem[] = [{ kind: "separator", id: "s" }];
-    expect(composeTranscriptItems([], core)).toEqual(core);
   });
 });
 

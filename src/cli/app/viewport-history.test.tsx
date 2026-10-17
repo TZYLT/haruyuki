@@ -10,8 +10,8 @@ import {
   useSyncExternalStore,
 } from "react";
 import type { AppViewProps } from "@/cli/app/AppView";
+import { composeTranscriptItems } from "@/cli/app/composed-transcript";
 import {
-  composeTranscriptItems,
   getOlderHistoryBlocks,
   getOlderHistoryItems,
   historyItemsForMessages,
