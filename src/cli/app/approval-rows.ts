@@ -48,11 +48,13 @@ import { parsePatchOperations } from "@/cli/helpers/format-args-display";
 import type { ApprovalRequest } from "@/cli/helpers/stream";
 import { countTextRows } from "@/cli/helpers/text-metrics";
 import {
-  isFileEditPreviewTool,
   isFileEditTool,
   isFileWriteTool,
-  isShellTool,
 } from "@/cli/helpers/tool-name-mapping";
+import {
+  isTallPreviewTool,
+  resolveApprovalPreviewBody,
+} from "@/cli/overlay/preview";
 import type { ApprovalContext } from "@/permissions/analyzer";
 
 /** Rows the approval options occupy behind a 5-column selector gutter. */
@@ -205,45 +207,45 @@ export function pendingApprovalStubRows(
  *
  * `ApprovalPreview` draws the same preview as the inline approvals but with the
  * advanced diff header shown (the inline previews suppress it) and with the
- * options and hint left to the live area, so this mirrors its own dispatch
- * (`isShellTool`, then its file-edit tool list, then the generic fallback) rather
- * than `ApprovalSwitch`'s.
+ * options and hint left to the live area. Which body it draws is not decided
+ * here either: `@/cli/overlay/preview` classifies the item once and the
+ * renderer draws from that classification, so the committed content and the
+ * rows the viewport walks cannot disagree -- they used to, because this
+ * mirrored `ApprovalPreview`'s dispatch by hand.
  */
 export function approvalPreviewItemRows(
   item: Extract<StaticItem, { kind: "approval_preview" }>,
   options: ApprovalMeasureOptions,
 ): number {
-  if (isShellTool(item.toolName)) {
-    const info = getBashApprovalInfo({
-      toolName: item.toolName,
-      toolArgs: item.toolArgs,
-    });
-    if (info) {
-      return bashPreviewRows(info.command, info.description, options, false);
-    }
+  const body = resolveApprovalPreviewBody({
+    toolName: item.toolName,
+    toolArgs: item.toolArgs,
+    toolCallId: item.toolCallId,
+  });
+
+  if (body.kind === "command") {
+    return bashPreviewRows(
+      body.info.command,
+      body.info.description,
+      options,
+      false,
+    );
   }
 
-  if (isFileEditPreviewTool(item.toolName)) {
-    const info = getFileEditApprovalInfo({
-      toolName: item.toolName,
-      toolArgs: item.toolArgs,
-      toolCallId: item.toolCallId,
-    });
-    if (info) {
-      return fileEditPreviewRows(
-        {
-          toolName: item.toolName,
-          filePath: info.filePath,
-          toolCallId: item.toolCallId,
-          patchInput: info.patchInput,
-          content: info.content,
-          oldString: info.oldString,
-          newString: info.newString,
-        },
-        options,
-        { showHeader: true, diff: item.precomputedDiff },
-      );
-    }
+  if (body.kind === "diff") {
+    return fileEditPreviewRows(
+      {
+        toolName: item.toolName,
+        filePath: body.info.filePath,
+        toolCallId: item.toolCallId,
+        patchInput: body.info.patchInput,
+        content: body.info.content,
+        oldString: body.info.oldString,
+        newString: body.info.newString,
+      },
+      options,
+      { showHeader: true, diff: item.precomputedDiff },
+    );
   }
 
   return GENERIC_PREVIEW_ROWS;
@@ -300,7 +302,7 @@ export function eagerCommitPreviewRows(
 ): number {
   const { toolName, toolCallId } = approval;
   if (!toolName || !toolCallId) return 0;
-  if (!isShellTool(toolName) && !isFileEditPreviewTool(toolName)) return 0;
+  if (!isTallPreviewTool(toolName)) return 0;
 
   return approvalPreviewItemRows(
     buildApprovalPreviewItem(approval, options.diffs),

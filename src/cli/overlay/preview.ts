@@ -1,14 +1,16 @@
 /**
- * The one classification of an approval's preview body.
+ * The one classification of a *committed* approval preview's body.
  *
- * An approval's preview is drawn twice: live, inside the inline approval the
- * user answers, and committed to the transcript for the tall bodies
- * (`ApprovalPreview`), whose height the row model has to predict before
- * anything renders. The committed side classified the tool name and parsed the
- * args itself -- its own `JSON.parse`, its own tool-name list, its own
- * `file_path` default -- while the row model went through
- * `getFileEditApprovalInfo`, so the item that was committed and the rows that
- * were measured could disagree about what the approval was showing.
+ * An approval is classified twice in this tree, because the two sides read
+ * different inputs and one of them predates the other. A live approval is
+ * dispatched by `@/cli/helpers/approval-info` (`resolveApproval`) into the
+ * inline surface that answers it; a preview committed to the transcript is
+ * classified here, from the tool name, args and call id a static item carries.
+ * Before this module the committed side was classified *three* times -- the
+ * renderer with its own `JSON.parse` and tool-name list, the row model through
+ * `getFileEditApprovalInfo`, and the eager-commit gate with the list spelled out
+ * again -- so the item that was committed and the rows that were measured could
+ * disagree about what the approval was showing.
  *
  * This module is that decision, once, as data. Pure: no React, no Ink, and no
  * filesystem -- the one thing a renderer adds on top is the existence probe
