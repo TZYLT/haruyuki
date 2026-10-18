@@ -81,13 +81,17 @@ function shellProps(overrides: Partial<AppShellProps>): AppShellProps {
   } as unknown as AppShellProps;
 }
 
-function mountShell(overrides: Partial<AppShellProps>) {
-  return mountInkTty(
+function shellElement(overrides: Partial<AppShellProps>) {
+  return (
     <>
       <ShellFrame {...shellProps(overrides)} transcript={StubTranscript} />
       <OverlayBindingProbe />
-    </>,
+    </>
   );
+}
+
+function mountShell(overrides: Partial<AppShellProps>) {
+  return mountInkTty(shellElement(overrides));
 }
 
 afterEach(() => {
@@ -143,20 +147,58 @@ describe("an open overlay and a pending approval", () => {
   });
 
   test("closing the overlay gives the approval back", async () => {
-    const pending = {
+    // One mount, two states. This case used to stop the shell and mount a second
+    // one without an overlay, which reasserted the case above: a fresh mount
+    // never had an overlay to lose, so it passes even if closing one never
+    // released the claim. (`modal` outranks `overlay`, so the leak is invisible
+    // from here once an approval is pending -- the case below is the one that
+    // sees it.)
+    const pending: Partial<AppShellProps> = {
       currentApproval: APPROVAL,
       pendingApprovals: [APPROVAL],
     };
-    const withOverlay = mountShell({ ...pending, activeOverlay: "model" });
-    withOverlay.stop();
-    resetInkTtyState();
-
-    const without = mountShell(pending);
+    const shell = mountShell({ ...pending, activeOverlay: "model" });
     try {
+      expect(await shell.text()).toContain("stub");
+      expect(owningInputScope()).toBe("overlay");
+
+      await shell.rerender(shellElement(pending));
+
       expect(owningInputScope()).toBe("modal");
+      expect(consultedInputScopes()).toEqual(["modal", "system"]);
       expect(seenApproval).toBe(APPROVAL);
+      const painted = await shell.text();
+      expect(painted).toContain("approval is current");
+      expect(painted).not.toContain("stub");
+
+      // The overlay's binding owner stays registered across the close, so this
+      // is the claim being released that hands the keyboard back -- not the
+      // owner having gone away with it.
+      await shell.press(UP);
+      expect(overlayNavigations).toBe(0);
     } finally {
-      without.stop();
+      shell.stop();
+    }
+  });
+
+  test("closing the last overlay with nothing pending returns the app its keys", async () => {
+    // The case above cannot see a claim that outlives the overlay: `modal`
+    // outranks `overlay`, so a selector that kept the keyboard claimed after
+    // closing would still report `modal` once an approval is pending. With
+    // nothing behind it the leak is the whole answer -- and in the app its
+    // symptom is a composer that stops responding after the last selector
+    // closes, with nothing on screen to explain why.
+    const shell = mountShell({ activeOverlay: "model" });
+    try {
+      expect(owningInputScope()).toBe("overlay");
+      expect(consultedInputScopes()).toEqual(["overlay", "system"]);
+
+      await shell.rerender(shellElement({}));
+
+      expect(owningInputScope()).toBe("app");
+      expect(consultedInputScopes()).toEqual(["app", "system"]);
+    } finally {
+      shell.stop();
     }
   });
 });

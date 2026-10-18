@@ -77,6 +77,17 @@ export interface InkTty {
   text(): Promise<string>;
   /** Push raw key bytes, one tick apart. */
   press(...keys: string[]): Promise<void>;
+  /**
+   * Re-render the same mount with new props.
+   *
+   * A prop change is not a second mount: React updates in place, and the
+   * module-level claims a component holds are released by the effect that owns
+   * them. That is the only way to tell "the approval came back when the overlay
+   * closed" from "a second shell was mounted without an overlay, which of course
+   * had no overlay" — a test that unmounts and mounts again asserts the second
+   * and calls it the first.
+   */
+  rerender(element: ReactElement): Promise<void>;
   /** Unmount, release the capture, restore the pinned terminal size. */
   stop(): void;
 }
@@ -125,6 +136,10 @@ export function mountInkTty(
         stdin.push(key);
         await tick();
       }
+    },
+    async rerender(element) {
+      instance.rerender(element);
+      await tick();
     },
     stop() {
       if (stopped) return;
