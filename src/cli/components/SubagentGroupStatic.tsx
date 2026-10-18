@@ -3,12 +3,16 @@
  *
  * Used in Ink's <Static> area for historical/committed items that have
  * scrolled up and should no longer re-render. Pure props-based component
- * with NO hooks (no store subscriptions, no keyboard handlers).
+ * with NO hooks of its own (no store subscriptions, no keyboard handlers).
  *
  * This separation from SubagentGroupDisplay is necessary because:
  * - Static area components shouldn't have active subscriptions (memory leaks)
  * - Keyboard handlers would stack up across frozen components
  * - We only need a simple snapshot, not live updates
+ *
+ * The two components render the same rows, so the row itself lives in
+ * `SubagentRow.tsx`; what stays here is the frozen snapshot's own policy — which
+ * cells a committed agent shows, and which status words apply to one.
  *
  * Shows: "Ran N subagents" with final stats (tool count, tokens).
  */
@@ -16,13 +20,9 @@
 import { Box } from "ink";
 import { memo } from "react";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
-import {
-  formatStats,
-  getSubagentModelDisplay,
-  getTreeChars,
-} from "@/cli/helpers/subagent-display.js";
-import { useTerminalWidth } from "@/cli/hooks/use-terminal-width.js";
+import { formatStats } from "@/cli/helpers/subagent-display.js";
 import { colors } from "./colors.js";
+import { SubagentRow, type SubagentRowStatus } from "./SubagentRow";
 import { Text } from "./Text";
 
 // ============================================================================
@@ -56,110 +56,41 @@ interface AgentRowProps {
 }
 
 const AgentRow = memo(({ agent, isLast }: AgentRowProps) => {
-  const { treeChar, continueChar } = getTreeChars(isLast);
-  const rowIndent = "  ";
-  const statusIndent = "   ";
-  const columns = useTerminalWidth();
-  const gutterWidth =
-    rowIndent.length + continueChar.length + statusIndent.length;
-  const contentWidth = Math.max(0, columns - gutterWidth);
-
   const isRunning = agent.status === "running";
   const shouldDim = isRunning && !agent.isBackground;
   const showStats = !(agent.isBackground && isRunning);
   const hideBackgroundStatusLine =
     agent.isBackground && isRunning && !agent.agentURL;
-  const stats = formatStats(agent.toolCount, agent.totalTokens);
-  const modelDisplay = getSubagentModelDisplay(agent.model);
+
+  // A frozen agent is never "launching": it was committed in this state. A
+  // foreground one that reached the static area says "Done"; a background one
+  // still working says so.
+  let status: SubagentRowStatus | null = null;
+  if (!hideBackgroundStatusLine) {
+    status =
+      agent.status === "error"
+        ? { kind: "error", message: agent.error }
+        : {
+            kind: "text",
+            text:
+              agent.status === "completed" && !agent.isBackground
+                ? "Done"
+                : "Running in the background",
+          };
+  }
 
   return (
-    <Box flexDirection="column">
-      {/* Main row: tree char + description + type + model + stats */}
-      <Box flexDirection="row">
-        <Text wrap="truncate-end">
-          <Text color={colors.subagent.treeChar}>
-            {rowIndent}
-            {treeChar}{" "}
-          </Text>
-          <Text bold={!shouldDim} dimColor={shouldDim}>
-            {agent.description}
-          </Text>
-          <Text dimColor>
-            {" · "}
-            {agent.type.toLowerCase()}
-          </Text>
-          {modelDisplay && (
-            <>
-              <Text dimColor>{` · ${modelDisplay.label}`}</Text>
-              {modelDisplay.isByokProvider && (
-                <Text
-                  color={
-                    modelDisplay.isOpenAICodexProvider ? "#74AA9C" : "yellow"
-                  }
-                >
-                  {" ▲"}
-                </Text>
-              )}
-            </>
-          )}
-          {showStats && (
-            <Text dimColor>
-              {" · "}
-              {stats}
-            </Text>
-          )}
-        </Text>
-      </Box>
-
-      {/* Subagent URL */}
-      {agent.agentURL && (
-        <Box flexDirection="row">
-          <Text color={colors.subagent.treeChar}>
-            {rowIndent}
-            {continueChar} {CLI_GLYPHS.result}{" "}
-          </Text>
-          <Text dimColor>{"Subagent: "}</Text>
-          <Text dimColor>{agent.agentURL}</Text>
-        </Box>
-      )}
-
-      {/* Status line */}
-      {!hideBackgroundStatusLine && (
-        <Box flexDirection="row">
-          {agent.status === "error" ? (
-            <>
-              <Box width={gutterWidth} flexShrink={0}>
-                <Text>
-                  <Text color={colors.subagent.treeChar}>
-                    {rowIndent}
-                    {continueChar}
-                  </Text>
-                  <Text dimColor>{statusIndent}</Text>
-                </Text>
-              </Box>
-              <Box flexGrow={1} width={contentWidth}>
-                <Text wrap="wrap" color={colors.subagent.error}>
-                  {agent.error}
-                </Text>
-              </Box>
-            </>
-          ) : (
-            <>
-              <Text color={colors.subagent.treeChar}>
-                {rowIndent}
-                {continueChar}
-              </Text>
-              <Text dimColor>
-                {statusIndent}
-                {agent.status === "completed" && !agent.isBackground
-                  ? "Done"
-                  : "Running in the background"}
-              </Text>
-            </>
-          )}
-        </Box>
-      )}
-    </Box>
+    <SubagentRow
+      isLast={isLast}
+      description={agent.description}
+      type={agent.type}
+      model={agent.model}
+      showStats={showStats}
+      stats={formatStats(agent.toolCount, agent.totalTokens)}
+      dimDescription={shouldDim}
+      agentURL={agent.agentURL}
+      status={status}
+    />
   );
 });
 

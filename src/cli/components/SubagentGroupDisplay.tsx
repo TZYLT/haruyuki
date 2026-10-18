@@ -12,7 +12,9 @@
  * - Shows "Running N subagents..." while active
  *
  * When agents complete, they get committed to Ink's <Static> area using
- * SubagentGroupStatic instead (a pure props-based snapshot with no hooks).
+ * SubagentGroupStatic instead (a pure props-based snapshot with no hooks). The
+ * two share their row markup through `SubagentRow.tsx`; what lives here is the
+ * live group's own policy, which is what actually differs between them.
  */
 
 import { Box } from "ink";
@@ -27,38 +29,57 @@ import {
 import { useAnimation } from "@/cli/contexts/AnimationContext.js";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { APP_KEY_CHORDS } from "@/cli/helpers/keymap";
-import {
-  formatStats,
-  getSubagentModelDisplay,
-  getTreeChars,
-} from "@/cli/helpers/subagent-display.js";
+import { formatStats } from "@/cli/helpers/subagent-display.js";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
-import { useTerminalWidth } from "@/cli/hooks/use-terminal-width.js";
 import { BlinkDot } from "./BlinkDot.js";
 import { colors } from "./colors.js";
+import type { SubagentRowStatus } from "./SubagentRow";
+import { SubagentRow, SubagentToolCallRow } from "./SubagentRow";
 import { Text } from "./Text";
 
-function formatToolArgs(argsStr: string): string {
-  try {
-    const args = JSON.parse(argsStr);
-    const entries = Object.entries(args)
-      .filter(([_, value]) => value !== undefined && value !== null)
-      .slice(0, 2);
+/**
+ * What the live group says about one agent.
+ *
+ * The full view names the tool that is running; the condensed one (animation
+ * disabled because live content would overflow) only says "Running...", and
+ * reports an error as the word rather than the message. Nothing here reaches
+ * the frozen group: a committed agent is never "launching".
+ */
+function liveAgentStatus(
+  agent: SubagentState,
+  condensed: boolean,
+): SubagentRowStatus {
+  const isComplete = agent.status === "completed" || agent.status === "error";
+  const lastTool = agent.toolCalls[agent.toolCalls.length - 1];
 
-    if (entries.length === 0) return "";
-
-    return entries
-      .map(([key, value]) => {
-        let displayValue = String(value);
-        if (displayValue.length > 50) {
-          displayValue = `${displayValue.slice(0, 47)}...`;
-        }
-        return `${key}: "${displayValue}"`;
-      })
-      .join(", ");
-  } catch {
-    return "";
+  if (!agent.agentURL && !lastTool && !isComplete && !agent.isBackground) {
+    return { kind: "launching" };
   }
+  if (agent.status === "error") {
+    return { kind: "error", message: condensed ? "Error" : agent.error };
+  }
+  if (condensed) {
+    return {
+      kind: "text",
+      text: isComplete
+        ? "Done"
+        : agent.isBackground
+          ? "Running in the background"
+          : lastTool
+            ? "Running..."
+            : "Thinking",
+    };
+  }
+  return {
+    kind: "text",
+    text: isComplete
+      ? "Done"
+      : agent.isBackground
+        ? "Running in the background"
+        : lastTool
+          ? lastTool.name
+          : "Thinking",
+  };
 }
 
 // ============================================================================
@@ -74,229 +95,45 @@ interface AgentRowProps {
 
 const AgentRow = memo(
   ({ agent, isLast, expanded, condensed = false }: AgentRowProps) => {
-    const { treeChar, continueChar } = getTreeChars(isLast);
-    const rowIndent = "  ";
-    const statusIndent = "   ";
-    const expandedToolIndent = "    ";
-    const columns = useTerminalWidth();
-    const gutterWidth =
-      rowIndent.length + continueChar.length + statusIndent.length;
-    const contentWidth = Math.max(0, columns - gutterWidth);
-
     const isRunning = agent.status === "pending" || agent.status === "running";
     const toolCount = getSubagentToolCount(agent);
     const shouldDim = isRunning && !agent.isBackground;
     const showStats =
-      !(agent.isBackground && isRunning) && !(isRunning && toolCount === 0);
+      !condensed &&
+      !(agent.isBackground && isRunning) &&
+      !(isRunning && toolCount === 0);
     const hideBackgroundStatusLine =
       agent.isBackground && isRunning && !agent.agentURL;
-    const stats = formatStats(toolCount, agent.totalTokens);
-    const modelDisplay = getSubagentModelDisplay(agent.model);
-    const lastTool = agent.toolCalls[agent.toolCalls.length - 1];
 
-    // Condensed mode: simplified view to reduce re-renders when overflowing
-    // Shows: "Description · type · model" + "Running..." or "Done"
-    // Full details are shown in SubagentGroupStatic when flushed to static area
-    if (condensed) {
-      const isComplete =
-        agent.status === "completed" || agent.status === "error";
-      return (
-        <Box flexDirection="column">
-          {/* Main row: tree char + description + type + model (no stats) */}
-          <Box flexDirection="row">
-            <Text wrap="truncate-end">
-              <Text color={colors.subagent.treeChar}>
-                {rowIndent}
-                {treeChar}{" "}
-              </Text>
-              <Text bold={!shouldDim} dimColor={shouldDim}>
-                {agent.description}
-              </Text>
-              <Text dimColor>
-                {" · "}
-                {agent.type.toLowerCase()}
-              </Text>
-              {modelDisplay && (
-                <>
-                  <Text dimColor>{` · ${modelDisplay.label}`}</Text>
-                  {modelDisplay.isByokProvider && (
-                    <Text
-                      color={
-                        modelDisplay.isOpenAICodexProvider
-                          ? "#74AA9C"
-                          : "yellow"
-                      }
-                    >
-                      {" ▲"}
-                    </Text>
-                  )}
-                </>
-              )}
-            </Text>
-          </Box>
-          {/* Simple status line */}
-          {!hideBackgroundStatusLine && (
-            <Box flexDirection="row">
-              {!agent.agentURL &&
-              !lastTool &&
-              !isComplete &&
-              agent.status !== "error" &&
-              !agent.isBackground ? (
-                <>
-                  <Text color={colors.subagent.treeChar}>
-                    {rowIndent}
-                    {continueChar} {CLI_GLYPHS.result}{" "}
-                  </Text>
-                  <Text dimColor>Launching...</Text>
-                </>
-              ) : (
-                <>
-                  <Text color={colors.subagent.treeChar}>
-                    {rowIndent}
-                    {continueChar}
-                  </Text>
-                  <Text dimColor>{statusIndent}</Text>
-                  {agent.status === "error" ? (
-                    <Text color={colors.subagent.error}>Error</Text>
-                  ) : isComplete ? (
-                    <Text dimColor>Done</Text>
-                  ) : agent.isBackground ? (
-                    <Text dimColor>Running in the background</Text>
-                  ) : lastTool ? (
-                    <Text dimColor>Running...</Text>
-                  ) : (
-                    <Text dimColor>Thinking</Text>
-                  )}
-                </>
-              )}
-            </Box>
-          )}
-        </Box>
-      );
-    }
-
-    // Full mode: all details including live tool calls
+    // Condensed mode: simplified view to reduce re-renders when overflowing.
+    // Shows: "Description · type · model" + "Running..." or "Done", with no URL
+    // line, no stats and no expanded tool calls. The full details are shown in
+    // SubagentGroupStatic once the group is flushed to the static area.
     return (
-      <Box flexDirection="column">
-        {/* Main row: tree char + description + type + model + stats */}
-        <Box flexDirection="row">
-          <Text wrap="truncate-end">
-            <Text color={colors.subagent.treeChar}>
-              {rowIndent}
-              {treeChar}{" "}
-            </Text>
-            <Text bold={!shouldDim} dimColor={shouldDim}>
-              {agent.description}
-            </Text>
-            <Text dimColor>
-              {" · "}
-              {agent.type.toLowerCase()}
-            </Text>
-            {modelDisplay && (
-              <>
-                <Text dimColor>{` · ${modelDisplay.label}`}</Text>
-                {modelDisplay.isByokProvider && (
-                  <Text
-                    color={
-                      modelDisplay.isOpenAICodexProvider ? "#74AA9C" : "yellow"
-                    }
-                  >
-                    {" ▲"}
-                  </Text>
-                )}
-              </>
-            )}
-            {showStats && (
-              <Text dimColor>
-                {" · "}
-                {stats}
-              </Text>
-            )}
-          </Text>
-        </Box>
-
-        {/* Subagent URL */}
-        {agent.agentURL && (
-          <Box flexDirection="row">
-            <Text color={colors.subagent.treeChar}>
-              {rowIndent}
-              {continueChar} {CLI_GLYPHS.result}{" "}
-            </Text>
-            <Text dimColor>{"Subagent: "}</Text>
-            <Text dimColor>{agent.agentURL}</Text>
-          </Box>
-        )}
-
-        {/* Expanded: show all tool calls */}
-        {expanded &&
-          agent.toolCalls.map((tc) => {
-            const formattedArgs = formatToolArgs(tc.args);
-            return (
-              <Box key={tc.id} flexDirection="row">
-                <Text color={colors.subagent.treeChar}>
-                  {rowIndent}
-                  {continueChar}
-                </Text>
-                <Text dimColor>
-                  {expandedToolIndent}
-                  {tc.name}({formattedArgs})
-                </Text>
-              </Box>
-            );
-          })}
-
-        {/* Status line */}
-        {!hideBackgroundStatusLine && (
-          <Box flexDirection="row">
-            {agent.status === "error" ? (
-              <>
-                <Box width={gutterWidth} flexShrink={0}>
-                  <Text>
-                    <Text color={colors.subagent.treeChar}>
-                      {rowIndent}
-                      {continueChar}
-                    </Text>
-                    <Text dimColor>{statusIndent}</Text>
-                  </Text>
-                </Box>
-                <Box flexGrow={1} width={contentWidth}>
-                  <Text wrap="wrap" color={colors.subagent.error}>
-                    {agent.error}
-                  </Text>
-                </Box>
-              </>
-            ) : !agent.agentURL &&
-              !lastTool &&
-              agent.status !== "completed" &&
-              !agent.isBackground ? (
-              <>
-                <Text color={colors.subagent.treeChar}>
-                  {rowIndent}
-                  {continueChar} {CLI_GLYPHS.result}{" "}
-                </Text>
-                <Text dimColor>Launching...</Text>
-              </>
-            ) : (
-              <>
-                <Text color={colors.subagent.treeChar}>
-                  {rowIndent}
-                  {continueChar}
-                </Text>
-                <Text dimColor>
-                  {statusIndent}
-                  {agent.status === "completed"
-                    ? "Done"
-                    : agent.isBackground
-                      ? "Running in the background"
-                      : lastTool
-                        ? lastTool.name
-                        : "Thinking"}
-                </Text>
-              </>
-            )}
-          </Box>
-        )}
-      </Box>
+      <SubagentRow
+        isLast={isLast}
+        description={agent.description}
+        type={agent.type}
+        model={agent.model}
+        showStats={showStats}
+        stats={formatStats(toolCount, agent.totalTokens)}
+        dimDescription={shouldDim}
+        agentURL={condensed ? undefined : agent.agentURL}
+        status={
+          hideBackgroundStatusLine ? null : liveAgentStatus(agent, condensed)
+        }
+      >
+        {!condensed &&
+          expanded &&
+          agent.toolCalls.map((tc) => (
+            <SubagentToolCallRow
+              key={tc.id}
+              isLast={isLast}
+              name={tc.name}
+              args={tc.args}
+            />
+          ))}
+      </SubagentRow>
     );
   },
 );

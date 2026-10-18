@@ -1,8 +1,13 @@
 /**
  * SubagentManager component - displays available subagents
+ *
+ * A read-only listing: there is no cursor and nothing to pick, so it has no list
+ * navigation — only the three ways out (Escape, Enter, Ctrl+C). Those are a key
+ * table now rather than a `useInput` handler, and the chrome is the frame every
+ * other overlay draws, so the overlay claims its input scope like the rest.
  */
 
-import { Box, useInput } from "ink";
+import { Box } from "ink";
 import { useEffect, useState } from "react";
 import {
   AGENTS_DIR,
@@ -12,8 +17,13 @@ import {
   getBuiltinSubagentNames,
   type SubagentConfig,
 } from "@/agent/subagents";
+import type { KeyBinding } from "@/cli/helpers/input-keys";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
+import { OverlayFrame } from "@/cli/overlay/frame";
 import { colors } from "./colors";
 import { Text } from "./Text";
+
+const TITLE = "Available Subagents";
 
 interface SubagentManagerProps {
   onClose: () => void;
@@ -64,25 +74,30 @@ export function SubagentManager({ onClose }: SubagentManagerProps) {
     loadSubagents();
   }, []);
 
-  useInput((input, key) => {
-    // CTRL-C: immediately close
-    if (key.ctrl && input === "c") {
-      onClose();
-      return;
-    }
+  // Unconditional: the overlay is closable from every state, including while the
+  // configs are still loading, which is what the hand-written handler did.
+  const bindings: KeyBinding[] = [
+    {
+      id: "subagent-manager.close",
+      chords: [{ key: "c", ctrl: true }, { key: "escape" }, { key: "return" }],
+      run: () => {
+        onClose();
+        return "consumed";
+      },
+    },
+  ];
 
-    if (key.escape || key.return) {
-      onClose();
-    }
-  });
+  useKeyBindings("subagent-manager", [{ scope: "overlay", bindings }]);
 
-  if (loading) {
-    return (
-      <Box flexDirection="column">
-        <Text>Loading subagents...</Text>
-      </Box>
-    );
-  }
+  const hints = (
+    <Box flexDirection="column" gap={1}>
+      <Text dimColor>
+        To add custom subagents, create .md files in {AGENTS_DIR}/ (project) or{" "}
+        {GLOBAL_AGENTS_DIR}/ (global)
+      </Text>
+      <Text dimColor>Press ESC or Enter to close</Text>
+    </Box>
+  );
 
   const renderSubagentList = (items: SubagentItem[]) =>
     items.map((item, index) => (
@@ -100,46 +115,46 @@ export function SubagentManager({ onClose }: SubagentManagerProps) {
       </Box>
     ));
 
+  if (loading) {
+    return (
+      <OverlayFrame command="/subagents" title={TITLE} footer={hints}>
+        <Text>Loading subagents...</Text>
+      </OverlayFrame>
+    );
+  }
+
   const hasNoSubagents =
     builtinSubagents.length === 0 && customSubagents.length === 0;
 
   return (
-    <Box flexDirection="column" gap={1}>
-      <Text bold color={colors.selector.title}>
-        Available Subagents
-      </Text>
+    <OverlayFrame command="/subagents" title={TITLE} footer={hints}>
+      <Box flexDirection="column" gap={1}>
+        {error && <Text color={colors.status.error}>Error: {error}</Text>}
 
-      {error && <Text color={colors.status.error}>Error: {error}</Text>}
+        {hasNoSubagents ? (
+          <Text dimColor>No subagents found</Text>
+        ) : (
+          <>
+            {builtinSubagents.length > 0 && (
+              <Box flexDirection="column">
+                <Text bold dimColor>
+                  Built-in
+                </Text>
+                {renderSubagentList(builtinSubagents)}
+              </Box>
+            )}
 
-      {hasNoSubagents ? (
-        <Text dimColor>No subagents found</Text>
-      ) : (
-        <>
-          {builtinSubagents.length > 0 && (
-            <Box flexDirection="column">
-              <Text bold dimColor>
-                Built-in
-              </Text>
-              {renderSubagentList(builtinSubagents)}
-            </Box>
-          )}
-
-          {customSubagents.length > 0 && (
-            <Box flexDirection="column">
-              <Text bold dimColor>
-                Custom
-              </Text>
-              {renderSubagentList(customSubagents)}
-            </Box>
-          )}
-        </>
-      )}
-
-      <Text dimColor>
-        To add custom subagents, create .md files in {AGENTS_DIR}/ (project) or{" "}
-        {GLOBAL_AGENTS_DIR}/ (global)
-      </Text>
-      <Text dimColor>Press ESC or Enter to close</Text>
-    </Box>
+            {customSubagents.length > 0 && (
+              <Box flexDirection="column">
+                <Text bold dimColor>
+                  Custom
+                </Text>
+                {renderSubagentList(customSubagents)}
+              </Box>
+            )}
+          </>
+        )}
+      </Box>
+    </OverlayFrame>
   );
 }

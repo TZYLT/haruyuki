@@ -24,6 +24,37 @@ export function formatStats(toolCount: number, totalTokens: number): string {
 }
 
 /**
+ * Format a tool call's raw JSON arguments for the expanded-tool-call rows.
+ *
+ * Best effort by design: arguments reach this as a string from the stream, so an
+ * unparsable one renders as `name()` rather than throwing inside a render pass.
+ * At most two entries are shown, and a value longer than 50 characters is
+ * truncated to 47 plus an ellipsis.
+ */
+export function formatToolArgs(argsStr: string): string {
+  try {
+    const args = JSON.parse(argsStr);
+    const entries = Object.entries(args)
+      .filter(([_, value]) => value !== undefined && value !== null)
+      .slice(0, 2);
+
+    if (entries.length === 0) return "";
+
+    return entries
+      .map(([key, value]) => {
+        let displayValue = String(value);
+        if (displayValue.length > 50) {
+          displayValue = `${displayValue.slice(0, 47)}...`;
+        }
+        return `${key}: "${displayValue}"`;
+      })
+      .join(", ");
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Get tree-drawing characters for hierarchical display
  *
  * @param isLast - Whether this is the last item in the list
