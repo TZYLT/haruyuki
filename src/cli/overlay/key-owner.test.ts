@@ -1,0 +1,37 @@
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+/**
+ * The toolkit's first rule, as a check rather than a convention: **one key
+ * owner** (`overlay/README.md` rule 1). Inside `overlay`/`modal`, an overlay
+ * declares its keys through the router — `useOverlayList` for a list, a
+ * `useKeyBindings` table for anything else — never through Ink's `useInput`,
+ * which fans one event out to every listener and cannot be told "this key is
+ * mine".
+ *
+ * Behaviour cannot see this: a face with its own `useInput` can still paint the
+ * right frame in a test that drives only that face. What it cannot survive is
+ * being mounted next to anything else that reads keys — which is the app.
+ *
+ * The list is the faces this batch migrated. It grows as the later batches land,
+ * and a face is added here in the commit that removes its handler.
+ */
+const MIGRATED_FACES = [
+  "components/ConversationSelector.tsx",
+  "components/MessageSearch.tsx",
+  "components/SkillsDialog.tsx",
+  "components/WorktreeDiffSelector.tsx",
+  "components/WindowTitlePicker.tsx",
+];
+
+describe("one key owner", () => {
+  for (const face of MIGRATED_FACES) {
+    test(`${face} binds no keys of its own`, () => {
+      const path = fileURLToPath(new URL(`../${face}`, import.meta.url));
+      const source = readFileSync(path, "utf-8");
+
+      expect(source).not.toContain("useInput(");
+    });
+  }
+});

@@ -1,13 +1,14 @@
-import { Box, useInput } from "ink";
+import { Box } from "ink";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Skill, SkillSource } from "@/agent/skills";
 import { estimateTokens } from "@/cli/helpers/format";
-import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
+import type { KeyBinding } from "@/cli/helpers/input-keys";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
+import { OverlayFrame } from "@/cli/overlay/frame";
 import { appHomeDirName } from "@/utils/app-paths";
-import { colors } from "./colors";
+import { TabBar } from "./TabBar";
 import { Text } from "./Text";
 
-const SOLID_LINE = "─";
 const VISIBLE_ITEMS = 5;
 
 type SkillTab = SkillSource;
@@ -45,9 +46,21 @@ interface SkillsDialogProps {
   agentId: string;
 }
 
+/**
+ * `/skills`: a read-only scroller with a tab strip.
+ *
+ * On the toolkit: the chrome is `OverlayFrame`'s and the strip is `TabBar`'s —
+ * this face was the last hand-written tab strip in the tree. The keys are a table
+ * the router owns rather than an Ink `useInput`, the same move every overlay in
+ * this tree is making.
+ *
+ * One detail is deliberately kept: **the arrows scroll, they do not navigate.**
+ * There is no cursor here — the list is a column of names the user reads, with no
+ * selection and no Enter — so this face declares its own table instead of using
+ * `useOverlayList`, which is exactly what `MemoryTabViewer` does for the same
+ * shape. Enter stays unbound, as it was.
+ */
 export function SkillsDialog({ onClose, agentId }: SkillsDialogProps) {
-  const terminalWidth = useTerminalWidth();
-  const solidLine = SOLID_LINE.repeat(Math.max(terminalWidth, 10));
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
   const [scrollOffset, setScrollOffset] = useState(0);
@@ -111,9 +124,15 @@ export function SkillsDialog({ onClose, agentId }: SkillsDialogProps) {
     [availableTabs],
   );
 
+  // The strip is drawn from this rather than from `activeTab` directly: the state
+  // catches up in an effect one render later, and a strip with no highlighted tab
+  // in that frame is a frame the user can see. It resolves to `activeTab` as soon
+  // as the effect has run.
+  const displayedTab = activeTab ?? availableTabs[0] ?? null;
+
   const currentSkills = useMemo(
-    () => (activeTab ? (skillsBySource.get(activeTab) ?? []) : []),
-    [activeTab, skillsBySource],
+    () => (displayedTab ? (skillsBySource.get(displayedTab) ?? []) : []),
+    [displayedTab, skillsBySource],
   );
 
   const visibleSkills = useMemo(
@@ -121,81 +140,73 @@ export function SkillsDialog({ onClose, agentId }: SkillsDialogProps) {
     [currentSkills, scrollOffset],
   );
 
+  const maxScrollOffset = Math.max(0, currentSkills.length - VISIBLE_ITEMS);
   const showScrollDown = scrollOffset + VISIBLE_ITEMS < currentSkills.length;
   const itemsBelow = currentSkills.length - scrollOffset - VISIBLE_ITEMS;
 
-  useInput(
-    useCallback(
-      (input, key) => {
-        if (key.ctrl && input === "c") {
-          onClose();
-          return;
-        }
-        if (key.escape) {
-          onClose();
-        } else if (key.tab || key.rightArrow) {
-          cycleTab(1);
-        } else if (key.leftArrow) {
-          cycleTab(-1);
-        } else if (key.downArrow) {
-          setScrollOffset((prev) =>
-            Math.min(
-              prev + 1,
-              Math.max(0, currentSkills.length - VISIBLE_ITEMS),
-            ),
-          );
-        } else if (key.upArrow) {
-          setScrollOffset((prev) => Math.max(0, prev - 1));
-        }
+  const bindings: KeyBinding[] = [
+    {
+      id: "skills-dialog.next-tab",
+      chords: [{ key: "tab" }, { key: "rightArrow" }],
+      run: () => {
+        cycleTab(1);
+        return "consumed";
       },
-      [onClose, cycleTab, currentSkills.length],
-    ),
-    { isActive: true },
-  );
+    },
+    {
+      id: "skills-dialog.previous-tab",
+      chords: [{ key: "leftArrow" }],
+      run: () => {
+        cycleTab(-1);
+        return "consumed";
+      },
+    },
+    {
+      id: "skills-dialog.scroll-down",
+      chords: [{ key: "downArrow" }],
+      run: () => {
+        setScrollOffset((prev) => Math.min(prev + 1, maxScrollOffset));
+        return "consumed";
+      },
+    },
+    {
+      id: "skills-dialog.scroll-up",
+      chords: [{ key: "upArrow" }],
+      run: () => {
+        setScrollOffset((prev) => Math.max(0, prev - 1));
+        return "consumed";
+      },
+    },
+    {
+      id: "skills-dialog.close",
+      chords: [{ key: "escape" }, { key: "c", ctrl: true }],
+      run: () => {
+        onClose();
+        return "consumed";
+      },
+    },
+  ];
+
+  useKeyBindings("skills-dialog", [{ scope: "overlay", bindings }]);
 
   const getTabLabel = (tab: SkillTab) => {
     const count = skillsBySource.get(tab)?.length ?? 0;
     return `${TAB_LABELS[tab]} [${count}]`;
   };
 
-  const renderTabBar = () => (
-    <Box flexDirection="row" gap={2}>
-      {availableTabs.map((tab) => {
-        const isActive = tab === activeTab;
-        return (
-          <Text
-            key={tab}
-            backgroundColor={
-              isActive ? colors.selector.itemHighlighted : undefined
-            }
-            color={isActive ? "white" : undefined}
-            bold={isActive}
-          >
-            {` ${getTabLabel(tab)} `}
-          </Text>
-        );
-      })}
-    </Box>
-  );
-
   // Count currently loaded skills (skills in the loaded_skills memory block)
   // For now, use total count since we don't track loaded state here
   const loadedCount = skills.length;
 
   return (
-    <Box flexDirection="column">
-      {/* Command header */}
-      <Text dimColor>{"> /skills"}</Text>
-      <Text dimColor>{solidLine}</Text>
-
-      <Box height={1} />
-
-      {/* Title and tabs */}
+    <OverlayFrame
+      command="/skills"
+      title={`Skills (${loadedCount} currently available)`}
+      footer={
+        <Text dimColor>{"  "}↑↓ scroll · ←→/Tab switch · Esc to close</Text>
+      }
+    >
       <Box flexDirection="column" gap={1} marginBottom={1}>
-        <Text bold color={colors.selector.title}>
-          Skills ({loadedCount} currently available)
-        </Text>
-
         {loading && (
           <Box paddingLeft={2}>
             <Text dimColor>Loading skills...</Text>
@@ -211,9 +222,15 @@ export function SkillsDialog({ onClose, agentId }: SkillsDialogProps) {
 
         {!loading && skills.length > 0 && (
           <Box flexDirection="column" paddingLeft={1}>
-            {renderTabBar()}
-            {activeTab && (
-              <Text dimColor> {getTabDescription(activeTab, agentId)}</Text>
+            {displayedTab && (
+              <TabBar
+                tabs={availableTabs}
+                activeTab={displayedTab}
+                getLabel={getTabLabel}
+              />
+            )}
+            {displayedTab && (
+              <Text dimColor> {getTabDescription(displayedTab, agentId)}</Text>
             )}
           </Box>
         )}
@@ -243,19 +260,11 @@ export function SkillsDialog({ onClose, agentId }: SkillsDialogProps) {
       )}
 
       {/* Empty state for active tab */}
-      {!loading && activeTab && currentSkills.length === 0 && (
+      {!loading && displayedTab && currentSkills.length === 0 && (
         <Box paddingLeft={2}>
           <Text dimColor>No skills in this location</Text>
         </Box>
       )}
-
-      {/* Footer */}
-      <Box marginTop={1}>
-        <Text dimColor>
-          {"  "}
-          {"↑↓ scroll · ←→/Tab switch · Esc to close"}
-        </Text>
-      </Box>
-    </Box>
+    </OverlayFrame>
   );
 }

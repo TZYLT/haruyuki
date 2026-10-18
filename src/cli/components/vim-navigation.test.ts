@@ -8,14 +8,16 @@ function readComponent(name: string): string {
 }
 
 describe("vim-style j/k navigation in list selectors", () => {
-  // Pure-list pickers (no inline text field), so binding bare j/k as
-  // down/up aliases cannot clash with typing. Filter-based selectors
-  // (AgentSelector, ProviderSelector, ...) deliberately avoid bare
-  // letter shortcuts and are intentionally excluded here.
-  test('ConversationSelector.tsx maps "k" to up and "j" to down', () => {
+  // `ConversationSelector` used to bind bare `j`/`k` beside an always-live search
+  // field, and Ink fans one stdin event out to every listener: one press moved
+  // the cursor *and* typed the letter. On the toolkit the two are exclusive, and
+  // this face takes the field's side (`vimKeys: false`) — so what a source-text
+  // test can still pin is that the keys are no longer bound here at all. The
+  // behaviour is judged on the frame in `ConversationSelector.test.tsx`.
+  test("ConversationSelector.tsx leaves j/k to its search field", () => {
     const source = readComponent("ConversationSelector.tsx");
-    expect(source).toContain('key.upArrow || input === "k"');
-    expect(source).toContain('key.downArrow || input === "j"');
+    expect(source).not.toContain('input === "k"');
+    expect(source).not.toContain('input === "j"');
   });
 
   // The two pickers are the toolkit's now, so their j/k lives in one place: the

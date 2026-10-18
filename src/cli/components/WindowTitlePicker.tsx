@@ -11,9 +11,9 @@ import {
   type WindowTitleData,
   type WindowTitleField,
 } from "@/cli/helpers/window-title-config";
+import { OverlayFrame } from "@/cli/overlay/frame";
 import { settingsManager } from "@/settings-manager";
 import { MultiSelectPicker } from "./MultiSelectPicker";
-import { OverlayShell } from "./OverlayShell";
 
 interface WindowTitlePickerProps {
   projectDirectory: string;
@@ -97,7 +97,7 @@ export const WindowTitlePicker = memo(function WindowTitlePicker({
   }, [onTitlePreviewEnd, onClose]);
 
   return (
-    <OverlayShell command="/title" title="Configure Terminal Title">
+    <OverlayFrame command="/title" title="Configure Terminal Title">
       <MultiSelectPicker
         items={items}
         selected={new Set(selectedKeys)}
@@ -107,7 +107,7 @@ export const WindowTitlePicker = memo(function WindowTitlePicker({
         preview={preview ?? undefined}
         enableOrdering
       />
-    </OverlayShell>
+    </OverlayFrame>
   );
 });
 

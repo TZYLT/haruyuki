@@ -1,6 +1,6 @@
 import type { MessageSearchResponse } from "@letta-ai/letta-client/resources/messages";
-import { Box, useInput } from "ink";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Box } from "ink";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getBackend } from "@/backend";
 import {
   searchMessagesForBackend,
@@ -8,11 +8,12 @@ import {
 } from "@/backend/message-search";
 import { truncateText } from "@/cli/helpers/truncate-text";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
+import { OverlayFrame } from "@/cli/overlay/frame";
+import { OverlayListView } from "@/cli/overlay/list-view";
+import { useOverlayList } from "@/cli/overlay/use-overlay-list";
 import { colors } from "./colors";
+import { PasteAwareTextInput } from "./PasteAwareTextInput";
 import { Text } from "./Text";
-
-// Horizontal line character (matches approval dialogs)
-const SOLID_LINE = "─";
 
 interface MessageSearchProps {
   onClose: () => void;
@@ -262,10 +263,13 @@ export function MessageSearch({
   const [results, setResults] = useState<MessageSearchResponse>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const [expandedMessage, setExpandedMessage] = useState<
     MessageSearchResponse[number] | null
   >(null);
+  // The cursor is the toolkit's now; this is how a new result set moves it back to
+  // the top, the way `setSelectedIndex(0)` did. A ref because the resets happen
+  // inside `executeSearch`/`clearSearch`, which are defined before the list.
+  const resetCursorRef = useRef<(index: number) => void>(() => {});
   const searchRequestIdRef = useRef(0);
   // Cache results per query+mode+range combination to avoid re-fetching
   const resultsCache = useRef<Map<string, MessageSearchResponse>>(new Map());
@@ -387,7 +391,7 @@ export function MessageSearch({
       if (cached) {
         setLoading(false);
         setResults(cached);
-        setSelectedIndex(0);
+        resetCursorRef.current(0);
         prefetchSearchResults(query, mode, range);
         return;
       }
@@ -406,7 +410,7 @@ export function MessageSearch({
         }
 
         setResults(primaryResults);
-        setSelectedIndex(0);
+        resetCursorRef.current(0);
         setLoading(false);
         prefetchSearchResults(query, mode, range);
       } catch (err) {
@@ -435,7 +439,7 @@ export function MessageSearch({
     setSearchInput("");
     setActiveQuery("");
     setResults([]);
-    setSelectedIndex(0);
+    resetCursorRef.current(0);
   }, []);
 
   // Cycle search mode (Shift+Tab)
@@ -465,72 +469,100 @@ export function MessageSearch({
     }
   }, [searchMode, searchRange, activeQuery, executeSearch]);
 
-  // Sliding window for visible items
-  const startIndex = Math.max(
-    0,
-    Math.min(selectedIndex - 2, results.length - VISIBLE_ITEMS),
+  // The result list is the toolkit's now: it owns the cursor and the four
+  // navigation keys, and `rows` is both the window and the PageUp/PageDown step.
+  // `vimKeys: false` because the query field beside it is a live editor — `j`/`k`
+  // are search text, which is what `list-bindings.ts` documents — and `center`
+  // because that is the shape this face's own window arithmetic had.
+  //
+  // Everything this face still owns goes in `extra`, at the head of the table:
+  // Tab and Shift+Tab cycle the range and the mode, Enter either searches,
+  // expands or opens, and Escape unwinds the expanded view first, then the query,
+  // and only then closes the overlay (through the list's own cancel).
+  const listItems = useMemo(
+    () =>
+      results.map((msg, index) => ({
+        // The message id alone is not unique: one search can return the same
+        // message twice, which is why the old row key carried its index too.
+        key: `${"message_id" in msg ? String(msg.message_id) : "result"}-${index}`,
+        label: "",
+      })),
+    [results],
   );
-  const visibleResults = results.slice(startIndex, startIndex + VISIBLE_ITEMS);
-
-  useInput((input, key) => {
-    // CTRL-C: immediately close (bypasses search clearing)
-    if (key.ctrl && input === "c") {
-      onClose();
-      return;
-    }
-
-    // Handle expanded message view
-    if (expandedMessage) {
-      if (key.escape) {
-        setExpandedMessage(null);
-      } else if (key.return && onOpenConversation) {
-        const msgData = expandedMessage as {
-          agent_id?: string;
-          conversation_id?: string;
-        };
-        if (msgData.agent_id) {
-          const fullText = getMessageText(expandedMessage);
-          onOpenConversation(msgData.agent_id, msgData.conversation_id, {
-            query: activeQuery,
-            message: fullText,
-          });
-        }
-      }
-      return;
-    }
-
-    if (key.escape) {
-      if (searchInput || activeQuery) {
-        clearSearch();
-      } else {
-        onClose();
-      }
-    } else if (key.return) {
-      // If user has typed a new query, search first
-      if (searchInput.trim() && searchInput !== activeQuery) {
-        submitSearch();
-      } else if (results.length > 0 && results[selectedIndex]) {
-        // Otherwise expand the selected result
-        setExpandedMessage(results[selectedIndex]);
-      }
-    } else if (key.backspace || key.delete) {
-      setSearchInput((prev) => prev.slice(0, -1));
-    } else if (key.tab && key.shift) {
-      // Shift+Tab cycles search mode
-      cycleSearchMode();
-    } else if (key.tab) {
-      // Tab cycles search range
-      cycleSearchRange();
-    } else if (key.upArrow) {
-      setSelectedIndex((prev) => Math.max(0, prev - 1));
-    } else if (key.downArrow) {
-      setSelectedIndex((prev) => Math.min(results.length - 1, prev + 1));
-    } else if (input && !key.ctrl && !key.meta) {
-      setSearchInput((prev) => prev + input);
-    }
+  const cursorRef = useRef(0);
+  const searchList = useOverlayList({
+    owner: "message-search",
+    items: listItems,
+    rows: VISIBLE_ITEMS,
+    anchor: "center",
+    vimKeys: false,
+    navigationEnabled: !expandedMessage,
+    onCancel: onClose,
+    extra: [
+      {
+        id: "message-search.escape",
+        chords: [{ key: "escape" }],
+        run: () => {
+          if (expandedMessage) {
+            setExpandedMessage(null);
+            return "consumed";
+          }
+          if (searchInput || activeQuery) {
+            clearSearch();
+            return "consumed";
+          }
+          // Nothing to clear: the list's own cancel owns Escape.
+          return "declined";
+        },
+      },
+      {
+        id: "message-search.enter",
+        chords: [{ key: "return" }],
+        run: () => {
+          if (expandedMessage) {
+            const msgData = expandedMessage as {
+              agent_id?: string;
+              conversation_id?: string;
+            };
+            if (onOpenConversation && msgData.agent_id) {
+              onOpenConversation(msgData.agent_id, msgData.conversation_id, {
+                query: activeQuery,
+                message: getMessageText(expandedMessage),
+              });
+            }
+            return "consumed";
+          }
+          // If user has typed a new query, search first
+          if (searchInput.trim() && searchInput !== activeQuery) {
+            submitSearch();
+            return "consumed";
+          }
+          const selected = results[cursorRef.current];
+          // Otherwise expand the selected result
+          if (selected) setExpandedMessage(selected);
+          return "consumed";
+        },
+      },
+      {
+        id: "message-search.cycle-mode",
+        chords: [{ key: "tab", shift: true }],
+        run: () => {
+          cycleSearchMode();
+          return "consumed";
+        },
+      },
+      {
+        id: "message-search.cycle-range",
+        chords: [{ key: "tab" }],
+        run: () => {
+          cycleSearchRange();
+          return "consumed";
+        },
+      },
+    ],
   });
-
-  const solidLine = SOLID_LINE.repeat(Math.max(terminalWidth, 10));
+  cursorRef.current = searchList.cursor;
+  resetCursorRef.current = searchList.setCursor;
 
   // Range label helper
   const getRangeLabel = (range: SearchRange) => {
@@ -545,13 +577,12 @@ export function MessageSearch({
   };
 
   return (
-    <Box flexDirection="column">
-      {/* Command header */}
-      <Text dimColor>{"> /search"}</Text>
-      <Text dimColor>{solidLine}</Text>
-
-      <Box height={1} />
-
+    <OverlayFrame
+      command="/search"
+      // The expanded view replaces the header: it is a sub-view of this overlay,
+      // and it has never shown the title.
+      title={expandedMessage ? undefined : "Search messages across all agents"}
+    >
       {/* Expanded message view - hide title/controls */}
       {expandedMessage &&
         (() => {
@@ -615,23 +646,20 @@ export function MessageSearch({
       {/* Title and search controls - hidden when expanded */}
       {!expandedMessage && (
         <Box flexDirection="column" gap={1} marginBottom={1}>
-          <Text bold color={colors.selector.title}>
-            Search messages across all agents
-          </Text>
           <Box flexDirection="column" paddingLeft={1}>
-            {/* Search input */}
+            {/* Search input. A real editor now: this face used to splice
+                characters into a string by hand, which is why a paste into it was
+                silently dropped. */}
             <Box flexDirection="row">
               <Text dimColor> Search: </Text>
-              {searchInput ? (
-                <>
-                  <Text>{searchInput}</Text>
-                  {searchInput !== activeQuery && (
-                    <Text dimColor> (press Enter to search)</Text>
-                  )}
-                </>
-              ) : (
-                <Text dimColor>(type to search)</Text>
-              )}
+              <PasteAwareTextInput
+                value={searchInput}
+                onChange={setSearchInput}
+                placeholder="(type to search)"
+              />
+              {searchInput && searchInput !== activeQuery ? (
+                <Text dimColor> (press Enter to search)</Text>
+              ) : null}
             </Box>
 
             <Box height={1} />
@@ -704,80 +732,79 @@ export function MessageSearch({
         </Box>
       )}
 
-      {/* Results list */}
+      {/* Results list. `indicators={false}` because the footer below says the
+          position in this face's own words ("1/2 results"). */}
       {!expandedMessage && !loading && results.length > 0 && (
-        <Box flexDirection="column">
-          {visibleResults.map(
-            (msg: MessageSearchResponse[number], visibleIndex: number) => {
-              const actualIndex = startIndex + visibleIndex;
-              const isSelected = actualIndex === selectedIndex;
-              const messageText = getMessageText(msg);
-              // All messages have a date field
-              const msgWithDate = msg as {
-                date?: string;
-                created_at?: string;
-                agent_id?: string;
-                conversation_id?: string;
-              };
-              const msgType = msg.message_type || "unknown";
-              const agentIdFromMsg = msgWithDate.agent_id || "unknown";
-              const conversationIdFromMsg = msgWithDate.conversation_id;
-              const createdAt = formatLocalTime(
-                msgWithDate.created_at || msgWithDate.date,
-              );
+        <OverlayListView
+          items={listItems}
+          cursor={searchList.cursor}
+          rows={VISIBLE_ITEMS}
+          anchor="center"
+          indicators={false}
+          renderRow={(_item, index, isCursor) => {
+            const msg = results[index];
+            if (!msg) return null;
+            const messageText = getMessageText(msg);
+            // All messages have a date field
+            const msgWithDate = msg as {
+              date?: string;
+              created_at?: string;
+              agent_id?: string;
+              conversation_id?: string;
+            };
+            const msgType = msg.message_type || "unknown";
+            const agentIdFromMsg = msgWithDate.agent_id || "unknown";
+            const conversationIdFromMsg = msgWithDate.conversation_id;
+            const createdAt = formatLocalTime(
+              msgWithDate.created_at || msgWithDate.date,
+            );
 
-              // Determine emoji based on message type
-              const isAssistant =
-                msgType === "assistant_message" ||
-                msgType === "reasoning_message";
-              const emoji = isAssistant ? "👾" : "👤";
+            // Determine emoji based on message type
+            const isAssistant =
+              msgType === "assistant_message" ||
+              msgType === "reasoning_message";
+            const emoji = isAssistant ? "👾" : "👤";
 
-              // Calculate available width for message text (account for emoji + spacing)
-              const availableWidth = Math.max(20, terminalWidth - 8);
-              const displayText = truncateText(
-                messageText.replace(/\n/g, " "),
-                availableWidth,
-              );
+            // Calculate available width for message text (account for emoji + spacing)
+            const availableWidth = Math.max(20, terminalWidth - 8);
+            const displayText = truncateText(
+              messageText.replace(/\n/g, " "),
+              availableWidth,
+            );
 
-              // Show conversation_id if exists, otherwise agent_id
-              const idToShow = conversationIdFromMsg || agentIdFromMsg;
+            // Show conversation_id if exists, otherwise agent_id
+            const idToShow = conversationIdFromMsg || agentIdFromMsg;
 
-              // Use message id + index for guaranteed uniqueness (search can return same message multiple times)
-              const msgId =
-                "message_id" in msg ? String(msg.message_id) : "result";
-              const uniqueKey = `${msgId}-${actualIndex}`;
-
-              return (
-                <Box key={uniqueKey} flexDirection="column" marginBottom={1}>
-                  <Box flexDirection="row">
-                    <Text
-                      color={
-                        isSelected ? colors.selector.itemHighlighted : undefined
-                      }
-                    >
-                      {isSelected ? ">" : " "}
-                    </Text>
-                    <Text> {emoji} </Text>
-                    <Text
-                      bold={isSelected}
-                      color={
-                        isSelected ? colors.selector.itemHighlighted : undefined
-                      }
-                    >
-                      <HighlightedText text={displayText} query={activeQuery} />
-                    </Text>
-                  </Box>
-                  <Box flexDirection="row" marginLeft={2}>
-                    <Text dimColor>
-                      {createdAt}
-                      {idToShow && ` · ${idToShow}`}
-                    </Text>
-                  </Box>
+            return (
+              <Box flexDirection="column" marginBottom={1}>
+                <Box flexDirection="row">
+                  <Text
+                    color={
+                      isCursor ? colors.selector.itemHighlighted : undefined
+                    }
+                  >
+                    {isCursor ? ">" : " "}
+                  </Text>
+                  <Text> {emoji} </Text>
+                  <Text
+                    bold={isCursor}
+                    color={
+                      isCursor ? colors.selector.itemHighlighted : undefined
+                    }
+                  >
+                    <HighlightedText text={displayText} query={activeQuery} />
+                  </Text>
                 </Box>
-              );
-            },
-          )}
-        </Box>
+                <Box flexDirection="row" marginLeft={2}>
+                  <Text dimColor>
+                    {createdAt}
+                    {idToShow && ` · ${idToShow}`}
+                  </Text>
+                </Box>
+              </Box>
+            );
+          }}
+        />
       )}
 
       {/* Footer */}
@@ -785,12 +812,12 @@ export function MessageSearch({
         <Box flexDirection="column" marginTop={1} paddingLeft={2}>
           {results.length > 0 && (
             <Text dimColor>
-              {selectedIndex + 1}/{results.length} results
+              {searchList.cursor + 1}/{results.length} results
             </Text>
           )}
           <Text dimColor>Enter expand · ↑↓ navigate · Esc close</Text>
         </Box>
       )}
-    </Box>
+    </OverlayFrame>
   );
 }

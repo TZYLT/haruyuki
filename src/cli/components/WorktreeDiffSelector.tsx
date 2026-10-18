@@ -1,7 +1,7 @@
 import { Box } from "ink";
+import { OverlayFrame } from "@/cli/overlay/frame";
 import type { WorktreeDiffOption } from "@/web/worktree-diff-list";
 import { colors } from "./colors";
-import { OverlayShell } from "./OverlayShell";
 import { type SelectableItem, SingleSelectPicker } from "./SingleSelectPicker";
 import { Text } from "./Text";
 
@@ -25,7 +25,7 @@ export function WorktreeDiffSelector({
   }));
 
   return (
-    <OverlayShell command="/experiments diffs" title="Open Worktree Diff">
+    <OverlayFrame command="/experiments diffs" title="Open Worktree Diff">
       {items.length === 0 ? (
         <Text dimColor>No worktrees found.</Text>
       ) : (
@@ -71,6 +71,6 @@ export function WorktreeDiffSelector({
           }}
         />
       )}
-    </OverlayShell>
+    </OverlayFrame>
   );
 }
