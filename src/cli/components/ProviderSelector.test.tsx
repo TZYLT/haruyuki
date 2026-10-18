@@ -41,6 +41,11 @@ const END = "\u001b[F";
 let previousBackendMode: BackendMode;
 
 beforeEach(async () => {
+  // `settingsManager` is a global singleton: `initialize()` returns immediately
+  // when it is already initialised, so without the reset this file would run
+  // against whatever the previous file in the worker left behind (and leave its
+  // own state for the next one).
+  await settingsManager.reset();
   previousBackendMode = resolveBackendMode();
   setConfiguredBackendMode("local");
   __testSetBackend(new FakeHeadlessBackend());

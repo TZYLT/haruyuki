@@ -35,6 +35,9 @@ function server(name: string): McpServerConfig {
 }
 
 beforeEach(async () => {
+  // Same singleton rule as the sibling selector tests: reset first, or
+  // `initialize()` no-ops against the previous file's settings.
+  await settingsManager.reset();
   await settingsManager.initialize();
 });
 
