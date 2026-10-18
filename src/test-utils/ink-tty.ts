@@ -70,9 +70,22 @@ export interface InkTtyOptions {
   rows?: number;
 }
 
+export interface InkTtyRowsOptions {
+  /**
+   * Keep the frame's trailing blank rows.
+   *
+   * `rows()` drops them, because a frame pads to the stream height and no
+   * assertion should trail a dozen empties. But a body can also *reserve* its
+   * last row -- a windowed list's indicator row, or an autocomplete's spacer that
+   * holds the popup's height while its footer has nothing to say. That reserved
+   * row is blank, so "the height did not change" can only be judged with this on.
+   */
+  keepTrailingBlanks?: boolean;
+}
+
 export interface InkTty {
   /** The rows painted, with the frame's unused trailing rows dropped. */
-  rows(): Promise<string[]>;
+  rows(options?: InkTtyRowsOptions): Promise<string[]>;
   /** The rows painted, joined — for the `toContain` assertions. */
   text(): Promise<string>;
   /** Push raw key bytes, one tick apart. */
@@ -117,10 +130,12 @@ export function mountInkTty(
     exitOnCtrlC: false,
   });
 
-  async function readRows(): Promise<string[]> {
+  async function readRows(options: InkTtyRowsOptions = {}): Promise<string[]> {
     await tick();
     const painted = [...(getTerminalFrame()?.text ?? [])];
-    while (painted.length > 0 && painted.at(-1) === "") painted.pop();
+    if (!options.keepTrailingBlanks) {
+      while (painted.length > 0 && painted.at(-1) === "") painted.pop();
+    }
     return painted;
   }
 
