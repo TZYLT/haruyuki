@@ -3,12 +3,14 @@
  */
 
 import type { AgentState } from "@letta-ai/letta-client/resources/agents/agents";
-import { Box, useInput } from "ink";
-import React, { useCallback, useEffect, useState } from "react";
+import { Box } from "ink";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { isLocalAgentId } from "@/agent/agent-id";
 import { getBackendForMode } from "@/backend";
 import { listPinnedAgentsForCurrentUser } from "@/cli/helpers/pinned-agent-listing";
 import { getRecentAgentOptions } from "@/cli/helpers/recent-agent-options";
+import type { OverlayListItem } from "@/cli/overlay/list-model";
+import { useOverlayList } from "@/cli/overlay/use-overlay-list";
 import { settingsManager } from "@/settings-manager";
 import { appHomeDirName } from "@/utils/app-paths";
 import { colors } from "./components/colors";
@@ -30,6 +32,13 @@ interface ProfileSelectionResult {
 
 const MAX_DISPLAY = 3;
 const RECENT_FALLBACK_DISPLAY = 2;
+
+/**
+ * The two rows that are not agents. They need identities (`list-model.ts` rule
+ * 3) because a cursor is a key, not an index.
+ */
+const VIEW_ALL_ROW = "\u0000view-all";
+const CREATE_NEW_ROW = "\u0000create-new";
 
 function formatRelativeTime(dateStr: string | null | undefined): string {
   if (!dateStr) return "Never";
@@ -80,8 +89,9 @@ function ProfileSelectionUI({
   const [options, setOptions] = useState<ProfileOption[]>([]);
   const [optionsLoading, setOptionsLoading] = useState(true);
   const loading = externalLoading || optionsLoading;
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const [showAll, setShowAll] = useState(false);
+  /** Written during render, read by the confirm handler above the hook. */
+  const setCursorRef = useRef<(index: number) => void>(() => {});
 
   const loadOptions = useCallback(async () => {
     setOptionsLoading(true);
@@ -165,39 +175,48 @@ function ProfileSelectionUI({
   const hasMore = options.length > MAX_DISPLAY;
   const totalItems = displayOptions.length + 1 + (hasMore && !showAll ? 1 : 0);
 
-  useInput((_input, key) => {
-    if (loading) return;
+  // The three row kinds as one flat list, in the order they are painted: the
+  // options, then "view all" while it is on offer, then "create a new agent".
+  const listItems: OverlayListItem[] = [
+    ...displayOptions.map((option) => ({
+      key: option.agentId,
+      label: option.agent?.name || option.agentId.slice(0, 20),
+    })),
+    ...(hasMore && !showAll
+      ? [{ key: VIEW_ALL_ROW, label: `View all ${options.length} profiles` }]
+      : []),
+    { key: CREATE_NEW_ROW, label: "Create a new agent" },
+  ];
 
-    // Agent selection mode
-    if (key.upArrow) {
-      setSelectedIndex((prev) => Math.max(0, prev - 1));
-    } else if (key.downArrow) {
-      setSelectedIndex((prev) => Math.min(totalItems - 1, prev + 1));
-    } else if (key.return) {
-      if (selectedIndex < displayOptions.length) {
-        const selected = displayOptions[selectedIndex];
-        if (selected) {
-          onComplete({
-            type: "select",
-            agentId: selected.agentId,
-            profileName: selected.name,
-          });
-        }
-      } else if (
-        hasMore &&
-        !showAll &&
-        selectedIndex === displayOptions.length
-      ) {
-        setShowAll(true);
-        setSelectedIndex(0);
-      } else {
-        // "Create new agent" selected
-        onComplete({ type: "new" });
+  const list = useOverlayList({
+    owner: "profile-selection",
+    items: listItems,
+    // No windowing: this flow shows at most `MAX_DISPLAY` options plus two rows.
+    // `loading` used to be the first line of the handler (`if (loading) return`),
+    // which is what `navigationEnabled` says now.
+    navigationEnabled: !loading,
+    onConfirm: (_key, index) => {
+      const selected = displayOptions[index];
+      if (selected) {
+        onComplete({
+          type: "select",
+          agentId: selected.agentId,
+          profileName: selected.name,
+        });
+        return;
       }
-    } else if (key.escape || (key.ctrl && _input === "c")) {
-      onComplete({ type: "exit" });
-    }
+      if (hasMore && !showAll && index === displayOptions.length) {
+        setShowAll(true);
+        setCursorRef.current(0);
+        return;
+      }
+      // "Create new agent" selected
+      onComplete({ type: "new" });
+    },
+    onCancel: () => onComplete({ type: "exit" }),
   });
+  setCursorRef.current = list.setCursor;
+  const selectedIndex = list.cursor;
 
   const hasLocalDir = settingsManager.hasLocalHaruyukiDir();
   const contextMessage = externalFreshRepoMode

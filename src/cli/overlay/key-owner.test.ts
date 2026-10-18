@@ -49,6 +49,8 @@ const MIGRATED_FACES = [
   // the composer's own scope, but the rule is the same one, and the hook is
   // where ↑/↓ used to be read from a stale first render.
   "hooks/use-autocomplete-navigation.ts",
+  // And the first-run picker, which lives directly under `cli/`.
+  "profile-selection.tsx",
 ];
 
 describe("one key owner", () => {
