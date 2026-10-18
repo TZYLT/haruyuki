@@ -50,8 +50,15 @@ export type ApprovalPreviewBody =
       /** Patch operations, in order; empty for a single edit or write. */
       operations: PatchOperation[];
     }
-  /** Nothing tool-specific to preview: the args, or the bare tool name. */
-  | { kind: "args"; toolName: string };
+  /**
+   * Nothing tool-specific to preview: the caller draws the args, or the bare tool
+   * name, from the props it already holds.
+   *
+   * It carries no payload on purpose. This used to hold a `toolName`, and neither
+   * consumer ever read it — both classify, and then fall through to the body they
+   * were given (`ApprovalPreview.tsx`, `approval-rows.ts`).
+   */
+  | { kind: "args" };
 
 /**
  * Classify a committed preview.
@@ -87,7 +94,7 @@ export function resolveApprovalPreviewBody(
     }
   }
 
-  return { kind: "args", toolName };
+  return { kind: "args" };
 }
 
 /**

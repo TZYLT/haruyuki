@@ -89,13 +89,17 @@ describe("resolveApprovalPreviewBody", () => {
     }
   });
 
-  test("an unknown tool falls back to its own name", () => {
+  test("an unknown tool falls back to the generic body, carrying nothing", () => {
+    // The body says "nothing tool-specific here" and stops: both consumers then
+    // draw the args from the props they already hold, so the tool name this used
+    // to travel in was never read. Asserting the exact shape is what keeps a
+    // payload from being reintroduced for nobody.
     const body = resolveApprovalPreviewBody({
       toolName: "Read",
       toolArgs: JSON.stringify({ file_path: "a.ts" }),
     });
 
-    expect(body).toEqual({ kind: "args", toolName: "Read" });
+    expect(body).toEqual({ kind: "args" });
   });
 
   test("the tool call id travels into the parsed info", () => {
