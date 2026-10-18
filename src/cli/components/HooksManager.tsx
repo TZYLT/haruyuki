@@ -173,10 +173,11 @@ function getSourceLabel(source: SaveLocation): string {
  *
  * Two of the face's keys were already the toolkit's, and the fields they sit in were
  * already real editors; what the rewrite removes is the sixth hand-written Escape
- * ladder in this tree and the second copy of the header. The ladder it removes was
- * also already broken: `memo` plus Ink's `useInput` leaves the handler reading the
- * state of its first render (measured; see `overlay/README.md`), so this face could
- * not leave the events screen at all while it owned its own keys. The rewrite's own
+ * ladder in this tree and the second copy of the header. That ladder cannot be driven
+ * under a bare mount either — this face is the second instance of the `memo` plus
+ * `useInput` freeze `ApprovalOptions.test.tsx` records first, which is why the frame
+ * baseline below needed the `memo(` removed (`overlay/README.md`; whether a running
+ * app's re-render cadence masks it is L3's question in `docs/36` M5). The rewrite's own
  * sixteen scripted frames, from the events screen through both add flows and the
  * delete confirmation, are byte-identical to that face's once its header is taken off
  * and the one-column indent that box needed is removed.

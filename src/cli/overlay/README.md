@@ -86,14 +86,17 @@ the router, before the event is dispatched. The tables here are built per render
 and read at event time by `useKeyBindings`, which is why the handlers close over
 the current cursor without re-registering anything.
 
-There is a second reason, measured while migrating `/hooks`: under React 19.2.8
-with `react-reconciler` 0.33.0 (Ink 7.1.1), **a `memo`-wrapped component's
-`useInput` handler keeps the state of its first render.** A `useState` counter
-incremented from that handler reports `[0,0,0]` when the component is wrapped in
-`memo` and `[0,1,2]` when the same component is not. The real face shows it too:
-the pre-migration `/hooks` logs `screen=events index=0` on every dispatch — so
-its six-step ladder can never leave the root step — while the identical file with
-`memo(` removed walks all six screens under the same harness. Any face here that
-both wraps itself in `memo` and *reads* its own state inside `useInput` is acting
-on a stale ladder, which is why this rule is a check (`key-owner.test.ts`) rather
-than a convention.
+There is a second reason, and this tree already records it: migrating `/hooks`
+measured it on a second component. Under React 19.2.8 with `react-reconciler`
+0.33.0 (Ink 7.1.1), **a `memo`-wrapped component's `useInput` handler keeps the
+state of its first render** — Ink subscribes that handler through React's
+`useEffectEvent`. A `useState` counter incremented from the handler reports
+`[0,0,0]` behind `memo` and `[0,1,2]` without it. `ApprovalOptions.test.tsx`
+found the same thing first and pinned it in its own words (`↓` then Enter records
+`approve`, not `always`); the pre-migration `/hooks` face is the second instance,
+logging `screen=events index=0` on every dispatch, so under a bare mount its
+six-step ladder cannot leave the root step — while the identical file with
+`memo(` removed walks all six screens in the same harness. Whether a running app
+masks it is a question about re-render cadence (`docs/36` M5, the approval
+item), and it is the reason the toolkit's tables are read at event time rather
+than closed over.
