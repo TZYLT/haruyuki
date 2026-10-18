@@ -44,6 +44,10 @@ const MIGRATED_FACES = [
   "components/TopicSelector.tsx",
   "components/WorktreeDiffSelector.tsx",
   "components/WindowTitlePicker.tsx",
+  // Not a component: the autocomplete popup's shared navigation hook. It sits in
+  // the composer's own scope, but the rule is the same one, and the hook is
+  // where ↑/↓ used to be read from a stale first render.
+  "hooks/use-autocomplete-navigation.ts",
 ];
 
 describe("one key owner", () => {
