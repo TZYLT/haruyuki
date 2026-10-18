@@ -14,6 +14,16 @@ import { fileURLToPath } from "node:url";
  * right frame in a test that drives only that face. What it cannot survive is
  * being mounted next to anything else that reads keys — which is the app.
  *
+ * It is also not only about which listener wins. Migrating `/hooks` measured
+ * something worse about the pattern: under React 19.2.8 with `react-reconciler`
+ * 0.33.0 (Ink 7.1.1) a **`memo`-wrapped component's `useInput` handler keeps the
+ * state of its first render**. A counter incremented from that handler reads
+ * `[0,0,0]` behind `memo` and `[0,1,2]` without it, and the old `/hooks` face
+ * logs `screen=events index=0` on every dispatch, so its ladder never leaves the
+ * root step — while the same file with `memo(` removed walks all six screens.
+ * A face that reads its own state inside `useInput` is reading a stale one, and
+ * the router's tables are read at event time instead.
+ *
  * The list is the faces this batch migrated. It grows as the later batches land,
  * and a face is added here in the commit that removes its handler.
  */
@@ -21,6 +31,7 @@ const MIGRATED_FACES = [
   "components/CompactionSelector.tsx",
   "components/ConversationSelector.tsx",
   "components/FeedbackDialog.tsx",
+  "components/HooksManager.tsx",
   "components/McpSelector.tsx",
   "components/MessageSearch.tsx",
   "components/PinDialog.tsx",

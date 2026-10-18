@@ -85,3 +85,15 @@ stopPropagation, so "this key belongs to the overlay" can only be expressed by
 the router, before the event is dispatched. The tables here are built per render
 and read at event time by `useKeyBindings`, which is why the handlers close over
 the current cursor without re-registering anything.
+
+There is a second reason, measured while migrating `/hooks`: under React 19.2.8
+with `react-reconciler` 0.33.0 (Ink 7.1.1), **a `memo`-wrapped component's
+`useInput` handler keeps the state of its first render.** A `useState` counter
+incremented from that handler reports `[0,0,0]` when the component is wrapped in
+`memo` and `[0,1,2]` when the same component is not. The real face shows it too:
+the pre-migration `/hooks` logs `screen=events index=0` on every dispatch — so
+its six-step ladder can never leave the root step — while the identical file with
+`memo(` removed walks all six screens under the same harness. Any face here that
+both wraps itself in `memo` and *reads* its own state inside `useInput` is acting
+on a stale ladder, which is why this rule is a check (`key-owner.test.ts`) rather
+than a convention.

@@ -1,10 +1,18 @@
 // src/cli/components/HooksManager.tsx
 // Interactive TUI for managing hooks configuration
 
-import { Box, useInput } from "ink";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { Box } from "ink";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { ConfirmOptions } from "@/cli/overlay/confirm";
+import { OverlayFrame } from "@/cli/overlay/frame";
+import { listBindings } from "@/cli/overlay/list-bindings";
+import type { OverlayListItem } from "@/cli/overlay/list-model";
+import { OverlayListView } from "@/cli/overlay/list-view";
+import { OverlayTextField } from "@/cli/overlay/text-view";
+import { useOverlayList } from "@/cli/overlay/use-overlay-list";
+import { useWizard, wizardBindings } from "@/cli/overlay/wizard";
 import {
   type HookCommand,
   type HookEvent,
@@ -33,16 +41,17 @@ import {
 import { settingsManager } from "@/settings-manager";
 import { appHomeDirName } from "@/utils/app-paths";
 import { colors } from "./colors";
-import { PasteAwareTextInput } from "./PasteAwareTextInput";
 import { Text } from "./Text";
 
-// Box drawing characters
-const BOX_TOP_LEFT = "╭";
-const BOX_TOP_RIGHT = "╮";
-const BOX_BOTTOM_LEFT = "╰";
-const BOX_BOTTOM_RIGHT = "╯";
-const BOX_HORIZONTAL = "─";
-const BOX_VERTICAL = "│";
+/**
+ * How many rows the hook list shows at once, and what PageUp/PageDown step over.
+ *
+ * The face listed every hook it found, which on a long config pushes the exit-code
+ * reminder and the hint line off the top of the terminal. Windowing is the signed
+ * change for this commit (`overlay/README.md` rule 4: opt-in, so this number is a
+ * decision, not a default).
+ */
+const WINDOW_ROWS = 10;
 
 /** The copy of this face's delete confirmation; the rows themselves are shared. */
 const HOOK_DELETE_OPTIONS = [
@@ -69,7 +78,7 @@ interface HooksManagerProps {
   onClose: () => void;
 }
 
-type Screen =
+type Step =
   | "events"
   | "hooks-list" // Was "matchers" - now handles both matchers and commands
   | "add-matcher" // For tool events only
@@ -90,6 +99,16 @@ const HOOK_EVENTS: { event: HookEvent; description: string }[] = [
   { event: "PreCompact", description: "Before context compaction" },
   { event: "SessionStart", description: "When a session starts" },
   { event: "SessionEnd", description: "When a session ends" },
+];
+
+/** The events screen's rows: the disable toggle, then one row per hook event. */
+const EVENT_ROWS: OverlayListItem[] = [
+  { key: "toggle-hooks", label: "Disable all hooks" },
+  ...HOOK_EVENTS.map(({ event, description }) => ({
+    key: event,
+    label: event,
+    description,
+  })),
 ];
 
 // Fallback tool names if agent tools can't be fetched
@@ -141,32 +160,53 @@ function getSourceLabel(source: SaveLocation): string {
 }
 
 /**
- * Create a box border line
+ * `/hooks` on the overlay toolkit.
+ *
+ * The face was six screens behind one `useInput`, a `╭─╮` header it drew itself on
+ * every one of them, and no test at all. Each piece is now the toolkit's: the frame
+ * draws the header (`> /hooks`, with the count and `(disabled)` moved into its
+ * title), `useWizard` walks the six steps as one trail, the two lists are
+ * `useOverlayList` tables, the two fields are `OverlayTextField`s — which is the
+ * same `PasteAwareTextInput` this face already used, now the toolkit's labelled row
+ * with `marker={null}` because the face draws the editor inside its own rounded box
+ * — and the confirmation is `ConfirmOptions`.
+ *
+ * Two of the face's keys were already the toolkit's, and the fields they sit in were
+ * already real editors; what the rewrite removes is the sixth hand-written Escape
+ * ladder in this tree and the second copy of the header. The ladder it removes was
+ * also already broken: `memo` plus Ink's `useInput` leaves the handler reading the
+ * state of its first render (measured; see `overlay/README.md`), so this face could
+ * not leave the events screen at all while it owned its own keys. The rewrite's own
+ * sixteen scripted frames, from the events screen through both add flows and the
+ * delete confirmation, are byte-identical to that face's once its header is taken off
+ * and the one-column indent that box needed is removed.
+ *
+ * Three things the rewrite had to keep, because they are this face's behaviour and
+ * not the toolkit's:
+ *
+ * - **The escape ladder.** `events` is the root (Escape closes), `hooks-list`
+ *   returns to it, `add-command` returns to `add-matcher` for a tool event and to
+ *   the hook list for a simple one — which the trail reproduces for free, because
+ *   a simple event never pushes `add-matcher`. Finishing an add or a delete from
+ *   four steps deep lands back on the hook list via `popTo`, not on the root.
+ * - **The cursor resets.** Leaving the hook list resets the events cursor, and a
+ *   completed delete resets the hook cursor, which is what the old
+ *   `setSelectedIndex(0)` did on each of those transitions.
+ * - **The row markup**, character for character: the numbers, the cyan source
+ *   label, the matcher column padded to twelve, and the `✦` that marks a prompt
+ *   hook.
+ *
+ * The `╭─╮` box and the one-column body indent it needed are gone: this frame's
+ * header is the same one the other eight migrated faces use.
  */
-function boxLine(content: string, width: number): string {
-  const innerWidth = width - 2;
-  const paddedContent = content.padEnd(innerWidth).slice(0, innerWidth);
-  return `${BOX_VERTICAL}${paddedContent}${BOX_VERTICAL}`;
-}
-
-function boxTop(width: number): string {
-  return `${BOX_TOP_LEFT}${BOX_HORIZONTAL.repeat(width - 2)}${BOX_TOP_RIGHT}`;
-}
-
-function boxBottom(width: number): string {
-  return `${BOX_BOTTOM_LEFT}${BOX_HORIZONTAL.repeat(width - 2)}${BOX_BOTTOM_RIGHT}`;
-}
-
 export const HooksManager = memo(function HooksManager({
   onClose,
 }: HooksManagerProps) {
   const terminalWidth = useTerminalWidth();
   const boxWidth = Math.min(terminalWidth - 4, 70);
 
-  const [screen, setScreen] = useState<Screen>("events");
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const [selectedEvent, setSelectedEvent] = useState<HookEvent | null>(null);
-  // For tool events: HookMatcherWithSource[], for simple events: HookCommandWithSource[]
+  // For tool events: HookMatcherWithSource[], for simple events: HookWithSource[]
   const [hooks, setHooks] = useState<HookWithSource[]>([]);
   const [totalHooks, setTotalHooks] = useState(0);
 
@@ -185,6 +225,9 @@ export const HooksManager = memo(function HooksManager({
   // Delete confirmation
   const [deleteHookIndex, setDeleteHookIndex] = useState(-1);
   const [deleteConfirmIndex, setDeleteConfirmIndex] = useState(1); // Default to No
+
+  const wizard = useWizard<Step>({ initial: "events" });
+  const { back, canGoBack, goTo, popTo, step } = wizard;
 
   // Helper to check if current event is a tool event
   const isCurrentToolEvent = selectedEvent ? isToolEvent(selectedEvent) : false;
@@ -217,10 +260,10 @@ export const HooksManager = memo(function HooksManager({
 
   // Refresh counts when returning to events screen
   useEffect(() => {
-    if (screen === "events") {
+    if (step === "events") {
       refreshCounts();
     }
-  }, [screen, refreshCounts]);
+  }, [step, refreshCounts]);
 
   // Load hooks when event is selected (matchers for both tool and simple events)
   const loadHooks = useCallback((event: HookEvent) => {
@@ -230,6 +273,85 @@ export const HooksManager = memo(function HooksManager({
       setHooks(loadSimpleMatchersWithSource(event as SimpleHookEvent));
     }
   }, []);
+
+  // Handle toggling the "disable all hooks" setting
+  const handleToggleDisableAll = useCallback(() => {
+    const newValue = !hooksDisabled;
+    setHooksDisabled(newValue);
+    setHooksDisabledState(newValue);
+  }, [hooksDisabled]);
+
+  // Items for the hook list: [+ Add new hook] + existing hooks
+  const hookItems = useMemo<OverlayListItem[]>(() => {
+    const addLabel = isCurrentToolEvent
+      ? "+ Add new matcher..."
+      : "+ Add new hook...";
+    return [
+      { key: "add-hook", label: addLabel },
+      ...hooks.map((hook, index) => ({
+        key: `${hook.source}-${hook.sourceIndex}-${index}`,
+        label: `[${getSourceLabel(hook.source)}]`,
+      })),
+    ];
+  }, [hooks, isCurrentToolEvent]);
+
+  const eventsList = useOverlayList({
+    owner: "hooks-events",
+    items: EVENT_ROWS,
+    navigationEnabled: step === "events",
+    onConfirm: (_key, index) => {
+      if (index === 0) {
+        // Toggle "disable all hooks"
+        handleToggleDisableAll();
+        return;
+      }
+      // Select a hook event (index is shifted by 1)
+      const entry = HOOK_EVENTS[index - 1];
+      if (!entry) return;
+      setSelectedEvent(entry.event);
+      loadHooks(entry.event);
+      goTo("hooks-list");
+    },
+    // Escape and Ctrl+C are the wizard's, so this list declares no cancel: a list
+    // that did would answer Escape for the other five steps as well.
+    onCancel: undefined,
+  });
+
+  const hooksList = useOverlayList({
+    owner: "hooks-hooks",
+    items: hookItems,
+    rows: WINDOW_ROWS,
+    anchor: "edge",
+    navigationEnabled: step === "hooks-list",
+    onConfirm: (_key, index) => {
+      if (index === 0) {
+        // Add new hook - for tool events, ask for the matcher first.
+        if (isCurrentToolEvent) {
+          setNewMatcher("");
+          goTo("add-matcher");
+        } else {
+          setNewCommand("");
+          goTo("add-command");
+        }
+        return;
+      }
+      // Delete selected hook
+      setDeleteHookIndex(index - 1);
+      setDeleteConfirmIndex(1); // Default to No
+      goTo("delete-confirm");
+    },
+    onCancel: undefined,
+  });
+
+  /** Escape with a step to return to: that step's own state is reset here. */
+  const leaveStep = useCallback(() => {
+    if (step === "hooks-list") {
+      setSelectedEvent(null);
+      // What `setSelectedIndex(0)` did when this list handed the screen back.
+      eventsList.setCursor(0);
+    }
+    back();
+  }, [back, eventsList, step]);
 
   // Handle adding a hook
   const handleAddHook = useCallback(async () => {
@@ -264,14 +386,14 @@ export const HooksManager = memo(function HooksManager({
     setNewMatcher("");
     setNewCommand("");
     setSelectedLocation(0);
-    setScreen("hooks-list");
-    setSelectedIndex(0);
+    popTo("hooks-list");
   }, [
     selectedEvent,
     newMatcher,
     newCommand,
     selectedLocation,
     loadHooks,
+    popTo,
     refreshCounts,
   ]);
 
@@ -288,206 +410,117 @@ export const HooksManager = memo(function HooksManager({
 
     // Reset and go back to hooks list
     setDeleteHookIndex(-1);
-    setScreen("hooks-list");
-    setSelectedIndex(0);
-  }, [deleteHookIndex, selectedEvent, hooks, loadHooks, refreshCounts]);
+    popTo("hooks-list");
+    hooksList.setCursor(0);
+  }, [
+    deleteHookIndex,
+    selectedEvent,
+    hooks,
+    loadHooks,
+    popTo,
+    refreshCounts,
+    hooksList,
+  ]);
 
-  // Handle toggling the "disable all hooks" setting
-  const handleToggleDisableAll = useCallback(() => {
-    const newValue = !hooksDisabled;
-    setHooksDisabled(newValue);
-    setHooksDisabledState(newValue);
-  }, [hooksDisabled]);
-
-  useInput((input, key) => {
-    // CTRL-C: immediately cancel
-    if (key.ctrl && input === "c") {
-      onClose();
-      return;
-    }
-
-    // Handle each screen
-    if (screen === "events") {
-      // Total items: 1 (disable toggle) + HOOK_EVENTS.length
-      const totalItems = 1 + HOOK_EVENTS.length;
-
-      if (key.upArrow) {
-        setSelectedIndex((prev) => Math.max(0, prev - 1));
-      } else if (key.downArrow) {
-        setSelectedIndex((prev) => Math.min(totalItems - 1, prev + 1));
-      } else if (key.return) {
-        if (selectedIndex === 0) {
-          // Toggle "disable all hooks"
-          handleToggleDisableAll();
-        } else {
-          // Select a hook event (index is shifted by 1)
-          const selected = HOOK_EVENTS[selectedIndex - 1];
-          if (selected) {
-            setSelectedEvent(selected.event);
-            loadHooks(selected.event);
-            setScreen("hooks-list");
-            setSelectedIndex(0);
-          }
-        }
-      } else if (key.escape) {
-        onClose();
-      }
-    } else if (screen === "hooks-list") {
-      // Items: [+ Add new hook] + existing hooks
-      const itemCount = hooks.length + 1;
-
-      if (key.upArrow) {
-        setSelectedIndex((prev) => Math.max(0, prev - 1));
-      } else if (key.downArrow) {
-        setSelectedIndex((prev) => Math.min(itemCount - 1, prev + 1));
-      } else if (key.return) {
-        if (selectedIndex === 0) {
-          // Add new hook - for tool events, go to matcher screen; for simple, go to command
-          if (isCurrentToolEvent) {
-            setScreen("add-matcher");
-            setNewMatcher("");
-          } else {
-            setScreen("add-command");
-            setNewCommand("");
-          }
-        } else {
-          // Delete selected hook
-          setDeleteHookIndex(selectedIndex - 1);
-          setDeleteConfirmIndex(1); // Default to No
-          setScreen("delete-confirm");
-        }
-      } else if (key.escape) {
-        setScreen("events");
-        setSelectedIndex(0);
-        setSelectedEvent(null);
-      }
-    } else if (screen === "add-matcher") {
-      // Text input handles most keys (tool events only)
-      if (key.return && !key.shift) {
-        setScreen("add-command");
-        setNewCommand("");
-      } else if (key.escape) {
-        setScreen("hooks-list");
-        setSelectedIndex(0);
-        setNewMatcher("");
-      }
-    } else if (screen === "add-command") {
-      if (key.return && !key.shift) {
-        setScreen("save-location");
-        setSelectedLocation(0);
-      } else if (key.escape) {
-        // Go back to matcher screen for tool events, or hooks list for simple
-        if (isCurrentToolEvent) {
-          setScreen("add-matcher");
-        } else {
-          setScreen("hooks-list");
-          setSelectedIndex(0);
-        }
-      }
-    } else if (screen === "save-location") {
-      if (key.upArrow) {
-        setSelectedLocation((prev) => Math.max(0, prev - 1));
-      } else if (key.downArrow) {
-        setSelectedLocation((prev) =>
-          Math.min(SAVE_LOCATIONS.length - 1, prev + 1),
-        );
-      } else if (key.return) {
-        handleAddHook();
-      } else if (key.escape) {
-        setScreen("add-command");
-      }
-    } else if (screen === "delete-confirm") {
-      if (key.upArrow || key.downArrow) {
-        setDeleteConfirmIndex((prev) => (prev === 0 ? 1 : 0));
-      } else if (key.return) {
-        if (deleteConfirmIndex === 0) {
-          handleDeleteHook();
-        } else {
-          setScreen("hooks-list");
-        }
-      } else if (key.escape) {
-        setScreen("hooks-list");
-      }
-    }
-  });
+  useKeyBindings("hooks-manager-keys", [
+    {
+      scope: "overlay",
+      bindings: [
+        // The save-location picker is three rows with its own cursor: arrows move
+        // it and Enter writes the hook. It is a `listBindings` table rather than a
+        // list, because it is a step inside this overlay and does not own Escape.
+        ...listBindings({
+          count: SAVE_LOCATIONS.length,
+          cursor: selectedLocation,
+          onMoveCursor: setSelectedLocation,
+          onConfirm: () => {
+            void handleAddHook();
+          },
+          onCancel: undefined,
+          navigationEnabled: step === "save-location",
+        }),
+        // The delete confirmation is a two-row list of its own, for the same
+        // reason: Escape here is the wizard's ("back to the hook list"), which is
+        // also how the old handler read it.
+        ...listBindings({
+          count: HOOK_DELETE_OPTIONS.length,
+          cursor: deleteConfirmIndex,
+          onMoveCursor: setDeleteConfirmIndex,
+          onConfirm: () => {
+            if (deleteConfirmIndex === 0) {
+              void handleDeleteHook();
+            } else {
+              popTo("hooks-list");
+            }
+          },
+          onCancel: undefined,
+          navigationEnabled: step === "delete-confirm" && deleteHookIndex >= 0,
+        }),
+        ...wizardBindings({ canGoBack, onBack: leaveStep, onCancel: onClose }),
+      ],
+    },
+  ]);
 
   // Render Events List
-  if (screen === "events") {
-    const disableToggleSelected = selectedIndex === 0;
+  if (step === "events") {
     const disableToggleLabel = hooksDisabled
       ? "Enable all hooks"
       : "Disable all hooks";
-    const titleBase = " Hooks";
-    const titleSuffix = hooksDisabled ? " (disabled)" : "";
-    const hooksCountText = `${totalHooks} hooks `;
-    const titlePadding =
-      boxWidth -
-      titleBase.length -
-      titleSuffix.length -
-      hooksCountText.length -
-      2;
+    const title = `Hooks · ${totalHooks} hooks${hooksDisabled ? " (disabled)" : ""}`;
 
     return (
-      <Box flexDirection="column" paddingX={1}>
-        <Text>{boxTop(boxWidth)}</Text>
-        <Text>
-          {BOX_VERTICAL}
-          {titleBase}
-          <Text color="red">{titleSuffix}</Text>
-          {" ".repeat(Math.max(0, titlePadding))}
-          {hooksCountText}
-          {BOX_VERTICAL}
-        </Text>
-        <Text>{boxBottom(boxWidth)}</Text>
-        <Text> </Text>
+      <OverlayFrame
+        command="/hooks"
+        title={title}
+        footer="Enter to select · esc to cancel"
+      >
+        <OverlayListView
+          items={EVENT_ROWS}
+          cursor={eventsList.cursor}
+          renderRow={(_item, index, isCursor) => {
+            if (index === 0) {
+              return (
+                <Text>
+                  <Text color={isCursor ? colors.input.prompt : undefined}>
+                    {isCursor ? "❯" : " "} 1.
+                  </Text>
+                  <Text dimColor> {disableToggleLabel}</Text>
+                </Text>
+              );
+            }
 
-        {/* Disable all hooks toggle - first item */}
-        <Text>
-          <Text color={disableToggleSelected ? colors.input.prompt : undefined}>
-            {disableToggleSelected ? "❯" : " "} 1.
-          </Text>
-          <Text dimColor> {disableToggleLabel}</Text>
-        </Text>
+            const entry = HOOK_EVENTS[index - 1];
+            if (!entry) return null;
+            const hookCount = countHooksForEvent(entry.event);
+            const countStr = hookCount > 0 ? ` (${hookCount})` : "";
 
-        {/* Hook events */}
-        {HOOK_EVENTS.map((item, index) => {
-          const isSelected = index + 1 === selectedIndex;
-          const hookCount = countHooksForEvent(item.event);
-          const prefix = isSelected ? "❯" : " ";
-          const countStr = hookCount > 0 ? ` (${hookCount})` : "";
-
-          return (
-            <Text key={item.event}>
-              <Text color={isSelected ? colors.input.prompt : undefined}>
-                {prefix} {index + 2}. {item.event}
+            return (
+              <Text>
+                <Text color={isCursor ? colors.input.prompt : undefined}>
+                  {isCursor ? "❯" : " "} {index + 1}. {entry.event}
+                </Text>
+                <Text dimColor> - {entry.description}</Text>
+                <Text color="yellow">{countStr}</Text>
               </Text>
-              <Text dimColor> - {item.description}</Text>
-              <Text color="yellow">{countStr}</Text>
-            </Text>
-          );
-        })}
-
-        <Text> </Text>
-        <Text dimColor>Enter to select · esc to cancel</Text>
-      </Box>
+            );
+          }}
+        />
+      </OverlayFrame>
     );
   }
 
   // Render Hooks List (matchers for tool events, commands for simple events)
-  if (screen === "hooks-list" && selectedEvent) {
+  if (step === "hooks-list" && selectedEvent) {
     const title = isCurrentToolEvent
-      ? ` ${selectedEvent} - Tool Matchers `
-      : ` ${selectedEvent} - Hooks `;
-    const addLabel = isCurrentToolEvent
-      ? "+ Add new matcher..."
-      : "+ Add new hook...";
+      ? `${selectedEvent} - Tool Matchers`
+      : `${selectedEvent} - Hooks`;
 
     return (
-      <Box flexDirection="column" paddingX={1}>
-        <Text>{boxTop(boxWidth)}</Text>
-        <Text>{boxLine(title, boxWidth)}</Text>
-        <Text>{boxBottom(boxWidth)}</Text>
-
+      <OverlayFrame
+        command="/hooks"
+        title={title}
+        footer="Enter to select · esc to go back"
+      >
         {isCurrentToolEvent ? (
           <>
             <Text dimColor>
@@ -508,77 +541,83 @@ export const HooksManager = memo(function HooksManager({
             <Text dimColor>Other exit codes - show stderr to user only</Text>
           </>
         )}
-        <Text> </Text>
+        <Box height={1} />
 
-        {/* Add new hook option */}
-        <Text>
-          <Text color={selectedIndex === 0 ? colors.input.prompt : undefined}>
-            {selectedIndex === 0 ? "❯" : " "} 1.{" "}
-          </Text>
-          <Text color="green">{addLabel}</Text>
-        </Text>
+        <OverlayListView
+          items={hookItems}
+          cursor={hooksList.cursor}
+          rows={WINDOW_ROWS}
+          anchor="edge"
+          renderRow={(_item, index, isCursor) => {
+            if (index === 0) {
+              const addLabel = isCurrentToolEvent
+                ? "+ Add new matcher..."
+                : "+ Add new hook...";
+              return (
+                <Text>
+                  <Text color={isCursor ? colors.input.prompt : undefined}>
+                    {isCursor ? "❯" : " "} 1.{" "}
+                  </Text>
+                  <Text color="green">{addLabel}</Text>
+                </Text>
+              );
+            }
 
-        {/* Existing hooks */}
-        {hooks.map((hook, index) => {
-          const isSelected = index + 1 === selectedIndex;
-          const prefix = isSelected ? "❯" : " ";
-          const sourceLabel = `[${getSourceLabel(hook.source)}]`;
+            const hook = hooks[index - 1];
+            if (!hook) return null;
+            const sourceLabel = `[${getSourceLabel(hook.source)}]`;
 
-          // Handle both tool matchers (with matcher field) and simple matchers (without)
-          const isToolMatcher = "matcher" in hook;
-          const matcherPattern = isToolMatcher
-            ? (hook as HookMatcherWithSource).matcher || "*"
-            : null;
-          // Both types have hooks array - get display label for first hook
-          const firstHook = "hooks" in hook ? hook.hooks[0] : undefined;
-          const command = getHookDisplayLabel(firstHook);
-          const truncatedCommand =
-            command.length > 50 ? `${command.slice(0, 47)}...` : command;
-          const isPrompt = firstHook ? isPromptHook(firstHook) : false;
+            // Handle both tool matchers (with matcher field) and simple matchers
+            const isToolMatcher = "matcher" in hook;
+            const matcherPattern = isToolMatcher
+              ? (hook as HookMatcherWithSource).matcher || "*"
+              : null;
+            // Both types have hooks array - get display label for first hook
+            const firstHook = "hooks" in hook ? hook.hooks[0] : undefined;
+            const command = getHookDisplayLabel(firstHook);
+            const truncatedCommand =
+              command.length > 50 ? `${command.slice(0, 47)}...` : command;
+            const isPrompt = firstHook ? isPromptHook(firstHook) : false;
 
-          return (
-            <Text key={`${hook.source}-${index}`}>
-              <Text color={isSelected ? colors.input.prompt : undefined}>
-                {prefix} {index + 2}.{" "}
+            return (
+              <Text>
+                <Text color={isCursor ? colors.input.prompt : undefined}>
+                  {isCursor ? "❯" : " "} {index + 1}.{" "}
+                </Text>
+                <Text color="cyan">{sourceLabel}</Text>
+                {matcherPattern !== null ? (
+                  <Text> {matcherPattern.padEnd(12)} </Text>
+                ) : (
+                  <Text> </Text>
+                )}
+                {isPrompt && <Text color={colors.status.processing}>✦ </Text>}
+                <Text dimColor>{truncatedCommand}</Text>
               </Text>
-              <Text color="cyan">{sourceLabel}</Text>
-              {matcherPattern !== null ? (
-                <Text> {matcherPattern.padEnd(12)} </Text>
-              ) : (
-                <Text> </Text>
-              )}
-              {isPrompt && <Text color={colors.status.processing}>✦ </Text>}
-              <Text dimColor>{truncatedCommand}</Text>
-            </Text>
-          );
-        })}
-
-        <Text> </Text>
-        <Text dimColor>Enter to select · esc to go back</Text>
-      </Box>
+            );
+          }}
+        />
+      </OverlayFrame>
     );
   }
 
   // Render Add Matcher - Tool Pattern Input
-  if (screen === "add-matcher" && selectedEvent) {
+  if (step === "add-matcher" && selectedEvent) {
     return (
-      <Box flexDirection="column" paddingX={1}>
-        <Text>{boxTop(boxWidth)}</Text>
-        <Text>
-          {boxLine(` Add new matcher for ${selectedEvent} `, boxWidth)}
-        </Text>
-        <Text>{boxBottom(boxWidth)}</Text>
-
+      <OverlayFrame
+        command="/hooks"
+        title={`Add new matcher for ${selectedEvent}`}
+        footer="Enter to continue · esc to cancel"
+      >
         <Text dimColor>Input to command is JSON of tool call arguments.</Text>
         <Text dimColor>Exit code 0 - stdout/stderr not shown</Text>
         <Text dimColor>
           Exit code 2 - show stderr to model and block tool call
         </Text>
-        <Text> </Text>
+        <Box height={1} />
 
         <Text dimColor>Possible matcher values for field tool_name:</Text>
         <Text dimColor>{toolNames.join(", ")}</Text>
-        <Text> </Text>
+        <Box height={1} />
 
         <Text>Tool matcher:</Text>
         <Box
@@ -589,39 +628,42 @@ export const HooksManager = memo(function HooksManager({
           flexDirection="column"
         >
           <Box flexWrap="wrap">
-            <PasteAwareTextInput
+            <OverlayTextField
               value={newMatcher}
               onChange={setNewMatcher}
+              marker={null}
               placeholder="* (matches all tools)"
+              onSubmit={() => {
+                setNewCommand("");
+                goTo("add-command");
+              }}
             />
           </Box>
         </Box>
-        <Text> </Text>
+        <Box height={1} />
 
         <Text dimColor>Example Matchers:</Text>
         <Text dimColor>• Write (single tool)</Text>
         <Text dimColor>• Write|Edit (multiple tools)</Text>
         <Text dimColor>• * (all tools)</Text>
-        <Text> </Text>
-        <Text dimColor>Enter to continue · esc to cancel</Text>
-      </Box>
+      </OverlayFrame>
     );
   }
 
   // Render Add Command Input
-  if (screen === "add-command" && selectedEvent) {
+  if (step === "add-command" && selectedEvent) {
     const title = isCurrentToolEvent
-      ? ` Add new matcher for ${selectedEvent} `
-      : ` Add new hook for ${selectedEvent} `;
+      ? `Add new matcher for ${selectedEvent}`
+      : `Add new hook for ${selectedEvent}`;
 
     return (
-      <Box flexDirection="column" paddingX={1}>
-        <Text>{boxTop(boxWidth)}</Text>
-        <Text>{boxLine(title, boxWidth)}</Text>
-        <Text>{boxBottom(boxWidth)}</Text>
-
+      <OverlayFrame
+        command="/hooks"
+        title={title}
+        footer="Enter to continue · esc to go back"
+      >
         {isCurrentToolEvent && <Text>Matcher: {newMatcher || "*"}</Text>}
-        {isCurrentToolEvent && <Text> </Text>}
+        {isCurrentToolEvent && <Box height={1} />}
 
         <Text>Command:</Text>
         <Box
@@ -632,36 +674,37 @@ export const HooksManager = memo(function HooksManager({
           flexDirection="column"
         >
           <Box flexWrap="wrap">
-            <PasteAwareTextInput
+            <OverlayTextField
               value={newCommand}
               onChange={setNewCommand}
+              marker={null}
               placeholder="/path/to/script.sh"
+              onSubmit={() => {
+                setSelectedLocation(0);
+                goTo("save-location");
+              }}
             />
           </Box>
         </Box>
-
-        <Text> </Text>
-        <Text dimColor>Enter to continue · esc to go back</Text>
-      </Box>
+      </OverlayFrame>
     );
   }
 
   // Render Save Location Picker
-  if (screen === "save-location" && selectedEvent) {
+  if (step === "save-location" && selectedEvent) {
     return (
-      <Box flexDirection="column" paddingX={1}>
-        <Text>{boxTop(boxWidth)}</Text>
-        <Text>{boxLine(" Save hook configuration ", boxWidth)}</Text>
-        <Text>{boxBottom(boxWidth)}</Text>
-        <Text> </Text>
-
+      <OverlayFrame
+        command="/hooks"
+        title="Save hook configuration"
+        footer="Enter to confirm · esc to go back"
+      >
         <Text>Event: {selectedEvent}</Text>
         {isCurrentToolEvent && <Text>Matcher: {newMatcher || "*"}</Text>}
         <Text>Command: {newCommand}</Text>
-        <Text> </Text>
+        <Box height={1} />
 
         <Text>Where should this hook be saved?</Text>
-        <Text> </Text>
+        <Box height={1} />
 
         {SAVE_LOCATIONS.map((loc, index) => {
           const isSelected = index === selectedLocation;
@@ -676,15 +719,12 @@ export const HooksManager = memo(function HooksManager({
             </Text>
           );
         })}
-
-        <Text> </Text>
-        <Text dimColor>Enter to confirm · esc to go back</Text>
-      </Box>
+      </OverlayFrame>
     );
   }
 
   // Render Delete Confirmation
-  if (screen === "delete-confirm" && deleteHookIndex >= 0) {
+  if (step === "delete-confirm" && deleteHookIndex >= 0) {
     const hook = hooks[deleteHookIndex];
     const isToolMatcher = hook && "matcher" in hook;
     const matcherPattern = isToolMatcher
@@ -696,12 +736,11 @@ export const HooksManager = memo(function HooksManager({
     const isPrompt = firstHook ? isPromptHook(firstHook) : false;
 
     return (
-      <Box flexDirection="column" paddingX={1}>
-        <Text>{boxTop(boxWidth)}</Text>
-        <Text>{boxLine(" Delete hook? ", boxWidth)}</Text>
-        <Text>{boxBottom(boxWidth)}</Text>
-        <Text> </Text>
-
+      <OverlayFrame
+        command="/hooks"
+        title="Delete hook?"
+        footer="Enter to confirm · esc to cancel"
+      >
         {matcherPattern !== null && <Text>Matcher: {matcherPattern}</Text>}
         <Text>
           {isPrompt ? (
@@ -714,16 +753,13 @@ export const HooksManager = memo(function HooksManager({
           )}
         </Text>
         <Text>Source: {hook ? getSourceLabel(hook.source) : ""}</Text>
-        <Text> </Text>
+        <Box height={1} />
 
         <ConfirmOptions
           options={HOOK_DELETE_OPTIONS}
           selectedIndex={deleteConfirmIndex}
         />
-
-        <Text> </Text>
-        <Text dimColor>Enter to confirm · esc to cancel</Text>
-      </Box>
+      </OverlayFrame>
     );
   }
 
