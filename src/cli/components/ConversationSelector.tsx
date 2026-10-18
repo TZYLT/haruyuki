@@ -7,6 +7,7 @@ import { Box } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Backend, getBackend } from "@/backend";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
+import { namedKeyChords } from "@/cli/helpers/input-keys";
 import {
   useTerminalRows,
   useTerminalWidth,
@@ -651,7 +652,7 @@ export function ConversationSelector({
       // own cancel.
       {
         id: "conversation-selector.escape",
-        chords: [{ key: "escape" }],
+        chords: namedKeyChords("escape"),
         run: () => {
           if (isLoading) return "consumed";
           if (!searchInput) return "declined";

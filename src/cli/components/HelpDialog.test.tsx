@@ -98,6 +98,7 @@ const ESC = "\u001b";
 const CTRL_C = "\u0003";
 const DOWN = "\u001b[B";
 const TAB_KEY = "\t";
+const SHIFT_TAB = "\u001b[Z";
 const RIGHT = "\u001b[C";
 const PAGE_SIZE = 10;
 
@@ -231,6 +232,25 @@ describe("HelpDialog on the overlay toolkit", () => {
         rows.some((row) => row.includes("Open command autocomplete")),
       ).toBe(true);
       expect(markedRow(rows)?.startsWith("›")).toBe(true);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("Shift+Tab is the same key, as it was before the toolkit", async () => {
+    // `ESC[Z` reaches the router as `tab` *with* `shift` set, and this face read
+    // `if (key.tab)` without looking at the modifier before it moved onto the
+    // toolkit. Applying the strict chord reading to it silently dropped the key —
+    // and no batch's frame-equivalence script pressed Shift+Tab, which is why the
+    // migration shipped it. `namedKeyChords` is where that meaning is stated now.
+    const tty = mountFrame();
+    try {
+      await settle(120);
+      await pressKeys(tty, SHIFT_TAB);
+      const rows = await tty.rows();
+
+      expect(rows[5]).toContain("Shortcuts (10)");
+      expect(pageLine(rows)).toBe("  Page 1/1");
     } finally {
       tty.stop();
     }

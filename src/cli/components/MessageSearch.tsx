@@ -6,6 +6,7 @@ import {
   searchMessagesForBackend,
   warmMessageSearchCacheForBackend,
 } from "@/backend/message-search";
+import { namedKeyChords } from "@/cli/helpers/input-keys";
 import { truncateText } from "@/cli/helpers/truncate-text";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { OverlayFrame } from "@/cli/overlay/frame";
@@ -501,7 +502,7 @@ export function MessageSearch({
     extra: [
       {
         id: "message-search.escape",
-        chords: [{ key: "escape" }],
+        chords: namedKeyChords("escape"),
         run: () => {
           if (expandedMessage) {
             setExpandedMessage(null);
@@ -517,7 +518,7 @@ export function MessageSearch({
       },
       {
         id: "message-search.enter",
-        chords: [{ key: "return" }],
+        chords: namedKeyChords("return"),
         run: () => {
           if (expandedMessage) {
             const msgData = expandedMessage as {

@@ -120,6 +120,26 @@ describe("SingleSelectPicker", () => {
     }
   });
 
+  test("Shift+Enter confirms, the way the picker read `key.return`", async () => {
+    // A kitty-protocol terminal sends Shift+Enter as CSI-u, so the event arrives
+    // as `return` with `shift` — a different chord under the strict reading, and
+    // the picker this replaced tested `if (key.return)` without looking at it.
+    const selected: string[] = [];
+    const picker = mountInkTty(
+      <SingleSelectPicker
+        items={SINGLE}
+        onSelect={(key) => selected.push(key)}
+        onCancel={() => {}}
+      />,
+    );
+    try {
+      await picker.press("\u001b[13;2u");
+      expect(selected).toEqual(["a"]);
+    } finally {
+      picker.stop();
+    }
+  });
+
   test("a disabled row confirms nothing", async () => {
     const selected: string[] = [];
     const picker = mountInkTty(

@@ -1,4 +1,4 @@
-import type { KeyBinding } from "@/cli/helpers/input-keys";
+import { type KeyBinding, namedKeyChords } from "@/cli/helpers/input-keys";
 import { edgeCursor, moveCursor } from "./list-model";
 
 /**
@@ -20,6 +20,14 @@ import { edgeCursor, moveCursor } from "./list-model";
  * - **Escape is never declined.** An overlay that cannot be left is a trap, so
  *   cancel is consumed unconditionally (with Ctrl+C, which is what cancels an
  *   overlay today).
+ *
+ * The chords themselves carry the flag-only meaning the faces had: the arrows,
+ * Escape, Enter and Space come from `namedKeyChords`, which states "this key,
+ * whatever the terminal says about the shift" once (`input-keys.ts` explains why
+ * that is not the same as the strict default). `pageUp`/`pageDown`/`home`/`end`
+ * do not, because they are this toolkit's own additions — there is no earlier
+ * meaning to restore, and an app-level `Shift+PageDown` must not become a second
+ * spelling of this list's page step.
  */
 
 /** Rows a PageUp/PageDown step covers when the caller does not say. */
@@ -112,14 +120,16 @@ export function listBindings(host: ListBindingHost): KeyBinding[] {
   bindings.push(
     {
       id: "overlay-list.up",
-      chords: vim ? [{ key: "upArrow" }, { key: "k" }] : [{ key: "upArrow" }],
+      chords: vim
+        ? [...namedKeyChords("upArrow"), { key: "k" }]
+        : namedKeyChords("upArrow"),
       run: () => step(-1),
     },
     {
       id: "overlay-list.down",
       chords: vim
-        ? [{ key: "downArrow" }, { key: "j" }]
-        : [{ key: "downArrow" }],
+        ? [...namedKeyChords("downArrow"), { key: "j" }]
+        : namedKeyChords("downArrow"),
       run: () => step(1),
     },
     {
@@ -152,7 +162,7 @@ export function listBindings(host: ListBindingHost): KeyBinding[] {
   bindings.push(
     {
       id: "overlay-list.confirm",
-      chords: [{ key: "return" }],
+      chords: namedKeyChords("return"),
       run: () => {
         if (!host.onConfirm || !navigation || count === 0) return "declined";
         host.onConfirm();
@@ -161,7 +171,7 @@ export function listBindings(host: ListBindingHost): KeyBinding[] {
     },
     {
       id: "overlay-list.toggle",
-      chords: [{ key: "space" }],
+      chords: namedKeyChords("space"),
       run: () => {
         if (!host.onToggle || !navigation || count === 0) return "declined";
         host.onToggle();
@@ -170,7 +180,7 @@ export function listBindings(host: ListBindingHost): KeyBinding[] {
     },
     {
       id: "overlay-list.move-item-up",
-      chords: [{ key: "leftArrow" }],
+      chords: namedKeyChords("leftArrow"),
       run: () => {
         if (!host.onMoveItem || !navigation || count === 0) return "declined";
         host.onMoveItem("up");
@@ -179,7 +189,7 @@ export function listBindings(host: ListBindingHost): KeyBinding[] {
     },
     {
       id: "overlay-list.move-item-down",
-      chords: [{ key: "rightArrow" }],
+      chords: namedKeyChords("rightArrow"),
       run: () => {
         if (!host.onMoveItem || !navigation || count === 0) return "declined";
         host.onMoveItem("down");
@@ -192,7 +202,7 @@ export function listBindings(host: ListBindingHost): KeyBinding[] {
     const onCancel = host.onCancel;
     bindings.push({
       id: "overlay-list.cancel",
-      chords: [{ key: "escape" }, { key: "c", ctrl: true }],
+      chords: [...namedKeyChords("escape"), { key: "c", ctrl: true }],
       run: () => {
         onCancel();
         return "consumed";

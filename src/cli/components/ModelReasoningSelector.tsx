@@ -2,6 +2,7 @@ import { Box } from "ink";
 import { useEffect, useMemo, useState } from "react";
 import type { ModelReasoningSelection } from "@/agent/model";
 import { formatXhighEffortLabel } from "@/agent/reasoning-effort-label";
+import { namedKeyChords } from "@/cli/helpers/input-keys";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { OverlayFrame } from "@/cli/overlay/frame";
 import { moveCursor } from "@/cli/overlay/list-model";
@@ -97,7 +98,7 @@ export function ModelReasoningSelector({
         // is a trap — and Ctrl+C is the same action here, as it always was.
         {
           id: "model-reasoning.cancel",
-          chords: [{ key: "escape" }, { key: "c", ctrl: true }],
+          chords: [...namedKeyChords("escape"), { key: "c", ctrl: true }],
           run: () => {
             onCancel();
             return "consumed";
@@ -105,7 +106,7 @@ export function ModelReasoningSelector({
         },
         {
           id: "model-reasoning.select",
-          chords: [{ key: "return" }],
+          chords: namedKeyChords("return"),
           run: () => {
             if (!selectedOption) return "declined";
             onSelect(selectedOption);
@@ -114,7 +115,7 @@ export function ModelReasoningSelector({
         },
         {
           id: "model-reasoning.previous",
-          chords: [{ key: "leftArrow" }],
+          chords: namedKeyChords("leftArrow"),
           run: () => {
             if (options.length === 0) return "declined";
             setSelectedIndex((prev) =>

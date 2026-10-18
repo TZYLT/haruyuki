@@ -26,6 +26,7 @@ import {
   getPiProviderRegistryRevision,
   subscribePiProviderRegistry,
 } from "@/backend/dev/pi-provider-mod-registry";
+import { namedKeyChords } from "@/cli/helpers/input-keys";
 import { OverlayFrame } from "@/cli/overlay/frame";
 import type { OverlayListItem } from "@/cli/overlay/list-model";
 import { OverlayListView } from "@/cli/overlay/list-view";
@@ -941,7 +942,7 @@ export function ModelSelector({
       // clear -- the order this face has always had.
       {
         id: "model-selector.clear-search",
-        chords: [{ key: "escape" }],
+        chords: namedKeyChords("escape"),
         run: () => {
           if (!searchQuery) return "declined";
           setSearchQuery("");
@@ -963,7 +964,7 @@ export function ModelSelector({
       },
       {
         id: "model-selector.cycle-category",
-        chords: [{ key: "tab" }, { key: "rightArrow" }, { key: "leftArrow" }],
+        chords: namedKeyChords("tab", "rightArrow", "leftArrow"),
         run: ({ key }) => {
           cycleCategory(key.leftArrow ? -1 : 1);
           return "consumed";

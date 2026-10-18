@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import type { KeyBinding } from "@/cli/helpers/input-keys";
+import { type KeyBinding, namedKeyChords } from "@/cli/helpers/input-keys";
 
 /**
  * Multi-step overlays: the return stack, and the two keys that leave a step.
@@ -115,7 +115,7 @@ export function wizardBindings(host: WizardKeyHost): KeyBinding[] {
     ...(host.extra ?? []),
     {
       id: "overlay-wizard.back",
-      chords: [{ key: "escape" }],
+      chords: namedKeyChords("escape"),
       run: () => {
         if (host.canGoBack) {
           host.onBack();

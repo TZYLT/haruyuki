@@ -6,6 +6,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { namedKeyChords } from "@/cli/helpers/input-keys";
 import type {
   ReflectionMergeMode,
   ReflectionSettings,
@@ -255,7 +256,7 @@ export function SleeptimeSelector({
       bindings: [
         {
           id: "sleeptime-selector.next",
-          chords: [{ key: "tab" }, { key: "downArrow" }],
+          chords: [{ key: "tab" }, ...namedKeyChords("downArrow")],
           run: () => {
             moveFocus(1);
             return "consumed";
@@ -263,7 +264,7 @@ export function SleeptimeSelector({
         },
         {
           id: "sleeptime-selector.previous",
-          chords: [{ key: "tab", shift: true }, { key: "upArrow" }],
+          chords: [{ key: "tab", shift: true }, ...namedKeyChords("upArrow")],
           run: () => {
             moveFocus(-1);
             return "consumed";
@@ -271,7 +272,7 @@ export function SleeptimeSelector({
         },
         {
           id: "sleeptime-selector.cycle-next",
-          chords: [{ key: "rightArrow" }],
+          chords: namedKeyChords("rightArrow"),
           run: () => {
             // A field's caret owns the arrows while it has the cursor.
             if (isFieldFocused) return "declined";
@@ -281,7 +282,7 @@ export function SleeptimeSelector({
         },
         {
           id: "sleeptime-selector.cycle-previous",
-          chords: [{ key: "leftArrow" }],
+          chords: namedKeyChords("leftArrow"),
           run: () => {
             if (isFieldFocused) return "declined";
             cycleFocusedGroup(-1);
@@ -290,7 +291,7 @@ export function SleeptimeSelector({
         },
         {
           id: "sleeptime-selector.select",
-          chords: [{ key: "space" }],
+          chords: namedKeyChords("space"),
           run: () => {
             // The instructions field is text, so a space there is a space; the
             // step count is a number, and space has always meant "select".
@@ -301,7 +302,7 @@ export function SleeptimeSelector({
         },
         {
           id: "sleeptime-selector.save",
-          chords: [{ key: "return" }],
+          chords: namedKeyChords("return"),
           run: () => {
             if (!memfsEnabled) {
               onCancel();

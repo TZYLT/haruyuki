@@ -17,7 +17,7 @@ import {
   getBuiltinSubagentNames,
   type SubagentConfig,
 } from "@/agent/subagents";
-import type { KeyBinding } from "@/cli/helpers/input-keys";
+import { type KeyBinding, namedKeyChords } from "@/cli/helpers/input-keys";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { OverlayFrame } from "@/cli/overlay/frame";
 import { colors } from "./colors";
@@ -79,7 +79,11 @@ export function SubagentManager({ onClose }: SubagentManagerProps) {
   const bindings: KeyBinding[] = [
     {
       id: "subagent-manager.close",
-      chords: [{ key: "c", ctrl: true }, { key: "escape" }, { key: "return" }],
+      chords: [
+        { key: "c", ctrl: true },
+        ...namedKeyChords("escape"),
+        ...namedKeyChords("return"),
+      ],
       run: () => {
         onClose();
         return "consumed";

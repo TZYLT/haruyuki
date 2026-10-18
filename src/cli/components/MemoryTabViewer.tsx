@@ -4,7 +4,7 @@ import Link from "ink-link";
 import { useEffect, useState } from "react";
 import { getBackend } from "@/backend";
 import { buildChatUrl, isLocalAgentId } from "@/cli/helpers/app-urls";
-import type { KeyBinding } from "@/cli/helpers/input-keys";
+import { type KeyBinding, namedKeyChords } from "@/cli/helpers/input-keys";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { OverlayFrame } from "@/cli/overlay/frame";
@@ -142,7 +142,7 @@ export function MemoryTabViewer({
   const bindings: KeyBinding[] = [
     {
       id: "memory-tab-viewer.next",
-      chords: [{ key: "tab" }, { key: "rightArrow" }],
+      chords: namedKeyChords("tab", "rightArrow"),
       run: () => {
         switchTabBy(1);
         return "consumed";
@@ -150,7 +150,7 @@ export function MemoryTabViewer({
     },
     {
       id: "memory-tab-viewer.previous",
-      chords: [{ key: "leftArrow" }],
+      chords: namedKeyChords("leftArrow"),
       run: () => {
         switchTabBy(-1);
         return "consumed";
@@ -158,7 +158,7 @@ export function MemoryTabViewer({
     },
     {
       id: "memory-tab-viewer.scroll-up",
-      chords: [{ key: "upArrow" }],
+      chords: namedKeyChords("upArrow"),
       run: () => {
         setScrollOffset((prev) => Math.max(prev - 1, 0));
         return "consumed";
@@ -166,7 +166,7 @@ export function MemoryTabViewer({
     },
     {
       id: "memory-tab-viewer.scroll-down",
-      chords: [{ key: "downArrow" }],
+      chords: namedKeyChords("downArrow"),
       run: () => {
         setScrollOffset((prev) => Math.min(prev + 1, maxScrollOffset));
         return "consumed";
@@ -174,7 +174,7 @@ export function MemoryTabViewer({
     },
     {
       id: "memory-tab-viewer.close",
-      chords: [{ key: "escape" }, { key: "c", ctrl: true }],
+      chords: [...namedKeyChords("escape"), { key: "c", ctrl: true }],
       run: () => {
         onClose();
         return "consumed";

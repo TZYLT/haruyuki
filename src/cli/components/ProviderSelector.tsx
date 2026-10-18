@@ -12,6 +12,7 @@ import {
   getPiProviderRegistryRevision,
   subscribePiProviderRegistry,
 } from "@/backend/dev/pi-provider-mod-registry";
+import { namedKeyChords } from "@/cli/helpers/input-keys";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { OverlayFrame } from "@/cli/overlay/frame";
 import { listBindings } from "@/cli/overlay/list-bindings";
@@ -832,7 +833,7 @@ export function ProviderSelector({
         extra: [
           {
             id: "connect.clear-filter",
-            chords: [{ key: "escape" }],
+            chords: namedKeyChords("escape"),
             run: () => {
               if (!onList || !searchQuery) return "declined";
               setSearchQuery("");
@@ -842,11 +843,7 @@ export function ProviderSelector({
           },
           {
             id: "connect.switch-target",
-            chords: [
-              { key: "tab" },
-              { key: "leftArrow" },
-              { key: "rightArrow" },
-            ],
+            chords: namedKeyChords("tab", "leftArrow", "rightArrow"),
             run: () => {
               if (!onList || !showProviderStoreTabs) return "declined";
               switchTarget();
@@ -936,7 +933,7 @@ export function ProviderSelector({
           }),
           {
             id: "connect.next-field",
-            chords: [{ key: "tab" }, { key: "downArrow" }],
+            chords: [{ key: "tab" }, ...namedKeyChords("downArrow")],
             run: () => {
               if (viewState.type !== "multiInput") return "declined";
               setFocusedFieldIndex((prev) =>
@@ -947,7 +944,7 @@ export function ProviderSelector({
           },
           {
             id: "connect.previous-field",
-            chords: [{ key: "tab", shift: true }, { key: "upArrow" }],
+            chords: [{ key: "tab", shift: true }, ...namedKeyChords("upArrow")],
             run: () => {
               if (viewState.type !== "multiInput") return "declined";
               setFocusedFieldIndex((prev) => Math.max(0, prev - 1));

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { type AgentBackendMode, isLocalAgentId } from "@/agent/agent-id";
 import { unpinAgentForCurrentUser } from "@/agent/favorites";
 import { getBackendForMode } from "@/backend/backend";
-import type { KeyBinding } from "@/cli/helpers/input-keys";
+import { type KeyBinding, namedKeyChords } from "@/cli/helpers/input-keys";
 import { listLocalAgentsFromDisk } from "@/cli/helpers/local-agent-listing";
 import {
   listPinnedAgentsForCurrentUser,
@@ -339,7 +339,7 @@ export function AgentSelector({
   const selectorExtras: KeyBinding[] = [
     {
       id: "agent-selector.new-tab-escape",
-      chords: [{ key: "escape" }],
+      chords: namedKeyChords("escape"),
       run: () => {
         if (activeTab !== "new" || !newAgentNameInput) return "declined";
         setNewAgentNameInput("");
@@ -349,7 +349,7 @@ export function AgentSelector({
     },
     {
       id: "agent-selector.cycle-tab",
-      chords: [{ key: "tab" }],
+      chords: namedKeyChords("tab"),
       run: () => {
         if (!listActive) return "declined";
         const currentIndex = visibleTabs.findIndex((t) => t.id === activeTab);
@@ -360,7 +360,7 @@ export function AgentSelector({
     },
     {
       id: "agent-selector.turn-page",
-      chords: [{ key: "leftArrow" }, { key: "rightArrow" }],
+      chords: [...namedKeyChords("leftArrow"), ...namedKeyChords("rightArrow")],
       run: ({ key }) => {
         if (!listActive) return "declined";
         return turnPage(key.leftArrow ? -1 : 1);

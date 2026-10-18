@@ -2,7 +2,7 @@ import { Box } from "ink";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Skill, SkillSource } from "@/agent/skills";
 import { estimateTokens } from "@/cli/helpers/format";
-import type { KeyBinding } from "@/cli/helpers/input-keys";
+import { type KeyBinding, namedKeyChords } from "@/cli/helpers/input-keys";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { OverlayFrame } from "@/cli/overlay/frame";
 import { appHomeDirName } from "@/utils/app-paths";
@@ -147,7 +147,7 @@ export function SkillsDialog({ onClose, agentId }: SkillsDialogProps) {
   const bindings: KeyBinding[] = [
     {
       id: "skills-dialog.next-tab",
-      chords: [{ key: "tab" }, { key: "rightArrow" }],
+      chords: namedKeyChords("tab", "rightArrow"),
       run: () => {
         cycleTab(1);
         return "consumed";
@@ -155,7 +155,7 @@ export function SkillsDialog({ onClose, agentId }: SkillsDialogProps) {
     },
     {
       id: "skills-dialog.previous-tab",
-      chords: [{ key: "leftArrow" }],
+      chords: namedKeyChords("leftArrow"),
       run: () => {
         cycleTab(-1);
         return "consumed";
@@ -163,7 +163,7 @@ export function SkillsDialog({ onClose, agentId }: SkillsDialogProps) {
     },
     {
       id: "skills-dialog.scroll-down",
-      chords: [{ key: "downArrow" }],
+      chords: namedKeyChords("downArrow"),
       run: () => {
         setScrollOffset((prev) => Math.min(prev + 1, maxScrollOffset));
         return "consumed";
@@ -171,7 +171,7 @@ export function SkillsDialog({ onClose, agentId }: SkillsDialogProps) {
     },
     {
       id: "skills-dialog.scroll-up",
-      chords: [{ key: "upArrow" }],
+      chords: namedKeyChords("upArrow"),
       run: () => {
         setScrollOffset((prev) => Math.max(0, prev - 1));
         return "consumed";
@@ -179,7 +179,7 @@ export function SkillsDialog({ onClose, agentId }: SkillsDialogProps) {
     },
     {
       id: "skills-dialog.close",
-      chords: [{ key: "escape" }, { key: "c", ctrl: true }],
+      chords: [...namedKeyChords("escape"), { key: "c", ctrl: true }],
       run: () => {
         onClose();
         return "consumed";

@@ -78,10 +78,13 @@ describe("listBindings", () => {
     expect(host.moved).toEqual([1, 3]);
   });
 
-  test("a chord names a key, so the shifted letter is the same key", () => {
-    // `matchChord` compares case-insensitively by design. The pre-toolkit pickers
-    // compared `input === "k"` and so ignored Shift+K; the table does not make that
-    // distinction when the terminal does not report the modifier.
+  test("a chord names a key, so the shifted letter is a different key", () => {
+    // The first half pins `matchChord`'s case rule rather than a key event a
+    // terminal produces: uppercase arrives with `shift` set (`ESC[Z` and the
+    // shield's letter handling, pinned in `input-keys.test.ts`). What production
+    // can hit is the second half — the pre-toolkit pickers compared
+    // `input === "k"` and so ignored Shift+K, and the table does not claim it
+    // either.
     const unmodified = harness();
     expect(dispatch(unmodified.host, keyEventFrom("K"))).toBe(
       "overlay-list.up",
@@ -293,6 +296,41 @@ describe("listBindings", () => {
     expect(dispatch(host.host, keyEventFrom("", { pageDown: true }))).toBe(
       "overlay-list.page-down",
     );
+  });
+
+  test("the flag-only keys carry the shift variant, the toolkit's own do not", () => {
+    // Every face this file replaces tested the key's flag and never looked at
+    // `shift` (`if (key.tab)`, `if (key.return)`, `input === " "` for space), and
+    // a terminal reports the shift for encodings they therefore accepted:
+    // `ESC[Z` is Shift+Tab, a kitty terminal sends Shift+Enter as CSI-u.
+    // `namedKeyChords` states that meaning once; this pins which keys take it.
+    const table = listBindings(harness().host);
+    const chordsOf = (id: string) =>
+      table.find((binding) => binding.id === id)?.chords ?? [];
+
+    for (const [id, key] of [
+      ["overlay-list.up", "upArrow"],
+      ["overlay-list.down", "downArrow"],
+      ["overlay-list.confirm", "return"],
+      ["overlay-list.toggle", "space"],
+      ["overlay-list.move-item-up", "leftArrow"],
+      ["overlay-list.move-item-down", "rightArrow"],
+    ] as const) {
+      expect(chordsOf(id)).toContainEqual({ key, shift: true });
+    }
+
+    // `pageUp`/`pageDown`/`home`/`end` are the toolkit's own additions: no face
+    // bound them before, so there is no meaning to restore, and leaving them
+    // strict keeps the app's `Shift+PageUp`/`Shift+PageDown` jump from becoming a
+    // second spelling of a list step while an overlay is open.
+    for (const [id, key] of [
+      ["overlay-list.page-up", "pageUp"],
+      ["overlay-list.page-down", "pageDown"],
+      ["overlay-list.first", "home"],
+      ["overlay-list.last", "end"],
+    ] as const) {
+      expect(chordsOf(id)).not.toContainEqual({ key, shift: true });
+    }
   });
 
   test("every binding has a unique id and declares at least one chord", () => {

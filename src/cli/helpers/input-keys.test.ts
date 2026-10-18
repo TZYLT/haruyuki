@@ -6,6 +6,7 @@ import {
   type KeyEvent,
   matchChord,
   matchingBindings,
+  namedKeyChords,
   resolveBinding,
 } from "@/cli/helpers/input-keys";
 import { keyEventFrom, shieldKeyEvent } from "@/cli/helpers/input-sequence";
@@ -168,5 +169,50 @@ describe("chord helpers", () => {
       chordsEqual({ key: "o", ctrl: true }, { key: "O", ctrl: true }),
     ).toBe(true);
     expect(chordsEqual({ key: "o", ctrl: true }, { key: "o" })).toBe(false);
+  });
+});
+
+describe("namedKeyChords", () => {
+  test("declares the key with and without the shift the faces ignored", () => {
+    expect(namedKeyChords("tab")).toEqual([
+      { key: "tab" },
+      { key: "tab", shift: true },
+    ]);
+    expect(namedKeyChords("return")).toEqual([
+      { key: "return" },
+      { key: "return", shift: true },
+    ]);
+  });
+
+  test("each chord answers to its own encoding and to nothing else", () => {
+    // `ESC[Z` is the sequence a terminal sends for Shift+Tab, and the face this
+    // replaced read `if (key.tab)` without looking at the modifier. Both halves
+    // are asserted, because a helper that matched everything would be worse than
+    // the strict chord it replaced.
+    const [plain, shifted] = namedKeyChords("tab");
+    expect(plain && matchChord(plain, event(TAB))).toBe(true);
+    expect(shifted && matchChord(shifted, event(SHIFT_TAB))).toBe(true);
+    expect(plain && matchChord(plain, event(SHIFT_TAB))).toBe(false);
+    expect(shifted && matchChord(shifted, event(TAB))).toBe(false);
+  });
+
+  test("covers every named key, letters excluded", () => {
+    // The helper takes the `NamedKey` type, so a face cannot hand it a letter and
+    // silently acquire the case decision that belongs to that face (`/agents`
+    // wants `D` for its delete and nothing for `d`).
+    for (const key of ["escape", "return", "tab", "space"] as const) {
+      expect(namedKeyChords(key)).toEqual([{ key }, { key, shift: true }]);
+    }
+  });
+
+  test("takes several keys at once, as a face's binding usually covers", () => {
+    // `/model` cycles its category on Tab, ← and →; one call keeps that a single
+    // line in a file the size ratchet pins.
+    expect(namedKeyChords("tab", "leftArrow")).toEqual([
+      { key: "tab" },
+      { key: "tab", shift: true },
+      { key: "leftArrow" },
+      { key: "leftArrow", shift: true },
+    ]);
   });
 });

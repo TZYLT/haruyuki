@@ -11,7 +11,11 @@ import {
   type TreeNode,
 } from "@/agent/memory-scanner";
 import { buildChatUrl, isLocalAgentId } from "@/cli/helpers/app-urls";
-import type { KeyBinding, KeyOutcome } from "@/cli/helpers/input-keys";
+import {
+  type KeyBinding,
+  type KeyOutcome,
+  namedKeyChords,
+} from "@/cli/helpers/input-keys";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { OverlayFrame } from "@/cli/overlay/frame";
@@ -206,7 +210,7 @@ export function MemfsTreeViewer({
     },
     {
       id: "memfs-tree-viewer.leave-full-view",
-      chords: [{ key: "escape" }],
+      chords: namedKeyChords("escape"),
       run: () => {
         leaveOrClose();
         return "consumed";
@@ -224,7 +228,7 @@ export function MemfsTreeViewer({
     },
     {
       id: "memfs-tree-viewer.up",
-      chords: [{ key: "upArrow" }],
+      chords: namedKeyChords("upArrow"),
       run: () => {
         if (viewMode === "full") {
           setFullViewScrollOffset((prev) => Math.max(0, prev - 1));
@@ -235,7 +239,7 @@ export function MemfsTreeViewer({
     },
     {
       id: "memfs-tree-viewer.down",
-      chords: [{ key: "downArrow" }],
+      chords: namedKeyChords("downArrow"),
       run: () => {
         if (viewMode === "full") {
           setFullViewScrollOffset((prev) =>
@@ -248,7 +252,7 @@ export function MemfsTreeViewer({
     },
     {
       id: "memfs-tree-viewer.open-file",
-      chords: [{ key: "return" }],
+      chords: namedKeyChords("return"),
       run: () => {
         if (viewMode !== "split" || !selectedFile) return "declined";
         setViewMode("full");

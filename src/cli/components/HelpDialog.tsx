@@ -1,6 +1,7 @@
 import { Box } from "ink";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { commands } from "@/cli/commands/registry";
+import { namedKeyChords } from "@/cli/helpers/input-keys";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { OverlayFrame } from "@/cli/overlay/frame";
 import type { OverlayListItem } from "@/cli/overlay/list-model";
@@ -160,7 +161,7 @@ export function HelpDialog({ onClose }: HelpDialogProps) {
       bindings: [
         {
           id: "help-dialog.cycle-tab",
-          chords: [{ key: "tab" }],
+          chords: namedKeyChords("tab"),
           run: () => {
             cycleTab();
             return "consumed";
@@ -169,7 +170,7 @@ export function HelpDialog({ onClose }: HelpDialogProps) {
         {
           id: "help-dialog.page-back",
           chords: [
-            { key: "leftArrow" },
+            ...namedKeyChords("leftArrow"),
             { key: "j" },
             { key: "j", shift: true },
           ],
@@ -178,7 +179,7 @@ export function HelpDialog({ onClose }: HelpDialogProps) {
         {
           id: "help-dialog.page-forward",
           chords: [
-            { key: "rightArrow" },
+            ...namedKeyChords("rightArrow"),
             { key: "k" },
             { key: "k", shift: true },
           ],

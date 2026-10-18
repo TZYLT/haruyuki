@@ -157,6 +157,44 @@ export function matchChord(chord: KeyChord, event: KeyEvent): boolean {
 }
 
 /**
+ * A named key's chords in the meaning the overlay faces had before the toolkit:
+ * the key's own flag decides, and `shift` is not consulted.
+ *
+ * The chord syntax is deliberately strict — an omitted modifier means "this
+ * modifier must be absent" (see `KeyChord`) — and that strictness is what keeps
+ * `{ key: "o" }` away from Ctrl+O and lets a list sit beside a live editor. But
+ * the faces this toolkit replaced tested the flag alone (`if (key.tab)`,
+ * `if (key.return)`, and a bare `input === " "` for space), so a terminal that
+ * reports the shift for a sequence the old code therefore accepted loses the key
+ * when the strict reading is applied to it: `ESC[Z` *is* Shift+Tab, and a
+ * kitty-protocol terminal sends Shift+Enter as CSI-u. Six faces stopped cycling
+ * their tabs and every list stopped confirming on Shift+Enter — behaviour no
+ * frame-equivalence script covered, because none of them pressed Shift+Tab.
+ *
+ * So a named key that means "this key, however the terminal encodes the shift"
+ * says so once, here, instead of every face spelling out a second chord. It takes
+ * several keys because a face's binding usually covers more than one (`Tab`,
+ * `←` and `→` cycle the same category in `/model`), and that keeps the call to
+ * one line in the files the size ratchet pins. Three things are deliberately
+ * outside it:
+ *
+ * - **Letters.** Case is the letter's own business (`/agents` wants `D` for its
+ *   destructive delete and nothing for `d`), and a generated shift variant would
+ *   make that decision for every face.
+ * - **Keys a face genuinely splits.** `/search` gives Tab and Shift+Tab two
+ *   different jobs, and the autocomplete declines the shift variants outright
+ *   (`use-autocomplete-navigation.ts`) — those declare their chords explicitly,
+ *   which is the whole point of the strict default.
+ * - **The keys the toolkit itself added.** `pageUp`/`pageDown`/`home`/`end` were
+ *   never bound by these faces, so there is no meaning to restore, and leaving
+ *   them strict keeps `Shift+PageUp`/`Shift+PageDown` from becoming a second
+ *   spelling of an app-level jump while an overlay happens to be open.
+ */
+export function namedKeyChords(...keys: readonly NamedKey[]): KeyChord[] {
+  return keys.flatMap((key) => [{ key }, { key, shift: true }]);
+}
+
+/**
  * Whether `value` names a non-printable key this module can match.
  *
  * `Object.hasOwn`, not `in`: `in` walks the prototype chain, so `constructor`,
