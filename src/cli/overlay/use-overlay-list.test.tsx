@@ -74,6 +74,7 @@ interface ProbeOptions {
   scope?: "overlay" | "modal";
   navigationEnabled?: boolean;
   vimKeys?: boolean;
+  edgeKeys?: boolean;
   onConfirm?: (key: string, index: number) => void;
   onCancel?: () => void;
   onToggle?: (key: string, index: number) => void;
@@ -107,6 +108,7 @@ function mountProbe(options: ProbeOptions) {
       scope: options.scope,
       navigationEnabled: options.navigationEnabled,
       vimKeys: options.vimKeys,
+      edgeKeys: options.edgeKeys,
       onConfirm: options.onConfirm,
       onToggle: options.onToggle,
       onMoveItem: options.onMoveItem,
@@ -320,6 +322,36 @@ describe("useOverlayList", () => {
       expect(probe.latest.current?.cursor).toBe(1);
     } finally {
       probe.stop();
+    }
+  });
+
+  test("gives Home/End up when a neighbour owns the caret", async () => {
+    // `/connect`'s provider list sits beside a live filter, where Home and End are
+    // the caret's — and the claim there has to be unconditional, because that
+    // filter remounts behind the list whenever the overlay walks into a step and
+    // back (`list-bindings.ts`). Both halves are asserted, since a switch that
+    // silently stopped claiming the keys altogether would look the same.
+    const claiming = mountProbe({ items: rows(5), initialCursorIndex: 2 });
+    try {
+      await claiming.press(END);
+      expect(claiming.latest.current?.cursor).toBe(4);
+      await claiming.press(HOME);
+      expect(claiming.latest.current?.cursor).toBe(0);
+    } finally {
+      claiming.stop();
+    }
+
+    const givenUp = mountProbe({
+      items: rows(5),
+      initialCursorIndex: 2,
+      edgeKeys: false,
+    });
+    try {
+      await givenUp.press(END, HOME);
+      expect(givenUp.latest.current?.cursor).toBe(2);
+      expect(givenUp.unrouted).toEqual(["end", "home"]);
+    } finally {
+      givenUp.stop();
     }
   });
 

@@ -16,9 +16,10 @@ import { namedKeyChords } from "@/cli/helpers/input-keys";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { OverlayFrame } from "@/cli/overlay/frame";
 import { listBindings } from "@/cli/overlay/list-bindings";
-import { type OverlayListItem, visibleWindow } from "@/cli/overlay/list-model";
+import type { OverlayListItem } from "@/cli/overlay/list-model";
 import { OverlayListView } from "@/cli/overlay/list-view";
 import { OverlayTextField } from "@/cli/overlay/text-view";
+import { useOverlayList } from "@/cli/overlay/use-overlay-list";
 import { useWizard, wizardBindings } from "@/cli/overlay/wizard";
 import {
   type AuthMethod,
@@ -114,7 +115,6 @@ export function ProviderSelector({
   const [hasCloudCredentials, setHasCloudCredentials] = useState<
     boolean | null
   >(null);
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const [connectedProvidersByTarget, setConnectedProvidersByTarget] =
     useState<ConnectedProvidersByTarget>({});
   const [loadingTargets, setLoadingTargets] = useState<
@@ -177,18 +177,6 @@ export function ProviderSelector({
     showProviderStoreTabs,
   });
   const selectableProviders = filteredProviders;
-  // The window the list shows, from the toolkit's own arithmetic: `edge` keeps
-  // the cursor on the bottom edge, which is the shape this list already had.
-  // The view is handed the same three values, so it windows identically, and
-  // `indicators: false` because this face prints the count itself, in the
-  // wording it always used (and, at the end of a long list, a blank row in its
-  // place so the frame's height does not move with the cursor).
-  const providerWindow = visibleWindow({
-    count: selectableProviders.length,
-    cursor: selectedIndex,
-    rows: VISIBLE_PROVIDERS,
-    anchor: "edge",
-  });
   const providerItems = useMemo(
     () =>
       selectableProviders.map(
@@ -199,6 +187,38 @@ export function ProviderSelector({
       ),
     [selectableProviders],
   );
+
+  // The provider list is the one real list on this face, so the toolkit owns its
+  // cursor, its window and its keys — the three things this file used to keep
+  // itself (`selectedIndex`, a clamping effect, and a `visibleWindow` call for the
+  // "N more below" line). It is registered **before** the wizard's table below, so
+  // Escape still reaches that table's clear-filter rule and `Tab` its tab switch:
+  // this list declares neither.
+  //
+  // `edgeKeys: false` because the filter beside it is a live editor whose Home/End
+  // belong to the caret — the switch `list-bindings.ts` documents.
+  const onList = viewState.type === "list" && !isLoading;
+  const providerList = useOverlayList({
+    owner: "provider-selector-list",
+    items: providerItems,
+    rows: VISIBLE_PROVIDERS,
+    anchor: "edge",
+    vimKeys: false,
+    edgeKeys: false,
+    navigationEnabled: onList,
+    onConfirm: (_key, index) => {
+      const provider = selectableProviders[index];
+      if (provider) handleSelectProvider(provider);
+    },
+    // Escape and Ctrl+C are the wizard's: a list that claimed Escape would answer
+    // for every step.
+    onCancel: undefined,
+  });
+  // Read per render and clamped there, so filtering the list down cannot leave the
+  // highlight on a row that is gone — which is what the effect this replaced did,
+  // one render late.
+  const selectedIndex = providerList.cursor;
+  const providerWindow = providerList.window;
 
   /**
    * Walk forward to a step, carrying the provider it is about. The payload goes
@@ -352,30 +372,24 @@ export function ProviderSelector({
   useEffect(() => {
     if (shouldForceLocalProviderTab(hasCloudCredentials, selectedTarget)) {
       setSelectedTarget("local");
-      setSelectedIndex(0);
+      providerList.setCursor(0);
       setSearchQuery("");
       returnToList();
     }
-  }, [hasCloudCredentials, selectedTarget, returnToList]);
-
-  useEffect(() => {
-    if (selectableProviders.length === 0) {
-      if (selectedIndex !== 0) setSelectedIndex(0);
-      return;
-    }
-
-    if (selectedIndex >= selectableProviders.length) {
-      setSelectedIndex(selectableProviders.length - 1);
-    }
-  }, [selectedIndex, selectableProviders.length]);
+  }, [
+    hasCloudCredentials,
+    selectedTarget,
+    returnToList,
+    providerList.setCursor,
+  ]);
 
   const switchTarget = useCallback(() => {
     if (!showProviderStoreTabs) return;
     setSelectedTarget((target) => (target === "local" ? "api" : "local"));
-    setSelectedIndex(0);
+    providerList.setCursor(0);
     setSearchQuery("");
     returnToList();
-  }, [showProviderStoreTabs, returnToList]);
+  }, [showProviderStoreTabs, returnToList, providerList.setCursor]);
 
   const getConnectedProviderRecords = useCallback(
     (provider: ByokProvider): ProviderResponse[] =>
@@ -794,13 +808,14 @@ export function ProviderSelector({
     selectedTarget,
   ]);
 
-  // The keys, as data. Every step's list is declared at once and gated by
+  // The keys, as data. The step lists are declared at once and gated by
   // `navigationEnabled`, so a table that does not apply to the step on screen
   // declines instead of eating the key. None of them declares a cancel of its
   // own: Escape and Ctrl+C are the wizard's, and a list that claimed Escape
   // would take it away from every other step — which is also why the filter's
-  // Escape (clear it first, or decline) sits at the head of the table rather
-  // than being folded into the provider list's own row handling.
+  // Escape (clear it first, or decline) sits at the head of the table. The
+  // provider list itself is not here: it is a real windowed list and went through
+  // `useOverlayList` above, which registered its table first.
   const authMethods =
     viewState.type === "methodSelect"
       ? viewState.provider.authMethods
@@ -821,7 +836,6 @@ export function ProviderSelector({
           : undefined) ??
         [])
       : [];
-  const onList = viewState.type === "list" && !isLoading;
 
   useKeyBindings("provider-selector", [
     {
@@ -837,7 +851,7 @@ export function ProviderSelector({
             run: () => {
               if (!onList || !searchQuery) return "declined";
               setSearchQuery("");
-              setSelectedIndex(0);
+              providerList.setCursor(0);
               return "consumed";
             },
           },
@@ -850,24 +864,6 @@ export function ProviderSelector({
               return "consumed";
             },
           },
-          ...listBindings({
-            count: selectableProviders.length,
-            cursor: selectedIndex,
-            onMoveCursor: setSelectedIndex,
-            onConfirm: () => {
-              const provider = selectableProviders[selectedIndex];
-              if (provider) handleSelectProvider(provider);
-            },
-            onCancel: undefined,
-            navigationEnabled: onList,
-            // The filter is a live editor beside this list, so `j`/`k` are its
-            // letters — the same call `/resume` makes — and Home/End are its
-            // caret's. That one cannot be left to registration order: the filter
-            // remounts every time the overlay walks into a provider's step and
-            // back, and a remount registers behind this table.
-            vimKeys: false,
-            edgeKeys: false,
-          }),
           ...listBindings({
             count: authMethods?.length ?? 0,
             cursor: methodIndex,
@@ -991,7 +987,7 @@ export function ProviderSelector({
           value={searchQuery}
           onChange={(next) => {
             setSearchQuery(next);
-            setSelectedIndex(0);
+            providerList.setCursor(0);
           }}
           placeholder="(type to filter)"
           focus={onList}

@@ -13,7 +13,7 @@
   "src/cli/app/use-submit-handler.ts": 3318,
   "src/cli/components/InputRich.tsx": 1996,
   "src/cli/components/ModelSelector.tsx": 1208,
-  "src/cli/components/ProviderSelector.tsx": 1522,
+  "src/cli/components/ProviderSelector.tsx": 1518,
   "src/cli/helpers/accumulator.ts": 1601,
   "src/cli/helpers/reflection-transcript.ts": 1926,
   "src/cli/mods/local-mod-loader.test.ts": 1043,

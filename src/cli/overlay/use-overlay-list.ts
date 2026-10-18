@@ -76,6 +76,14 @@ export interface UseOverlayListOptions {
   /** Whether plain `j`/`k` navigate. On by default, as the pickers had them. */
   vimKeys?: boolean;
   /**
+   * Whether Home/End jump to the ends of the list. On by default.
+   *
+   * Off is for a list whose neighbour is a live editor — `/connect`'s filter is
+   * the one. `list-bindings.ts` states the rule; this is the same switch, for a
+   * face that goes through this hook rather than building the table itself.
+   */
+  edgeKeys?: boolean;
+  /**
    * Enter on the item at the cursor. Called for a `disabled` item too: whether
    * that confirms is the caller's policy, and the key is consumed either way.
    */
@@ -127,6 +135,7 @@ export function useOverlayList(
     scope = "overlay",
     navigationEnabled = true,
     vimKeys,
+    edgeKeys,
     onConfirm,
     onCancel,
     onToggle,
@@ -170,6 +179,7 @@ export function useOverlayList(
         rows,
         navigationEnabled,
         vimKeys,
+        edgeKeys,
         onToggle: onToggle
           ? () => {
               const item = itemAt(items, cursor);
