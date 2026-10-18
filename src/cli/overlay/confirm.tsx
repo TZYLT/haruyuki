@@ -82,8 +82,6 @@ export interface TypedConfirmPromptProps {
   value: string;
   /** Shown dim instead of the value while it is empty. */
   placeholder: string;
-  /** Colour of the `> ` caret. */
-  markerColor?: string;
 }
 
 /**
@@ -96,11 +94,10 @@ export interface TypedConfirmPromptProps {
 export function TypedConfirmPrompt({
   value,
   placeholder,
-  markerColor = colors.selector.itemHighlighted,
 }: TypedConfirmPromptProps): ReactElement {
   return (
     <Box flexDirection="row">
-      <Text color={markerColor}>{"> "}</Text>
+      <Text color={colors.selector.itemHighlighted}>{"> "}</Text>
       <Text dimColor={!value}>{value || placeholder}</Text>
     </Box>
   );
