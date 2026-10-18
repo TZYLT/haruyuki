@@ -8,10 +8,11 @@ import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 /**
  * The chrome every overlay is drawn inside.
  *
- * The same markup `OverlayShell` renders — `> /command`, a solid line, the title,
- * the body, an optional footer — because that shape is what every overlay in this
- * tree already looks like and this module is where it becomes *one* component
- * instead of a pattern repeated in a dozen selectors.
+ * `> /command`, a solid line, the title, the body, an optional footer — the
+ * shape every overlay in this tree already had, and the shape of the shared
+ * `OverlayShell` it replaced. The two were deliberately rendered from the same
+ * markup, so that moving a face from one to the other was a no-op at the frame
+ * level; the shell has since retired with its last consumer (`/help`, B8).
  *
  * It also declares the input scope its container occupies, which is the half of
  * the frame a picture cannot show: the router routes overlay keys only while an

@@ -24,7 +24,7 @@ import { ModelSelector } from "./ModelSelector";
  * The model selector, on the frame and on its keys.
  *
  * Most of this file's subject used to be hand-wired: its own `useInput`, its own
- * window arithmetic, its own scroll indicator, and `OverlayShell` for the chrome.
+ * window arithmetic, its own scroll indicator, and the shared shell for the chrome.
  * It now renders through `OverlayFrame` and `OverlayListView` and takes its keys
  * from `list-bindings.ts`, so what these assertions pin is that the move kept the
  * face it had -- and, where it deliberately did not, that it is the change the

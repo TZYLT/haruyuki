@@ -5,9 +5,9 @@ import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
 /**
  * The typed-name delete confirmation, judged on the frame.
  *
- * Two things are worth pinning. The frame's chrome: this view was one of
- * `OverlayShell`'s remaining consumers, and the frame it now draws is the same
- * markup (the full overlay was driven against the checked-out pre-batch version in
+ * Two things are worth pinning. The frame's chrome: this view was one of the
+ * shared shell's last consumers, and the frame it now draws is the same markup
+ * (the full overlay was driven against the checked-out pre-batch version in
  * four states and came back row for row identical). And the footer's three
  * wordings, because they are the only place the user is told that Enter will do
  * the deed at all: `Enter to delete` appears **only** once the typed name matches,
