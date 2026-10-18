@@ -21,10 +21,8 @@ import {
   getModelPresetUpdateForAgent,
   getModelUpdateArgs,
   getResumeRefreshArgs,
-  type ModelReasoningSelection,
   preservableContextWindow,
   resolveModel,
-  withReasoningEffortUpdateArg,
 } from "./agent/model";
 import { updateAgentLLMConfig, updateAgentSystemPrompt } from "./agent/modify";
 import { buildCreateAgentOptionsForPersonality } from "./agent/personality";
@@ -961,18 +959,6 @@ async function main(): Promise<void> {
     const [failedAgentMessage, setFailedAgentMessage] = useState<string | null>(
       null,
     );
-    // The custom-API backend went away with the API backend, so the custom-API
-    // model inventory is permanently empty and nothing prefetches into it.
-    const availableServerModels: string[] = [];
-    const [selectedServerModel, setSelectedServerModel] = useState<
-      string | null
-    >(null);
-    const [
-      selectedServerModelReasoningEffort,
-      setSelectedServerModelReasoningEffort,
-    ] = useState<ModelReasoningSelection | undefined>(undefined);
-    const customApiDefaultModel: string | null = null;
-    const customApiBaseUrl: string | null = null;
 
     // Release notes to display (checked once on mount)
     const [releaseNotes, setReleaseNotes] = useState<string | null>(null);
@@ -1463,22 +1449,11 @@ async function main(): Promise<void> {
 
         // Priority 3: Check if --new flag was passed or user requested new from selector
         if (!agent && shouldCreateNew) {
-          // For custom API backends: if default model unavailable and no model selected yet, show picker
-          if (availableServerModels.length > 0 && !selectedServerModel) {
-            setLoadingState("selecting_global");
-            return;
-          }
-
           // Determine effective model:
-          // 1. Use selectedServerModel if user picked from the custom-API picker
-          // 2. Use model if --model flag was passed
-          // 3. Otherwise, use billing-tier-aware default (free tier gets GLM-5)
-          let effectiveModel = selectedServerModel || model;
-          if (
-            !effectiveModel &&
-            !customApiBaseUrl &&
-            !backend.capabilities.localModelCatalog
-          ) {
+          // 1. Use model if --model flag was passed
+          // 2. Otherwise, use billing-tier-aware default (free tier gets GLM-5)
+          let effectiveModel = model;
+          if (!effectiveModel && !backend.capabilities.localModelCatalog) {
             // On Letta API without explicit model - check billing tier for appropriate default
             const { getDefaultModelForTier } = await import("@/agent/model");
             const billingTier = await getBillingTier();
@@ -1502,11 +1477,7 @@ async function main(): Promise<void> {
             : undefined;
           const modelForUpdateArgs =
             personalityOptions?.model ?? effectiveModel;
-          const baseUpdateArgs = getModelUpdateArgs(modelForUpdateArgs);
-          const updateArgs = withReasoningEffortUpdateArg(
-            baseUpdateArgs,
-            selectedServerModelReasoningEffort,
-          );
+          const updateArgs = getModelUpdateArgs(modelForUpdateArgs);
           const result = await createAgent({
             ...(personalityOptions ?? {}),
             model: modelForUpdateArgs,
@@ -1931,11 +1902,6 @@ async function main(): Promise<void> {
         loading: false,
         freshRepoMode: true, // Hides "(global)" labels and simplifies context message
         failedAgentMessage: failedAgentMessage ?? undefined,
-        // For custom API backends: pass available models so user can pick one when creating new agent
-        serverModelsForNewAgent:
-          availableServerModels.length > 0 ? availableServerModels : undefined,
-        defaultModelHandle: customApiDefaultModel ?? undefined,
-        serverBaseUrl: customApiBaseUrl ?? undefined,
         onSelect: createStartupAgentPickerHandler(
           setSelectedGlobalAgentId,
           () => setLoadingState("assembling"),
@@ -1943,15 +1909,6 @@ async function main(): Promise<void> {
         ),
         onCreateNew: () => {
           setUserRequestedNewAgent(true);
-          setLoadingState("assembling");
-        },
-        onCreateNewWithModel: (
-          modelHandle: string,
-          reasoningEffort?: ModelReasoningSelection,
-        ) => {
-          setUserRequestedNewAgent(true);
-          setSelectedServerModel(modelHandle);
-          setSelectedServerModelReasoningEffort(reasoningEffort);
           setLoadingState("assembling");
         },
         onExit: () => {
