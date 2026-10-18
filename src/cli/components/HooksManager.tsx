@@ -101,15 +101,24 @@ const HOOK_EVENTS: { event: HookEvent; description: string }[] = [
   { event: "SessionEnd", description: "When a session ends" },
 ];
 
-/** The events screen's rows: the disable toggle, then one row per hook event. */
-const EVENT_ROWS: OverlayListItem[] = [
-  { key: "toggle-hooks", label: "Disable all hooks" },
-  ...HOOK_EVENTS.map(({ event, description }) => ({
+/** Identity of the events screen's first row: the all-hooks toggle. */
+const TOGGLE_ROW_KEY = "toggle-hooks";
+
+/**
+ * One row per hook event, in the order `HOOK_EVENTS` declares them.
+ *
+ * The toggle row is deliberately **not** here: its label is state ("Disable all
+ * hooks" / "Enable all hooks"), so the screen builds its item list from this plus
+ * that row where the state is. Keeping a static copy in this array is how the row
+ * used to lie whenever hooks were already disabled.
+ */
+const EVENT_ROWS: OverlayListItem[] = HOOK_EVENTS.map(
+  ({ event, description }) => ({
     key: event,
     label: event,
     description,
-  })),
-];
+  }),
+);
 
 // Fallback tool names if agent tools can't be fetched
 const FALLBACK_TOOL_NAMES = [
@@ -296,9 +305,20 @@ export const HooksManager = memo(function HooksManager({
     ];
   }, [hooks, isCurrentToolEvent]);
 
+  // The events screen's rows: the toggle (whose text is state) and then the
+  // event rows (whose text is data). Built here so the list the view windows and
+  // the list the cursor moves through are the same array.
+  const disableToggleLabel = hooksDisabled
+    ? "Enable all hooks"
+    : "Disable all hooks";
+  const eventRows = useMemo<OverlayListItem[]>(
+    () => [{ key: TOGGLE_ROW_KEY, label: disableToggleLabel }, ...EVENT_ROWS],
+    [disableToggleLabel],
+  );
+
   const eventsList = useOverlayList({
     owner: "hooks-events",
-    items: EVENT_ROWS,
+    items: eventRows,
     navigationEnabled: step === "events",
     onConfirm: (_key, index) => {
       if (index === 0) {
@@ -464,9 +484,6 @@ export const HooksManager = memo(function HooksManager({
 
   // Render Events List
   if (step === "events") {
-    const disableToggleLabel = hooksDisabled
-      ? "Enable all hooks"
-      : "Disable all hooks";
     const title = `Hooks · ${totalHooks} hooks${hooksDisabled ? " (disabled)" : ""}`;
 
     return (
@@ -476,20 +493,23 @@ export const HooksManager = memo(function HooksManager({
         footer="Enter to select · esc to cancel"
       >
         <OverlayListView
-          items={EVENT_ROWS}
+          items={eventRows}
           cursor={eventsList.cursor}
-          renderRow={(_item, index, isCursor) => {
+          renderRow={(item, index, isCursor) => {
             if (index === 0) {
               return (
                 <Text>
                   <Text color={isCursor ? colors.input.prompt : undefined}>
                     {isCursor ? "❯" : " "} 1.
                   </Text>
-                  <Text dimColor> {disableToggleLabel}</Text>
+                  <Text dimColor> {item.label}</Text>
                 </Text>
               );
             }
 
+            // The count is per event, so it is looked up by the row's own key;
+            // the text on screen is the item's, which is what makes the list the
+            // single description of a row rather than a second copy of it.
             const entry = HOOK_EVENTS[index - 1];
             if (!entry) return null;
             const hookCount = countHooksForEvent(entry.event);
@@ -498,9 +518,9 @@ export const HooksManager = memo(function HooksManager({
             return (
               <Text>
                 <Text color={isCursor ? colors.input.prompt : undefined}>
-                  {isCursor ? "❯" : " "} {index + 1}. {entry.event}
+                  {isCursor ? "❯" : " "} {index + 1}. {item.label}
                 </Text>
-                <Text dimColor> - {entry.description}</Text>
+                <Text dimColor> - {item.description}</Text>
                 <Text color="yellow">{countStr}</Text>
               </Text>
             );
