@@ -7,6 +7,7 @@ import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import { parsePatchToAdvancedDiff } from "@/cli/helpers/diff";
 import { simpleDiffDisplayPath } from "@/cli/helpers/diff-rows";
 import { parsePatchOperations } from "@/cli/helpers/format-args-display";
+import { dottedRule, solidRule } from "@/cli/helpers/rule-lines";
 import { useProgressIndicator } from "@/cli/hooks/use-progress-indicator";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { AdvancedDiffRenderer } from "./AdvancedDiffRenderer";
@@ -47,10 +48,6 @@ type Props = {
   /** Override the auto-generated header text (e.g. "Edit memory system/persona/soul?") */
   headerOverride?: string;
 };
-
-// Horizontal line characters for Claude Code style
-const SOLID_LINE = "─";
-const DOTTED_LINE = "╌";
 
 /**
  * Determine diff kind based on tool name
@@ -132,8 +129,8 @@ export const InlineFileEditApproval = memo(
     const diffsPayload = diffsToPass.size > 0 ? diffsToPass : undefined;
 
     // Generate horizontal lines
-    const solidLine = SOLID_LINE.repeat(Math.max(columns, 10));
-    const dottedLine = DOTTED_LINE.repeat(Math.max(columns, 10));
+    const solidLine = solidRule(columns);
+    const dottedLine = dottedRule(columns);
     // Shared with the committed preview and the transcript row model
     // (`@/cli/helpers/approval-info`).
     const headerText =

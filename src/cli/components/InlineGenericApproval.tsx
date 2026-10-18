@@ -5,6 +5,7 @@ import {
   formatApprovalArgs,
   genericApprovalPreviewRows,
 } from "@/cli/helpers/approval-layout";
+import { solidRule } from "@/cli/helpers/rule-lines";
 import { useProgressIndicator } from "@/cli/hooks/use-progress-indicator";
 import {
   useTerminalRows,
@@ -27,9 +28,6 @@ type Props = {
   showPreview?: boolean;
   defaultScope?: "project" | "session";
 };
-
-// Horizontal line character for Claude Code style
-const SOLID_LINE = "─";
 
 /**
  * InlineGenericApproval - Renders generic tool approval UI inline
@@ -55,7 +53,7 @@ export const InlineGenericApproval = memo(
     useProgressIndicator();
 
     // Generate horizontal line
-    const solidLine = SOLID_LINE.repeat(Math.max(columns, 10));
+    const solidLine = solidRule(columns);
     // The preview box is indented by 2 columns. The budget is shared with the
     // transcript row model (`@/cli/helpers/approval-layout`).
     const formattedArgs = formatApprovalArgs(

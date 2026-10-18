@@ -8,6 +8,7 @@ import {
   countPreviewRows,
   fitPreviewLines,
 } from "@/cli/helpers/approval-preview";
+import { solidRule } from "@/cli/helpers/rule-lines";
 import { useProgressIndicator } from "@/cli/hooks/use-progress-indicator";
 import {
   useTerminalRows,
@@ -34,9 +35,6 @@ type Props = {
   allowPersistence?: boolean;
 };
 
-// Horizontal line character for Claude Code style
-const SOLID_LINE = "─";
-
 /**
  * InlineTaskApproval - Renders Task tool approval UI inline with pretty formatting
  *
@@ -58,7 +56,7 @@ export const InlineTaskApproval = memo(
     useProgressIndicator();
 
     // Generate horizontal line
-    const solidLine = SOLID_LINE.repeat(Math.max(columns, 10));
+    const solidLine = solidRule(columns);
     const contentWidth = Math.max(0, columns - 4); // 2 padding on each side
 
     // Memoize the static task content so it doesn't re-render on keystroke

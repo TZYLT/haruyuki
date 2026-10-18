@@ -4,15 +4,13 @@ import { memo } from "react";
 import { fileEditApprovalHeaderText } from "@/cli/helpers/approval-info";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import { simpleDiffDisplayPath } from "@/cli/helpers/diff-rows";
+import { dottedRule, solidRule } from "@/cli/helpers/rule-lines";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { resolveApprovalPreviewBody } from "@/cli/overlay/preview";
 import { AdvancedDiffRenderer } from "./AdvancedDiffRenderer";
 import { colors } from "./colors";
 import { BashPreview } from "./previews/BashPreview";
 import { Text } from "./Text";
-
-const SOLID_LINE = "─";
-const DOTTED_LINE = "╌";
 
 type Props = {
   toolName: string;
@@ -38,8 +36,8 @@ type Props = {
 export const ApprovalPreview = memo(
   ({ toolName, toolArgs, precomputedDiff, allDiffs, toolCallId }: Props) => {
     const columns = useTerminalWidth();
-    const solidLine = SOLID_LINE.repeat(Math.max(columns, 10));
-    const dottedLine = DOTTED_LINE.repeat(Math.max(columns, 10));
+    const solidLine = solidRule(columns);
+    const dottedLine = dottedRule(columns);
     const body = resolveApprovalPreviewBody({ toolName, toolArgs, toolCallId });
 
     // Bash/Shell: Use BashPreview component

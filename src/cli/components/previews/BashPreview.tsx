@@ -3,9 +3,9 @@ import { memo } from "react";
 import { colors } from "@/cli/components/colors";
 import { SyntaxHighlightedCommand } from "@/cli/components/SyntaxHighlightedCommand";
 import { Text } from "@/cli/components/Text";
+import { solidRule } from "@/cli/helpers/rule-lines";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 
-const SOLID_LINE = "─";
 const BASH_PREVIEW_MAX_LINES = 3;
 
 type Props = {
@@ -22,7 +22,7 @@ type Props = {
  */
 export const BashPreview = memo(({ command, description }: Props) => {
   const columns = useTerminalWidth();
-  const solidLine = SOLID_LINE.repeat(Math.max(columns, 10));
+  const solidLine = solidRule(columns);
 
   return (
     <>

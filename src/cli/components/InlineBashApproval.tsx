@@ -1,6 +1,7 @@
 import { Box } from "ink";
 import { memo, useMemo } from "react";
 import { DEFAULT_APPROVE_ALWAYS_LABEL } from "@/cli/helpers/approval-layout";
+import { solidRule } from "@/cli/helpers/rule-lines";
 import { useProgressIndicator } from "@/cli/hooks/use-progress-indicator";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { ApprovalOptions } from "./ApprovalOptions";
@@ -27,8 +28,6 @@ type Props = {
   defaultScope?: "project" | "session";
 };
 
-// Horizontal line character for Claude Code style
-const SOLID_LINE = "─";
 const BASH_PREVIEW_MAX_LINES = 3;
 
 /**
@@ -53,7 +52,7 @@ export const InlineBashApproval = memo(
     const columns = useTerminalWidth();
     useProgressIndicator();
 
-    const solidLine = SOLID_LINE.repeat(Math.max(columns, 10));
+    const solidLine = solidRule(columns);
 
     // Memoize the static command content so it doesn't re-render on keystroke
     // This prevents flicker when typing feedback in the custom input field

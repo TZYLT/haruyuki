@@ -16,6 +16,7 @@ import {
   type KeyOutcome,
   namedKeyChords,
 } from "@/cli/helpers/input-keys";
+import { dottedRule } from "@/cli/helpers/rule-lines";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { OverlayFrame } from "@/cli/overlay/frame";
@@ -23,9 +24,6 @@ import type { ContextUsageSnapshot } from "@/web/context-usage";
 import { generateAndOpenMemoryViewer } from "@/web/generate-memory-viewer";
 import { colors } from "./colors";
 import { Text } from "./Text";
-
-// Line characters
-const DOTTED_LINE = "╌";
 
 const TITLE = "View your agent's memory";
 
@@ -399,7 +397,7 @@ export function MemfsTreeViewer({
       }
     >
       {/* Top dotted border - full width */}
-      <Text dimColor>{DOTTED_LINE.repeat(terminalWidth)}</Text>
+      <Text dimColor>{dottedRule(terminalWidth)}</Text>
 
       {/* Split view */}
       <Box flexDirection="row">
@@ -516,7 +514,7 @@ export function MemfsTreeViewer({
       </Box>
 
       {/* Bottom dotted border - full width */}
-      <Text dimColor>{DOTTED_LINE.repeat(terminalWidth)}</Text>
+      <Text dimColor>{dottedRule(terminalWidth)}</Text>
     </OverlayFrame>
   );
 }

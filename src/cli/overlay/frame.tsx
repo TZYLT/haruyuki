@@ -2,6 +2,7 @@ import { Box } from "ink";
 import type { ReactNode } from "react";
 import { colors } from "@/cli/components/colors";
 import { Text } from "@/cli/components/Text";
+import { solidRule } from "@/cli/helpers/rule-lines";
 import { useInputScopeClaim } from "@/cli/hooks/use-input-router";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 
@@ -25,8 +26,6 @@ import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
  * A frame that is on screen *is* an open overlay, so the claim is unconditional
  * for its mounted life rather than driven by a boolean prop.
  */
-
-const SOLID_LINE = "─";
 
 /** Which layer of the router's priority chain this container occupies. */
 export type OverlayContainer = "overlay" | "modal";
@@ -64,7 +63,7 @@ export function OverlayFrame({
   container = "overlay",
 }: OverlayFrameProps) {
   const terminalWidth = useTerminalWidth();
-  const solidLine = SOLID_LINE.repeat(Math.max(terminalWidth, 10));
+  const solidLine = solidRule(terminalWidth);
   useInputScopeClaim(container, true);
 
   const renderedFooter =
