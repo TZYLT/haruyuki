@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { Text } from "ink";
+import { Text, useInput } from "ink";
 import {
   type MultiSelectItem,
   MultiSelectPicker,
@@ -200,15 +200,29 @@ describe("SingleSelectPicker", () => {
     }
   });
 
-  test("hands a key it does not use to onUnhandledKey, and still lets it travel", async () => {
+  test("a key it does not use still travels past it", async () => {
+    // The property is the router's, not the picker's: a key no binding consumes
+    // is dispatched to the legacy `useInput` handlers. It used to be asserted
+    // through the picker's `onUnhandledKey` callback — a second channel onto the
+    // same keys, which no caller used — so this probe is the path a caller
+    // actually takes.
     const forwarded: string[] = [];
+    function LegacyProbe() {
+      useInput((_input, key) => {
+        if (key.tab) forwarded.push("tab");
+      });
+      return null;
+    }
+
     const picker = mountInkTty(
-      <SingleSelectPicker
-        items={SINGLE}
-        onSelect={() => {}}
-        onCancel={() => {}}
-        onUnhandledKey={(_input, key) => forwarded.push(key.tab ? "tab" : "?")}
-      />,
+      <>
+        <SingleSelectPicker
+          items={SINGLE}
+          onSelect={() => {}}
+          onCancel={() => {}}
+        />
+        <LegacyProbe />
+      </>,
     );
     try {
       await picker.press("\t");

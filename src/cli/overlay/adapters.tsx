@@ -1,4 +1,4 @@
-import { Box, type Key } from "ink";
+import { Box } from "ink";
 import {
   memo,
   type ReactElement,
@@ -11,7 +11,6 @@ import {
 } from "react";
 import { colors } from "@/cli/components/colors";
 import { Text } from "@/cli/components/Text";
-import type { KeyBinding } from "@/cli/helpers/input-keys";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import {
   type OverlayListItem,
@@ -35,10 +34,9 @@ import { useOverlayList } from "./use-overlay-list";
  * Two differences are deliberate and both are visible only where nothing can see
  * them:
  *
- * - **PageUp/PageDown/Home/End now navigate a single-select.** They proxy to the
- *   caller through `onUnhandledKey`, which no caller passes (checked: it has no
- *   call sites), and the list's keys are the toolkit's; `Enter` on an empty list
- *   likewise reaches `onUnhandledKey` where the picker used to swallow it.
+ * - **PageUp/PageDown/Home/End now navigate a single-select.** They are the
+ *   toolkit's list keys; the old picker left them unhandled. `Enter` on an empty
+ *   list is declined too, where the picker used to swallow it.
  * - **Ctrl+C cancels the multi-select.** `SingleSelectPicker` already did, so
  *   this is the two pickers agreeing rather than a new key: an overlay the user
  *   cannot leave with the conventional key is the trap the toolkit inherited.
@@ -71,16 +69,6 @@ export interface SingleSelectPickerProps {
     index: number,
     isSelected: boolean,
   ) => ReactElement | null;
-  /**
-   * Called for keys the picker doesn't handle itself
-   * (anything that isn't the list's own navigation or confirm keys).
-   * Useful for pagination (←→), shortcuts (N), etc.
-   *
-   * The key is *declined*, not consumed: the router hands it on to the legacy
-   * `useInput` handlers after this returns, so a caller with its own listener
-   * receives it either way.
-   */
-  onUnhandledKey?: (input: string, key: Key) => void;
   /**
    * Override the footer content. When provided, replaces the default
    * "Enter select · ↑↓/jk navigate · Esc cancel" hint. A plain string is
@@ -115,28 +103,8 @@ export const SingleSelectPicker = memo(function SingleSelectPicker({
   onSelect,
   onCancel,
   renderItem,
-  onUnhandledKey,
   footer,
 }: SingleSelectPickerProps) {
-  // A catch-all, which the table only reaches after every chord it does declare
-  // has either not matched or declined — the same order the picker's own
-  // `handleInput` had. It forwards and then declines, so the key still travels.
-  const extra = useMemo<KeyBinding[]>(
-    () =>
-      onUnhandledKey
-        ? [
-            {
-              id: "single-select-picker.unhandled",
-              run: (event) => {
-                onUnhandledKey(event.input, event.key);
-                return "declined";
-              },
-            },
-          ]
-        : [],
-    [onUnhandledKey],
-  );
-
   const list = useOverlayList({
     owner: "single-select-picker",
     items,
@@ -148,7 +116,6 @@ export const SingleSelectPicker = memo(function SingleSelectPicker({
       onSelect(key);
     },
     onCancel,
-    extra,
   });
 
   return (
