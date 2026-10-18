@@ -2,6 +2,7 @@ import { Box, useInput } from "ink";
 import { memo, useCallback, useEffect, useState } from "react";
 import { truncateText } from "@/cli/helpers/truncate-text";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
+import { ConfirmOptions } from "@/cli/overlay/confirm";
 import type { McpServerConfig } from "@/mcp-client";
 import { clearMcpOAuthCredentials } from "@/mcp-oauth";
 import {
@@ -15,6 +16,12 @@ import { Text } from "./Text";
 
 const SOLID_LINE = "─";
 const DISPLAY_PAGE_SIZE = 7;
+
+/** The copy of this face's delete confirmation; the rows themselves are shared. */
+const MCP_DELETE_OPTIONS = [
+  { key: "remove", label: "Yes, remove" },
+  { key: "cancel", label: "No, cancel" },
+];
 
 type Mode = "browsing" | "confirming-delete" | "viewing-tools";
 
@@ -216,20 +223,13 @@ export const McpSelector = memo(function McpSelector({
         </Text>
         <Text>Remove "{selected.state.config.name}" and stop its process?</Text>
         <Box marginTop={1} flexDirection="column">
-          {["Yes, remove", "No, cancel"].map((option, index) => (
-            <Text
-              key={option}
-              bold={index === deleteConfirmIndex}
-              color={
-                index === deleteConfirmIndex
-                  ? colors.selector.itemHighlighted
-                  : undefined
-              }
-            >
-              {index === deleteConfirmIndex ? "> " : "  "}
-              {option}
-            </Text>
-          ))}
+          <ConfirmOptions
+            options={MCP_DELETE_OPTIONS}
+            selectedIndex={deleteConfirmIndex}
+            marker="> "
+            selectedColor={colors.selector.itemHighlighted}
+            boldSelected
+          />
         </Box>
       </Frame>
     );

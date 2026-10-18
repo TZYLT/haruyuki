@@ -1,7 +1,7 @@
 import { Box } from "ink";
 import type { ReactElement } from "react";
-import { colors } from "./colors";
-import { OverlayShell } from "./OverlayShell";
+import { TypedConfirmPrompt } from "@/cli/overlay/confirm";
+import { OverlayFrame } from "@/cli/overlay/frame";
 import { Text } from "./Text";
 
 interface AgentDeleteConfirmOverlayProps {
@@ -11,6 +11,14 @@ interface AgentDeleteConfirmOverlayProps {
   loading: boolean;
 }
 
+/**
+ * The typed-name confirmation for deleting an agent.
+ *
+ * The keys, the draft and the "the name has to match" rule live in
+ * `AgentSelector`; this is its view. `OverlayShell` and `OverlayFrame` render the
+ * same chrome — the frame is where that markup became one component, and this view
+ * was one of the shell's remaining consumers.
+ */
 export function AgentDeleteConfirmOverlay({
   command,
   displayName,
@@ -26,7 +34,16 @@ export function AgentDeleteConfirmOverlay({
   }
 
   return (
-    <OverlayShell command={command} title="Delete agent">
+    <OverlayFrame
+      command={command}
+      title="Delete agent"
+      footer={
+        <Text dimColor>
+          {"  "}
+          {footerText}
+        </Text>
+      }
+    >
       <Box flexDirection="column" marginBottom={1}>
         <Text>
           {"  "}Are you sure you want to delete <Text bold>{displayName}</Text>?
@@ -34,17 +51,7 @@ export function AgentDeleteConfirmOverlay({
         <Text color="red">{"  "}This action can not be undone.</Text>
       </Box>
 
-      <Box flexDirection="row">
-        <Text color={colors.selector.itemHighlighted}>{"> "}</Text>
-        <Text dimColor={!input}>{input || "(type the agent's name)"}</Text>
-      </Box>
-
-      <Box marginTop={1}>
-        <Text dimColor>
-          {"  "}
-          {footerText}
-        </Text>
-      </Box>
-    </OverlayShell>
+      <TypedConfirmPrompt value={input} placeholder="(type the agent's name)" />
+    </OverlayFrame>
   );
 }

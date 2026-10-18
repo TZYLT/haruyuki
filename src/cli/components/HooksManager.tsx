@@ -4,6 +4,7 @@
 import { Box, useInput } from "ink";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
+import { ConfirmOptions } from "@/cli/overlay/confirm";
 import {
   type HookCommand,
   type HookEvent,
@@ -42,6 +43,12 @@ const BOX_BOTTOM_LEFT = "╰";
 const BOX_BOTTOM_RIGHT = "╯";
 const BOX_HORIZONTAL = "─";
 const BOX_VERTICAL = "│";
+
+/** The copy of this face's delete confirmation; the rows themselves are shared. */
+const HOOK_DELETE_OPTIONS = [
+  { key: "delete", label: "Yes, delete" },
+  { key: "cancel", label: "No, cancel" },
+];
 
 /**
  * Get a display label for a hook (command or prompt).
@@ -709,20 +716,10 @@ export const HooksManager = memo(function HooksManager({
         <Text>Source: {hook ? getSourceLabel(hook.source) : ""}</Text>
         <Text> </Text>
 
-        <Text>
-          <Text
-            color={deleteConfirmIndex === 0 ? colors.input.prompt : undefined}
-          >
-            {deleteConfirmIndex === 0 ? "❯" : " "} Yes, delete
-          </Text>
-        </Text>
-        <Text>
-          <Text
-            color={deleteConfirmIndex === 1 ? colors.input.prompt : undefined}
-          >
-            {deleteConfirmIndex === 1 ? "❯" : " "} No, cancel
-          </Text>
-        </Text>
+        <ConfirmOptions
+          options={HOOK_DELETE_OPTIONS}
+          selectedIndex={deleteConfirmIndex}
+        />
 
         <Text> </Text>
         <Text dimColor>Enter to confirm · esc to cancel</Text>
