@@ -49,7 +49,11 @@ directory exists to be the *one* copy.
    explicitly, so migrating one cannot silently change what a long list shows.
    The same rule covers the window's *shape*: `anchor` is `edge` unless a face
    asks for `center`, and `indicators` may be turned off by a face that prints the
-   position itself (`/resume`, `/search`). A face picks what it already had.
+   position itself (`/resume`, `/search`). A face picks what it already had. Two
+   keys are opt-out for the same reason: `vimKeys` is off for a list beside a live
+   field (its `j`/`k` are letters), and `edgeKeys` is off for one beside a live
+   editor, whose Home/End are the caret's — a claim that has to be unconditional,
+   because the editor re-registers behind the list whenever it remounts.
 5. **State stays in the leaf.** Cursor and query state live in the overlay
    component, never in `AppCoordinator`/`AppView` (see `src/cli/AGENTS.md`) and
    never in a module-level store: an overlay is one component, and a store would

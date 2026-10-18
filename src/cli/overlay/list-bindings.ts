@@ -39,8 +39,15 @@ export interface ListBindingHost {
    * did (Enter on a disabled row did nothing, it did not fall through).
    */
   onConfirm?: () => void;
-  /** Escape / Ctrl+C. Always consumed. */
-  onCancel: () => void;
+  /**
+   * Escape / Ctrl+C. Always consumed where it is declared, but **optional**:
+   * a list inside a multi-step overlay declares no cancel, because there the
+   * two keys are the wizard's (`wizard.tsx`) — Escape goes back one step and
+   * Ctrl+C closes the overlay. A list that claimed Escape would take it away
+   * from every other step, and one that claimed Ctrl+C would turn "close this"
+   * into "go back".
+   */
+  onCancel?: () => void;
   /** Window size, which is also the PageUp/PageDown step. */
   rows?: number;
   /**
@@ -54,6 +61,20 @@ export interface ListBindingHost {
    * a list that sits beside a text field wants them off: they are letters.
    */
   vimKeys?: boolean;
+  /**
+   * Whether Home/End jump to the ends of the list. On by default.
+   *
+   * Off is for a list whose neighbour is a **live text editor** — `/connect`'s
+   * filter is the one. The editor binds Home/End for the caret, and which of the
+   * two claims the key is decided by binding **registration order**: a child that
+   * is mounted once (the composer) registers before every face, but a child that
+   * unmounts and remounts — the filter, whenever the overlay walks into a
+   * provider's own step and back — re-registers *behind* the list's table. The
+   * result is that the same key moves the caret before such a trip and jumps the
+   * list after it. Leaving Home/End undeclared here makes the editor's claim
+   * unconditional, whatever order the two ended up in.
+   */
+  edgeKeys?: boolean;
   /** Space toggles the item at the cursor (multi-select). */
   onToggle?: () => void;
   /** ←/→ move the item at the cursor (reorder). */
@@ -72,6 +93,7 @@ export function listBindings(host: ListBindingHost): KeyBinding[] {
   const rows = Math.max(1, Math.trunc(host.rows ?? DEFAULT_PAGE_ROWS));
   const navigation = host.navigationEnabled ?? true;
   const vim = host.vimKeys ?? true;
+  const edges = host.edgeKeys ?? true;
 
   const bindings: KeyBinding[] = [...(host.extra ?? [])];
 
@@ -110,16 +132,24 @@ export function listBindings(host: ListBindingHost): KeyBinding[] {
       chords: [{ key: "pageDown" }],
       run: () => step(rows),
     },
-    {
-      id: "overlay-list.first",
-      chords: [{ key: "home" }],
-      run: () => edge("start"),
-    },
-    {
-      id: "overlay-list.last",
-      chords: [{ key: "end" }],
-      run: () => edge("end"),
-    },
+  );
+
+  if (edges) {
+    bindings.push(
+      {
+        id: "overlay-list.first",
+        chords: [{ key: "home" }],
+        run: () => edge("start"),
+      },
+      {
+        id: "overlay-list.last",
+        chords: [{ key: "end" }],
+        run: () => edge("end"),
+      },
+    );
+  }
+
+  bindings.push(
     {
       id: "overlay-list.confirm",
       chords: [{ key: "return" }],
@@ -156,15 +186,19 @@ export function listBindings(host: ListBindingHost): KeyBinding[] {
         return "consumed";
       },
     },
-    {
+  );
+
+  if (host.onCancel) {
+    const onCancel = host.onCancel;
+    bindings.push({
       id: "overlay-list.cancel",
       chords: [{ key: "escape" }, { key: "c", ctrl: true }],
       run: () => {
-        host.onCancel();
+        onCancel();
         return "consumed";
       },
-    },
-  );
+    });
+  }
 
   return bindings;
 }
