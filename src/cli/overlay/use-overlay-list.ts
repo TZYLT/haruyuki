@@ -79,8 +79,12 @@ export interface UseOverlayListOptions {
    * that confirms is the caller's policy, and the key is consumed either way.
    */
   onConfirm?: (key: string, index: number) => void;
-  /** Escape / Ctrl+C. */
-  onCancel: () => void;
+  /**
+   * Escape / Ctrl+C. Omit it inside a multi-step overlay, where both keys are
+   * the wizard's (`wizard.tsx`) and a list that claimed Escape would answer for
+   * every step; see `list-bindings.ts`.
+   */
+  onCancel?: () => void;
   /**
    * Space on the item at the cursor. Called for a `disabled` item too, for the
    * same reason as `onConfirm`.
