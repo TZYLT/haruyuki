@@ -33,8 +33,21 @@ export function ShellFrame({
   } = viewProps;
 
   useInputRouter();
-  useInputScopeClaim("overlay", appViewProps.activeOverlay !== null);
-  useInputScopeClaim("modal", appViewProps.pendingApprovals.length > 0);
+  // One keyboard, one owner. §4.5 ruling c: an open overlay owns it, and a
+  // pending approval waits behind the overlay — visible as a compact stub, not
+  // as the current approval. Claiming both layers would hand the overlay's keys
+  // to the approval instead, because `modal` outranks `overlay` in
+  // `INPUT_SCOPE_PRIORITY` and a migrated selector binds through the router.
+  const overlayOwnsInput = appViewProps.activeOverlay !== null;
+  const currentApproval = overlayOwnsInput
+    ? undefined
+    : appViewProps.currentApproval;
+
+  useInputScopeClaim("overlay", overlayOwnsInput);
+  useInputScopeClaim(
+    "modal",
+    !overlayOwnsInput && appViewProps.pendingApprovals.length > 0,
+  );
 
   return (
     <>
@@ -47,7 +60,11 @@ export function ShellFrame({
         requiresAction={appViewProps.pendingApprovals.length > 0}
         previewTitle={terminalTitlePreviewOverride}
       />
-      <AppView {...appViewProps} transcript={transcript} />
+      <AppView
+        {...appViewProps}
+        currentApproval={currentApproval}
+        transcript={transcript}
+      />
     </>
   );
 }
