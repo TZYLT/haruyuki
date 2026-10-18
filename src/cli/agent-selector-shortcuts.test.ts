@@ -8,7 +8,7 @@ import {
 import { getPinnedAgentBackendMode } from "@/cli/helpers/pinned-agent-listing";
 
 describe("agent selector shortcuts", () => {
-  test("delete sits behind Shift+D, so a plain d is not destructive", () => {
+  test("delete and unpin sit behind Shift, so a plain d or p is not one", () => {
     const selectorPath = fileURLToPath(
       new URL("../cli/components/AgentSelector.tsx", import.meta.url),
     );
@@ -19,14 +19,20 @@ describe("agent selector shortcuts", () => {
     const footerSource = readFileSync(footerPath, "utf-8");
 
     // The chord matcher lowercases both sides, so a `d` chord also matches a
-    // bare `d`; the binding therefore has to check the letter itself. That guard
-    // is the whole reason this is a source assertion and not a key one.
+    // bare `d`; the bindings therefore check the letter themselves. That guard is
+    // the whole reason this is a source assertion and not a key one.
     expect(source).toContain('if (input !== "D") return "declined";');
+    expect(source).toContain('if (input !== "P") return "declined";');
     expect(source).toContain(
       'chords: [{ key: "d" }, { key: "d", shift: true }]',
     );
+    expect(source).toContain(
+      'chords: [{ key: "p" }, { key: "p", shift: true }]',
+    );
     expect(source).not.toContain('chords: [{ key: "d" }]');
+    expect(source).not.toContain('chords: [{ key: "p" }]');
     expect(footerSource).toContain("Shift+D delete");
+    expect(footerSource).toContain("Shift+P unpin");
   });
 
   test("pinned agent backend comes from agent id, not pin scope", () => {

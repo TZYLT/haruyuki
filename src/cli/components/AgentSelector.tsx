@@ -333,9 +333,11 @@ export function AgentSelector({
   // shortcuts, and the New tab's Escape. All of them decline when they do not
   // apply, so the list's table (or the wizard's rule) still receives the key.
   //
-  // `D` carries a chord for each encoding of the shift and then checks the
-  // letter itself: the chord matcher is case-insensitive, and the key has to be
-  // **uppercase** or the destructive action would sit under a plain `d`.
+  // `D` and `P` carry a chord for each encoding of the shift and then check the
+  // letter itself: the chord matcher is case-insensitive, so without that check a
+  // bare `d` would open the delete confirmation and a bare `p` would unpin the row
+  // under the cursor. Both sit behind Shift, which is what the footer has always
+  // advertised (`Shift+D delete`, `Shift+P unpin`).
   const selectorExtras: KeyBinding[] = [
     {
       id: "agent-selector.new-tab-escape",
@@ -369,7 +371,8 @@ export function AgentSelector({
     {
       id: "agent-selector.unpin",
       chords: [{ key: "p" }, { key: "p", shift: true }],
-      run: () => {
+      run: ({ input }) => {
+        if (input !== "P") return "declined";
         if (!listActive || !allowPinActions || activeTab !== "pinned") {
           return "declined";
         }

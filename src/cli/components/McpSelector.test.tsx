@@ -154,7 +154,7 @@ describe("a configured server", () => {
     const { tty, cancelled } = await mountMcp({ servers: ["alpha", "beta"] });
     try {
       await waitForRow(tty, "beta");
-      await pressSlowly(tty, DOWN, "d");
+      await pressSlowly(tty, DOWN, "D");
       let painted = await tty.text();
       expect(painted).toContain("Remove client-local MCP server?");
       expect(painted).toContain('Remove "beta" and stop its process?');
@@ -169,11 +169,28 @@ describe("a configured server", () => {
     }
   });
 
+  test("a bare d does not open the removal confirmation", async () => {
+    const { tty } = await mountMcp({ servers: ["alpha", "beta"] });
+    try {
+      await waitForRow(tty, "beta");
+      expect(await tty.text()).toContain("Shift+D remove");
+      // `d` is not the remove key: the chord matcher is case-insensitive, so the
+      // binding checks the letter itself — the footer has always advertised
+      // `Shift+D remove`.
+      await pressSlowly(tty, "d");
+      expect(await tty.text()).not.toContain("Remove beta");
+      expect(await tty.text()).toContain("MCP servers for this agent");
+      expect(settingsManager.getMcpServers(AGENT_ID)).toHaveLength(2);
+    } finally {
+      tty.stop();
+    }
+  });
+
   test("Enter on the confirming row removes it", async () => {
     const { tty } = await mountMcp({ servers: ["alpha", "beta"] });
     try {
       await waitForRow(tty, "beta");
-      await pressSlowly(tty, DOWN, "d");
+      await pressSlowly(tty, DOWN, "D");
       // The cursor starts on "No, cancel"; up is "Yes, remove".
       await pressSlowly(tty, UP, ENTER);
       await settle(200);

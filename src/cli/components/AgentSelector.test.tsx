@@ -310,6 +310,36 @@ describe("AgentSelector", () => {
       await settledRows(tty);
       await press(tty, "d");
       expect((await tty.rows())[3]).toBe("Swap to a different agent");
+      // The frame alone would also pass if `d` deleted outright and the list then
+      // re-rendered, so the record is the assertion that matters.
+      expect(existsSync(agentRecordPath(ALPHA))).toBe(true);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a lowercase p is not the unpin key, and Shift+P unpins", async () => {
+    seedAgents();
+    const { tty } = mount();
+    try {
+      await settledRows(tty);
+      // Alpha is the favourited (pinned) row, and the footer says `Shift+P unpin`.
+      await press(tty, "p");
+      expect((await tty.rows()).join("\n")).toContain(
+        "Alpha · agent-local-alpha",
+      );
+
+      await press(tty, "P");
+      await settle(200);
+      expect(await tty.rows()).toEqual([
+        ...head(),
+        PINNED_TABS,
+        "  Save agents for easy access with /pin or Desktop favorites",
+        "",
+        "  No pinned or favorite agents, use /pin to save",
+        "",
+        "  Tab switch · Esc cancel",
+      ]);
     } finally {
       tty.stop();
     }

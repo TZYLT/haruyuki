@@ -194,7 +194,13 @@ export const McpSelector = memo(function McpSelector({
         {
           id: "mcp-selector.remove",
           chords: [{ key: "d" }, { key: "d", shift: true }],
-          run: () => {
+          run: ({ input }) => {
+            // Removing a server cannot be undone from this face, so it sits behind
+            // Shift the way `/agents`'s delete does: the chord matcher is
+            // case-insensitive, so without this a bare `d` would open the
+            // confirmation. `A` and `R` stay bare — they open a flow and re-read
+            // state, they do not destroy anything.
+            if (input !== "D") return "declined";
             if (!browsing) return "declined";
             const row = rows[list.cursor];
             if (!row) return "declined";
@@ -335,7 +341,7 @@ export const McpSelector = memo(function McpSelector({
       )}
       <Box marginTop={1}>
         <Text dimColor>
-          Enter tools · A add · D remove · R refresh · Esc close
+          Enter tools · A add · Shift+D remove · R refresh · Esc close
         </Text>
       </Box>
     </OverlayFrame>
