@@ -4,20 +4,23 @@
  *
  * The rate is a real setting (every `/compact` compresses that fraction of the
  * transcript), so the overlay also lets the user change it — rows are built by
- * pure functions and asserted here, and the mount tests at the end cover what
- * pure functions cannot see: the picker hands its hint line to
- * `SingleSelectPicker` as a raw string prop, and Ink rejects a string child that
- * is not wrapped in `<Text>`. Without a mount, that mistake is invisible until a
- * user opens `/compaction`.
+ * pure functions and asserted here, and the mount suite at the end covers what
+ * pure functions cannot see.
+ *
+ * That suite is on the frame, and it walks the keys. Both halves were missing: the
+ * overlay is a two-step wizard (a picker, then the rate editor) whose only mount
+ * test asserted on Ink's *chunk stream* — which re-asserts Ink's own diffing
+ * rather than what is on screen — and pressed nothing, so "Enter on the rate row
+ * opens the editor", "Escape goes back a step instead of closing", and "the typed
+ * percent is what gets saved" had no coverage at all.
  */
-import { describe, expect, test } from "bun:test";
-import { Readable, Writable } from "node:stream";
-import { render } from "ink";
-import stripAnsi from "strip-ansi";
+import { afterEach, describe, expect, test } from "bun:test";
+import type { AgentState } from "@letta-ai/letta-client/resources/agents/agents";
 import {
   buildCompactionModeItems,
   buildCompactionPickerRows,
   COMPRESSION_RATE_ROW_KEY,
+  type CompactionSelection,
   CompactionSelector,
   compressionPercentageFor,
   compressionPercentFor,
@@ -28,6 +31,11 @@ import {
   availableCompactionModes,
   isCompactionMode,
 } from "@/cli/helpers/compaction-mode";
+import {
+  type InkTty,
+  mountInkTty,
+  resetInkTtyState,
+} from "@/test-utils/ink-tty";
 
 describe("availableCompactionModes", () => {
   test("offers sliding_window only", () => {
@@ -186,91 +194,251 @@ describe("compressionPercentageFor", () => {
   });
 });
 
-/** Captures Ink output at a fixed terminal width. */
-class CaptureStream extends Writable {
-  columns: number;
-  rows = 24;
-  isTTY = true;
-  chunks: string[] = [];
+const DOWN = "\u001b[B";
+const ENTER = "\r";
+const ESCAPE = "\u001b";
+const BACKSPACE = "\u007f";
+const CTRL_C = "\u0003";
 
-  constructor(columns: number) {
-    super();
-    this.columns = columns;
-  }
+const RULE_100 = "─".repeat(100);
+const RULE_60 = "─".repeat(60);
 
-  override _write(
-    chunk: Buffer | string,
-    _encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ) {
-    this.chunks.push(String(chunk));
-    callback();
-  }
-}
+const settle = (ms = 80) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Renders the picker into a captured TTY and returns the stripped output. */
-async function renderCompactionSelector(columns = 100): Promise<string> {
-  const stdout = new CaptureStream(columns) as CaptureStream &
-    NodeJS.WriteStream;
-  const stdin = new Readable({ read() {} }) as NodeJS.ReadStream;
-  stdin.isTTY = true;
-  stdin.setRawMode = () => stdin;
-  stdin.ref = () => stdin;
-  stdin.unref = () => stdin;
+afterEach(resetInkTtyState);
 
-  const instance = render(
+function mountSelector(options: {
+  columns?: number;
+  settings?: AgentState["compaction_settings"];
+  onSave?: (selection: CompactionSelection) => void;
+  onCancel?: () => void;
+}): InkTty {
+  return mountInkTty(
     <CompactionSelector
-      settings={{ mode: "sliding_window", sliding_window_percentage: 0.3 }}
-      onSave={() => {}}
-      onCancel={() => {}}
+      settings={
+        options.settings ?? {
+          mode: "sliding_window",
+          sliding_window_percentage: 0.3,
+        }
+      }
+      onSave={options.onSave ?? (() => {})}
+      onCancel={options.onCancel ?? (() => {})}
     />,
-    {
-      stdout,
-      stdin,
-      debug: false,
-      patchConsole: false,
-      exitOnCtrlC: false,
-    },
+    { columns: options.columns ?? 100, rows: 40 },
   );
-
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  instance.unmount();
-  instance.cleanup();
-
-  return stripAnsi(stdout.chunks.join(""));
 }
 
-describe("CompactionSelector mount", () => {
-  test("paints the modes and the rate row without an Ink text error", async () => {
-    const output = await renderCompactionSelector(100);
+/** `↓` onto the rate row and `Enter` into the second step. */
+async function openRateEditor(tty: InkTty): Promise<void> {
+  await tty.press(DOWN);
+  await tty.press(ENTER);
+  await settle();
+}
 
-    // The hint line is the regression: it is passed as a plain string prop, so
-    // the picker must wrap it in `<Text>`. Rendered raw, Ink throws during
-    // commit and the tree never paints — which fails every assertion below.
-    expect(output).toContain("Enter select");
-    expect(output).toContain("Esc cancel");
-    expect(output).not.toContain("must be rendered inside");
-
-    expect(output).toContain("Configure compaction mode");
-    expect(output).toContain("Sliding Window");
-    // Ink wraps the `(current)` marker onto its own line, so it is asserted
-    // separately rather than glued to the label.
-    expect(output).toContain("(current)");
-    // At 100 columns the rate row fits on one line.
-    expect(output).toContain("Compression rate ·");
+describe("CompactionSelector on the frame", () => {
+  test("the picker opens on the current mode and lists the rate row last", async () => {
+    // The `>` marker is the only on-screen carrier of the cursor: the item's own
+    // colour is invisible in a frame (docs/37 §8 item 14). It is also what makes
+    // "the last row edits the rate" checkable — that row must not be the cursor's
+    // start and must not claim `(current)`, because it is not a mode.
+    const tty = mountSelector({});
+    try {
+      expect(await tty.rows()).toEqual([
+        "> /compaction",
+        RULE_100,
+        "",
+        "Configure compaction mode",
+        "",
+        ">Sliding Window       · Compact older messages to stay within a token limit. Compresses about 30% of",
+        " (current)            the conversation each time (keeps about 70%).",
+        "  Compression rate · Compresses about 30% each time (keeps about 70%). Enter to change it.",
+        " Enter select · ↑↓/jk navigate · Esc cancel · the last row edits the compression rate",
+      ]);
+    } finally {
+      tty.stop();
+    }
   });
 
-  test("keeps the rate row and its hint in a narrow terminal", async () => {
-    const output = await renderCompactionSelector(60);
+  test("the cursor moves onto the rate row", async () => {
+    const tty = mountSelector({});
+    try {
+      await tty.press(DOWN);
+      const rows = await tty.rows();
 
-    // The label itself wraps at 60 columns ("Compression" / "rate") — expected
-    // Ink behaviour for a wide label, not a defect. What matters is that the row
-    // and its hint survive the wrap without an Ink text error.
-    expect(output).not.toContain("must be rendered inside");
-    expect(output).toContain("Compression");
-    expect(output).toContain("rate");
-    expect(output).toContain("Compresses about 30% each time");
-    expect(output).toContain("Enter to change it");
-    expect(output).toContain("the last row");
+      // Only the marker moved: the rate row is the tail of the picker, and the
+      // frame keeps its shape while the cursor walks between the two rows.
+      expect(rows[5]?.startsWith(" Sliding Window")).toBe(true);
+      expect(rows[6]?.trimStart()).toStartWith("(current)");
+      expect(rows[7]?.startsWith("> Compression rate ·")).toBe(true);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("Enter on the rate row opens the editor", async () => {
+    const tty = mountSelector({});
+    try {
+      await openRateEditor(tty);
+
+      expect(await tty.rows()).toEqual([
+        "> /compaction",
+        RULE_100,
+        "",
+        "Compression rate",
+        "",
+        "Compress what percent of the conversation on each /compact? Currently 30% (keeps 70%).",
+        "",
+        "> 30",
+        "",
+        "Enter to save (1-100) · Esc back · Ctrl-C cancel",
+      ]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("Enter on a mode row saves the mode alone", async () => {
+    const saved: CompactionSelection[] = [];
+    const tty = mountSelector({ onSave: (selection) => saved.push(selection) });
+    try {
+      await tty.press(ENTER);
+      await settle();
+
+      // No `compressionPercentage` key at all: picking a mode has always meant
+      // "leave the stored rate alone", and an explicit `undefined` would be a
+      // different thing to whoever writes it back.
+      expect(saved).toEqual([{ mode: "sliding_window" }]);
+      expect("compressionPercentage" in (saved[0] ?? {})).toBe(false);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the editor saves the percent the user typed", async () => {
+    const saved: CompactionSelection[] = [];
+    const tty = mountSelector({ onSave: (selection) => saved.push(selection) });
+    try {
+      await openRateEditor(tty);
+      // The field opens pre-filled with the stored rate and the caret at its end,
+      // so a new value is typed over it rather than appended to it.
+      await tty.press(BACKSPACE, BACKSPACE, "4", "5");
+      expect((await tty.rows())[7]).toBe("> 45");
+
+      await tty.press(ENTER);
+      await settle();
+
+      expect(saved).toEqual([
+        { mode: "sliding_window", compressionPercentage: 0.45 },
+      ]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a rate the store would silently clamp is refused on screen", async () => {
+    const saved: CompactionSelection[] = [];
+    const tty = mountSelector({ onSave: (selection) => saved.push(selection) });
+    try {
+      await openRateEditor(tty);
+      await tty.press(BACKSPACE, BACKSPACE, "1", "0", "1");
+      await tty.press(ENTER);
+      await settle();
+
+      // The editor stays open with the value still typed and the reason under it.
+      // The alternative — letting it through — is what the backend turns into `1`
+      // without telling anyone.
+      expect(saved).toEqual([]);
+      expect(await tty.rows()).toEqual([
+        "> /compaction",
+        RULE_100,
+        "",
+        "Compression rate",
+        "",
+        "Compress what percent of the conversation on each /compact? Currently 30% (keeps 70%).",
+        "",
+        "> 101",
+        "",
+        "Enter a percentage from 1 to 100.",
+        "",
+        "Enter to save (1-100) · Esc back · Ctrl-C cancel",
+      ]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("Escape goes back a step, and only the second one closes", async () => {
+    const saved: CompactionSelection[] = [];
+    let cancelled = 0;
+    const tty = mountSelector({
+      onSave: (selection) => saved.push(selection),
+      onCancel: () => {
+        cancelled += 1;
+      },
+    });
+    try {
+      await openRateEditor(tty);
+
+      await tty.press(ESCAPE);
+      await settle();
+      // Back to the picker, not out of the overlay: Escape in a text step is the
+      // wizard's (`text-view.tsx` states the rule), and a step that could not be
+      // left would be a trap in the other direction.
+      expect((await tty.rows())[3]).toBe("Configure compaction mode");
+      expect(cancelled).toBe(0);
+      expect(saved).toEqual([]);
+
+      await tty.press(ESCAPE);
+      await settle();
+      expect(cancelled).toBe(1);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("Ctrl-C closes from the editor", async () => {
+    let cancelled = 0;
+    const tty = mountSelector({
+      onCancel: () => {
+        cancelled += 1;
+      },
+    });
+    try {
+      await openRateEditor(tty);
+
+      await tty.press(CTRL_C);
+      await settle();
+
+      expect(cancelled).toBe(1);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("nothing is dropped when the rows wrap in a narrow terminal", async () => {
+    // The label itself wraps at 60 columns ("Compression" / "rate") and the mode
+    // row takes three lines — expected Ink behaviour for wide labels, not a
+    // defect. What is asserted is that the wrap loses nothing: the rate row is
+    // still complete, the footer is still all there, and nothing threw on the way.
+    const tty = mountSelector({ columns: 60 });
+    try {
+      expect(await tty.rows()).toEqual([
+        "> /compaction",
+        RULE_60,
+        "",
+        "Configure compaction mode",
+        "",
+        ">Sliding Window    · Compact older messages to stay within a",
+        " (current)         token limit. Compresses about 30% of the",
+        "                  conversation each time (keeps about 70%).",
+        "",
+        " Compression   · Compresses about 30% each time (keeps about",
+        " rate          70%). Enter to change it.",
+        " Enter select · ↑↓/jk navigate · Esc cancel · the last row",
+        "edits the compression rate",
+      ]);
+    } finally {
+      tty.stop();
+    }
   });
 });
