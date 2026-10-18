@@ -118,6 +118,7 @@ describe("usePagedList", () => {
     expect(page?.map((item) => item.id)).toEqual(["a", "b"]);
     expect(after.items.map((item) => item.id)).toEqual(["default", "a", "b"]);
     expect(after.status).toBe("ready");
+    expect(after.hasMore).toBe(true);
     expect(after.canLoadMore).toBe(true);
     probe.stop();
   });
@@ -133,6 +134,7 @@ describe("usePagedList", () => {
     await controller.loadFirst();
     const after = await probe.controller();
 
+    expect(after.hasMore).toBe(false);
     expect(after.canLoadMore).toBe(false);
     probe.stop();
   });

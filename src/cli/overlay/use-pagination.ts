@@ -56,6 +56,9 @@ export interface PagedListController<Item> {
    */
   status: PageStatus;
   error: string | null;
+  /** Whether the source said another page exists, the request state aside. */
+  hasMore: boolean;
+  /** Whether asking for it right now would start a fetch. */
   canLoadMore: boolean;
   /**
    * Load the first page, replacing what is there. Resolves to the page's own rows
@@ -136,6 +139,7 @@ export function usePagedList<Item>(
     items: state.items,
     status: state.status,
     error: state.error,
+    hasMore: state.nextCursor !== null,
     canLoadMore: canLoadMore(state),
     loadFirst,
     loadMore,
