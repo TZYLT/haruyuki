@@ -1,5 +1,4 @@
-// Import useInput from vendored Ink for bracketed paste support
-import { Box, useInput } from "ink";
+import { Box } from "ink";
 import {
   useCallback,
   useEffect,
@@ -27,7 +26,10 @@ import {
   getPiProviderRegistryRevision,
   subscribePiProviderRegistry,
 } from "@/backend/dev/pi-provider-mod-registry";
-
+import { OverlayFrame } from "@/cli/overlay/frame";
+import type { OverlayListItem } from "@/cli/overlay/list-model";
+import { OverlayListView } from "@/cli/overlay/list-view";
+import { useOverlayList } from "@/cli/overlay/use-overlay-list";
 import {
   buildByokProviderAliases,
   buildOpenAICompatibleProxyProviderNames,
@@ -49,7 +51,6 @@ import {
   type UiModel,
   withProviderMetadataForSelector,
 } from "./model-selector-helpers";
-import { OverlayShell } from "./OverlayShell";
 import { TabBar } from "./TabBar";
 import { Text } from "./Text";
 
@@ -177,8 +178,13 @@ export function ModelSelector({
   const defaultCategory = modelCategories[0] ?? "supported";
 
   const [category, setCategory] = useState<ModelCategory>(defaultCategory);
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const cachedHandlesAtMount = useMemo(() => getCachedModelHandles(), []);
+
+  // The toolkit owns the cursor. The key table is an argument to the controller
+  // that hands it the cursor, so the table reaches it through this ref -- the
+  // same latest-value pattern `useKeyBindings` uses, and what keeps the bindings
+  // reading the render that is on screen.
+  const resetCursorRef = useRef<(index: number) => void>(() => {});
 
   // undefined: not loaded yet (show spinner)
   // Set<string>: loaded and filtered
@@ -834,23 +840,6 @@ export function ModelSelector({
   // Show 1 fewer item because Search line takes space
   const visibleCount = VISIBLE_ITEMS - 1;
 
-  // Scrolling - keep selectedIndex in view
-  const startIndex = useMemo(() => {
-    // Keep selected item in the visible window
-    if (selectedIndex < visibleCount) return 0;
-    return Math.min(
-      selectedIndex - visibleCount + 1,
-      Math.max(0, currentList.length - visibleCount),
-    );
-  }, [selectedIndex, currentList.length, visibleCount]);
-
-  const visibleModels = useMemo(() => {
-    return currentList.slice(startIndex, startIndex + visibleCount);
-  }, [currentList, startIndex, visibleCount]);
-
-  const showScrollDown = startIndex + visibleCount < currentList.length;
-  const itemsBelow = currentList.length - startIndex - visibleCount;
-
   // Auto-switch to first non-empty category if current category becomes empty
   useEffect(() => {
     if (allEmpty) return;
@@ -859,21 +848,28 @@ export function ModelSelector({
       !nonEmptyCategories.includes(category)
     ) {
       setCategory(nonEmptyCategories[0] as ModelCategory);
-      setSelectedIndex(0);
+      resetCursorRef.current(0);
     }
   }, [nonEmptyCategories, category, allEmpty]);
 
-  // Reset selection when category changes
-  const cycleCategory = useCallback(() => {
-    setCategory((current) => {
-      const cats =
-        displayCategories.length > 0 ? displayCategories : modelCategories;
-      const idx = cats.indexOf(current);
-      return cats[(idx + 1) % cats.length] as ModelCategory;
-    });
-    setSelectedIndex(0);
-    setSearchQuery("");
-  }, [displayCategories, modelCategories]);
+  // Move to the next (or previous) category, and put the cursor back at the top
+  // of the new list: the same reset the inline key handler used to do in two
+  // places.
+  const cycleCategory = useCallback(
+    (direction: 1 | -1 = 1) => {
+      setCategory((current) => {
+        const cats =
+          displayCategories.length > 0 ? displayCategories : modelCategories;
+        const idx = cats.indexOf(current);
+        return cats[
+          (idx + direction + cats.length) % cats.length
+        ] as ModelCategory;
+      });
+      resetCursorRef.current(0);
+      setSearchQuery("");
+    },
+    [displayCategories, modelCategories],
+  );
 
   // Set initial selection to current model on mount
   const initializedRef = useRef(false);
@@ -881,137 +877,134 @@ export function ModelSelector({
     if (!initializedRef.current && currentList.length > 0) {
       const index = currentList.findIndex((m) => m.id === currentModelId);
       if (index >= 0) {
-        setSelectedIndex(index);
+        resetCursorRef.current(index);
       }
       initializedRef.current = true;
     }
   }, [currentList, currentModelId]);
 
-  // Clamp selectedIndex when list changes
-  useEffect(() => {
-    const selectableCount = allEmpty
-      ? emptyStateActions.length
-      : currentList.length;
-    if (selectedIndex >= selectableCount && selectableCount > 0) {
-      setSelectedIndex(selectableCount - 1);
+  // The toolkit owns the cursor and the navigation keys now. `useOverlayList`
+  // publishes `list-bindings.ts` and claims the `overlay` scope; what this face
+  // still owns -- its always-live search field, its category tabs, its refresh --
+  // goes in `extra`, which sits at the head of the table so a caller can claim
+  // keys the list would otherwise take.
+  //
+  // `vimKeys: false` because that search field is always live: `j` and `k` are
+  // search text here, which is exactly the case `list-bindings.ts` documents
+  // ("a list that sits beside a text field wants them off: they are letters").
+  const listItems: OverlayListItem[] = useMemo(() => {
+    if (allEmpty) {
+      return emptyStateActions.map((action) => ({
+        key: action.id,
+        label: action.label,
+        description: action.description,
+      }));
     }
-  }, [selectedIndex, currentList.length, allEmpty, emptyStateActions.length]);
-
-  useInput(
-    (input, key) => {
-      // CTRL-C: immediately cancel (bypasses search clearing)
-      if (key.ctrl && input === "c") {
-        onCancel();
-        return;
-      }
-
-      // Handle ESC: clear search first if active, otherwise cancel
-      if (key.escape) {
-        if (searchQuery) {
-          setSearchQuery("");
-          setSelectedIndex(0);
-        } else {
-          onCancel();
-        }
-        return;
-      }
-
-      // Allow 'r' to refresh even while loading. If a refresh is already in
-      // flight, consume the key so repeated presses don't turn into search text.
-      if (input === "r" && !searchQuery) {
-        if (!refreshing) {
-          loadModels.current(true);
-        }
-        return;
-      }
-
-      // Tab or left/right arrows to switch categories
-      if (key.tab || key.rightArrow) {
-        cycleCategory();
-        return;
-      }
-
-      if (key.leftArrow) {
-        // Cycle backwards through categories
-        setCategory((current) => {
-          const cats =
-            displayCategories.length > 0 ? displayCategories : modelCategories;
-          const idx = cats.indexOf(current);
-          return cats[idx === 0 ? cats.length - 1 : idx - 1] as ModelCategory;
-        });
-        setSelectedIndex(0);
-        setSearchQuery("");
-        return;
-      }
-
-      // Handle backspace for search
-      if (key.backspace || key.delete) {
-        if (searchQuery) {
-          setSearchQuery((prev) => prev.slice(0, -1));
-          setSelectedIndex(0);
-        }
-        return;
-      }
-
+    return currentList.map((model) => ({
+      key: model.id,
+      label: model.label,
+      description: model.description,
+    }));
+  }, [allEmpty, emptyStateActions, currentList]);
+  const confirmAtCursor = useCallback(
+    (key: string) => {
       if (allEmpty) {
-        if (key.upArrow) {
-          setSelectedIndex((prev) => Math.max(0, prev - 1));
-          return;
-        }
-        if (key.downArrow) {
-          setSelectedIndex((prev) =>
-            Math.min(emptyStateActions.length - 1, prev + 1),
-          );
-          return;
-        }
-        if (key.return) {
-          emptyStateActions[selectedIndex]?.onSelect?.();
-          return;
-        }
-      }
-
-      // Capture text input for search (allow typing even with 0 results)
-      // Exclude special keys like Enter, arrows, etc.
-      if (
-        input &&
-        input.length === 1 &&
-        !key.ctrl &&
-        !key.meta &&
-        !key.return &&
-        !key.upArrow &&
-        !key.downArrow
-      ) {
-        setSearchQuery((prev) => prev + input);
-        setSelectedIndex(0);
+        emptyStateActions.find((action) => action.id === key)?.onSelect?.();
         return;
       }
-
-      // Disable navigation/selection while loading or no results
-      if (isLoading || currentList.length === 0) {
-        return;
-      }
-
-      if (key.upArrow) {
-        setSelectedIndex((prev) => Math.max(0, prev - 1));
-      } else if (key.downArrow) {
-        setSelectedIndex((prev) => Math.min(currentList.length - 1, prev + 1));
-      } else if (key.return) {
-        const selectedModel = currentList[selectedIndex];
-        if (selectedModel) {
-          onSelect({
-            id: selectedModel.id,
-            handle: selectedModel.handle,
-            label: selectedModel.label,
-            description: selectedModel.description,
-            registryHandle: selectedModel.registryHandle,
-            updateArgs: selectedModel.updateArgs,
-          });
-        }
-      }
+      const selectedModel = currentList.find((model) => model.id === key);
+      if (!selectedModel) return;
+      onSelect({
+        id: selectedModel.id,
+        handle: selectedModel.handle,
+        label: selectedModel.label,
+        description: selectedModel.description,
+        registryHandle: selectedModel.registryHandle,
+        updateArgs: selectedModel.updateArgs,
+      });
     },
-    // Keep active so ESC and 'r' work while loading.
-    { isActive: true },
+    [allEmpty, currentList, emptyStateActions, onSelect],
   );
+
+  const modelList = useOverlayList({
+    owner: "model-selector",
+    items: listItems,
+    // One row is spent on the search line; the toolkit reserves its own indicator
+    // rows on top of this window.
+    rows: allEmpty ? undefined : visibleCount,
+    vimKeys: false,
+    navigationEnabled: !isLoading && listItems.length > 0,
+    onConfirm: confirmAtCursor,
+    onCancel,
+    extra: [
+      // Escape clears the search first and only cancels when there is nothing to
+      // clear -- the order this face has always had.
+      {
+        id: "model-selector.clear-search",
+        chords: [{ key: "escape" }],
+        run: () => {
+          if (!searchQuery) return "declined";
+          setSearchQuery("");
+          resetCursorRef.current(0);
+          return "consumed";
+        },
+      },
+      // `r` refreshes, even while a refresh is in flight (the key is consumed so
+      // repeated presses do not become search text); with a query live it is
+      // search text instead.
+      {
+        id: "model-selector.refresh",
+        chords: [{ key: "r" }],
+        run: () => {
+          if (searchQuery) return "declined";
+          if (!refreshing) loadModels.current(true);
+          return "consumed";
+        },
+      },
+      {
+        id: "model-selector.cycle-category",
+        chords: [{ key: "tab" }, { key: "rightArrow" }, { key: "leftArrow" }],
+        run: ({ key }) => {
+          cycleCategory(key.leftArrow ? -1 : 1);
+          return "consumed";
+        },
+      },
+      {
+        id: "model-selector.search-backspace",
+        chords: [{ key: "backspace" }, { key: "delete" }],
+        run: () => {
+          if (searchQuery) {
+            setSearchQuery((prev) => prev.slice(0, -1));
+            resetCursorRef.current(0);
+          }
+          return "consumed";
+        },
+      },
+      // Anything else printable is search text. Named keys (arrows, Enter, Tab,
+      // Escape, PageUp/Down, Home/End) decline, so the navigation table below
+      // still receives them.
+      {
+        id: "model-selector.search-text",
+        run: ({ input, key }) => {
+          if (
+            !input ||
+            input.length !== 1 ||
+            key.ctrl ||
+            key.meta ||
+            key.return ||
+            key.upArrow ||
+            key.downArrow
+          ) {
+            return "declined";
+          }
+          setSearchQuery((prev) => prev + input);
+          resetCursorRef.current(0);
+          return "consumed";
+        },
+      },
+    ],
+  });
+  resetCursorRef.current = modelList.setCursor;
 
   const getCategoryLabel = (cat: ModelCategory) => {
     if (cat === "recents") return `Recents [${recentModels.length}]`;
@@ -1053,7 +1046,7 @@ export function ModelSelector({
   };
 
   return (
-    <OverlayShell
+    <OverlayFrame
       command="/model"
       title="Swap your agent's model"
       footer={
@@ -1105,24 +1098,25 @@ export function ModelSelector({
               following options:
             </Text>
             <Box height={1} />
-            {emptyStateActions.map((action, index) => {
-              const isSelected = index === selectedIndex;
-              return (
-                <Box key={action.id} flexDirection="column" marginBottom={1}>
+            <OverlayListView
+              items={listItems}
+              cursor={modelList.cursor}
+              renderRow={(item, _index, isCursor) => (
+                <Box flexDirection="column" marginBottom={1}>
                   <Text
                     color={
-                      isSelected ? colors.selector.itemHighlighted : undefined
+                      isCursor ? colors.selector.itemHighlighted : undefined
                     }
                   >
-                    {isSelected ? "> " : "  "}
-                    {action.label}
+                    {isCursor ? "> " : "  "}
+                    {item.label}
                   </Text>
                   <Box paddingLeft={2}>
-                    <Text dimColor>{action.description}</Text>
+                    <Text dimColor>{item.description ?? ""}</Text>
                   </Box>
                 </Box>
-              );
-            })}
+              )}
+            />
           </Box>
         </Box>
       )}
@@ -1142,7 +1136,7 @@ export function ModelSelector({
         </Box>
       )}
 
-      {!isLoading && !allEmpty && visibleModels.length === 0 && (
+      {!isLoading && !allEmpty && listItems.length === 0 && (
         <Box paddingLeft={2}>
           <Text dimColor>
             {searchQuery
@@ -1158,10 +1152,13 @@ export function ModelSelector({
           <Text dimColor>Refreshing list...</Text>
         </Box>
       )}
-      <Box flexDirection="column">
-        {visibleModels.map((model, index) => {
-          const actualIndex = startIndex + index;
-          const isSelected = actualIndex === selectedIndex;
+      <OverlayListView
+        items={listItems}
+        cursor={modelList.cursor}
+        rows={allEmpty ? undefined : visibleCount}
+        renderRow={(_item, index, isCursor) => {
+          const model = currentList[index];
+          if (!model) return null;
           const modelServiceTier = serviceTierForModel(model);
           const currentServiceTier =
             currentModelServiceTier === CHATGPT_FAST_SERVICE_TIER
@@ -1178,17 +1175,17 @@ export function ModelSelector({
             (category === "supported" || category === "all");
 
           return (
-            <Box key={model.id} flexDirection="row">
+            <Box flexDirection="row">
               <Text
-                color={isSelected ? colors.selector.itemHighlighted : undefined}
+                color={isCursor ? colors.selector.itemHighlighted : undefined}
               >
-                {isSelected ? "> " : "  "}
+                {isCursor ? "> " : "  "}
               </Text>
               {showLock && <Text dimColor>🔒 </Text>}
               <Text
-                bold={isSelected}
+                bold={isCursor}
                 color={
-                  isSelected
+                  isCursor
                     ? colors.selector.itemHighlighted
                     : isCurrent
                       ? colors.selector.itemCurrent
@@ -1203,15 +1200,8 @@ export function ModelSelector({
               )}
             </Box>
           );
-        })}
-        {showScrollDown ? (
-          <Text dimColor>
-            {"  "}↓ {itemsBelow} more below
-          </Text>
-        ) : currentList.length > visibleCount ? (
-          <Text> </Text>
-        ) : null}
-      </Box>
-    </OverlayShell>
+        }}
+      />
+    </OverlayFrame>
   );
 }
