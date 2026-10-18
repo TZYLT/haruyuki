@@ -618,7 +618,6 @@ export function ConversationSelector({
     [filteredConversations],
   );
 
-  const resetCursorRef = useRef<(index: number) => void>(() => {});
   const conversationList = useOverlayList({
     owner: "conversation-selector",
     items: listItems,
@@ -662,7 +661,6 @@ export function ConversationSelector({
       },
     ],
   });
-  resetCursorRef.current = conversationList.setCursor;
   const visibleConversations = filteredConversations.slice(
     conversationList.window.start,
     conversationList.window.end,
@@ -829,7 +827,7 @@ export function ConversationSelector({
           onChange={(value) => {
             if (value === searchInput) return;
             setSearchInput(value);
-            resetCursorRef.current(0);
+            conversationList.setCursor(0);
           }}
           placeholder="search conversation titles"
         />

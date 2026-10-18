@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { InputScope, KeyBinding } from "@/cli/helpers/input-keys";
 import {
   useInputScopeClaim,
@@ -104,7 +104,15 @@ export interface OverlayListController {
   current: OverlayListItem | undefined;
   /** What part of the list is on screen, for a footer or a count. */
   window: ListWindow;
-  /** Move the cursor to an index, clamped. */
+  /**
+   * Move the cursor to an index, clamped.
+   *
+   * **Stable across renders.** Three faces (`/resume`, `/search`, `/model`) hold
+   * the cursor themselves and reset it from a callback they define *before* this
+   * hook is called, so each of them used to keep a ref to the fresh closure it got
+   * every render. The clamping reads the current count through a ref instead, so
+   * the identity never has to change.
+   */
   setCursor: (index: number) => void;
 }
 
@@ -134,7 +142,15 @@ export function useOverlayList(
 
   useInputScopeClaim(scope, true);
 
-  const moveTo = (index: number) => setRawCursor(clampCursor(index, count));
+  // The count this render sees, kept where `moveTo` can read it without being
+  // rebuilt: assigned during render, the pattern `useKeyBindings` uses for its
+  // tables (a key handler must see the render that is on screen).
+  const countRef = useRef(count);
+  countRef.current = count;
+
+  const moveTo = useCallback((index: number) => {
+    setRawCursor(clampCursor(index, countRef.current));
+  }, []);
 
   useKeyBindings(owner, [
     {
