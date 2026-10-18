@@ -47,7 +47,7 @@ import {
  * history is. The key is consumed either way.
  */
 
-export type OverlayInputScope = Extract<InputScope, "overlay" | "modal">;
+type OverlayInputScope = Extract<InputScope, "overlay" | "modal">;
 
 export interface UseOverlayListOptions {
   /** Registered owner id, for diagnostics and conflict tests. */

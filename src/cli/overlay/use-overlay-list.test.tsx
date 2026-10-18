@@ -5,7 +5,6 @@ import { owningInputScope, resetInputScopes } from "@/cli/helpers/focus-ledger";
 import { resetBindingOwners } from "@/cli/helpers/input-router";
 import type { OverlayListItem } from "@/cli/overlay/list-model";
 import {
-  type OverlayInputScope,
   type OverlayListController,
   useOverlayList,
 } from "@/cli/overlay/use-overlay-list";
@@ -71,7 +70,8 @@ interface ProbeOptions {
   items: OverlayListItem[];
   initialCursorIndex?: number;
   rows?: number;
-  scope?: OverlayInputScope;
+  /** The two containers a list may claim; spelled out so the alias stays local. */
+  scope?: "overlay" | "modal";
   navigationEnabled?: boolean;
   vimKeys?: boolean;
   onConfirm?: (key: string, index: number) => void;
