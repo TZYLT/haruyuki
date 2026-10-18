@@ -199,7 +199,9 @@ export function pendingApprovalStubRows(
  * here either: `@/cli/overlay/preview` classifies the item once and the
  * renderer draws from that classification, so the committed content and the
  * rows the viewport walks cannot disagree -- they used to, because this
- * mirrored `ApprovalPreview`'s dispatch by hand.
+ * mirrored `ApprovalPreview`'s dispatch by hand. The file-edit body is shared
+ * with the inline approval outright (`@/cli/components/previews/FileEditPreview`),
+ * so for that one the two are the same markup and only `showDiffHeader` differs.
  */
 export function approvalPreviewItemRows(
   item: Extract<StaticItem, { kind: "approval_preview" }>,
@@ -504,7 +506,7 @@ function fileEditPreviewRows(
       if (index > 0) rows += 1; // blank separator between operations
       rows += countTextRows(simpleDiffDisplayPath(operation.path), columns);
       if (operation.kind === "delete") {
-        // "File will be deleted" (inline) or "Delete x" (preview): one row both.
+        // The one red "File will be deleted" row both surfaces draw.
         rows += 1;
         continue;
       }
