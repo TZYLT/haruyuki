@@ -1,36 +1,22 @@
 import { existsSync } from "node:fs";
 import { Box } from "ink";
 import { memo, useMemo } from "react";
-import { fileEditApprovalHeaderText } from "@/cli/helpers/approval-info";
+import {
+  type FileEditApprovalInfo,
+  fileEditApprovalHeaderText,
+} from "@/cli/helpers/approval-info";
 import { DEFAULT_APPROVE_ALWAYS_LABEL } from "@/cli/helpers/approval-layout";
-import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
-import { parsePatchToAdvancedDiff } from "@/cli/helpers/diff";
-import { simpleDiffDisplayPath } from "@/cli/helpers/diff-rows";
+import {
+  type AdvancedDiffSuccess,
+  parsePatchToAdvancedDiff,
+} from "@/cli/helpers/diff";
 import { parsePatchOperations } from "@/cli/helpers/format-args-display";
-import { dottedRule, solidRule } from "@/cli/helpers/rule-lines";
 import { useProgressIndicator } from "@/cli/hooks/use-progress-indicator";
-import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
-import { AdvancedDiffRenderer } from "./AdvancedDiffRenderer";
 import { ApprovalOptions } from "./ApprovalOptions";
-import { colors } from "./colors";
-import { Text } from "./Text";
-
-type FileEditInfo = {
-  toolName: string;
-  filePath: string;
-  // For write tools
-  content?: string;
-  // For edit tools
-  oldString?: string;
-  newString?: string;
-  replaceAll?: boolean;
-  // For patch tools
-  patchInput?: string;
-  toolCallId?: string;
-};
+import { FileEditPreview } from "./previews/FileEditPreview";
 
 type Props = {
-  fileEdit: FileEditInfo;
+  fileEdit: FileEditApprovalInfo;
   precomputedDiff?: AdvancedDiffSuccess;
   allDiffs?: Map<string, AdvancedDiffSuccess>; // For patch tools with multiple files
   onApprove: (diffs?: Map<string, AdvancedDiffSuccess>) => void;
@@ -50,19 +36,13 @@ type Props = {
 };
 
 /**
- * Determine diff kind based on tool name
- */
-function getDiffKind(toolName: string): "write" | "edit" {
-  return toolName.toLowerCase() === "write" ? "write" : "edit";
-}
-
-/**
  * InlineFileEditApproval - Renders file edit approval UI inline (Claude Code style)
  *
- * Uses horizontal lines instead of boxes for visual styling:
- * - ──── solid line at top
- * - ╌╌╌╌ dotted line around diff content
- * - Approval options below
+ * The preview body is `FileEditPreview`, shared with the committed preview the
+ * transcript paints once an approval's preview has been flushed to `<Static>`;
+ * what lives here is the live surface's own policy -- the options that answer
+ * the approval, the diffs collected for the result, and the existence probe
+ * behind the header.
  */
 export const InlineFileEditApproval = memo(
   ({
@@ -80,7 +60,6 @@ export const InlineFileEditApproval = memo(
     defaultScope = "project",
     headerOverride,
   }: Props) => {
-    const columns = useTerminalWidth();
     useProgressIndicator();
 
     // Build diffs map to pass to approval handler (needed for line numbers in result)
@@ -128,122 +107,40 @@ export const InlineFileEditApproval = memo(
 
     const diffsPayload = diffsToPass.size > 0 ? diffsToPass : undefined;
 
-    // Generate horizontal lines
-    const solidLine = solidRule(columns);
-    const dottedLine = dottedRule(columns);
     // Shared with the committed preview and the transcript row model
     // (`@/cli/helpers/approval-info`).
     const headerText =
       headerOverride || fileEditApprovalHeaderText(fileEdit, existsSync);
-    const diffKind = getDiffKind(fileEdit.toolName);
 
     // Memoize the static diff content so it doesn't re-render on keystroke
-    // This prevents flicker when typing feedback in the custom input field
+    // This prevents flicker when typing feedback in the custom input field.
+    //
+    // The memo depends on the parsed fields rather than on `fileEdit`, which the
+    // approval dispatch rebuilds on every render: a fresh object would invalidate
+    // this on each keystroke and re-render the whole diff. The width is not a
+    // dependency either -- `FileEditPreview` reads it with the same hook every
+    // diff renderer already uses, and a resize re-renders it from there.
     const memoizedDiffContent = useMemo(
       () => (
-        <>
-          {/* Top solid line */}
-          <Text dimColor>{solidLine}</Text>
-
-          {/* Header */}
-          <Text bold color={colors.approval.header}>
-            {headerText}
-          </Text>
-
-          {/* Dotted separator before diff content */}
-          <Text dimColor>{dottedLine}</Text>
-
-          {/* Diff preview */}
-          <Box paddingLeft={0}>
-            {fileEdit.patchInput ? (
-              // Render patch operations (can be multiple files)
-              <Box flexDirection="column">
-                {parsePatchOperations(fileEdit.patchInput).map((op, idx) => {
-                  // The display form of a patch target, shared with the
-                  // transcript row model and the committed preview.
-                  const displayPath = simpleDiffDisplayPath(op.path);
-
-                  // Look up precomputed diff using toolCallId:path key
-                  const diffKey = fileEdit.toolCallId
-                    ? `${fileEdit.toolCallId}:${op.path}`
-                    : undefined;
-                  const opDiff =
-                    diffKey && allDiffs ? allDiffs.get(diffKey) : undefined;
-
-                  if (op.kind === "add") {
-                    return (
-                      <Box key={`patch-add-${op.path}`} flexDirection="column">
-                        {idx > 0 && <Box height={1} />}
-                        <Text dimColor>{displayPath}</Text>
-                        <AdvancedDiffRenderer
-                          precomputed={opDiff}
-                          kind="write"
-                          filePath={op.path}
-                          content={op.content}
-                          showHeader={false}
-                        />
-                      </Box>
-                    );
-                  } else if (op.kind === "update") {
-                    return (
-                      <Box
-                        key={`patch-update-${op.path}`}
-                        flexDirection="column"
-                      >
-                        {idx > 0 && <Box height={1} />}
-                        <Text dimColor>{displayPath}</Text>
-                        <AdvancedDiffRenderer
-                          precomputed={opDiff}
-                          kind="edit"
-                          filePath={op.path}
-                          oldString={op.oldString}
-                          newString={op.newString}
-                          showHeader={false}
-                        />
-                      </Box>
-                    );
-                  } else if (op.kind === "delete") {
-                    return (
-                      <Box
-                        key={`patch-delete-${op.path}`}
-                        flexDirection="column"
-                      >
-                        {idx > 0 && <Box height={1} />}
-                        <Text dimColor>{displayPath}</Text>
-                        <Text color="red">File will be deleted</Text>
-                      </Box>
-                    );
-                  }
-                  return null;
-                })}
-              </Box>
-            ) : diffKind === "write" ? (
-              <AdvancedDiffRenderer
-                precomputed={precomputedDiff}
-                kind="write"
-                filePath={fileEdit.filePath}
-                content={fileEdit.content || ""}
-                showHeader={false}
-              />
-            ) : (
-              <AdvancedDiffRenderer
-                precomputed={precomputedDiff}
-                kind="edit"
-                filePath={fileEdit.filePath}
-                oldString={fileEdit.oldString || ""}
-                newString={fileEdit.newString || ""}
-                replaceAll={fileEdit.replaceAll}
-                showHeader={false}
-              />
-            )}
-          </Box>
-
-          {/* Dotted separator after diff content */}
-          <Text dimColor>{dottedLine}</Text>
-        </>
+        <FileEditPreview
+          info={{
+            toolName: fileEdit.toolName,
+            filePath: fileEdit.filePath,
+            content: fileEdit.content,
+            oldString: fileEdit.oldString,
+            newString: fileEdit.newString,
+            replaceAll: fileEdit.replaceAll,
+            patchInput: fileEdit.patchInput,
+            toolCallId: fileEdit.toolCallId,
+          }}
+          headerText={headerText}
+          precomputedDiff={precomputedDiff}
+          allDiffs={allDiffs}
+          showDiffHeader={false}
+        />
       ),
-      // Use primitive values to avoid memo invalidation when parent re-renders.
       [
+        fileEdit.toolName,
         fileEdit.filePath,
         fileEdit.content,
         fileEdit.oldString,
@@ -251,12 +148,9 @@ export const InlineFileEditApproval = memo(
         fileEdit.replaceAll,
         fileEdit.patchInput,
         fileEdit.toolCallId,
+        headerText,
         precomputedDiff,
         allDiffs,
-        solidLine,
-        dottedLine,
-        headerText,
-        diffKind,
       ],
     );
 

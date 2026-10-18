@@ -12,6 +12,12 @@ import { ApprovalPreview } from "./ApprovalPreview";
  * rewrite was proved parity-first against the previous renderer over a wider
  * matrix (unparsable args, an empty patch input, the legacy `str_replace_*`
  * names, a lowercase `write`); these are the frames that stay.
+ *
+ * The file-edit bodies are the exception: they are no longer this file's, they
+ * are `FileEditPreview`'s, shared with the live approval that answers the same
+ * request. The frames below are the committed form of that one body (it draws
+ * the advanced diff header; the inline surface suppresses it), and
+ * `previews/FileEditPreview.test.tsx` holds the body's own cases.
  */
 
 const COLUMNS = 60;
@@ -87,6 +93,10 @@ describe("ApprovalPreview", () => {
   });
 
   test("a patch draws one block per operation, deletes included", async () => {
+    // Every block after the first opens with the blank row the row model counts,
+    // the delete included: `Delete gone.ts` used to sit in a row-direction box,
+    // where its separator collapsed to zero rows and the block was one row short
+    // of what `approvalPreviewItemRows` measures.
     expect(await frame("ApplyPatch", JSON.stringify({ input: PATCH }))).toEqual(
       [
         RULE,
@@ -99,7 +109,9 @@ describe("ApprovalPreview", () => {
         "  └ Updated changed.ts with 1 addition and 1 removal",
         "    1 -  old",
         "    1 +  new",
-        "Delete gone.ts",
+        "",
+        "gone.ts",
+        "File will be deleted",
         DOTTED,
       ],
     );
