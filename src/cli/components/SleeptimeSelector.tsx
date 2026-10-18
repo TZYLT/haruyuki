@@ -1,15 +1,23 @@
-import { Box, useInput } from "ink";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { Box } from "ink";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import type {
   ReflectionMergeMode,
   ReflectionSettings,
   ReflectionTrigger,
 } from "@/cli/helpers/memory-reminder";
-import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
+import { OverlayFrame } from "@/cli/overlay/frame";
+import { OverlayTextField } from "@/cli/overlay/text-view";
+import { wizardBindings } from "@/cli/overlay/wizard";
 import { colors } from "./colors";
 import { Text } from "./Text";
 
-const SOLID_LINE = "─";
 const DEFAULT_STEP_COUNT = "25";
 
 type FocusRow =
@@ -115,14 +123,24 @@ function parseStepCount(raw: string): number | null {
   return parsed;
 }
 
+/**
+ * `/sleeptime`'s form.
+ *
+ * It is the tree's one self-drawn form: a radio group over two sections with two
+ * fields edited **in place** rather than in a sub-view, which is what it was
+ * signed off to keep. What changed is the two fields: they are the toolkit's
+ * editors now, so they carry a caret and accept a paste where the hand-rolled
+ * row only appended characters and painted a `█`. While a field has the cursor,
+ * the arrows and Home/End belong to the caret; ←/→ still cycle the option on the
+ * rows that are not fields, and ↑↓/Tab still walk the form, which is the split
+ * the face was signed off for.
+ */
 export function SleeptimeSelector({
   initialSettings,
   memfsEnabled,
   onSave,
   onCancel,
 }: SleeptimeSelectorProps) {
-  const terminalWidth = useTerminalWidth();
-  const solidLine = SOLID_LINE.repeat(Math.max(terminalWidth, 10));
   const initialState = useMemo(
     () => parseInitialState(initialSettings),
     [initialSettings],
@@ -156,6 +174,7 @@ export function SleeptimeSelector({
   const isEditingStepCount = focusRow === "trigger-step-count";
   const isEditingMergeInstructions =
     focusRow === "merge-instructions" && merge === "explicit";
+  const isFieldFocused = isEditingStepCount || isEditingMergeInstructions;
 
   useEffect(() => {
     if (!visibleRows.includes(focusRow)) {
@@ -163,19 +182,14 @@ export function SleeptimeSelector({
     }
   }, [focusRow, visibleRows]);
 
-  const saveSelection = () => {
+  const saveSelection = useCallback(() => {
     if (trigger === "step-count") {
       const stepCount = parseStepCount(stepCountInput);
       if (stepCount === null) {
         setValidationError("must be a positive integer");
         return;
       }
-      onSave({
-        trigger,
-        stepCount,
-        merge,
-        mergeInstructions,
-      });
+      onSave({ trigger, stepCount, merge, mergeInstructions });
       return;
     }
 
@@ -187,7 +201,7 @@ export function SleeptimeSelector({
       merge,
       mergeInstructions,
     });
-  };
+  }, [merge, mergeInstructions, onSave, stepCountInput, trigger]);
 
   const selectFocusedOption = () => {
     switch (focusRow) {
@@ -212,122 +226,154 @@ export function SleeptimeSelector({
     setValidationError(null);
   };
 
-  useInput((input, key) => {
-    if (key.ctrl && input === "c") {
-      onCancel();
-      return;
-    }
+  const moveFocus = (direction: -1 | 1) => {
+    if (visibleRows.length === 0) return;
+    setValidationError(null);
+    const currentIndex = visibleRows.indexOf(focusRow);
+    const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex =
+      (safeIndex + direction + visibleRows.length) % visibleRows.length;
+    setFocusRow(visibleRows[nextIndex] ?? "trigger-off");
+  };
 
-    if (key.escape) {
-      onCancel();
-      return;
+  const cycleFocusedGroup = (direction: -1 | 1) => {
+    setValidationError(null);
+    if (focusRow.startsWith("trigger-")) {
+      const nextTrigger = cycleOption(TRIGGER_OPTIONS, trigger, direction);
+      setTrigger(nextTrigger);
+      setFocusRow(triggerFocusRow(nextTrigger));
+    } else if (focusRow.startsWith("merge-")) {
+      const nextMerge = cycleOption(MERGE_OPTIONS, merge, direction);
+      setMerge(nextMerge);
+      setFocusRow(mergeFocusRow(nextMerge));
     }
+  };
 
-    if (!memfsEnabled) {
-      if (key.return) {
-        onCancel();
-      }
-      return;
-    }
-
-    if (key.return) {
-      saveSelection();
-      return;
-    }
-
-    if (key.upArrow || key.downArrow || key.tab) {
-      if (visibleRows.length === 0) return;
-      setValidationError(null);
-      const direction = key.upArrow ? -1 : 1;
-      const currentIndex = visibleRows.indexOf(focusRow);
-      const safeIndex = currentIndex >= 0 ? currentIndex : 0;
-      const nextIndex =
-        (safeIndex + direction + visibleRows.length) % visibleRows.length;
-      const nextRow = visibleRows[nextIndex] ?? "trigger-off";
-      setFocusRow(nextRow);
-      return;
-    }
-
-    if (input === " " && !isEditingMergeInstructions) {
-      selectFocusedOption();
-      return;
-    }
-
-    if (key.leftArrow || key.rightArrow) {
-      setValidationError(null);
-      const direction: -1 | 1 = key.leftArrow ? -1 : 1;
-      if (focusRow.startsWith("trigger-")) {
-        const nextTrigger = cycleOption(TRIGGER_OPTIONS, trigger, direction);
-        setTrigger(nextTrigger);
-        setFocusRow(triggerFocusRow(nextTrigger));
-      } else if (focusRow.startsWith("merge-")) {
-        const nextMerge = cycleOption(MERGE_OPTIONS, merge, direction);
-        setMerge(nextMerge);
-        setFocusRow(mergeFocusRow(nextMerge));
-      }
-      return;
-    }
-
-    if (!isEditingStepCount && !isEditingMergeInstructions) return;
-
-    if (key.backspace || key.delete) {
-      if (isEditingStepCount) {
-        setTrigger("step-count");
-        setStepCountInput((prev) => prev.slice(0, -1));
-      } else {
-        setMergeInstructions((prev) => prev.slice(0, -1));
-      }
-      setValidationError(null);
-      return;
-    }
-
-    // Allow arbitrary typing and validate only when saving.
-    if (
-      input &&
-      input.length > 0 &&
-      !key.ctrl &&
-      !key.meta &&
-      !key.tab &&
-      !key.upArrow &&
-      !key.downArrow &&
-      !key.leftArrow &&
-      !key.rightArrow
-    ) {
-      if (isEditingStepCount) {
-        setTrigger("step-count");
-        setStepCountInput((prev) => `${prev}${input}`);
-      } else {
-        setMergeInstructions((prev) => `${prev}${input}`);
-      }
-      setValidationError(null);
-    }
-  });
+  useKeyBindings("sleeptime-selector", [
+    {
+      scope: "overlay",
+      bindings: [
+        {
+          id: "sleeptime-selector.next",
+          chords: [{ key: "tab" }, { key: "downArrow" }],
+          run: () => {
+            moveFocus(1);
+            return "consumed";
+          },
+        },
+        {
+          id: "sleeptime-selector.previous",
+          chords: [{ key: "tab", shift: true }, { key: "upArrow" }],
+          run: () => {
+            moveFocus(-1);
+            return "consumed";
+          },
+        },
+        {
+          id: "sleeptime-selector.cycle-next",
+          chords: [{ key: "rightArrow" }],
+          run: () => {
+            // A field's caret owns the arrows while it has the cursor.
+            if (isFieldFocused) return "declined";
+            cycleFocusedGroup(1);
+            return "consumed";
+          },
+        },
+        {
+          id: "sleeptime-selector.cycle-previous",
+          chords: [{ key: "leftArrow" }],
+          run: () => {
+            if (isFieldFocused) return "declined";
+            cycleFocusedGroup(-1);
+            return "consumed";
+          },
+        },
+        {
+          id: "sleeptime-selector.select",
+          chords: [{ key: "space" }],
+          run: () => {
+            // The instructions field is text, so a space there is a space; the
+            // step count is a number, and space has always meant "select".
+            if (isEditingMergeInstructions) return "declined";
+            selectFocusedOption();
+            return "consumed";
+          },
+        },
+        {
+          id: "sleeptime-selector.save",
+          chords: [{ key: "return" }],
+          run: () => {
+            if (!memfsEnabled) {
+              onCancel();
+              return "consumed";
+            }
+            // A focused field submits through its own editor, so this would be
+            // the same save twice.
+            if (isFieldFocused) return "declined";
+            saveSelection();
+            return "consumed";
+          },
+        },
+        ...wizardBindings({
+          canGoBack: false,
+          onBack: onCancel,
+          onCancel,
+        }),
+      ],
+    },
+  ]);
 
   return (
-    <Box flexDirection="column">
-      <Text dimColor>{"> /sleeptime"}</Text>
-      <Text dimColor>{solidLine}</Text>
-
-      <Box height={1} />
-
+    <OverlayFrame
+      command="/sleeptime"
+      title={memfsEnabled ? "Dream Settings" : undefined}
+    >
       {memfsEnabled ? (
         <>
-          <Text bold color={colors.selector.title}>
-            Dream Settings
-          </Text>
-          <Box height={1} />
           <ChoiceRow
             focused={focusRow === "trigger-off"}
             selected={trigger === "off"}
           >
             {" Off "}
           </ChoiceRow>
-          <ChoiceRow
-            focused={focusRow === "trigger-step-count"}
-            selected={trigger === "step-count"}
-          >
-            {` Every [${stepCountInput}${isEditingStepCount ? "█" : ""}] steps `}
-          </ChoiceRow>
+          <Box flexDirection="row">
+            <Text>{isEditingStepCount ? "> " : "  "}</Text>
+            <Text
+              backgroundColor={
+                trigger === "step-count"
+                  ? colors.selector.itemHighlighted
+                  : undefined
+              }
+              color={trigger === "step-count" ? "black" : undefined}
+              bold={trigger === "step-count"}
+            >
+              {" Every ["}
+            </Text>
+            <OverlayTextField
+              marker={null}
+              value={stepCountInput}
+              onChange={(value) => {
+                setTrigger("step-count");
+                setStepCountInput(value);
+                setValidationError(null);
+              }}
+              // Enter in the field is the form's save: the `return` binding
+              // declines while a field has the cursor, so this is the only path.
+              onSubmit={saveSelection}
+              focus={isEditingStepCount}
+            />
+            <Text
+              backgroundColor={
+                trigger === "step-count"
+                  ? colors.selector.itemHighlighted
+                  : undefined
+              }
+              color={trigger === "step-count" ? "black" : undefined}
+              bold={trigger === "step-count"}
+            >
+              {"] steps "}
+            </Text>
+          </Box>
           {validationError && (
             <Text color={colors.error.text}>
               {`    Error: ${validationError}`}
@@ -363,10 +409,19 @@ export function SleeptimeSelector({
               <Box height={1} />
               <Text bold>{"  Review instructions"}</Text>
               <Box flexDirection="row">
-                <Text>{focusRow === "merge-instructions" ? "> " : "  "}</Text>
-                <Text>
-                  {`[${mergeInstructions}${isEditingMergeInstructions ? "█" : ""}]`}
-                </Text>
+                <Text>{isEditingMergeInstructions ? "> " : "  "}</Text>
+                <Text>{"["}</Text>
+                <OverlayTextField
+                  marker={null}
+                  value={mergeInstructions}
+                  onChange={(value) => {
+                    setMergeInstructions(value);
+                    setValidationError(null);
+                  }}
+                  onSubmit={saveSelection}
+                  focus={isEditingMergeInstructions}
+                />
+                <Text>{"]"}</Text>
               </Box>
             </>
           )}
@@ -389,6 +444,6 @@ export function SleeptimeSelector({
           <Text dimColor>{"  Enter or Esc to close"}</Text>
         </>
       )}
-    </Box>
+    </OverlayFrame>
   );
 }

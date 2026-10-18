@@ -1,12 +1,11 @@
-import { Box, useInput } from "ink";
+import { Box } from "ink";
 import { useState } from "react";
-import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
+import { OverlayFrame } from "@/cli/overlay/frame";
+import { OverlayTextField } from "@/cli/overlay/text-view";
+import { wizardBindings } from "@/cli/overlay/wizard";
 import { colors } from "./colors";
-import { PasteAwareTextInput } from "./PasteAwareTextInput";
 import { Text } from "./Text";
-
-const SOLID_LINE = "─";
-const INPUT_PROMPT = "> ";
 
 interface FeedbackDialogProps {
   onSubmit: (message: string) => void;
@@ -14,29 +13,33 @@ interface FeedbackDialogProps {
   initialValue?: string;
 }
 
+/**
+ * One line of feedback, and the two keys out of it.
+ *
+ * The frame draws the header it always drew (`> /feedback`, the rule, a blank
+ * line), the prompt line is the body, and the field is the toolkit's editor —
+ * so this dialog stops hand-rolling Escape and Ctrl+C and stops painting the
+ * draft as a plain `<Text>`.
+ */
 export function FeedbackDialog({
   onSubmit,
   onCancel,
   initialValue = "",
 }: FeedbackDialogProps) {
-  const terminalWidth = useTerminalWidth();
-  const solidLine = SOLID_LINE.repeat(Math.max(terminalWidth, 10));
-  const inputWidth = Math.max(terminalWidth - INPUT_PROMPT.length, 10);
-
   const [feedbackText, setFeedbackText] = useState(initialValue);
   const [error, setError] = useState("");
 
-  useInput((_input, key) => {
-    // CTRL-C: immediately cancel
-    if (key.ctrl && _input === "c") {
-      onCancel();
-      return;
-    }
-
-    if (key.escape) {
-      onCancel();
-    }
-  });
+  useKeyBindings("feedback-dialog", [
+    {
+      scope: "overlay",
+      // One step, so Escape and Ctrl+C are the same key: close.
+      bindings: wizardBindings({
+        canGoBack: false,
+        onBack: onCancel,
+        onCancel,
+      }),
+    },
+  ]);
 
   const handleSubmit = (text: string) => {
     const trimmed = text.trim();
@@ -52,30 +55,21 @@ export function FeedbackDialog({
   };
 
   return (
-    <Box flexDirection="column">
-      {/* Command header */}
-      <Text dimColor>{"> /feedback"}</Text>
-      <Text dimColor>{solidLine}</Text>
-
-      <Box height={1} />
-
+    <OverlayFrame command="/feedback">
       <Box flexDirection="column" marginBottom={1}>
         <Text>{"  "}Enter your feedback:</Text>
       </Box>
 
-      <Box flexDirection="row">
-        <Box width={INPUT_PROMPT.length} flexShrink={0}>
-          <Text color={colors.selector.itemHighlighted}>{INPUT_PROMPT}</Text>
-        </Box>
-        <Box width={inputWidth} flexGrow={1}>
-          <PasteAwareTextInput
-            value={feedbackText}
-            onChange={setFeedbackText}
-            onSubmit={handleSubmit}
-            placeholder="(type your feedback)"
-          />
-        </Box>
-      </Box>
+      <OverlayTextField
+        markerColor={colors.selector.itemHighlighted}
+        value={feedbackText}
+        onChange={(value) => {
+          setFeedbackText(value);
+          setError("");
+        }}
+        onSubmit={handleSubmit}
+        placeholder="(type your feedback)"
+      />
 
       {error && (
         <Box marginTop={1}>
@@ -89,6 +83,6 @@ export function FeedbackDialog({
       <Box marginTop={1}>
         <Text dimColor>{"  "}Enter to submit · Esc cancel</Text>
       </Box>
-    </Box>
+    </OverlayFrame>
   );
 }
