@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { useState } from "react";
+import { Text } from "@/cli/components/Text";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
 import { OverlayFrame } from "./frame";
 import { OverlayTextField, type OverlayTextFieldProps } from "./text-view";
@@ -134,6 +135,24 @@ describe("OverlayTextField", () => {
         expect(body.startsWith("> ")).toBe(false);
       },
       { marker: null, value: "x" },
+    );
+  });
+
+  test("an element marker is drawn as it is, and trailing content stays in the row", async () => {
+    // `/connect` is the consumer of both: its filter labels itself dim, and the
+    // API-key row prints its validation status after the caret.
+    await withField(
+      async (tty) => {
+        const row = await fieldRow(tty, "ab");
+        // Two spaces before the status: the first is the editor's trailing
+        // caret cell, the second the caller's own separator.
+        expect(row).toBe("  label: ab  (validating...)");
+      },
+      {
+        marker: <Text>{"  label: "}</Text>,
+        trailing: <Text>{" (validating...)"}</Text>,
+        value: "ab",
+      },
     );
   });
 

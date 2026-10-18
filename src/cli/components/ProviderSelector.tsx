@@ -1,4 +1,4 @@
-import { Box, useInput } from "ink";
+import { Box } from "ink";
 import {
   useCallback,
   useEffect,
@@ -12,7 +12,13 @@ import {
   getPiProviderRegistryRevision,
   subscribePiProviderRegistry,
 } from "@/backend/dev/pi-provider-mod-registry";
-import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
+import { OverlayFrame } from "@/cli/overlay/frame";
+import { listBindings } from "@/cli/overlay/list-bindings";
+import { type OverlayListItem, visibleWindow } from "@/cli/overlay/list-model";
+import { OverlayListView } from "@/cli/overlay/list-view";
+import { OverlayTextField } from "@/cli/overlay/text-view";
+import { useWizard, wizardBindings } from "@/cli/overlay/wizard";
 import {
   type AuthMethod,
   type ByokProvider,
@@ -55,26 +61,21 @@ import {
   shouldForceLocalProviderTab,
   shouldShowProviderStoreTabs,
 } from "./provider-selector-helpers";
+import {
+  type ChatGPTUsageStatus,
+  ProviderOptionsView,
+} from "./provider-selector-options-view";
+import {
+  type ConnectStep,
+  type ConnectSubject,
+  type ConnectViewState,
+  viewFor,
+} from "./provider-selector-steps";
 import { Text } from "./Text";
 
-const SOLID_LINE = "─";
 const VISIBLE_PROVIDERS = 8;
 
-type ViewState =
-  | { type: "list" }
-  | { type: "input"; provider: ByokProvider }
-  | { type: "multiInput"; provider: ByokProvider; authMethod?: AuthMethod }
-  | { type: "methodSelect"; provider: ByokProvider }
-  | { type: "profileSelect"; provider: ByokProvider }
-  | { type: "options"; provider: ByokProvider }
-  | { type: "oauthNameInput"; provider: ByokProvider };
-
 type ValidationState = "idle" | "validating" | "valid" | "invalid" | "saving";
-
-type ChatGPTUsageStatus =
-  | { status: "loading" }
-  | { status: "ready"; rows: string[] }
-  | { status: "error"; message: string };
 
 interface ProviderSelectorProps {
   onCancel: () => void;
@@ -84,12 +85,6 @@ interface ProviderSelectorProps {
     target: ProviderStorageTarget,
     providerName?: string,
   ) => void;
-}
-
-function usageStatusRows(status: ChatGPTUsageStatus | undefined): string[] {
-  if (!status || status.status === "loading") return ["Loading..."];
-  if (status.status === "error") return [`Unavailable: ${status.message}`];
-  return status.rows;
 }
 
 export {
@@ -111,9 +106,6 @@ export function ProviderSelector({
   onCancel,
   onStartOAuth,
 }: ProviderSelectorProps) {
-  const terminalWidth = useTerminalWidth();
-  const solidLine = SOLID_LINE.repeat(Math.max(terminalWidth, 10));
-
   // State
   const [selectedTarget, setSelectedTarget] = useState<ProviderStorageTarget>(
     defaultProviderStorageTarget(),
@@ -127,7 +119,22 @@ export function ProviderSelector({
   const [loadingTargets, setLoadingTargets] = useState<
     Set<ProviderStorageTarget>
   >(new Set());
-  const [viewState, setViewState] = useState<ViewState>({ type: "list" });
+  // The step is the wizard's, the payload is the face's; `viewState` is what
+  // both of them say together, so the renderers below read it unchanged. It is
+  // memoized on purpose: three effects and several callbacks compare it by
+  // identity, which is how it behaved when it was the state itself.
+  const wizard = useWizard<ConnectStep>({ initial: "list" });
+  const {
+    goTo: goToStep,
+    back: stepBack,
+    popTo: popToList,
+    canGoBack,
+  } = wizard;
+  const [subject, setSubject] = useState<ConnectSubject | null>(null);
+  const viewState: ConnectViewState = useMemo(
+    () => viewFor(wizard.step, subject),
+    [wizard.step, subject],
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [providerNameInput, setProviderNameInput] = useState("");
@@ -169,25 +176,81 @@ export function ProviderSelector({
     showProviderStoreTabs,
   });
   const selectableProviders = filteredProviders;
-  const providerStartIndex = useMemo(() => {
-    if (selectedIndex < VISIBLE_PROVIDERS) return 0;
-    return Math.min(
-      selectedIndex - VISIBLE_PROVIDERS + 1,
-      Math.max(0, selectableProviders.length - VISIBLE_PROVIDERS),
-    );
-  }, [selectedIndex, selectableProviders.length]);
-  const visibleProviders = useMemo(
+  // The window the list shows, from the toolkit's own arithmetic: `edge` keeps
+  // the cursor on the bottom edge, which is the shape this list already had.
+  // The view is handed the same three values, so it windows identically, and
+  // `indicators: false` because this face prints the count itself, in the
+  // wording it always used (and, at the end of a long list, a blank row in its
+  // place so the frame's height does not move with the cursor).
+  const providerWindow = visibleWindow({
+    count: selectableProviders.length,
+    cursor: selectedIndex,
+    rows: VISIBLE_PROVIDERS,
+    anchor: "edge",
+  });
+  const providerItems = useMemo(
     () =>
-      selectableProviders.slice(
-        providerStartIndex,
-        providerStartIndex + VISIBLE_PROVIDERS,
+      selectableProviders.map(
+        (provider): OverlayListItem => ({
+          key: provider.id,
+          label: provider.displayName,
+        }),
       ),
-    [selectableProviders, providerStartIndex],
+    [selectableProviders],
   );
-  const providersBelow = Math.max(
-    0,
-    selectableProviders.length - providerStartIndex - VISIBLE_PROVIDERS,
+
+  /**
+   * Walk forward to a step, carrying the provider it is about. The payload goes
+   * with the step in one handler, so the two cannot disagree about what is on
+   * screen.
+   */
+  const openStep = useCallback(
+    (
+      next: ConnectStep,
+      provider: ByokProvider,
+      authMethod: AuthMethod | null = null,
+    ) => {
+      setSubject({ provider, authMethod });
+      goToStep(next);
+    },
+    [goToStep],
   );
+
+  /** Back to the list, and forget the provider with it. */
+  const returnToList = useCallback(() => {
+    setSubject(null);
+    popToList("list");
+  }, [popToList]);
+
+  /**
+   * Escape from a step that has somewhere to go back to: this face's own fields
+   * are cleared first (the wizard's stack only knows the path, not what a step
+   * holds), then the trail is popped. The conditional escapes the hand-written
+   * ladder had — `/connect`'s multi-field step returns to the method picker only
+   * when it was the picker that opened it — are gone: the trail *is* the path
+   * that was taken.
+   */
+  const leaveStep = useCallback(() => {
+    if (viewState.type === "input") {
+      setApiKeyInput("");
+      setValidationState("idle");
+      setValidationError(null);
+    } else if (viewState.type === "methodSelect") {
+      setMethodIndex(0);
+    } else if (viewState.type === "profileSelect") {
+      setMethodIndex(0);
+      setAwsProfiles([]);
+      setProfileIndex(0);
+    } else if (viewState.type === "multiInput") {
+      setFieldValues({});
+      setFocusedFieldIndex(0);
+      setValidationState("idle");
+      setValidationError(null);
+    } else if (viewState.type === "oauthNameInput") {
+      setProviderNameError(null);
+    }
+    stepBack();
+  }, [viewState, stepBack]);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -290,14 +353,9 @@ export function ProviderSelector({
       setSelectedTarget("local");
       setSelectedIndex(0);
       setSearchQuery("");
-      setViewState({ type: "list" });
+      returnToList();
     }
-  }, [hasCloudCredentials, selectedTarget]);
-
-  useEffect(() => {
-    setSelectedIndex(0);
-    setViewState({ type: "list" });
-  }, []);
+  }, [hasCloudCredentials, selectedTarget, returnToList]);
 
   useEffect(() => {
     if (selectableProviders.length === 0) {
@@ -315,8 +373,8 @@ export function ProviderSelector({
     setSelectedTarget((target) => (target === "local" ? "api" : "local"));
     setSelectedIndex(0);
     setSearchQuery("");
-    setViewState({ type: "list" });
-  }, [showProviderStoreTabs]);
+    returnToList();
+  }, [showProviderStoreTabs, returnToList]);
 
   const getConnectedProviderRecords = useCallback(
     (provider: ByokProvider): ProviderResponse[] =>
@@ -398,7 +456,7 @@ export function ProviderSelector({
       const flow = providerSelectionFlow(provider, providerId);
 
       if (flow === "options") {
-        setViewState({ type: "options", provider });
+        openStep("options", provider);
         setOptionIndex(0);
         return;
       }
@@ -413,24 +471,24 @@ export function ProviderSelector({
 
       if (flow === "methodSelect") {
         // Provider with multiple auth methods - show method selection
-        setViewState({ type: "methodSelect", provider });
+        openStep("methodSelect", provider);
         setMethodIndex(0);
       } else if (flow === "multiInput") {
         // Multi-field provider - show multi-input view
-        setViewState({ type: "multiInput", provider });
+        openStep("multiInput", provider);
         setFieldValues(fieldValuesFromProviderPlaceholders(provider.fields));
         setFocusedFieldIndex(0);
         setValidationState("idle");
         setValidationError(null);
       } else {
         // Single API key input for regular providers
-        setViewState({ type: "input", provider });
+        openStep("input", provider);
         setApiKeyInput("");
         setValidationState("idle");
         setValidationError(null);
       }
     },
-    [getProviderId, onStartOAuth, selectedTarget],
+    [getProviderId, onStartOAuth, openStep, selectedTarget],
   );
 
   // Handle selecting an auth method
@@ -439,7 +497,7 @@ export function ProviderSelector({
       // Special handling for profile method - load AWS profiles first
       if (authMethod.id === "profile") {
         setIsLoadingProfiles(true);
-        setViewState({ type: "profileSelect", provider });
+        openStep("profileSelect", provider);
         setProfileIndex(0);
 
         // Load profiles asynchronously
@@ -460,13 +518,13 @@ export function ProviderSelector({
         return;
       }
 
-      setViewState({ type: "multiInput", provider, authMethod });
+      openStep("multiInput", provider, authMethod);
       setFieldValues({});
       setFocusedFieldIndex(0);
       setValidationState("idle");
       setValidationError(null);
     },
-    [],
+    [openStep],
   );
 
   // Handle selecting an AWS profile - pre-fill IAM fields with credentials
@@ -487,12 +545,12 @@ export function ProviderSelector({
         region: profile.region || "",
       });
 
-      setViewState({ type: "multiInput", provider, authMethod: iamMethod });
+      openStep("multiInput", provider, iamMethod);
       setFocusedFieldIndex(profile.region ? 0 : 2); // Focus region if not set
       setValidationState("idle");
       setValidationError(null);
     },
-    [],
+    [openStep],
   );
 
   // Handle API key validation and saving
@@ -524,7 +582,7 @@ export function ProviderSelector({
         });
         if (mountedRef.current) {
           setConnectedProvidersForTarget(selectedTarget, providers);
-          setViewState({ type: "list" });
+          returnToList();
           setApiKeyInput("");
           setValidationState("idle");
         }
@@ -569,6 +627,7 @@ export function ProviderSelector({
     validationState,
     selectedTarget,
     setConnectedProvidersForTarget,
+    returnToList,
   ]);
 
   // Handle multi-field validation and saving (for providers like Bedrock)
@@ -616,7 +675,7 @@ export function ProviderSelector({
         });
         if (mountedRef.current) {
           setConnectedProvidersForTarget(selectedTarget, providers);
-          setViewState({ type: "list" });
+          returnToList();
           setFieldValues({});
           setValidationState("idle");
         }
@@ -661,6 +720,7 @@ export function ProviderSelector({
     validationState,
     selectedTarget,
     setConnectedProvidersForTarget,
+    returnToList,
   ]);
 
   // Handle disconnect
@@ -685,7 +745,7 @@ export function ProviderSelector({
         });
         if (mountedRef.current) {
           setConnectedProvidersForTarget(selectedTarget, providers);
-          setViewState({ type: "list" });
+          returnToList();
         }
       } catch {
         // Silently fail, stay on options view
@@ -696,6 +756,7 @@ export function ProviderSelector({
       selectedTarget,
       getConnectedProviderName,
       setConnectedProvidersForTarget,
+      returnToList,
     ],
   );
 
@@ -732,243 +793,171 @@ export function ProviderSelector({
     selectedTarget,
   ]);
 
-  useInput((input, key) => {
-    // CTRL-C: immediately cancel
-    if (key.ctrl && input === "c") {
-      onCancel();
-      return;
-    }
-
-    // Handle based on view state
-    if (viewState.type === "list") {
-      if (isLoading) return;
-
-      if (key.escape) {
-        if (searchQuery) {
-          setSearchQuery("");
-          setSelectedIndex(0);
-        } else {
-          onCancel();
-        }
-      } else if (
-        showProviderStoreTabs &&
-        (key.leftArrow || key.rightArrow || key.tab)
-      ) {
-        switchTarget();
-      } else if (key.backspace || key.delete) {
-        if (searchQuery) {
-          setSearchQuery((prev) => prev.slice(0, -1));
-          setSelectedIndex(0);
-        }
-      } else if (key.upArrow) {
-        setSelectedIndex((prev) => Math.max(0, prev - 1));
-      } else if (key.downArrow) {
-        setSelectedIndex((prev) =>
-          selectableProviders.length === 0
-            ? 0
-            : Math.min(selectableProviders.length - 1, prev + 1),
-        );
-      } else if (key.return) {
-        const provider = selectableProviders[selectedIndex];
-        if (provider) {
-          handleSelectProvider(provider);
-        }
-      } else if (
-        input &&
-        !key.ctrl &&
-        !key.meta &&
-        !key.return &&
-        !key.tab &&
-        !key.leftArrow &&
-        !key.rightArrow &&
-        !key.upArrow &&
-        !key.downArrow
-      ) {
-        setSearchQuery((prev) => prev + input);
-        setSelectedIndex(0);
-      }
-    } else if (viewState.type === "input") {
-      if (key.escape) {
-        // Back to list
-        setViewState({ type: "list" });
-        setApiKeyInput("");
-        setValidationState("idle");
-        setValidationError(null);
-      } else if (key.return) {
-        handleValidateAndSave();
-      } else if (key.backspace || key.delete) {
-        setApiKeyInput((prev) => prev.slice(0, -1));
-        // Reset validation if key changed
-        if (validationState !== "idle") {
-          setValidationState("idle");
-          setValidationError(null);
-        }
-      } else if (input && !key.ctrl && !key.meta) {
-        setApiKeyInput((prev) => prev + input);
-        // Reset validation if key changed
-        if (validationState !== "idle") {
-          setValidationState("idle");
-          setValidationError(null);
-        }
-      }
-    } else if (viewState.type === "methodSelect") {
-      // Handle auth method selection
-      if (
-        !("authMethods" in viewState.provider) ||
-        !viewState.provider.authMethods
-      )
-        return;
-      const authMethods = viewState.provider.authMethods;
-
-      if (key.escape) {
-        // Back to list
-        setViewState({ type: "list" });
-        setMethodIndex(0);
-      } else if (key.upArrow) {
-        setMethodIndex((prev) => Math.max(0, prev - 1));
-      } else if (key.downArrow) {
-        setMethodIndex((prev) => Math.min(authMethods.length - 1, prev + 1));
-      } else if (key.return) {
-        const selectedMethod = authMethods[methodIndex];
-        if (selectedMethod) {
-          handleSelectAuthMethod(viewState.provider, selectedMethod);
-        }
-      }
-    } else if (viewState.type === "profileSelect") {
-      // Handle AWS profile selection
-      if (isLoadingProfiles) return;
-
-      if (key.escape) {
-        // Back to method select
-        setViewState({ type: "methodSelect", provider: viewState.provider });
-        setMethodIndex(0);
-        setAwsProfiles([]);
-        setProfileIndex(0);
-      } else if (key.upArrow) {
-        setProfileIndex((prev) => Math.max(0, prev - 1));
-      } else if (key.downArrow) {
-        setProfileIndex((prev) => Math.min(awsProfiles.length - 1, prev + 1));
-      } else if (key.return) {
-        const selectedProfile = awsProfiles[profileIndex];
-        if (selectedProfile) {
-          handleSelectAwsProfile(viewState.provider, selectedProfile);
-        }
-      }
-    } else if (viewState.type === "multiInput") {
-      // Get fields from authMethod if present, otherwise from provider
-      const fields: ProviderField[] | undefined =
-        viewState.authMethod?.fields ||
+  // The keys, as data. Every step's list is declared at once and gated by
+  // `navigationEnabled`, so a table that does not apply to the step on screen
+  // declines instead of eating the key. None of them declares a cancel of its
+  // own: Escape and Ctrl+C are the wizard's, and a list that claimed Escape
+  // would take it away from every other step — which is also why the filter's
+  // Escape (clear it first, or decline) sits at the head of the table rather
+  // than being folded into the provider list's own row handling.
+  const authMethods =
+    viewState.type === "methodSelect"
+      ? viewState.provider.authMethods
+      : undefined;
+  const manageActions =
+    viewState.type === "options"
+      ? providerManageActions(
+          viewState.provider,
+          selectedTarget,
+          getConnectedProviderRecords(viewState.provider),
+        )
+      : [];
+  const multiFields: ProviderField[] =
+    viewState.type === "multiInput"
+      ? (viewState.authMethod?.fields ??
         ("fields" in viewState.provider
           ? (viewState.provider.fields as ProviderField[])
-          : undefined);
-      if (!fields) return;
-      const currentField = fields[focusedFieldIndex];
-      if (!currentField) return;
+          : undefined) ??
+        [])
+      : [];
+  const onList = viewState.type === "list" && !isLoading;
 
-      if (key.escape) {
-        // Back to method select if provider has authMethods, otherwise back to list
-        if (
-          "authMethods" in viewState.provider &&
-          viewState.provider.authMethods
-        ) {
-          setViewState({ type: "methodSelect", provider: viewState.provider });
-          setMethodIndex(0);
-        } else {
-          setViewState({ type: "list" });
-        }
-        setFieldValues({});
-        setFocusedFieldIndex(0);
-        setValidationState("idle");
-        setValidationError(null);
-      } else if (key.tab) {
-        // Move to next/prev field
-        if (key.shift) {
-          setFocusedFieldIndex((prev) => Math.max(0, prev - 1));
-        } else {
-          setFocusedFieldIndex((prev) => Math.min(fields.length - 1, prev + 1));
-        }
-      } else if (key.upArrow) {
-        setFocusedFieldIndex((prev) => Math.max(0, prev - 1));
-      } else if (key.downArrow) {
-        setFocusedFieldIndex((prev) => Math.min(fields.length - 1, prev + 1));
-      } else if (key.return) {
-        handleMultiFieldValidateAndSave();
-      } else if (key.backspace || key.delete) {
-        setFieldValues((prev) => ({
-          ...prev,
-          [currentField.key]: (prev[currentField.key] || "").slice(0, -1),
-        }));
-        // Reset validation if value changed
-        if (validationState !== "idle") {
-          setValidationState("idle");
-          setValidationError(null);
-        }
-      } else if (input && !key.ctrl && !key.meta) {
-        setFieldValues((prev) => ({
-          ...prev,
-          [currentField.key]: (prev[currentField.key] || "") + input,
-        }));
-        // Reset validation if value changed
-        if (validationState !== "idle") {
-          setValidationState("idle");
-          setValidationError(null);
-        }
-      }
-    } else if (viewState.type === "options") {
-      const connectedRecords = getConnectedProviderRecords(viewState.provider);
-      const actions = providerManageActions(
-        viewState.provider,
-        selectedTarget,
-        connectedRecords,
-      );
-      if (key.escape) {
-        setViewState({ type: "list" });
-      } else if (key.upArrow) {
-        setOptionIndex((prev) => Math.max(0, prev - 1));
-      } else if (key.downArrow) {
-        setOptionIndex((prev) => Math.min(actions.length - 1, prev + 1));
-      } else if (key.return) {
-        const action = actions[optionIndex];
-        if (action?.type === "disconnect") {
-          handleDisconnect(action.name);
-        } else if (action?.type === "connect-another") {
-          setProviderNameInput(
-            nextProviderConnectionName(viewState.provider, connectedRecords),
-          );
-          setProviderNameError(null);
-          setViewState({
-            type: "oauthNameInput",
-            provider: viewState.provider,
-          });
-        } else if (action?.type === "reconnect") {
-          onStartOAuth?.(viewState.provider, selectedTarget);
-        } else if (action?.type === "refresh-usage") {
-          loadChatGPTUsageForProvider(viewState.provider, true);
-        } else {
-          setViewState({ type: "list" });
-        }
-      }
-    } else if (viewState.type === "oauthNameInput") {
-      if (key.escape) {
-        setProviderNameError(null);
-        setViewState({ type: "options", provider: viewState.provider });
-      } else if (key.return) {
-        startNamedOAuthConnect();
-      } else if (key.backspace || key.delete) {
-        setProviderNameInput((prev) => prev.slice(0, -1));
-        setProviderNameError(null);
-      } else if (input && !key.ctrl && !key.meta) {
-        setProviderNameInput((prev) => prev + input);
-        setProviderNameError(null);
-      }
-    }
-  });
-
-  // Mask API key for display
-  const maskApiKey = (key: string): string => {
-    if (key.length <= 8) return "*".repeat(key.length);
-    return key.slice(0, 4) + "*".repeat(Math.min(key.length - 4, 20));
-  };
+  useKeyBindings("provider-selector", [
+    {
+      scope: "overlay",
+      bindings: wizardBindings({
+        canGoBack,
+        onBack: leaveStep,
+        onCancel,
+        extra: [
+          {
+            id: "connect.clear-filter",
+            chords: [{ key: "escape" }],
+            run: () => {
+              if (!onList || !searchQuery) return "declined";
+              setSearchQuery("");
+              setSelectedIndex(0);
+              return "consumed";
+            },
+          },
+          {
+            id: "connect.switch-target",
+            chords: [
+              { key: "tab" },
+              { key: "leftArrow" },
+              { key: "rightArrow" },
+            ],
+            run: () => {
+              if (!onList || !showProviderStoreTabs) return "declined";
+              switchTarget();
+              return "consumed";
+            },
+          },
+          ...listBindings({
+            count: selectableProviders.length,
+            cursor: selectedIndex,
+            onMoveCursor: setSelectedIndex,
+            onConfirm: () => {
+              const provider = selectableProviders[selectedIndex];
+              if (provider) handleSelectProvider(provider);
+            },
+            onCancel: undefined,
+            navigationEnabled: onList,
+            // The filter is a live editor beside this list, so `j`/`k` are its
+            // letters — the same call `/resume` makes — and Home/End are its
+            // caret's. That one cannot be left to registration order: the filter
+            // remounts every time the overlay walks into a provider's step and
+            // back, and a remount registers behind this table.
+            vimKeys: false,
+            edgeKeys: false,
+          }),
+          ...listBindings({
+            count: authMethods?.length ?? 0,
+            cursor: methodIndex,
+            onMoveCursor: setMethodIndex,
+            onConfirm: () => {
+              const method = authMethods?.[methodIndex];
+              if (method && viewState.type === "methodSelect") {
+                void handleSelectAuthMethod(viewState.provider, method);
+              }
+            },
+            onCancel: undefined,
+            navigationEnabled: viewState.type === "methodSelect",
+          }),
+          ...listBindings({
+            count: awsProfiles.length,
+            cursor: profileIndex,
+            onMoveCursor: setProfileIndex,
+            onConfirm: () => {
+              const profile = awsProfiles[profileIndex];
+              if (profile && viewState.type === "profileSelect") {
+                handleSelectAwsProfile(viewState.provider, profile);
+              }
+            },
+            onCancel: undefined,
+            navigationEnabled:
+              viewState.type === "profileSelect" && !isLoadingProfiles,
+          }),
+          ...listBindings({
+            count: manageActions.length,
+            cursor: optionIndex,
+            onMoveCursor: setOptionIndex,
+            onConfirm: () => {
+              if (viewState.type !== "options") return;
+              const action = manageActions[optionIndex];
+              if (action?.type === "disconnect") {
+                void handleDisconnect(action.name);
+                return;
+              }
+              if (action?.type === "connect-another") {
+                setProviderNameInput(
+                  nextProviderConnectionName(
+                    viewState.provider,
+                    getConnectedProviderRecords(viewState.provider),
+                  ),
+                );
+                setProviderNameError(null);
+                openStep("oauthNameInput", viewState.provider);
+                return;
+              }
+              if (action?.type === "reconnect") {
+                onStartOAuth?.(viewState.provider, selectedTarget);
+                return;
+              }
+              if (action?.type === "refresh-usage") {
+                loadChatGPTUsageForProvider(viewState.provider, true);
+                return;
+              }
+              // The row that manages nothing is how this list is left.
+              returnToList();
+            },
+            onCancel: undefined,
+            navigationEnabled: viewState.type === "options",
+          }),
+          {
+            id: "connect.next-field",
+            chords: [{ key: "tab" }, { key: "downArrow" }],
+            run: () => {
+              if (viewState.type !== "multiInput") return "declined";
+              setFocusedFieldIndex((prev) =>
+                Math.min(multiFields.length - 1, prev + 1),
+              );
+              return "consumed";
+            },
+          },
+          {
+            id: "connect.previous-field",
+            chords: [{ key: "tab", shift: true }, { key: "upArrow" }],
+            run: () => {
+              if (viewState.type !== "multiInput") return "declined";
+              setFocusedFieldIndex((prev) => Math.max(0, prev - 1));
+              return "consumed";
+            },
+          },
+        ],
+      }),
+    },
+  ]);
 
   // Render list view
   const renderListView = () => (
@@ -1000,14 +989,16 @@ export function ProviderSelector({
           </Box>
         )}
         {!showProviderStoreTabs && <Box height={1} />}
-        <Text>
-          <Text dimColor>{"  Filter: "}</Text>
-          {searchQuery ? (
-            <Text>{searchQuery}</Text>
-          ) : (
-            <Text dimColor>(type to filter)</Text>
-          )}
-        </Text>
+        <OverlayTextField
+          marker={<Text dimColor>{"  Filter: "}</Text>}
+          value={searchQuery}
+          onChange={(next) => {
+            setSearchQuery(next);
+            setSelectedIndex(0);
+          }}
+          placeholder="(type to filter)"
+          focus={onList}
+        />
       </Box>
 
       {isLoading ? (
@@ -1019,49 +1010,56 @@ export function ProviderSelector({
           {selectableProviders.length === 0 && searchQuery ? (
             <Text dimColor>{"  "}No providers match your filter.</Text>
           ) : null}
-          {visibleProviders.map((provider, index) => {
-            const actualIndex = providerStartIndex + index;
-            const isSelected = actualIndex === selectedIndex;
-            const connectedRecords = getConnectedProviderRecords(provider);
-            const connected = connectedRecords.length > 0;
+          <OverlayListView
+            items={providerItems}
+            cursor={selectedIndex}
+            rows={VISIBLE_PROVIDERS}
+            anchor="edge"
+            indicators={false}
+            renderRow={(_item, index, isSelected) => {
+              const provider = selectableProviders[index];
+              if (!provider) return null;
+              const connectedRecords = getConnectedProviderRecords(provider);
+              const connected = connectedRecords.length > 0;
 
-            return (
-              <Box key={provider.id} flexDirection="row">
-                <Text
-                  color={
-                    isSelected ? colors.selector.itemHighlighted : undefined
-                  }
-                >
-                  {isSelected ? "> " : "  "}
-                </Text>
-                <Text color={connected ? "green" : undefined}>
-                  [{connected ? "✓" : " "}]
-                </Text>
-                <Text> </Text>
-                <Text
-                  bold={isSelected}
-                  color={
-                    isSelected ? colors.selector.itemHighlighted : undefined
-                  }
-                >
-                  {provider.displayName}
-                </Text>
-                <Text dimColor>
-                  {" · "}
-                  {connected ? (
-                    <Text color="green">
-                      {connectedProviderSummary(provider, connectedRecords)}
-                    </Text>
-                  ) : (
-                    provider.description
-                  )}
-                </Text>
-              </Box>
-            );
-          })}
-          {providersBelow > 0 ? (
+              return (
+                <Box flexDirection="row">
+                  <Text
+                    color={
+                      isSelected ? colors.selector.itemHighlighted : undefined
+                    }
+                  >
+                    {isSelected ? "> " : "  "}
+                  </Text>
+                  <Text color={connected ? "green" : undefined}>
+                    [{connected ? "✓" : " "}]
+                  </Text>
+                  <Text> </Text>
+                  <Text
+                    bold={isSelected}
+                    color={
+                      isSelected ? colors.selector.itemHighlighted : undefined
+                    }
+                  >
+                    {provider.displayName}
+                  </Text>
+                  <Text dimColor>
+                    {" · "}
+                    {connected ? (
+                      <Text color="green">
+                        {connectedProviderSummary(provider, connectedRecords)}
+                      </Text>
+                    ) : (
+                      provider.description
+                    )}
+                  </Text>
+                </Box>
+              );
+            }}
+          />
+          {providerWindow.below > 0 ? (
             <Text dimColor>
-              {"  "}↓ {providersBelow} more below
+              {"  "}↓ {providerWindow.below} more below
             </Text>
           ) : selectableProviders.length > VISIBLE_PROVIDERS ? (
             <Text> </Text>
@@ -1128,24 +1126,37 @@ export function ProviderSelector({
           </Text>
         </Box>
 
-        <Box flexDirection="row">
-          <Text color={colors.selector.itemHighlighted}>{"> "}</Text>
-          <Text>
-            {apiKeyInput
-              ? maskApiKey(apiKeyInput)
-              : hasDefaultApiKey
-                ? "(press Enter for default key)"
-                : "(enter key)"}
-          </Text>
-          <Text
-            color={statusColor}
-            dimColor={
-              validationState === "validating" || validationState === "saving"
+        <OverlayTextField
+          markerColor={colors.selector.itemHighlighted}
+          // The key is a secret, so the editor paints it over rather than
+          // showing it: a single repeated character, where the hand-rolled row
+          // showed the first four characters of a long key and nothing else of
+          // it. The draft the overlay holds is still the real key.
+          mask="*"
+          value={apiKeyInput}
+          onChange={(next) => {
+            setApiKeyInput(next);
+            // Reset validation if key changed
+            if (validationState !== "idle") {
+              setValidationState("idle");
+              setValidationError(null);
             }
-          >
-            {statusText}
-          </Text>
-        </Box>
+          }}
+          onSubmit={handleValidateAndSave}
+          placeholder={
+            hasDefaultApiKey ? "(press Enter for default key)" : "(enter key)"
+          }
+          trailing={
+            <Text
+              color={statusColor}
+              dimColor={
+                validationState === "validating" || validationState === "saving"
+              }
+            >
+              {statusText}
+            </Text>
+          }
+        />
 
         <Box marginTop={1}>
           <Text dimColor>
@@ -1366,33 +1377,52 @@ export function ProviderSelector({
           {fields.map((field: ProviderField, index: number) => {
             const isFocused = index === focusedFieldIndex;
             const value = fieldValues[field.key] || "";
-            const displayValue = field.secret ? maskApiKey(value) : value;
 
             return (
-              <Box key={field.key} flexDirection="row">
-                <Text
-                  color={
-                    isFocused ? colors.selector.itemHighlighted : undefined
+              <OverlayTextField
+                key={field.key}
+                value={value}
+                onChange={(next) => {
+                  setFieldValues((prev) => ({
+                    ...prev,
+                    [field.key]: next,
+                  }));
+                  // Reset validation if value changed
+                  if (validationState !== "idle") {
+                    setValidationState("idle");
+                    setValidationError(null);
                   }
-                >
-                  {isFocused ? "> " : "  "}
-                </Text>
-                <Text dimColor={!isFocused} bold={isFocused}>
-                  {field.label}
-                  {field.required === false ? " (optional)" : ""}:
-                </Text>
-                <Text> </Text>
-                <Text
-                  color={
-                    isFocused ? colors.selector.itemHighlighted : undefined
-                  }
-                >
-                  {displayValue ||
-                    (isFocused
-                      ? `(${field.placeholder || "enter value"})`
-                      : "")}
-                </Text>
-              </Box>
+                }}
+                onSubmit={handleMultiFieldValidateAndSave}
+                // Every field is an editor; only the row the cursor is on takes
+                // keys, so Tab/↑↓ can walk the form across the ones it is not on.
+                focus={isFocused}
+                mask={field.secret ? "*" : undefined}
+                // The hint is the row's own wording, parentheses and all, and
+                // only the focused row shows it — which is what this view did
+                // before the field was an editor.
+                placeholder={
+                  isFocused
+                    ? `(${field.placeholder || "enter value"})`
+                    : undefined
+                }
+                marker={
+                  <>
+                    <Text
+                      color={
+                        isFocused ? colors.selector.itemHighlighted : undefined
+                      }
+                    >
+                      {isFocused ? "> " : "  "}
+                    </Text>
+                    <Text dimColor={!isFocused} bold={isFocused}>
+                      {field.label}
+                      {field.required === false ? " (optional)" : ""}:
+                    </Text>
+                    <Text> </Text>
+                  </>
+                }
+              />
             );
           })}
         </Box>
@@ -1426,7 +1456,6 @@ export function ProviderSelector({
     if (viewState.type !== "options") return null;
     const { provider } = viewState;
     const connectedRecords = getConnectedProviderRecords(provider);
-    const showUsage = isChatGPTUsageProvider(provider);
     const options = providerManageActions(
       provider,
       selectedTarget,
@@ -1434,81 +1463,14 @@ export function ProviderSelector({
     ).map((action) => providerManageActionLabel(action, provider));
 
     return (
-      <>
-        <Box flexDirection="column" marginBottom={1}>
-          <Text bold color={colors.selector.title}>
-            Manage {provider.displayName}
-          </Text>
-          <Box height={1} />
-          {connectedRecords.length > 0 ? (
-            connectedRecords.map((record) => {
-              const usageStatus = chatGPTUsageByProvider[record.name];
-              return (
-                <Box key={record.id} flexDirection="column">
-                  <Box flexDirection="row">
-                    <Text>{"  "}</Text>
-                    <Text color="green">[✓]</Text>
-                    <Text> </Text>
-                    <Text bold>{record.name}</Text>
-                    <Text dimColor> · </Text>
-                    <Text color="green">Connected</Text>
-                  </Box>
-                  {showUsage && (
-                    <Box flexDirection="column">
-                      {usageStatusRows(usageStatus).map((row) => (
-                        <Box key={row} flexDirection="row">
-                          <Text>{"      "}</Text>
-                          <Text
-                            color={
-                              usageStatus?.status === "error"
-                                ? "yellow"
-                                : undefined
-                            }
-                            dimColor={usageStatus?.status !== "error"}
-                          >
-                            {row}
-                          </Text>
-                        </Box>
-                      ))}
-                    </Box>
-                  )}
-                </Box>
-              );
-            })
-          ) : (
-            <Text dimColor>{"  "}No connected providers.</Text>
-          )}
-        </Box>
-
-        <Box flexDirection="column">
-          {options.map((option, index) => {
-            const isSelected = index === optionIndex;
-            return (
-              <Box key={option} flexDirection="row">
-                <Text
-                  color={
-                    isSelected ? colors.selector.itemHighlighted : undefined
-                  }
-                >
-                  {isSelected ? "> " : "  "}
-                </Text>
-                <Text
-                  bold={isSelected}
-                  color={
-                    isSelected ? colors.selector.itemHighlighted : undefined
-                  }
-                >
-                  {option}
-                </Text>
-              </Box>
-            );
-          })}
-        </Box>
-
-        <Box marginTop={1}>
-          <Text dimColor>{"  "}Enter confirm · ↑↓ navigate · Esc back</Text>
-        </Box>
-      </>
+      <ProviderOptionsView
+        provider={provider}
+        options={options}
+        connectedRecords={connectedRecords}
+        showUsage={isChatGPTUsageProvider(provider)}
+        usageByProvider={chatGPTUsageByProvider}
+        optionIndex={optionIndex}
+      />
     );
   };
 
@@ -1523,10 +1485,15 @@ export function ProviderSelector({
             Connect another {provider.displayName}
           </Text>
           <Box height={1} />
-          <Box flexDirection="row">
-            <Text>{"  "}Provider name: </Text>
-            <Text>{providerNameInput}</Text>
-          </Box>
+          <OverlayTextField
+            marker={<Text>{"  "}Provider name: </Text>}
+            value={providerNameInput}
+            onChange={(next) => {
+              setProviderNameInput(next);
+              setProviderNameError(null);
+            }}
+            onSubmit={startNamedOAuthConnect}
+          />
           {providerNameError ? (
             <Box marginTop={1}>
               <Text color="red">
@@ -1545,13 +1512,7 @@ export function ProviderSelector({
   };
 
   return (
-    <Box flexDirection="column">
-      {/* Command header */}
-      <Text dimColor>{"> /connect"}</Text>
-      <Text dimColor>{solidLine}</Text>
-
-      <Box height={1} />
-
+    <OverlayFrame command="/connect">
       {viewState.type === "list" && renderListView()}
       {viewState.type === "input" && renderInputView()}
       {viewState.type === "methodSelect" && renderMethodSelectView()}
@@ -1559,6 +1520,6 @@ export function ProviderSelector({
       {viewState.type === "multiInput" && renderMultiInputView()}
       {viewState.type === "options" && renderOptionsView()}
       {viewState.type === "oauthNameInput" && renderOAuthNameInputView()}
-    </Box>
+    </OverlayFrame>
   );
 }

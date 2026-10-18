@@ -1,4 +1,5 @@
 import { Box } from "ink";
+import type { ReactNode } from "react";
 import { colors } from "@/cli/components/colors";
 import { PasteAwareTextInput } from "@/cli/components/PasteAwareTextInput";
 import { Text } from "@/cli/components/Text";
@@ -41,11 +42,13 @@ export interface OverlayTextFieldProps {
   onSubmit?: (value: string) => void;
   placeholder?: string;
   /**
-   * The marker drawn before the editor. Defaults to `"> "` — the prompt every
-   * text step in this tree shows. `null` draws none at all; that is not the
-   * same as `""`, which would still take its place in the row.
+   * What sits before the editor. A plain string is painted in `markerColor`;
+   * anything else is drawn as it is, the way `OverlayFrame`'s `footer` works, so
+   * a face can hand over its own label (`/connect`'s dim `Filter: `, its
+   * per-field `> Label:` runs). `null` draws nothing at all — which is not the
+   * same as `""`, a marker that still takes its place in the row.
    */
-  marker?: string | null;
+  marker?: ReactNode;
   /**
    * The marker's colour. Defaults to the approval-header accent the value
    * editors use; `/connect` and `/feedback` prompt in the selector accent
@@ -81,8 +84,10 @@ export function OverlayTextField({
 }: OverlayTextFieldProps) {
   return (
     <Box flexDirection="row">
-      {marker !== null && (
+      {typeof marker === "string" ? (
         <Text color={markerColor ?? colors.approval.header}>{marker}</Text>
+      ) : (
+        marker
       )}
       <PasteAwareTextInput
         value={value}

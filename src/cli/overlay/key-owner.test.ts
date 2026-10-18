@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 const MIGRATED_FACES = [
   "components/ConversationSelector.tsx",
   "components/MessageSearch.tsx",
+  "components/ProviderSelector.tsx",
   "components/SkillsDialog.tsx",
   "components/WorktreeDiffSelector.tsx",
   "components/WindowTitlePicker.tsx",
