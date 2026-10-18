@@ -18,8 +18,11 @@ import {
   topicBlockBoundaryNote,
 } from "@/cli/helpers/topic-list";
 import type { TopicTrimRequest } from "@/cli/helpers/topic-trim-request";
+import {
+  type SingleSelectItem,
+  SingleSelectPicker,
+} from "@/cli/overlay/adapters";
 import { OverlayFrame } from "@/cli/overlay/frame";
-import { type SelectableItem, SingleSelectPicker } from "./SingleSelectPicker";
 
 export const TOPIC_TRIM_CANCEL_KEY = "cancel";
 
@@ -39,7 +42,7 @@ const TOPIC_WINDOW_ROWS = 10;
  */
 export function buildTopicPickRows(
   blocks: readonly TopicBlock[],
-): SelectableItem[] {
+): SingleSelectItem[] {
   return blocks.map((block, position) => ({
     key: String(block.index),
     label: `${block.index}. ${block.title ?? CURRENT_TOPIC_LABEL}`,
@@ -50,7 +53,7 @@ export function buildTopicPickRows(
 /** The full item list, cancel last. */
 export function buildTopicPickItems(
   blocks: readonly TopicBlock[],
-): SelectableItem[] {
+): SingleSelectItem[] {
   return [
     ...buildTopicPickRows(blocks),
     {
@@ -66,7 +69,7 @@ export function buildTopicPickItems(
  * suggestion is unknown (an empty list still ends on Cancel).
  */
 export function initialTopicPickIndex(
-  items: readonly SelectableItem[],
+  items: readonly SingleSelectItem[],
   suggestionIndex: number,
 ): number {
   const suggested = items.findIndex(

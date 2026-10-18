@@ -15,10 +15,10 @@ import {
   isCompactionMode,
 } from "@/cli/helpers/compaction-mode";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
+import { SingleSelectPicker } from "@/cli/overlay/adapters";
 import { OverlayFrame } from "@/cli/overlay/frame";
 import { OverlayTextField } from "@/cli/overlay/text-view";
 import { useWizard, wizardBindings } from "@/cli/overlay/wizard";
-import { SingleSelectPicker } from "./SingleSelectPicker";
 import { Text } from "./Text";
 
 const MODE_LABELS: Record<CompactionMode, string> = {

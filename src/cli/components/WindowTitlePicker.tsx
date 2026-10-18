@@ -11,9 +11,9 @@ import {
   type WindowTitleData,
   type WindowTitleField,
 } from "@/cli/helpers/window-title-config";
+import { MultiSelectPicker } from "@/cli/overlay/adapters";
 import { OverlayFrame } from "@/cli/overlay/frame";
 import { settingsManager } from "@/settings-manager";
-import { MultiSelectPicker } from "./MultiSelectPicker";
 
 interface WindowTitlePickerProps {
   projectDirectory: string;

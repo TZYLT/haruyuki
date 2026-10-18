@@ -1,8 +1,11 @@
 import { Box } from "ink";
+import {
+  type SingleSelectItem,
+  SingleSelectPicker,
+} from "@/cli/overlay/adapters";
 import { OverlayFrame } from "@/cli/overlay/frame";
 import type { WorktreeDiffOption } from "@/web/worktree-diff-list";
 import { colors } from "./colors";
-import { type SelectableItem, SingleSelectPicker } from "./SingleSelectPicker";
 import { Text } from "./Text";
 
 type WorktreeDiffSelectorProps = {
@@ -16,7 +19,7 @@ export function WorktreeDiffSelector({
   onSelect,
   onCancel,
 }: WorktreeDiffSelectorProps) {
-  const items: SelectableItem[] = worktrees.map((worktree) => ({
+  const items: SingleSelectItem[] = worktrees.map((worktree) => ({
     key: worktree.path,
     label: worktree.name,
     description: `${worktree.branch} · ${worktree.fileCount} files · +${worktree.insertions}/-${worktree.deletions}`,

@@ -14,6 +14,10 @@ import { Box } from "ink";
 import { memo, useCallback, useMemo, useState } from "react";
 import { parseRecallCount, parseRecallRatio } from "@/cli/commands/recall";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
+import {
+  type SingleSelectItem,
+  SingleSelectPicker,
+} from "@/cli/overlay/adapters";
 import { OverlayFrame } from "@/cli/overlay/frame";
 import { OverlayTextField } from "@/cli/overlay/text-view";
 import { useWizard, wizardBindings } from "@/cli/overlay/wizard";
@@ -25,7 +29,6 @@ import {
 import type { RecallDiversity } from "@/reminders/recall-port";
 import { isRecallDiversity } from "@/reminders/recall-port";
 import type { Settings } from "@/settings-manager";
-import { type SelectableItem, SingleSelectPicker } from "./SingleSelectPicker";
 import { Text } from "./Text";
 
 export interface RecallOverlayProps {
@@ -120,8 +123,8 @@ function numberRowValue(row: RecallNumberRow, value: number): string {
  */
 export function buildRecallPickerRows(
   settings: ResolvedRecallSettings,
-): SelectableItem[] {
-  const rows: SelectableItem[] = [
+): SingleSelectItem[] {
+  const rows: SingleSelectItem[] = [
     {
       key: RECALL_TOGGLE_ROW_KEY,
       label: "Passive recall",
@@ -151,7 +154,7 @@ export function buildRecallPickerRows(
   return rows;
 }
 
-export function buildDisplayRows(current: RecallDisplay): SelectableItem[] {
+export function buildDisplayRows(current: RecallDisplay): SingleSelectItem[] {
   return [
     {
       key: "summary",
@@ -174,7 +177,9 @@ export function buildDisplayRows(current: RecallDisplay): SelectableItem[] {
   ];
 }
 
-export function buildDiversityRows(current: RecallDiversity): SelectableItem[] {
+export function buildDiversityRows(
+  current: RecallDiversity,
+): SingleSelectItem[] {
   return [
     {
       key: "none",
