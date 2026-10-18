@@ -42,18 +42,25 @@ export interface OverlayListItem {
 /**
  * Where the window stops relative to the cursor.
  *
- * Both shapes are real in this tree, which is why this is a parameter and not a
- * choice. `edge` keeps the cursor on the window's bottom edge while the list
- * scrolls under it — what the model lists do (`profile-selection`'s model window
- * and `ModelSelector`). `center` holds the cursor near the middle — what
- * `/resume` and `/search` do, both with `cursor - floor(rows / 2)`. Stating both
- * here is still one copy: a face asks for the shape it already had, which is what
- * keeps a migration from changing what a long list shows as a side effect.
+ * All three shapes are real in this tree, which is why this is a parameter and
+ * not a choice. `edge` keeps the cursor on the window's bottom edge while the
+ * list scrolls under it — what the model lists do (`profile-selection`'s model
+ * window and `ModelSelector`). `center` holds the cursor near the middle — what
+ * `/resume` and `/search` do, both with `cursor - floor(rows / 2)`. `page` is
+ * **page-aligned**: the window never moves while the cursor stays inside one
+ * page, which is what `/help` did with its own `currentPage` arithmetic, and
+ * what lets a face keep printing `Page n/m` without owning the window.
+ * Stating all three here is still one copy: a face asks for the shape it
+ * already had, which is what keeps a migration from changing what a long list
+ * shows as a side effect.
  *
- * The last window is the list's tail in both shapes, so neither can leave rows
- * unreachable at the bottom.
+ * `edge` and `center` both end at the list's tail, so neither can leave rows
+ * unreachable at the bottom. **`page` deliberately does not**: its last page is
+ * short when the count is not a multiple of `rows`, because a page-aligned face
+ * shows exactly that — a tail window of the full `rows` would put the page's
+ * own first row off the top.
  */
-export type ListAnchor = "edge" | "center";
+export type ListAnchor = "edge" | "center" | "page";
 
 /** Which part of a list is on screen, and how much is hidden on either side. */
 export interface ListWindow {
@@ -83,8 +90,9 @@ export function clampCursor(cursor: number, count: number): number {
  * First index of the window that shows `cursor` inside `rows` rows.
  *
  * The window only moves once the cursor reaches the lead its anchor allows, and
- * the last window is the list's tail rather than a shorter one — the shape the
- * hand-written window calculations in this tree already had, now stated once.
+ * for `edge`/`center` the last window is the list's tail rather than a shorter
+ * one — the shape the hand-written window calculations in this tree already had,
+ * now stated once. `page` is the exception, and on purpose: see `ListAnchor`.
  */
 export function windowStart(options: {
   count: number;
@@ -96,6 +104,12 @@ export function windowStart(options: {
   const rows = Math.trunc(options.rows);
   if (rows <= 0 || count <= rows) return 0;
   const cursor = clampCursor(options.cursor, count);
+  if (options.anchor === "page") {
+    // No tail clamp: the page the cursor is on starts where it starts, and a
+    // short last page is the page's own shape. `start < count` always, because
+    // the cursor is inside the list.
+    return Math.floor(cursor / rows) * rows;
+  }
   const lead = options.anchor === "center" ? Math.floor(rows / 2) : rows - 1;
   return Math.max(0, Math.min(cursor - lead, count - rows));
 }

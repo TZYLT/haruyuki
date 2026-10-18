@@ -35,8 +35,9 @@ export interface OverlayListViewProps {
   rows?: number;
   /**
    * Where the window sits relative to the cursor. Defaults to `edge`, the model
-   * lists' shape; `/resume` and `/search` pass `center`, which is what their own
-   * window arithmetic did.
+   * lists' shape; `/resume` and `/search` pass `center`, and `/help` passes
+   * `page`, which is what its own page arithmetic did. A face must pass the same
+   * anchor it gave `useOverlayList`.
    */
   anchor?: ListAnchor;
   /**

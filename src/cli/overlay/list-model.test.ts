@@ -86,6 +86,32 @@ describe("windowStart", () => {
     ).toBe(9);
     expect(windowStart({ count: 20, cursor: 9, rows: 1 })).toBe(9);
   });
+
+  test("the page anchor does not move while the cursor stays in its page", () => {
+    // `/help`'s shape: it moved a whole page at a time and put the cursor back
+    // at the page's first row, which is what this window does.
+    expect(
+      windowStart({ count: 45, cursor: 0, rows: 10, anchor: "page" }),
+    ).toBe(0);
+    expect(
+      windowStart({ count: 45, cursor: 9, rows: 10, anchor: "page" }),
+    ).toBe(0);
+    expect(
+      windowStart({ count: 45, cursor: 10, rows: 10, anchor: "page" }),
+    ).toBe(10);
+    expect(
+      windowStart({ count: 45, cursor: 19, rows: 10, anchor: "page" }),
+    ).toBe(10);
+  });
+
+  test("the page anchor's last page is short instead of pulled to the tail", () => {
+    // The one place the page anchor differs from `edge`: a tail window of the
+    // full `rows` would push the page's own first row off the top.
+    expect(
+      windowStart({ count: 45, cursor: 40, rows: 10, anchor: "page" }),
+    ).toBe(40);
+    expect(windowStart({ count: 45, cursor: 44, rows: 10 })).toBe(35);
+  });
 });
 
 describe("visibleWindow", () => {
@@ -122,6 +148,12 @@ describe("visibleWindow", () => {
       below: 0,
       total: 3,
     });
+  });
+
+  test("the page anchor reports the short tail page as its own page", () => {
+    expect(
+      visibleWindow({ count: 45, cursor: 44, rows: 10, anchor: "page" }),
+    ).toEqual({ start: 40, end: 45, above: 40, below: 0, total: 45 });
   });
 
   test("the window always contains the cursor", () => {

@@ -61,8 +61,9 @@ export interface UseOverlayListOptions {
   rows?: number;
   /**
    * Where the window sits relative to the cursor. See `list-model.ts`: `edge` is
-   * the model lists' shape, `center` is `/resume`'s and `/search`'s. A face must
-   * pass the same anchor to `OverlayListView`, which is what windows.
+   * the model lists' shape, `center` is `/resume`'s and `/search`'s, and `page`
+   * is `/help`'s page-aligned one. A face must pass the same anchor to
+   * `OverlayListView`, which is what windows.
    */
   anchor?: ListAnchor;
   /** Scope to claim and bind in. `overlay` unless this list is a modal's. */

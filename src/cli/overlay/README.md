@@ -48,8 +48,10 @@ directory exists to be the *one* copy.
    what every overlay did before the toolkit; a caller asks for a window
    explicitly, so migrating one cannot silently change what a long list shows.
    The same rule covers the window's *shape*: `anchor` is `edge` unless a face
-   asks for `center`, and `indicators` may be turned off by a face that prints the
-   position itself (`/resume`, `/search`). A face picks what it already had. Two
+   asks for `center` (`/resume`, `/search`) or `page` (`/help`, which prints its
+   own `Page n/m` and whose last page is deliberately short), and `indicators` may
+   be turned off by a face that prints the position itself (`/resume`, `/search`,
+   `/help`). A face picks what it already had. Two
    keys are opt-out for the same reason: `vimKeys` is off for a list beside a live
    field (its `j`/`k` are letters), and `edgeKeys` is off for one beside a live
    editor, whose Home/End are the caret's — a claim that has to be unconditional,
