@@ -2,12 +2,11 @@ import { Box, useInput } from "ink";
 import { useEffect, useMemo, useState } from "react";
 import type { ModelReasoningSelection } from "@/agent/model";
 import { formatXhighEffortLabel } from "@/agent/reasoning-effort-label";
-import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
+import { OverlayFrame } from "@/cli/overlay/frame";
 import { colors } from "./colors";
 import type { ModelSelectorSelection } from "./ModelSelector";
 import { Text } from "./Text";
 
-const SOLID_LINE = "─";
 const EFFORT_BLOCK = "▌";
 
 interface ReasoningOption {
@@ -45,8 +44,6 @@ export function ModelReasoningSelector({
   onSelect,
   onCancel,
 }: ModelReasoningSelectorProps) {
-  const terminalWidth = useTerminalWidth();
-  const solidLine = SOLID_LINE.repeat(Math.max(terminalWidth, 10));
   const [selectedIndex, setSelectedIndex] = useState(() => {
     const idx = options.findIndex(
       (option) =>
@@ -138,18 +135,15 @@ export function ModelReasoningSelector({
       : "";
 
   return (
-    <Box flexDirection="column">
-      <Text dimColor>{"> /model"}</Text>
-      <Text dimColor>{solidLine}</Text>
-
-      <Box height={1} />
-
-      <Text bold color={colors.selector.title}>
-        Set your model&apos;s reasoning settings
-      </Text>
-
-      <Box height={1} />
-
+    <OverlayFrame
+      command="/model"
+      title="Set your model's reasoning settings"
+      footer={
+        <Box paddingLeft={1}>
+          <Text dimColor>Enter select · ←→/Tab switch · Esc back</Text>
+        </Box>
+      }
+    >
       <Box paddingLeft={1}>
         <Text>{modelLabel}</Text>
       </Box>
@@ -163,12 +157,6 @@ export function ModelReasoningSelector({
         <Text bold>{effortLabel}</Text>
         <Text dimColor> reasoning effort</Text>
       </Box>
-
-      <Box height={1} />
-
-      <Box paddingLeft={1}>
-        <Text dimColor>Enter select · ←→/Tab switch · Esc back</Text>
-      </Box>
-    </Box>
+    </OverlayFrame>
   );
 }
