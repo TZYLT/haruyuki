@@ -205,16 +205,27 @@ export function parseBashApprovalArgs(
 }
 
 /** Parse bash info from an approval request. */
-export function getBashApprovalInfo(
-  approval: ApprovalRequest,
-): BashApprovalInfo | null {
+export function getBashApprovalInfo(approval: {
+  toolName: string;
+  toolArgs: string;
+}): BashApprovalInfo | null {
   return parseBashApprovalArgs(approval.toolName, approval.toolArgs);
 }
 
-/** Parse file edit info from approval args. */
-export function getFileEditApprovalInfo(
-  approval: ApprovalRequest,
-): FileEditApprovalInfo | null {
+/**
+ * Parse file edit info from approval args.
+ *
+ * Takes the three fields it reads rather than an `ApprovalRequest`: the
+ * committed-preview classification (`@/cli/overlay/preview`) has a tool name,
+ * args and a *possibly absent* tool call id (a static item may carry none), and
+ * narrowing here is what lets it call this instead of parsing the args a second
+ * time.
+ */
+export function getFileEditApprovalInfo(approval: {
+  toolName: string;
+  toolArgs: string;
+  toolCallId?: string;
+}): FileEditApprovalInfo | null {
   try {
     const args = JSON.parse(approval.toolArgs || "{}");
 

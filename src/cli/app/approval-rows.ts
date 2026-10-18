@@ -217,7 +217,6 @@ export function approvalPreviewItemRows(
     const info = getBashApprovalInfo({
       toolName: item.toolName,
       toolArgs: item.toolArgs,
-      toolCallId: item.toolCallId,
     });
     if (info) {
       return bashPreviewRows(info.command, info.description, options, false);
