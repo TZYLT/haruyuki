@@ -1,11 +1,9 @@
-import { Box } from "ink";
 import type { ReactElement } from "react";
 import { colors } from "@/cli/components/colors";
 import { Text } from "@/cli/components/Text";
 
 /**
- * The confirmation controls: one row per option, and the line a destructive
- * action makes you type a name into.
+ * The confirmation controls: one row per option.
  *
  * A confirmation is the last screen before something is deleted, so what it owes
  * the user is that the row under the marker is unmistakably the row Enter acts on.
@@ -20,6 +18,13 @@ import { Text } from "@/cli/components/Text";
  * renderer that picked one of them would be a visible change wearing the costume
  * of a deduplication. The unselected rows are derived from the marker's width, so
  * `> ` and `❯ ` each keep their own alignment.
+ *
+ * The **type-to-confirm** prompt used to live here too (`TypedConfirmPrompt`: the
+ * value, or the placeholder while it was empty). It is gone: the one caller was
+ * `/agents`'s delete confirmation, whose draft was a hand-rolled appender, so the
+ * row could not receive a paste and could not show a caret. That row is the
+ * toolkit's text sub-view now (`text-view.tsx`), which is a *real* editor — there
+ * is one implementation of a `> ` prompt row in this tree, and it is not this one.
  *
  * This module grows when its next consumer arrives (the approval faces, B5, whose
  * options are numbered and whose custom reason is a text field); it does not
@@ -74,31 +79,5 @@ export function ConfirmOptions({
         );
       })}
     </>
-  );
-}
-
-export interface TypedConfirmPromptProps {
-  /** What the user has typed so far. */
-  value: string;
-  /** Shown dim instead of the value while it is empty. */
-  placeholder: string;
-}
-
-/**
- * The `> ` line a typed confirmation is entered on.
- *
- * It renders the value, and the placeholder only while there is no value — the
- * caller keeps the draft and decides when it matches (a name comparison belongs to
- * the action being confirmed, not to its prompt).
- */
-export function TypedConfirmPrompt({
-  value,
-  placeholder,
-}: TypedConfirmPromptProps): ReactElement {
-  return (
-    <Box flexDirection="row">
-      <Text color={colors.selector.itemHighlighted}>{"> "}</Text>
-      <Text dimColor={!value}>{value || placeholder}</Text>
-    </Box>
   );
 }

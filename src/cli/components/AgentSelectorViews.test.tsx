@@ -31,6 +31,8 @@ async function confirmFrame(props: {
       displayName={props.displayName ?? "my-agent"}
       input={props.input}
       loading={props.loading ?? false}
+      onInputChange={() => {}}
+      onInputSubmit={() => {}}
     />,
     { columns: COLUMNS, rows: 40 },
   );

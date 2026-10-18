@@ -1,15 +1,23 @@
 import type { AgentState } from "@letta-ai/letta-client/resources/agents/agents";
-import { Box, useInput } from "ink";
+import { Box } from "ink";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type AgentBackendMode, isLocalAgentId } from "@/agent/agent-id";
 import { unpinAgentForCurrentUser } from "@/agent/favorites";
 import { getBackendForMode } from "@/backend/backend";
+import type { KeyBinding } from "@/cli/helpers/input-keys";
 import { listLocalAgentsFromDisk } from "@/cli/helpers/local-agent-listing";
 import {
   listPinnedAgentsForCurrentUser,
   type PinnedAgentData,
 } from "@/cli/helpers/pinned-agent-listing";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
+import { OverlayFrame } from "@/cli/overlay/frame";
+import type { OverlayListItem } from "@/cli/overlay/list-model";
+import { OverlayListView } from "@/cli/overlay/list-view";
+import { OverlayTextField } from "@/cli/overlay/text-view";
+import { useOverlayList } from "@/cli/overlay/use-overlay-list";
+import { useWizard, wizardBindings } from "@/cli/overlay/wizard";
 import { DEFAULT_AGENT_NAME } from "@/constants";
 import { AgentSelectorFooter } from "./AgentSelectorFooter";
 import { AgentDeleteConfirmOverlay } from "./AgentSelectorViews";
@@ -25,8 +33,6 @@ import {
   truncateAgentId,
 } from "./agent-selector-utils";
 import { colors } from "./colors";
-import { OverlayShell } from "./OverlayShell";
-import { PasteAwareTextInput } from "./PasteAwareTextInput";
 import { validateAgentName } from "./PinDialog";
 import { TabBar } from "./TabBar";
 import { Text } from "./Text";
@@ -50,17 +56,48 @@ interface AgentSelectorProps {
   allowPinActions?: boolean;
 }
 
-type ViewState =
-  | { type: "list" }
-  | {
-      type: "deleteConfirm";
-      agent: AgentState;
-      agentId: string;
-      isLocal: boolean;
-    };
+/**
+ * `/agents`'s two screens. The trail is the wizard's, so Escape backs out of the
+ * typed-name confirmation and cancels at the list — the two answers the face
+ * used to write itself (`setViewState({ type: "list" })` versus `onCancel`).
+ */
+type AgentSelectorStep = "list" | "deleteConfirm";
+
+/** The agent a confirmation was opened on, kept out of the trail. */
+interface PendingDelete {
+  agent: AgentState;
+  agentId: string;
+  isLocal: boolean;
+}
 
 const DISPLAY_PAGE_SIZE = 5;
 
+/**
+ * The agent browser, on the overlay toolkit.
+ *
+ * The face keeps its **page** shape: five rows per page, `Page n/m` in the
+ * footer, ←/→ to turn the page and a cursor that stays inside the page. The
+ * toolkit's window is opt-in (`overlay/README.md` rule 4) and this face asks for
+ * none — what it takes from the toolkit is the key table (`useOverlayList` over
+ * the page's rows, the wizard for the two screens) instead of the one
+ * `if (key.upArrow) … else if` ladder that used to hold both screens' keys.
+ *
+ * Two lists rather than one, because Pinned and Local each keep their own cursor
+ * across a tab switch — the shape `/hooks` has, for the same reason.
+ *
+ * What changed visibly, and both were ruled on:
+ *
+ * - the **search row is gone**. It was dead: `activeQuery` was only ever
+ *   compared and painted, never used to filter a pinned or a local page (it
+ *   outlived the Cloud/Shared tabs, which were the lists that had something to
+ *   search). Typing on the Local tab showed `Search: foo` and filtered nothing.
+ * - the two hand-rolled appenders (the delete confirmation's typed name and the
+ *   New tab's name field) are the toolkit's editor now. The delete row keeps its
+ *   `> ` marker and its wording; what it gains is a caret and the paste channel
+ *   — a paste into it used to be dropped silently. The caret is inverse video,
+ *   which a test process cannot see (no colour): `docs/36` M8 carries it for the
+ *   real machine.
+ */
 export function AgentSelector({
   currentAgentId,
   onSelect,
@@ -105,28 +142,27 @@ export function AgentSelector({
   // Pinned tab state
   const [pinnedAgents, setPinnedAgents] = useState<PinnedAgentData[]>([]);
   const [pinnedLoading, setPinnedLoading] = useState(true);
-  const [pinnedSelectedIndex, setPinnedSelectedIndex] = useState(0);
   const [pinnedPage, setPinnedPage] = useState(0);
 
   // Local tab state (reads from disk, no API calls)
   const [localAgents, setLocalAgents] = useState<AgentState[]>([]);
   const [localLoading, setLocalLoading] = useState(false);
-  const [localSelectedIndex, setLocalSelectedIndex] = useState(0);
   const [localPage, setLocalPage] = useState(0);
   const [localLoaded, setLocalLoaded] = useState(false);
 
-  // Search state (shared across list tabs)
-  const [searchInput, setSearchInput] = useState("");
-  const [activeQuery, setActiveQuery] = useState("");
-
   // Delete confirmation state
-  const [viewState, setViewState] = useState<ViewState>({ type: "list" });
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(
+    null,
+  );
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   // New agent tab state
   const [newAgentNameInput, setNewAgentNameInput] = useState("");
   const [newAgentNameError, setNewAgentNameError] = useState("");
+
+  const wizard = useWizard<AgentSelectorStep>({ initial: "list" });
+  const { canGoBack, back, goTo, popTo, step } = wizard;
 
   // Load pinned agents
   const loadPinnedAgents = useCallback(async () => {
@@ -157,7 +193,6 @@ export function AgentSelector({
       setLocalAgents(agents);
       setHasLocalAgents(agents.length > 0);
       setLocalPage(0);
-      setLocalSelectedIndex(0);
       setLocalLoaded(true);
     } catch {
       setLocalAgents([]);
@@ -211,40 +246,205 @@ export function AgentSelector({
 
   // Current tab's state (computed)
   let currentLoading = false;
-  const currentError: string | null = null;
   let currentAgents: AgentSelectorListAgent[] = [];
-  let setCurrentSelectedIndex = setPinnedSelectedIndex;
   if (activeTab === "pinned") {
     currentLoading = pinnedLoading;
     currentAgents = pinnedPageAgents
       .map((p) => p.agent)
       .filter((agent): agent is AgentState => agent !== null);
-    setCurrentSelectedIndex = setPinnedSelectedIndex;
   } else if (activeTab === "local") {
     currentLoading = localLoading;
     currentAgents = localPageAgents;
-    setCurrentSelectedIndex = setLocalSelectedIndex;
   }
 
-  // Submit search
-  const submitSearch = useCallback(() => {
-    if (searchInput !== activeQuery) {
-      setActiveQuery(searchInput);
-    }
-  }, [searchInput, activeQuery]);
+  // A page is "listed" when the trail is on the list step and the tab has rows
+  // to put a cursor on. The New tab is neither: its editor owns the keys.
+  const listActive = step === "list" && activeTab !== "new";
 
-  // Clear search (effect will handle reload when query changes)
-  const clearSearch = useCallback(() => {
-    setSearchInput("");
-    if (activeQuery) {
-      setActiveQuery("");
-    }
-  }, [activeQuery]);
+  const pinnedItems: OverlayListItem[] = pinnedPageAgents.map((data) => ({
+    key: data.agentId,
+    label: data.agent?.name ?? data.agentId.slice(0, 12),
+  }));
+
+  const localItems: OverlayListItem[] = localPageAgents.map((agent) => ({
+    key: agent.id,
+    label: agent.name ?? "Unnamed",
+  }));
+
+  // The Pinned tab's cursor. Omitted `onCancel`: Escape and Ctrl+C are the
+  // wizard's here (`wizard.tsx`), because this face has two screens.
+  const pinnedList = useOverlayList({
+    owner: "agent-selector-pinned",
+    items: pinnedItems,
+    navigationEnabled: listActive && activeTab === "pinned",
+    onConfirm: (_key, index) => {
+      const selected = pinnedPageAgents[index];
+      if (selected?.agent) {
+        onSelect(selected.agentId, selected.backendMode);
+      }
+    },
+    onCancel: undefined,
+  });
+
+  const localList = useOverlayList({
+    owner: "agent-selector-local",
+    items: localItems,
+    navigationEnabled: listActive && activeTab === "local",
+    onConfirm: (_key, index) => {
+      const selected = localPageAgents[index];
+      if (selected?.id) {
+        onSelect(selected.id, "local");
+      }
+    },
+    onCancel: undefined,
+  });
+
+  /** Turn one page, or decline at either end (which is what the face did). */
+  const turnPage = useCallback(
+    (delta: 1 | -1) => {
+      if (activeTab === "pinned") {
+        const next = pinnedPage + delta;
+        if (next < 0 || next > pinnedTotalPages - 1) return "declined";
+        setPinnedPage(next);
+        pinnedList.setCursor(0);
+        return "consumed";
+      }
+      if (activeTab === "local") {
+        const next = localPage + delta;
+        if (next < 0 || next > localTotalPages - 1) return "declined";
+        setLocalPage(next);
+        localList.setCursor(0);
+        return "consumed";
+      }
+      return "declined";
+    },
+    [
+      activeTab,
+      localList,
+      localPage,
+      localTotalPages,
+      pinnedList,
+      pinnedPage,
+      pinnedTotalPages,
+    ],
+  );
+
+  // Every key that is not the list's own: the tabs, the page turn, the three
+  // shortcuts, and the New tab's Escape. All of them decline when they do not
+  // apply, so the list's table (or the wizard's rule) still receives the key.
+  //
+  // `D` carries a chord for each encoding of the shift and then checks the
+  // letter itself: the chord matcher is case-insensitive, and the key has to be
+  // **uppercase** or the destructive action would sit under a plain `d`.
+  const selectorExtras: KeyBinding[] = [
+    {
+      id: "agent-selector.new-tab-escape",
+      chords: [{ key: "escape" }],
+      run: () => {
+        if (activeTab !== "new" || !newAgentNameInput) return "declined";
+        setNewAgentNameInput("");
+        setNewAgentNameError("");
+        return "consumed";
+      },
+    },
+    {
+      id: "agent-selector.cycle-tab",
+      chords: [{ key: "tab" }],
+      run: () => {
+        if (!listActive) return "declined";
+        const currentIndex = visibleTabs.findIndex((t) => t.id === activeTab);
+        const nextIndex = (currentIndex + 1) % visibleTabs.length;
+        setActiveTab(visibleTabs[nextIndex]?.id ?? "pinned");
+        return "consumed";
+      },
+    },
+    {
+      id: "agent-selector.turn-page",
+      chords: [{ key: "leftArrow" }, { key: "rightArrow" }],
+      run: ({ key }) => {
+        if (!listActive) return "declined";
+        return turnPage(key.leftArrow ? -1 : 1);
+      },
+    },
+    {
+      id: "agent-selector.unpin",
+      chords: [{ key: "p" }, { key: "p", shift: true }],
+      run: () => {
+        if (!listActive || !allowPinActions || activeTab !== "pinned") {
+          return "declined";
+        }
+        const selected = pinnedPageAgents[pinnedList.cursor];
+        if (!selected) return "declined";
+        const backend = getBackendForMode(selected.backendMode);
+        void unpinAgentForCurrentUser(selected.agentId, backend).finally(() => {
+          loadPinnedAgents();
+        });
+        return "consumed";
+      },
+    },
+    {
+      id: "agent-selector.delete",
+      chords: [{ key: "d" }, { key: "d", shift: true }],
+      run: ({ input }) => {
+        if (input !== "D") return "declined";
+        if (!listActive || !allowDelete) return "declined";
+        if (activeTab === "pinned") {
+          const selected = pinnedPageAgents[pinnedList.cursor];
+          if (!selected?.agent) return "declined";
+          setPendingDelete({
+            agent: selected.agent,
+            agentId: selected.agentId,
+            isLocal: selected.backendMode === "local",
+          });
+        } else if (activeTab === "local") {
+          const selected = localPageAgents[localList.cursor];
+          if (!selected?.id) return "declined";
+          setPendingDelete({
+            agent: selected,
+            agentId: selected.id,
+            isLocal: true,
+          });
+        } else {
+          return "declined";
+        }
+        setDeleteConfirmInput("");
+        goTo("deleteConfirm");
+        return "consumed";
+      },
+    },
+    {
+      id: "agent-selector.new-tab",
+      chords: [{ key: "n" }, { key: "n", shift: true }],
+      run: () => {
+        if (!listActive || !showNewTab) return "declined";
+        setActiveTab("new");
+        return "consumed";
+      },
+    },
+  ];
+
+  useKeyBindings("agent-selector-keys", [
+    {
+      scope: "overlay",
+      bindings: [
+        ...selectorExtras,
+        ...wizardBindings({
+          canGoBack,
+          onBack: () => {
+            setPendingDelete(null);
+            setDeleteConfirmInput("");
+            back();
+          },
+          onCancel,
+        }),
+      ],
+    },
+  ]);
 
   // Handle agent deletion
   const handleDeleteAgent = useCallback(async () => {
-    if (viewState.type !== "deleteConfirm") return;
-    const { agent, agentId, isLocal } = viewState;
+    if (!pendingDelete) return;
+    const { agent, agentId, isLocal } = pendingDelete;
     const expectedName = agent.name || agentId.slice(0, 12);
 
     if (deleteConfirmInput !== expectedName) return;
@@ -256,8 +456,9 @@ export function AgentSelector({
       await backend.deleteAgent(agentId);
 
       // Reset state and refresh tabs
-      setViewState({ type: "list" });
+      setPendingDelete(null);
       setDeleteConfirmInput("");
+      popTo("list");
       // Reload pinned and invalidate cached tabs
       loadPinnedAgents();
       setLocalLoaded(false);
@@ -266,178 +467,8 @@ export function AgentSelector({
     } finally {
       setDeleteLoading(false);
     }
-  }, [viewState, deleteConfirmInput, loadPinnedAgents]);
+  }, [pendingDelete, deleteConfirmInput, loadPinnedAgents, popTo]);
 
-  useInput((input, key) => {
-    // CTRL-C: immediately cancel
-    if (key.ctrl && input === "c") {
-      onCancel();
-      return;
-    }
-
-    // Handle delete confirmation view
-    if (viewState.type === "deleteConfirm") {
-      // Always allow Esc to back out (even during deletion)
-      if (key.escape) {
-        setViewState({ type: "list" });
-        setDeleteConfirmInput("");
-        return;
-      }
-
-      // Disable all other input while deleting
-      if (deleteLoading) return;
-
-      if (key.return) {
-        handleDeleteAgent();
-      } else if (key.backspace || key.delete) {
-        setDeleteConfirmInput((prev) => prev.slice(0, -1));
-      } else if (input && !key.ctrl && !key.meta) {
-        setDeleteConfirmInput((prev) => prev + input);
-      }
-      return;
-    }
-
-    // List view handlers below
-
-    // Tab key cycles through tabs
-    if (key.tab) {
-      const currentIndex = visibleTabs.findIndex((t) => t.id === activeTab);
-      const nextIndex = (currentIndex + 1) % visibleTabs.length;
-      setActiveTab(visibleTabs[nextIndex]?.id ?? "pinned");
-      return;
-    }
-
-    if (currentLoading) return;
-
-    // New tab has its own input handling via PasteAwareTextInput.
-    // Only handle Escape here.
-    if (activeTab === "new") {
-      if (key.escape) {
-        if (newAgentNameInput) {
-          setNewAgentNameInput("");
-          setNewAgentNameError("");
-        } else {
-          onCancel();
-        }
-      }
-      return;
-    }
-
-    const maxIndex = currentAgents.length - 1;
-
-    if (key.upArrow) {
-      setCurrentSelectedIndex((prev: number) => Math.max(0, prev - 1));
-    } else if (key.downArrow) {
-      setCurrentSelectedIndex((prev: number) => Math.min(maxIndex, prev + 1));
-    } else if (key.return) {
-      // If typing a search query (list tabs only), submit it
-      if (
-        activeTab !== "pinned" &&
-        searchInput &&
-        searchInput !== activeQuery
-      ) {
-        submitSearch();
-        return;
-      }
-
-      // Select agent
-      if (activeTab === "pinned") {
-        const selected = pinnedPageAgents[pinnedSelectedIndex];
-        if (selected?.agent) {
-          onSelect(selected.agentId, selected.backendMode);
-        }
-      } else if (activeTab === "local") {
-        const selected = localPageAgents[localSelectedIndex];
-        if (selected?.id) {
-          onSelect(selected.id, "local");
-        }
-      }
-    } else if (key.escape) {
-      // If typing search (list tabs), clear it first
-      if (activeTab !== "pinned" && searchInput) {
-        clearSearch();
-        return;
-      }
-      onCancel();
-    } else if (key.backspace || key.delete) {
-      if (activeTab !== "pinned") {
-        setSearchInput((prev) => prev.slice(0, -1));
-      }
-    } else if (key.leftArrow) {
-      // Previous page
-      if (activeTab === "pinned") {
-        if (pinnedPage > 0) {
-          setPinnedPage((prev) => prev - 1);
-          setPinnedSelectedIndex(0);
-        }
-      } else if (activeTab === "local") {
-        if (localPage > 0) {
-          setLocalPage((prev) => prev - 1);
-          setLocalSelectedIndex(0);
-        }
-      }
-    } else if (key.rightArrow) {
-      // Next page
-      if (activeTab === "pinned") {
-        if (pinnedPage < pinnedTotalPages - 1) {
-          setPinnedPage((prev) => prev + 1);
-          setPinnedSelectedIndex(0);
-        }
-      } else if (activeTab === "local") {
-        if (localPage < localTotalPages - 1) {
-          setLocalPage((prev) => prev + 1);
-          setLocalSelectedIndex(0);
-        }
-      }
-    } else if (
-      allowPinActions &&
-      activeTab === "pinned" &&
-      (input === "p" || input === "P")
-    ) {
-      // Unpin from current scope (pinned tab only)
-      const selected = pinnedPageAgents[pinnedSelectedIndex];
-      if (selected) {
-        const backend = getBackendForMode(selected.backendMode);
-        void unpinAgentForCurrentUser(selected.agentId, backend).finally(() => {
-          loadPinnedAgents();
-        });
-      }
-    } else if (allowDelete && input === "D") {
-      // Delete agent - open confirmation
-      let selectedAgent: AgentState | null = null;
-      let selectedAgentId: string | null = null;
-      let selectedIsLocal = false;
-
-      if (activeTab === "pinned") {
-        const selected = pinnedPageAgents[pinnedSelectedIndex];
-        if (selected?.agent) {
-          selectedAgent = selected.agent;
-          selectedAgentId = selected.agentId;
-          selectedIsLocal = selected.backendMode === "local";
-        }
-      } else if (activeTab === "local") {
-        selectedAgent = localPageAgents[localSelectedIndex] ?? null;
-        selectedAgentId = selectedAgent?.id ?? null;
-        selectedIsLocal = true;
-      }
-
-      if (selectedAgent && selectedAgentId) {
-        setViewState({
-          type: "deleteConfirm",
-          agent: selectedAgent,
-          agentId: selectedAgentId,
-          isLocal: selectedIsLocal,
-        });
-        setDeleteConfirmInput("");
-      }
-    } else if (showNewTab && (input === "n" || input === "N")) {
-      // Switch to New tab
-      setActiveTab("new");
-    } else if (activeTab !== "pinned" && input && !key.ctrl && !key.meta) {
-      // Type to search (list tabs only)
-      setSearchInput((prev) => prev + input);
-    }
-  });
   // Render agent item (shared between tabs)
   const renderAgentItem = (
     agent: AgentSelectorListAgent,
@@ -476,7 +507,7 @@ export function AgentSelector({
     }
 
     return (
-      <Box key={agent.id} flexDirection="column" marginBottom={1}>
+      <Box flexDirection="column" marginBottom={1}>
         <Box flexDirection="row">
           <Text
             color={isSelected ? colors.selector.itemHighlighted : undefined}
@@ -523,7 +554,7 @@ export function AgentSelector({
 
     // Error state for missing agent
     return (
-      <Box key={data.agentId} flexDirection="column" marginBottom={1}>
+      <Box flexDirection="column" marginBottom={1}>
         <Box flexDirection="row">
           <Text
             color={isSelected ? colors.selector.itemHighlighted : undefined}
@@ -548,27 +579,29 @@ export function AgentSelector({
   };
 
   // If in delete confirmation view, render that instead of the list
-  if (viewState.type === "deleteConfirm") {
-    const displayName = viewState.agent.name || viewState.agentId.slice(0, 12);
+  if (step === "deleteConfirm" && pendingDelete) {
+    const displayName =
+      pendingDelete.agent.name || pendingDelete.agentId.slice(0, 12);
     return (
       <AgentDeleteConfirmOverlay
         command={command}
         displayName={displayName}
         input={deleteConfirmInput}
         loading={deleteLoading}
+        onInputChange={setDeleteConfirmInput}
+        onInputSubmit={handleDeleteAgent}
       />
     );
   }
 
   return (
-    <OverlayShell
+    <OverlayFrame
       command={command}
       title={title}
       footer={
         activeTab !== "new" &&
         !currentLoading &&
-        (activeTab === "pinned" ||
-          (!currentError && currentAgents.length > 0)) ? (
+        (activeTab === "pinned" || currentAgents.length > 0) ? (
           <AgentSelectorFooter
             terminalWidth={terminalWidth}
             activeTab={activeTab}
@@ -580,7 +613,7 @@ export function AgentSelector({
             allowDelete={allowDelete}
             allowPinActions={allowPinActions}
             hasSelectedPinnedAgent={
-              pinnedPageAgents[pinnedSelectedIndex] !== undefined
+              pinnedPageAgents[pinnedList.cursor] !== undefined
             }
           />
         ) : undefined
@@ -598,30 +631,6 @@ export function AgentSelector({
         <Box height={1} />
       </Box>
 
-      {/* Search input - list tabs only */}
-      {activeTab !== "pinned" &&
-        activeTab !== "new" &&
-        (searchInput || activeQuery) && (
-          <Box marginBottom={1}>
-            <Text dimColor>Search: </Text>
-            <Text>{searchInput}</Text>
-            {searchInput && searchInput !== activeQuery && (
-              <Text dimColor> (press Enter to search)</Text>
-            )}
-            {activeQuery && searchInput === activeQuery && (
-              <Text dimColor> (Esc to clear)</Text>
-            )}
-          </Box>
-        )}
-
-      {/* Error state - list tabs */}
-      {activeTab !== "pinned" && currentError && (
-        <Box flexDirection="column">
-          <Text color="red">Error: {currentError}</Text>
-          <Text dimColor>Press ESC to cancel</Text>
-        </Box>
-      )}
-
       {/* Loading state */}
       {currentLoading && (
         <Box>
@@ -632,9 +641,7 @@ export function AgentSelector({
       {/* Empty state */}
       {!currentLoading &&
         ((activeTab === "pinned" && validPinnedAgents.length === 0) ||
-          (activeTab === "local" &&
-            !currentError &&
-            currentAgents.length === 0)) && (
+          (activeTab === "local" && currentAgents.length === 0)) && (
           <Box
             flexDirection="column"
             paddingLeft={activeTab === "pinned" ? 2 : 0}
@@ -650,22 +657,30 @@ export function AgentSelector({
       {activeTab === "pinned" &&
         !pinnedLoading &&
         validPinnedAgents.length > 0 && (
-          <Box flexDirection="column">
-            {pinnedPageAgents.map((data, index) =>
-              renderPinnedItem(data, index, index === pinnedSelectedIndex),
-            )}
-          </Box>
+          <OverlayListView
+            items={pinnedItems}
+            cursor={pinnedList.cursor}
+            renderRow={(_item, index, isCursor) => {
+              const data = pinnedPageAgents[index];
+              if (!data) return null;
+              return renderPinnedItem(data, index, isCursor);
+            }}
+          />
         )}
 
       {/* Local tab content */}
       {activeTab === "local" && !localLoading && localAgents.length > 0 && (
-        <Box flexDirection="column">
-          {localPageAgents.map((agent, index) =>
-            renderAgentItem(agent, index, index === localSelectedIndex, {
+        <OverlayListView
+          items={localItems}
+          cursor={localList.cursor}
+          renderRow={(_item, index, isCursor) => {
+            const agent = localPageAgents[index];
+            if (!agent) return null;
+            return renderAgentItem(agent, index, isCursor, {
               backend: "local",
-            }),
-          )}
-        </Box>
+            });
+          }}
+        />
       )}
 
       {/* New tab content */}
@@ -681,31 +696,30 @@ export function AgentSelector({
             <Box paddingLeft={2}>
               <Text>Agent name:</Text>
             </Box>
-            <Box>
-              <Text color={colors.selector.itemHighlighted}>{">"}</Text>
-              <Text> </Text>
-              <PasteAwareTextInput
-                value={newAgentNameInput}
-                onChange={(val) => {
-                  setNewAgentNameInput(val);
-                  setNewAgentNameError("");
-                }}
-                onSubmit={(text) => {
-                  const trimmed = text.trim();
-                  if (!trimmed) {
-                    onCreateNewAgent?.(DEFAULT_AGENT_NAME, "local");
-                    return;
-                  }
-                  const validationError = validateAgentName(trimmed);
-                  if (validationError) {
-                    setNewAgentNameError(validationError);
-                    return;
-                  }
-                  onCreateNewAgent?.(trimmed, "local");
-                }}
-                placeholder={DEFAULT_AGENT_NAME}
-              />
-            </Box>
+            <OverlayTextField
+              value={newAgentNameInput}
+              onChange={(val) => {
+                setNewAgentNameInput(val);
+                setNewAgentNameError("");
+              }}
+              onSubmit={(text) => {
+                const trimmed = text.trim();
+                if (!trimmed) {
+                  onCreateNewAgent?.(DEFAULT_AGENT_NAME, "local");
+                  return;
+                }
+                const validationError = validateAgentName(trimmed);
+                if (validationError) {
+                  setNewAgentNameError(validationError);
+                  return;
+                }
+                onCreateNewAgent?.(trimmed, "local");
+              }}
+              placeholder={DEFAULT_AGENT_NAME}
+              marker={
+                <Text color={colors.selector.itemHighlighted}>{"> "}</Text>
+              }
+            />
           </Box>
           {newAgentNameError && (
             <Box paddingLeft={2} marginTop={1}>
@@ -718,6 +732,6 @@ export function AgentSelector({
           </Box>
         </Box>
       )}
-    </OverlayShell>
+    </OverlayFrame>
   );
 }

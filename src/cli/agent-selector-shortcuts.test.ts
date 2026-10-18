@@ -8,7 +8,7 @@ import {
 import { getPinnedAgentBackendMode } from "@/cli/helpers/pinned-agent-listing";
 
 describe("agent selector shortcuts", () => {
-  test("uses Shift+D for delete so lowercase d can be typed in search", () => {
+  test("delete sits behind Shift+D, so a plain d is not destructive", () => {
     const selectorPath = fileURLToPath(
       new URL("../cli/components/AgentSelector.tsx", import.meta.url),
     );
@@ -18,16 +18,14 @@ describe("agent selector shortcuts", () => {
     const source = readFileSync(selectorPath, "utf-8");
     const footerSource = readFileSync(footerPath, "utf-8");
 
-    expect(source).toContain('allowDelete && input === "D"');
-    expect(source).not.toContain('input === "d" || input === "D"');
-
-    const deleteShortcutIndex = source.indexOf('allowDelete && input === "D"');
-    const searchTypingIndex = source.indexOf(
-      '} else if (activeTab !== "pinned" && input && !key.ctrl && !key.meta) {',
+    // The chord matcher lowercases both sides, so a `d` chord also matches a
+    // bare `d`; the binding therefore has to check the letter itself. That guard
+    // is the whole reason this is a source assertion and not a key one.
+    expect(source).toContain('if (input !== "D") return "declined";');
+    expect(source).toContain(
+      'chords: [{ key: "d" }, { key: "d", shift: true }]',
     );
-
-    expect(deleteShortcutIndex).toBeGreaterThanOrEqual(0);
-    expect(searchTypingIndex).toBeGreaterThan(deleteShortcutIndex);
+    expect(source).not.toContain('chords: [{ key: "d" }]');
     expect(footerSource).toContain("Shift+D delete");
   });
 

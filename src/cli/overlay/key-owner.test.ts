@@ -29,6 +29,7 @@ import { fileURLToPath } from "node:url";
  * and a face is added here in the commit that removes its handler.
  */
 const MIGRATED_FACES = [
+  "components/AgentSelector.tsx",
   "components/CompactionSelector.tsx",
   "components/ConversationSelector.tsx",
   "components/FeedbackDialog.tsx",

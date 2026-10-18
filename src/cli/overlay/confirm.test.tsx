@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Box } from "ink";
 import { colors } from "@/cli/components/colors";
-import { ConfirmOptions, TypedConfirmPrompt } from "@/cli/overlay/confirm";
+import { ConfirmOptions } from "@/cli/overlay/confirm";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
 
 /**
@@ -86,24 +86,5 @@ describe("ConfirmOptions", () => {
     expect(
       await optionsFrame(<ConfirmOptions options={[]} selectedIndex={0} />),
     ).toEqual([]);
-  });
-});
-
-describe("TypedConfirmPrompt", () => {
-  test("shows the placeholder while empty and the value once typed", async () => {
-    expect(
-      await optionsFrame(
-        <TypedConfirmPrompt value="" placeholder="(type the agent's name)" />,
-      ),
-    ).toEqual(["> (type the agent's name)"]);
-
-    expect(
-      await optionsFrame(
-        <TypedConfirmPrompt
-          value="my-agent"
-          placeholder="(type the agent's name)"
-        />,
-      ),
-    ).toEqual(["> my-agent"]);
   });
 });
