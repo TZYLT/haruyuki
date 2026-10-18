@@ -10,19 +10,25 @@ part of the need — so "list navigation + pagination + search" was written by
 hand a dozen times, each copy with its own edge cases. Everything in this
 directory exists to be the *one* copy.
 
+That count is reproducible, and worth stating because getting it wrong is easy:
+`git grep -lE '\buseInput\(' <pre-toolkit-commit> -- src/cli`, excluding
+`*.test.*` (the tests use the hook as a probe). Matching on the bare substring
+`useInput(` also counts this tree's own `useMouseInput(`, which is a different
+listener entirely.
+
 ## Ownership
 
 | File | Owns |
 |---|---|
 | `frame.tsx` | The chrome: `> /command`, solid line, title, body, footer. The **only** place an overlay header is rendered. Claims the input scope for its container kind. |
 | `list-model.ts` | Pure list behaviour: cursor clamping, the visible window (either anchor), filtering, multi-select ordering, reordering. No React, no Ink. |
-| `list-view.tsx` | Rendering a window: rows, the "(current)" marker, the "↑/↓ N more" indicators, and the loading/empty/error states. |
+| `list-view.tsx` | Rendering a window: rows, the "(current)" marker, the "↑/↓ N more" indicators, and the empty label a caller passes for "nothing to list". Loading and error are the caller's to render — they are state a list does not own. |
 | `list-bindings.ts` | Pure key data: arrows, `j`/`k`, PageUp/PageDown, Home/End, Enter, Escape, Space, ←/→. |
 | `use-overlay-list.ts` | Wiring the model and the key table to the input router — including claiming the scope — and keeping the state in the leaf. |
 | `pagination.ts` | Incremental page fetching as data: identity de-duplication, the cursor a full page hands on, the idle/loading/more/ready/error machine. |
 | `use-pagination.ts` | The page machine's React half — the generation guard that makes a superseded response inert, and the rule that a first load wins while a further one waits. |
 | `text-view.tsx` | The text sub-view: the labelled `> ` editor row, built on `PasteAwareTextInput` rather than growing a second editor. |
-| `confirm.tsx` | Option-style and type-to-confirm confirmations. |
+| `confirm.tsx` | The option-style confirmation, in the two variants the faces that already had one disagreed about (bold-and-highlighted, or the marker alone). The type-to-confirm prompt that used to live here retired with its last consumer in B7c; the typed row is now `text-view.tsx`'s editor in a step. |
 | `wizard.tsx` | Multi-step containers: the return stack as data, and the two keys that leave a step. |
 | `preview.ts` | The one classification of an approval's preview body (command / diff / args). |
 | `adapters.tsx` | `SingleSelectPicker`/`MultiSelectPicker`, rewritten as thin wrappers so their existing consumers did not have to change. |
@@ -38,15 +44,28 @@ directory exists to be the *one* copy.
    chord-less catch-all binding would decline the keys it does not want, which
    drops them on the composer behind the approval. Those keys are unchanged from
    the four copies they replaced and are pinned in that component's test.
+   The **leaf editor** is the other reader the rule does not cover: `TextInput`
+   (`@/cli/components/TextInput`) owns the character keys, Enter and the caret
+   keys a field needs, which is why `text-view.tsx` builds the typed row on
+   `PasteAwareTextInput` instead of growing a second editor. Both are named in
+   `key-owner.test.ts`, which derives the set rather than listing it, so a third
+   one cannot appear without a reason in a diff.
 2. **Decline, do not swallow.** A binding that does not apply right now (empty
    list, no query field, not in the confirm state) must return `declined` so the
    key continues down its normal path. `matchingBindings` exists for this; a
    binding that matches and consumes is a bug when it had nothing to do.
 3. **Identity is the item's `key`, never its index.** Anything that outlives a
-   render — a selection, a reorder, an anchor — is expressed as a key.
+   render — a selection, a reorder's *result*, a window anchor — is expressed as a
+   key. The **order** is still the caller's array: reordering is asked for by
+   index (`swapWithin(items, from, to)`, `onMoveItem(direction, index)`), because
+   it acts on the list the user is looking at, and what comes back out is keyed
+   (`orderedKeys`, in list order) so the answer survives a reorder.
 4. **Windowing is opt-in.** `rows: undefined` renders the whole list, which is
    what every overlay did before the toolkit; a caller asks for a window
    explicitly, so migrating one cannot silently change what a long list shows.
+   PageUp/PageDown still step by `list-bindings.ts`'s `DEFAULT_PAGE_ROWS` (10)
+   there: an unwindowed list has no row budget to take the step from, and every
+   face that bound those keys before the toolkit stepped by something page-sized.
    The same rule covers the window's *shape*: `anchor` is `edge` unless a face
    asks for `center` (`/resume`, `/search`) or `page` (`/help`, which prints its
    own `Page n/m` and whose last page is deliberately short), and `indicators` may
@@ -96,7 +115,9 @@ state of its first render** — Ink subscribes that handler through React's
 `[0,0,0]` behind `memo` and `[0,1,2]` without it. `ApprovalOptions.test.tsx`
 found the same thing first and pinned it in its own words (`↓` then Enter records
 `approve`, not `always`); the pre-migration `/hooks` face is the second instance,
-logging `screen=events index=0` on every dispatch, so under a bare mount its
+logging `screen=events index=0` on every dispatch (seen with a temporary counter
+while that batch was built — the reproducible half is the `[0,0,0]` / `[0,1,2]`
+counter `key-owner.test.ts` states), so under a bare mount its
 six-step ladder cannot leave the root step — while the identical file with
 `memo(` removed walks all six screens in the same harness. Whether a running app
 masks it is a question about re-render cadence (`docs/36` M5, the approval
