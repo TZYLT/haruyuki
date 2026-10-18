@@ -2,7 +2,11 @@ import { Box } from "ink";
 import type { ReactElement } from "react";
 import { colors } from "@/cli/components/colors";
 import { Text } from "@/cli/components/Text";
-import { type OverlayListItem, visibleWindow } from "./list-model";
+import {
+  type ListAnchor,
+  type OverlayListItem,
+  visibleWindow,
+} from "./list-model";
 
 /**
  * Rendering a list of overlay items.
@@ -29,6 +33,21 @@ export interface OverlayListViewProps {
   cursor: number;
   /** Window size. `undefined` renders the whole list. */
   rows?: number;
+  /**
+   * Where the window sits relative to the cursor. Defaults to `edge`, the model
+   * lists' shape; `/resume` and `/search` pass `center`, which is what their own
+   * window arithmetic did.
+   */
+  anchor?: ListAnchor;
+  /**
+   * Whether the `↑/↓ N more` rows are drawn for a windowed list. On by default.
+   *
+   * Off is for a face that already says the same thing somewhere it owns:
+   * `/resume` prints `Showing 1-5 of 23+` in its footer and `/search` prints
+   * `3/100 results`, so a second count in the toolkit's wording is the same fact
+   * twice — and, because the rows are reserved even at an end, two rows taller.
+   */
+  indicators?: boolean;
   /**
    * Custom row renderer, in the picker's `renderItem` signature so a rewrite can
    * pass its renderer straight through. `index` is the item's index in the *full*
@@ -82,6 +101,8 @@ export function OverlayListView({
   items,
   cursor,
   rows,
+  anchor,
+  indicators = true,
   renderRow,
   emptyLabel,
 }: OverlayListViewProps) {
@@ -93,9 +114,9 @@ export function OverlayListView({
     ) : null;
   }
 
-  const window = visibleWindow({ count: items.length, cursor, rows });
+  const window = visibleWindow({ count: items.length, cursor, rows, anchor });
   const visible = items.slice(window.start, window.end);
-  const windowed = rows !== undefined && window.total > rows;
+  const windowed = indicators && rows !== undefined && window.total > rows;
 
   return (
     <Box flexDirection="column">

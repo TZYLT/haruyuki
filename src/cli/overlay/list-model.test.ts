@@ -66,6 +66,26 @@ describe("windowStart", () => {
     expect(windowStart({ count: 10, cursor: 7, rows: 0 })).toBe(0);
     expect(windowStart({ count: 10, cursor: 7, rows: -2 })).toBe(0);
   });
+
+  test("the centered anchor holds the cursor in the middle of the window", () => {
+    // `/resume` and `/search` both had `cursor - floor(rows / 2)`; the cursor
+    // reaches the middle of the window and the window moves with it from there.
+    expect(
+      windowStart({ count: 20, cursor: 2, rows: 5, anchor: "center" }),
+    ).toBe(0);
+    expect(
+      windowStart({ count: 20, cursor: 3, rows: 5, anchor: "center" }),
+    ).toBe(1);
+    // The last window is still the list's tail, so the tail is reachable.
+    expect(
+      windowStart({ count: 20, cursor: 19, rows: 5, anchor: "center" }),
+    ).toBe(15);
+    // A single-row window has no room to center, so both anchors agree.
+    expect(
+      windowStart({ count: 20, cursor: 9, rows: 1, anchor: "center" }),
+    ).toBe(9);
+    expect(windowStart({ count: 20, cursor: 9, rows: 1 })).toBe(9);
+  });
 });
 
 describe("visibleWindow", () => {

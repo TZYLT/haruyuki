@@ -8,6 +8,7 @@ import { listBindings } from "./list-bindings";
 import {
   clampCursor,
   itemAt,
+  type ListAnchor,
   type ListWindow,
   type OverlayListItem,
   visibleWindow,
@@ -58,6 +59,12 @@ export interface UseOverlayListOptions {
   initialCursorIndex?: number;
   /** Window size, which is also the PageUp/PageDown step. Unset = whole list. */
   rows?: number;
+  /**
+   * Where the window sits relative to the cursor. See `list-model.ts`: `edge` is
+   * the model lists' shape, `center` is `/resume`'s and `/search`'s. A face must
+   * pass the same anchor to `OverlayListView`, which is what windows.
+   */
+  anchor?: ListAnchor;
   /** Scope to claim and bind in. `overlay` unless this list is a modal's. */
   scope?: OverlayInputScope;
   /**
@@ -103,6 +110,7 @@ export function useOverlayList(
     owner,
     items,
     rows,
+    anchor,
     scope = "overlay",
     navigationEnabled = true,
     vimKeys,
@@ -159,7 +167,7 @@ export function useOverlayList(
   return {
     cursor,
     current: itemAt(items, cursor),
-    window: visibleWindow({ count, cursor, rows }),
+    window: visibleWindow({ count, cursor, rows, anchor }),
     setCursor: moveTo,
   };
 }

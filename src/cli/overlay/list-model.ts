@@ -39,6 +39,22 @@ export interface OverlayListItem {
   dimLabel?: boolean;
 }
 
+/**
+ * Where the window stops relative to the cursor.
+ *
+ * Both shapes are real in this tree, which is why this is a parameter and not a
+ * choice. `edge` keeps the cursor on the window's bottom edge while the list
+ * scrolls under it — what the model lists do (`profile-selection`'s model window
+ * and `ModelSelector`). `center` holds the cursor near the middle — what
+ * `/resume` and `/search` do, both with `cursor - floor(rows / 2)`. Stating both
+ * here is still one copy: a face asks for the shape it already had, which is what
+ * keeps a migration from changing what a long list shows as a side effect.
+ *
+ * The last window is the list's tail in both shapes, so neither can leave rows
+ * unreachable at the bottom.
+ */
+export type ListAnchor = "edge" | "center";
+
 /** Which part of a list is on screen, and how much is hidden on either side. */
 export interface ListWindow {
   start: number;
@@ -66,27 +82,29 @@ export function clampCursor(cursor: number, count: number): number {
 /**
  * First index of the window that shows `cursor` inside `rows` rows.
  *
- * The window only moves once the cursor reaches its edge, and the last window is
- * the list's tail rather than a shorter one — the shape both hand-written window
- * calculations in this tree already had (`MessageSearch`, `profile-selection`),
- * now stated once.
+ * The window only moves once the cursor reaches the lead its anchor allows, and
+ * the last window is the list's tail rather than a shorter one — the shape the
+ * hand-written window calculations in this tree already had, now stated once.
  */
 export function windowStart(options: {
   count: number;
   cursor: number;
   rows: number;
+  anchor?: ListAnchor;
 }): number {
   const count = Math.max(0, Math.trunc(options.count));
   const rows = Math.trunc(options.rows);
   if (rows <= 0 || count <= rows) return 0;
   const cursor = clampCursor(options.cursor, count);
-  return Math.max(0, Math.min(cursor - rows + 1, count - rows));
+  const lead = options.anchor === "center" ? Math.floor(rows / 2) : rows - 1;
+  return Math.max(0, Math.min(cursor - lead, count - rows));
 }
 
 export function visibleWindow(options: {
   count: number;
   cursor: number;
   rows?: number;
+  anchor?: ListAnchor;
 }): ListWindow {
   const count = Math.max(0, Math.trunc(options.count));
   if (count === 0) return EMPTY_WINDOW;
@@ -95,7 +113,7 @@ export function visibleWindow(options: {
     return { start: 0, end: count, above: 0, below: 0, total: count };
   }
   const rows = Math.max(1, Math.trunc(options.rows));
-  const start = windowStart({ count, cursor, rows });
+  const start = windowStart({ count, cursor, rows, anchor: options.anchor });
   const end = Math.min(count, start + rows);
   return { start, end, above: start, below: count - end, total: count };
 }

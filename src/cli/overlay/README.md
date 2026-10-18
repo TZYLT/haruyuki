@@ -15,11 +15,12 @@ directory exists to be the *one* copy.
 | File | Owns |
 |---|---|
 | `frame.tsx` | The chrome: `> /command`, solid line, title, body, footer. The **only** place an overlay header is rendered. Claims the input scope for its container kind. |
-| `list-model.ts` | Pure list behaviour: cursor clamping, the visible window, filtering, multi-select ordering, reordering. No React, no Ink. |
+| `list-model.ts` | Pure list behaviour: cursor clamping, the visible window (either anchor), filtering, multi-select ordering, reordering. No React, no Ink. |
 | `list-view.tsx` | Rendering a window: rows, the "(current)" marker, the "↑/↓ N more" indicators, and the loading/empty/error states. |
 | `list-bindings.ts` | Pure key data: arrows, `j`/`k`, PageUp/PageDown, Home/End, Enter, Escape, Space, ←/→. |
 | `use-overlay-list.ts` | Wiring the model and the key table to the input router — including claiming the scope — and keeping the state in the leaf. |
-| `pagination.ts` | Incremental page fetching: generation guard, identity de-duplication, the idle/loading/more/end/error machine. |
+| `pagination.ts` | Incremental page fetching as data: identity de-duplication, the cursor a full page hands on, the idle/loading/more/ready/error machine. |
+| `use-pagination.ts` | The page machine's React half — the generation guard that makes a superseded response inert, and the rule that a first load wins while a further one waits. |
 | `text-view.tsx` | The text sub-view — reuses `TextInput`/`PasteAwareTextInput` rather than growing a second editor. |
 | `confirm.tsx` | Option-style and type-to-confirm confirmations. |
 | `wizard.tsx` | Multi-step containers with a return stack. |
@@ -46,6 +47,9 @@ directory exists to be the *one* copy.
 4. **Windowing is opt-in.** `rows: undefined` renders the whole list, which is
    what every overlay did before the toolkit; a caller asks for a window
    explicitly, so migrating one cannot silently change what a long list shows.
+   The same rule covers the window's *shape*: `anchor` is `edge` unless a face
+   asks for `center`, and `indicators` may be turned off by a face that prints the
+   position itself (`/resume`, `/search`). A face picks what it already had.
 5. **State stays in the leaf.** Cursor and query state live in the overlay
    component, never in `AppCoordinator`/`AppView` (see `src/cli/AGENTS.md`) and
    never in a module-level store: an overlay is one component, and a store would

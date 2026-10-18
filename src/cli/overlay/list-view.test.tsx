@@ -176,6 +176,45 @@ describe("OverlayListView", () => {
     ).toEqual(["No worktrees."]);
   });
 
+  test("a caller that says the count itself can turn the indicators off", async () => {
+    const painted = await paint(
+      <OverlayListView
+        items={rows(10)}
+        cursor={5}
+        rows={3}
+        indicators={false}
+      />,
+    );
+
+    // The window is the same; only the two rows the face does not want are gone.
+    // `/resume` and `/search` print the position in their own footer.
+    expect(painted).toEqual([
+      "  Row 4 · desc 4",
+      "  Row 5 · desc 5",
+      "> Row 6 · desc 6",
+    ]);
+  });
+
+  test("the centered anchor holds the cursor in the middle of the window", async () => {
+    const painted = await paint(
+      <OverlayListView
+        items={rows(10)}
+        cursor={5}
+        rows={5}
+        anchor="center"
+        indicators={false}
+      />,
+    );
+
+    expect(painted).toEqual([
+      "  Row 4 · desc 4",
+      "  Row 5 · desc 5",
+      "> Row 6 · desc 6",
+      "  Row 7 · desc 7",
+      "  Row 8 · desc 8",
+    ]);
+  });
+
   test("hands a custom row its index in the full list, not in the window", async () => {
     const seen: number[] = [];
     const painted = await paint(
