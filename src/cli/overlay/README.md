@@ -30,7 +30,13 @@ directory exists to be the *one* copy.
 
 1. **One key owner.** Inside `overlay`/`modal`, list navigation keys may only be
    declared by `list-bindings.ts`. No overlay handles ↑↓/Enter/Escape/Space/←→
-   through its own `useInput`.
+   through its own `useInput`. **One named exception**: the four inline
+   approvals' shared option list (`@/cli/components/ApprovalOptions`) keeps Ink's
+   `useInput`, because its custom-denial row is a live text editor — every
+   printable key belongs to the editor while the cursor is on it, and a
+   chord-less catch-all binding would decline the keys it does not want, which
+   drops them on the composer behind the approval. Those keys are unchanged from
+   the four copies they replaced and are pinned in that component's test.
 2. **Decline, do not swallow.** A binding that does not apply right now (empty
    list, no query field, not in the confirm state) must return `declined` so the
    key continues down its normal path. `matchingBindings` exists for this; a

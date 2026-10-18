@@ -29,8 +29,13 @@ import {
   resolveApprovalKind,
 } from "@/cli/helpers/approval-info";
 import {
+  APPROVAL_HINT_TEXT,
+  APPROVAL_OPTION_GUTTER_WIDTH,
+  CUSTOM_DENIAL_LABEL,
+  DEFAULT_APPROVE_ALWAYS_LABEL,
   formatApprovalArgs,
   genericApprovalPreviewRows,
+  TASK_APPROVE_ALWAYS_LABEL,
   taskApprovalPromptRows,
 } from "@/cli/helpers/approval-layout";
 import {
@@ -57,9 +62,6 @@ import {
 } from "@/cli/overlay/preview";
 import type { ApprovalContext } from "@/permissions/analyzer";
 
-/** Rows the approval options occupy behind a 5-column selector gutter. */
-const APPROVAL_OPTION_GUTTER_WIDTH = 5;
-
 /** Width the inline previews are indented by inside the approval column. */
 const APPROVAL_PREVIEW_INDENT = 2;
 
@@ -71,20 +73,6 @@ const GENERIC_PREVIEW_ROWS = 3;
 
 /** Lines `SyntaxHighlightedCommand` keeps in a bash approval preview. */
 const BASH_PREVIEW_MAX_LINES = 3;
-
-/** The custom-denial option every inline approval offers. */
-const CUSTOM_DENIAL_LABEL = "No, and tell Haruyuki what to do differently";
-
-/** Default "always" label for the non-task approvals. */
-const DEFAULT_APPROVE_ALWAYS_LABEL =
-  "Yes, and don't ask again for this project";
-
-/** Default "always" label for the task approval. */
-const TASK_APPROVE_ALWAYS_LABEL =
-  "Yes, allow subagent operations during this session";
-
-/** Hint text every inline approval shows while its options are selected. */
-const APPROVAL_HINT_TEXT = "Enter to select · Esc to cancel";
 
 export interface QueuedApprovalDecision {
   type: "approve" | "deny";

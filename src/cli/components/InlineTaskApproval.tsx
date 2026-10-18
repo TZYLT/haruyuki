@@ -1,6 +1,9 @@
-import { Box, useInput } from "ink";
-import { memo, useMemo, useState } from "react";
-import { taskApprovalPromptRows } from "@/cli/helpers/approval-layout";
+import { Box } from "ink";
+import { memo, useMemo } from "react";
+import {
+  TASK_APPROVE_ALWAYS_LABEL,
+  taskApprovalPromptRows,
+} from "@/cli/helpers/approval-layout";
 import {
   countPreviewRows,
   fitPreviewLines,
@@ -10,7 +13,7 @@ import {
   useTerminalRows,
   useTerminalWidth,
 } from "@/cli/hooks/use-terminal-width";
-import { useTextInputCursor } from "@/cli/hooks/use-text-input-cursor";
+import { ApprovalOptions } from "./ApprovalOptions";
 import { colors } from "./colors";
 import { Text } from "./Text";
 
@@ -50,90 +53,9 @@ export const InlineTaskApproval = memo(
     approveAlwaysText,
     allowPersistence = true,
   }: Props) => {
-    const [selectedOption, setSelectedOption] = useState(0);
-    const {
-      text: customReason,
-      cursorPos,
-      handleKey,
-      clear,
-    } = useTextInputCursor();
     const columns = useTerminalWidth();
     const terminalRows = useTerminalRows();
     useProgressIndicator();
-
-    // Custom option index depends on whether "always" option is shown
-    const customOptionIndex = allowPersistence ? 2 : 1;
-    const maxOptionIndex = customOptionIndex;
-    const isOnCustomOption = selectedOption === customOptionIndex;
-    const customOptionPlaceholder =
-      "No, and tell Haruyuki what to do differently";
-
-    useInput(
-      (input, key) => {
-        if (!isFocused) return;
-
-        // CTRL-C: cancel (queue denial, return to input)
-        if (key.ctrl && input === "c") {
-          onCancel?.();
-          return;
-        }
-
-        // Arrow navigation always works
-        if (key.upArrow) {
-          setSelectedOption((prev) => Math.max(0, prev - 1));
-          return;
-        }
-        if (key.downArrow) {
-          setSelectedOption((prev) => Math.min(maxOptionIndex, prev + 1));
-          return;
-        }
-
-        // When on custom input option
-        if (isOnCustomOption) {
-          if (key.return) {
-            if (customReason.trim()) {
-              onDeny(customReason.trim());
-            }
-            return;
-          }
-          if (key.escape) {
-            if (customReason) {
-              clear();
-            } else {
-              onCancel?.();
-            }
-            return;
-          }
-          // Handle text input (arrows, backspace, typing)
-          if (handleKey(input, key)) return;
-        }
-
-        // When on regular options
-        if (key.return) {
-          if (selectedOption === 0) {
-            onApprove();
-          } else if (selectedOption === 1 && allowPersistence) {
-            onApproveAlways("session");
-          }
-          return;
-        }
-        if (key.escape) {
-          onCancel?.();
-          return;
-        }
-
-        // Number keys for quick selection (only for fixed options, not custom text input)
-        if (input === "1") {
-          onApprove();
-          return;
-        }
-        if (input === "2" && allowPersistence) {
-          onApproveAlways("session");
-          return;
-        }
-      },
-      { isActive: isFocused },
-    );
 
     // Generate horizontal line
     const solidLine = SOLID_LINE.repeat(Math.max(columns, 10));
@@ -200,102 +122,26 @@ export const InlineTaskApproval = memo(
       );
     }, [taskInfo, solidLine, contentWidth, terminalRows]);
 
-    // Hint text based on state
-    const hintText = isOnCustomOption
-      ? customReason
-        ? "Enter to submit · Esc to clear"
-        : "Type reason · Esc to cancel"
-      : "Enter to select · Esc to cancel";
-
     // Generate "always" text for Task tool
-    const alwaysText =
-      approveAlwaysText || "Yes, allow subagent operations during this session";
+    const alwaysText = approveAlwaysText || TASK_APPROVE_ALWAYS_LABEL;
 
     return (
       <Box flexDirection="column">
         {/* Static task content - memoized to prevent re-render on keystroke */}
         {memoizedTaskContent}
 
-        {/* Options */}
-        <Box marginTop={1} flexDirection="column">
-          {/* Option 1: Yes */}
-          <Box flexDirection="row">
-            <Box width={5} flexShrink={0}>
-              <Text
-                color={
-                  selectedOption === 0 ? colors.approval.header : undefined
-                }
-              >
-                {selectedOption === 0 ? "❯" : " "} 1.
-              </Text>
-            </Box>
-            <Box flexGrow={1} width={Math.max(0, columns - 5)}>
-              <Text
-                wrap="wrap"
-                color={
-                  selectedOption === 0 ? colors.approval.header : undefined
-                }
-              >
-                Yes
-              </Text>
-            </Box>
-          </Box>
-
-          {/* Option 2: Yes, always (only if persistence allowed) */}
-          {allowPersistence && (
-            <Box flexDirection="row">
-              <Box width={5} flexShrink={0}>
-                <Text
-                  color={
-                    selectedOption === 1 ? colors.approval.header : undefined
-                  }
-                >
-                  {selectedOption === 1 ? "❯" : " "} 2.
-                </Text>
-              </Box>
-              <Box flexGrow={1} width={Math.max(0, columns - 5)}>
-                <Text
-                  wrap="wrap"
-                  color={
-                    selectedOption === 1 ? colors.approval.header : undefined
-                  }
-                >
-                  {alwaysText}
-                </Text>
-              </Box>
-            </Box>
-          )}
-
-          {/* Custom input option */}
-          <Box flexDirection="row">
-            <Box width={5} flexShrink={0}>
-              <Text
-                color={isOnCustomOption ? colors.approval.header : undefined}
-              >
-                {isOnCustomOption ? "❯" : " "} {customOptionIndex + 1}.
-              </Text>
-            </Box>
-            <Box flexGrow={1} width={Math.max(0, columns - 5)}>
-              {customReason ? (
-                <Text wrap="wrap">
-                  {customReason.slice(0, cursorPos)}
-                  {isOnCustomOption && "█"}
-                  {customReason.slice(cursorPos)}
-                </Text>
-              ) : (
-                <Text wrap="wrap" dimColor>
-                  {customOptionPlaceholder}
-                  {isOnCustomOption && "█"}
-                </Text>
-              )}
-            </Box>
-          </Box>
-        </Box>
-
-        {/* Hint */}
-        <Box marginTop={1}>
-          <Text dimColor>{hintText}</Text>
-        </Box>
+        <ApprovalOptions
+          allowPersistence={allowPersistence}
+          alwaysLabel={alwaysText}
+          isFocused={isFocused}
+          // The task approval always shows its preview, so its options always
+          // carry the separating row.
+          marginTop={1}
+          onApprove={onApprove}
+          onApproveAlways={() => onApproveAlways("session")}
+          onCancel={onCancel}
+          onDeny={onDeny}
+        />
       </Box>
     );
   },

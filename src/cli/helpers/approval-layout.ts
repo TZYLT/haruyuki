@@ -15,6 +15,49 @@ import { fitPreviewLines } from "@/cli/helpers/approval-preview";
 const SCRIPT_PREVIEW_MAX_LINES = 40;
 
 /**
+ * The approval options, shared by the one control that renders them
+ * (`@/cli/components/ApprovalOptions`) and the row model that measures them.
+ *
+ * They are constants here rather than literals at either site because the two
+ * must agree: an option label that wraps one row more than the row model
+ * predicted is a viewport that clips the approval it is showing.
+ */
+
+/** Columns the numbered selector gutter takes. */
+export const APPROVAL_OPTION_GUTTER_WIDTH = 5;
+
+/** The custom-denial option every inline approval offers. */
+export const CUSTOM_DENIAL_LABEL =
+  "No, and tell Haruyuki what to do differently";
+
+/** Default "always" label for the non-task approvals. */
+export const DEFAULT_APPROVE_ALWAYS_LABEL =
+  "Yes, and don't ask again for this project";
+
+/** Default "always" label for the task approval. */
+export const TASK_APPROVE_ALWAYS_LABEL =
+  "Yes, allow subagent operations during this session";
+
+/**
+ * Hint text the options show while one of them is selected.
+ *
+ * The custom option's two hints are not longer than this one, which is why the
+ * row model can measure the hint with this constant whatever the cursor is on.
+ */
+export const APPROVAL_HINT_TEXT = "Enter to select · Esc to cancel";
+
+/** Hint text for the state the cursor is in. */
+export function approvalHintText(
+  isOnCustomOption: boolean,
+  hasReason: boolean,
+): string {
+  if (!isOnCustomOption) return APPROVAL_HINT_TEXT;
+  return hasReason
+    ? "Enter to submit · Esc to clear"
+    : "Type reason · Esc to cancel";
+}
+
+/**
  * Rows the live area needs besides the argument preview while a generic approval
  * is shown: rule, header, spacer, options with spacer, hint with spacer, the
  * live-item margin above and the collapsed input margin below, plus slack for

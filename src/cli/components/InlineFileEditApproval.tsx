@@ -1,15 +1,16 @@
 import { existsSync } from "node:fs";
-import { Box, useInput } from "ink";
-import { memo, useMemo, useState } from "react";
+import { Box } from "ink";
+import { memo, useMemo } from "react";
 import { fileEditApprovalHeaderText } from "@/cli/helpers/approval-info";
+import { DEFAULT_APPROVE_ALWAYS_LABEL } from "@/cli/helpers/approval-layout";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import { parsePatchToAdvancedDiff } from "@/cli/helpers/diff";
 import { simpleDiffDisplayPath } from "@/cli/helpers/diff-rows";
 import { parsePatchOperations } from "@/cli/helpers/format-args-display";
 import { useProgressIndicator } from "@/cli/hooks/use-progress-indicator";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
-import { useTextInputCursor } from "@/cli/hooks/use-text-input-cursor";
 import { AdvancedDiffRenderer } from "./AdvancedDiffRenderer";
+import { ApprovalOptions } from "./ApprovalOptions";
 import { colors } from "./colors";
 import { Text } from "./Text";
 
@@ -82,20 +83,8 @@ export const InlineFileEditApproval = memo(
     defaultScope = "project",
     headerOverride,
   }: Props) => {
-    const [selectedOption, setSelectedOption] = useState(0);
-    const {
-      text: customReason,
-      cursorPos,
-      handleKey,
-      clear,
-    } = useTextInputCursor();
     const columns = useTerminalWidth();
     useProgressIndicator();
-
-    // Custom option index depends on whether "always" option is shown
-    const customOptionIndex = allowPersistence ? 2 : 1;
-    const maxOptionIndex = customOptionIndex;
-    const isOnCustomOption = selectedOption === customOptionIndex;
 
     // Build diffs map to pass to approval handler (needed for line numbers in result)
     const diffsToPass = useMemo((): Map<string, AdvancedDiffSuccess> => {
@@ -140,81 +129,7 @@ export const InlineFileEditApproval = memo(
       return diffs;
     }, [fileEdit, precomputedDiff, allDiffs]);
 
-    const customOptionPlaceholder =
-      "No, and tell Haruyuki what to do differently";
-
-    useInput(
-      (input, key) => {
-        if (!isFocused) return;
-
-        // CTRL-C: cancel (queue denial, return to input)
-        if (key.ctrl && input === "c") {
-          onCancel?.();
-          return;
-        }
-
-        // Arrow navigation always works
-        if (key.upArrow) {
-          setSelectedOption((prev) => Math.max(0, prev - 1));
-          return;
-        }
-        if (key.downArrow) {
-          setSelectedOption((prev) => Math.min(maxOptionIndex, prev + 1));
-          return;
-        }
-
-        // When on custom input option
-        if (isOnCustomOption) {
-          if (key.return) {
-            if (customReason.trim()) {
-              onDeny(customReason.trim());
-            }
-            return;
-          }
-          if (key.escape) {
-            if (customReason) {
-              clear();
-            } else {
-              onCancel?.();
-            }
-            return;
-          }
-          // Handle text input (arrows, backspace, typing)
-          if (handleKey(input, key)) return;
-        }
-
-        // When on regular options
-        if (key.return) {
-          if (selectedOption === 0) {
-            onApprove(diffsToPass.size > 0 ? diffsToPass : undefined);
-          } else if (selectedOption === 1 && allowPersistence) {
-            onApproveAlways(
-              defaultScope,
-              diffsToPass.size > 0 ? diffsToPass : undefined,
-            );
-          }
-          return;
-        }
-        if (key.escape) {
-          onCancel?.();
-          return;
-        }
-
-        // Number keys for quick selection (only for fixed options, not custom text input)
-        if (input === "1") {
-          onApprove(diffsToPass.size > 0 ? diffsToPass : undefined);
-          return;
-        }
-        if (input === "2" && allowPersistence) {
-          onApproveAlways(
-            defaultScope,
-            diffsToPass.size > 0 ? diffsToPass : undefined,
-          );
-          return;
-        }
-      },
-      { isActive: isFocused },
-    );
+    const diffsPayload = diffsToPass.size > 0 ? diffsToPass : undefined;
 
     // Generate horizontal lines
     const solidLine = SOLID_LINE.repeat(Math.max(columns, 10));
@@ -348,13 +263,6 @@ export const InlineFileEditApproval = memo(
       ],
     );
 
-    // Hint text based on state
-    const hintText = isOnCustomOption
-      ? customReason
-        ? "Enter to submit · Esc to clear"
-        : "Type reason · Esc to cancel"
-      : "Enter to select · Esc to cancel";
-
     const optionsMarginTop = showPreview ? 1 : 0;
 
     return (
@@ -362,87 +270,16 @@ export const InlineFileEditApproval = memo(
         {/* Static diff content - memoized to prevent re-render on keystroke */}
         {showPreview && memoizedDiffContent}
 
-        {/* Options */}
-        <Box marginTop={optionsMarginTop} flexDirection="column">
-          {/* Option 1: Yes */}
-          <Box flexDirection="row">
-            <Box width={5} flexShrink={0}>
-              <Text
-                color={
-                  selectedOption === 0 ? colors.approval.header : undefined
-                }
-              >
-                {selectedOption === 0 ? "❯" : " "} 1.
-              </Text>
-            </Box>
-            <Box flexGrow={1} width={Math.max(0, columns - 5)}>
-              <Text
-                wrap="wrap"
-                color={
-                  selectedOption === 0 ? colors.approval.header : undefined
-                }
-              >
-                Yes
-              </Text>
-            </Box>
-          </Box>
-
-          {/* Option 2: Yes, always (only if persistence allowed) */}
-          {allowPersistence && (
-            <Box flexDirection="row">
-              <Box width={5} flexShrink={0}>
-                <Text
-                  color={
-                    selectedOption === 1 ? colors.approval.header : undefined
-                  }
-                >
-                  {selectedOption === 1 ? "❯" : " "} 2.
-                </Text>
-              </Box>
-              <Box flexGrow={1} width={Math.max(0, columns - 5)}>
-                <Text
-                  wrap="wrap"
-                  color={
-                    selectedOption === 1 ? colors.approval.header : undefined
-                  }
-                >
-                  {approveAlwaysText ||
-                    "Yes, and don't ask again for this project"}
-                </Text>
-              </Box>
-            </Box>
-          )}
-
-          {/* Custom input option */}
-          <Box flexDirection="row">
-            <Box width={5} flexShrink={0}>
-              <Text
-                color={isOnCustomOption ? colors.approval.header : undefined}
-              >
-                {isOnCustomOption ? "❯" : " "} {customOptionIndex + 1}.
-              </Text>
-            </Box>
-            <Box flexGrow={1} width={Math.max(0, columns - 5)}>
-              {customReason ? (
-                <Text wrap="wrap">
-                  {customReason.slice(0, cursorPos)}
-                  {isOnCustomOption && "█"}
-                  {customReason.slice(cursorPos)}
-                </Text>
-              ) : (
-                <Text wrap="wrap" dimColor>
-                  {customOptionPlaceholder}
-                  {isOnCustomOption && "█"}
-                </Text>
-              )}
-            </Box>
-          </Box>
-        </Box>
-
-        {/* Hint */}
-        <Box marginTop={1}>
-          <Text dimColor>{hintText}</Text>
-        </Box>
+        <ApprovalOptions
+          allowPersistence={allowPersistence}
+          alwaysLabel={approveAlwaysText || DEFAULT_APPROVE_ALWAYS_LABEL}
+          isFocused={isFocused}
+          marginTop={optionsMarginTop}
+          onApprove={() => onApprove(diffsPayload)}
+          onApproveAlways={() => onApproveAlways(defaultScope, diffsPayload)}
+          onCancel={onCancel}
+          onDeny={onDeny}
+        />
       </Box>
     );
   },
