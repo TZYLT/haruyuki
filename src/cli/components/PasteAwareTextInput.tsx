@@ -49,6 +49,13 @@ interface PasteAwareTextInputProps {
   onSubmit?: (value: string) => void;
   placeholder?: string;
   focus?: boolean;
+  /**
+   * A single character repeated over the value, for a secret field. The draft
+   * this component holds and reports is still the real value — only the paint is
+   * masked — so an overlay's API-key field gets a caret and the paste channel
+   * without the key becoming visible.
+   */
+  mask?: string;
   cursorPosition?: number;
   onCursorMove?: (position: number) => void;
 
@@ -129,6 +136,7 @@ export function PasteAwareTextInput({
   onSubmit,
   placeholder,
   focus = true,
+  mask,
   cursorPosition,
   onCursorMove,
   onBangAtEmpty,
@@ -688,6 +696,7 @@ export function PasteAwareTextInput({
       onChange={handleChange}
       onSubmit={handleSubmit}
       placeholder={placeholder}
+      mask={mask}
       focus={focus}
     />
   );

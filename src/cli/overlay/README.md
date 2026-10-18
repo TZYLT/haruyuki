@@ -21,9 +21,9 @@ directory exists to be the *one* copy.
 | `use-overlay-list.ts` | Wiring the model and the key table to the input router — including claiming the scope — and keeping the state in the leaf. |
 | `pagination.ts` | Incremental page fetching as data: identity de-duplication, the cursor a full page hands on, the idle/loading/more/ready/error machine. |
 | `use-pagination.ts` | The page machine's React half — the generation guard that makes a superseded response inert, and the rule that a first load wins while a further one waits. |
-| `text-view.tsx` | The text sub-view — reuses `TextInput`/`PasteAwareTextInput` rather than growing a second editor. |
+| `text-view.tsx` | The text sub-view: the labelled `> ` editor row, built on `PasteAwareTextInput` rather than growing a second editor. |
 | `confirm.tsx` | Option-style and type-to-confirm confirmations. |
-| `wizard.tsx` | Multi-step containers with a return stack. |
+| `wizard.tsx` | Multi-step containers: the return stack as data, and the two keys that leave a step. |
 | `preview.ts` | The one classification of an approval's preview body (command / diff / args). |
 | `adapters.tsx` | `SingleSelectPicker`/`MultiSelectPicker`, rewritten as thin wrappers so their existing consumers did not have to change. |
 
@@ -66,6 +66,13 @@ directory exists to be the *one* copy.
    and both were right: a blocked row in the single-select confirmed nothing,
    while the multi-select confirmed its whole selection from wherever the cursor
    stood — which is what keeps a list of nothing but blocked rows closable.
+8. **Escape belongs to the wizard, not to the step.** A multi-step overlay's
+   Escape goes back one step and cancels at the root; Ctrl+C cancels from any
+   step. Both are declared once (`wizard.tsx`), so a step that redefines Escape
+   does it as a binding at the head of the table — ahead of the rule, declining
+   when it had nothing to do. A step that merely has to clear its own field on
+   the way out passes its own `onBack` instead, so the stack never learns about a
+   step's state.
 
 ## Why the keys are data
 
