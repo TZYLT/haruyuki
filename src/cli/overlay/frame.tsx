@@ -33,8 +33,14 @@ export type OverlayContainer = "overlay" | "modal";
 export interface OverlayFrameProps {
   /** The command that opened this overlay, e.g. "/personality". */
   command: string;
-  /** Title displayed below the solid line. */
-  title: string;
+  /**
+   * Title displayed below the solid line, or omitted entirely.
+   *
+   * Omitted is for a sub-view that replaces the header: `/search`'s expanded
+   * message has never shown a title, and a frame that always drew one would add a
+   * line to that view rather than move it.
+   */
+  title?: string;
   children: ReactNode;
   /**
    * Optional footer (the hint line). A plain string or number is wrapped in
@@ -74,11 +80,13 @@ export function OverlayFrame({
 
       <Box height={1} />
 
-      <Box marginBottom={1}>
-        <Text bold color={colors.selector.title}>
-          {title}
-        </Text>
-      </Box>
+      {title !== undefined && (
+        <Box marginBottom={1}>
+          <Text bold color={colors.selector.title}>
+            {title}
+          </Text>
+        </Box>
+      )}
 
       {children}
 

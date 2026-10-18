@@ -62,7 +62,10 @@ function mountBareFrame() {
   );
 }
 
-function mountFrame(container?: OverlayContainer) {
+function mountFrame(
+  container?: OverlayContainer,
+  options: { omitTitle?: boolean } = {},
+) {
   const stdout = new CaptureStream() as unknown as NodeJS.WriteStream;
   const release = installTerminalFrameCapture(stdout);
   const stdin = new Readable({ read() {} }) as NodeJS.ReadStream;
@@ -74,7 +77,7 @@ function mountFrame(container?: OverlayContainer) {
   const instance = render(
     <OverlayFrame
       command="/personality"
-      title="Choose a personality"
+      title={options.omitTitle ? undefined : "Choose a personality"}
       container={container}
       footer="Enter select · Esc cancel"
     >
@@ -124,6 +127,29 @@ describe("OverlayFrame", () => {
       // existing overlay tests were written for.
       expect(painted).toContain("Enter select");
       expect(painted).not.toContain("must be rendered inside");
+    } finally {
+      frame.stop();
+    }
+  });
+
+  test("paints no title row at all when a sub-view replaces the header", async () => {
+    const frame = mountFrame(undefined, { omitTitle: true });
+    try {
+      const rows = (await frame.rows()).map((row) => row.trimEnd());
+      const painted = rows.join("\n");
+
+      // `/search`'s expanded message is the consumer: it has never shown a title,
+      // and a frame that drew one (even an empty one) would add rows to that view
+      // rather than move it.
+      expect(painted).toContain("> /personality");
+      expect(painted).toContain("body text");
+      expect(painted).not.toContain("Choose a personality");
+      expect(rows[0]).toBe("> /personality");
+      expect(/^─{10,}$/.test(rows[1] ?? "")).toBe(true);
+      // The blank row after the command line is the header's own spacing; the
+      // body follows it directly, with no title row and no title margin.
+      expect(rows[2]).toBe("");
+      expect(rows[3]).toBe("body text");
     } finally {
       frame.stop();
     }
