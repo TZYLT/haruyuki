@@ -6,7 +6,7 @@
 // otherwise it can only be changed by editing the agent's settings by hand.
 
 import type { AgentState } from "@letta-ai/letta-client/resources/agents/agents";
-import { Box, useInput } from "ink";
+import { Box } from "ink";
 import { memo, useCallback, useMemo, useState } from "react";
 import { LOCAL_DEFAULT_SLIDING_WINDOW_PERCENTAGE } from "@/backend/local/compaction";
 import {
@@ -14,9 +14,10 @@ import {
   type CompactionMode,
   isCompactionMode,
 } from "@/cli/helpers/compaction-mode";
-import { colors } from "./colors";
-import { OverlayShell } from "./OverlayShell";
-import { PasteAwareTextInput } from "./PasteAwareTextInput";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
+import { OverlayFrame } from "@/cli/overlay/frame";
+import { OverlayTextField } from "@/cli/overlay/text-view";
+import { useWizard, wizardBindings } from "@/cli/overlay/wizard";
 import { SingleSelectPicker } from "./SingleSelectPicker";
 import { Text } from "./Text";
 
@@ -176,36 +177,21 @@ export function compressionPercentageFor(
 interface CompressionRateEditorProps {
   currentPercentage: number;
   onSave: (percentage: number) => void;
-  /** Esc: back to the picker without saving. */
-  onBack: () => void;
-  /** Ctrl-C: close the whole overlay without saving. */
-  onCancel: () => void;
 }
 
 /**
- * Second view of the overlay: one line of text for the rate. Mirrors
- * `PinDialog`'s input mode — the text field owns typing, this component owns the
- * two keys that leave it.
+ * Second view of the overlay: one line of text for the rate.
+ *
+ * It binds nothing: Escape is "back to the picker" and Ctrl+C is "close", which
+ * the overlay's own `wizardBindings` answers for both of its steps.
  */
 function CompressionRateEditor({
   currentPercentage,
   onSave,
-  onBack,
-  onCancel,
 }: CompressionRateEditorProps) {
   const currentPercent = compressionPercentFor(currentPercentage);
   const [draft, setDraft] = useState(String(currentPercent));
   const [error, setError] = useState("");
-
-  useInput((input, key) => {
-    if (key.ctrl && input === "c") {
-      onCancel();
-      return;
-    }
-    if (key.escape) {
-      onBack();
-    }
-  });
 
   const submit = useCallback(
     (text: string) => {
@@ -220,7 +206,7 @@ function CompressionRateEditor({
   );
 
   return (
-    <OverlayShell command="/compaction" title="Compression rate">
+    <OverlayFrame command="/compaction" title="Compression rate">
       <Box flexDirection="column">
         <Box marginBottom={1}>
           <Text>
@@ -228,18 +214,15 @@ function CompressionRateEditor({
           </Text>
         </Box>
 
-        <Box>
-          <Text color={colors.approval.header}>{"> "}</Text>
-          <PasteAwareTextInput
-            value={draft}
-            onChange={(value) => {
-              setDraft(value);
-              setError("");
-            }}
-            onSubmit={submit}
-            placeholder={String(currentPercent)}
-          />
-        </Box>
+        <OverlayTextField
+          value={draft}
+          onChange={(value) => {
+            setDraft(value);
+            setError("");
+          }}
+          onSubmit={submit}
+          placeholder={String(currentPercent)}
+        />
 
         {error ? (
           <Box marginTop={1}>
@@ -253,7 +236,7 @@ function CompressionRateEditor({
           </Text>
         </Box>
       </Box>
-    </OverlayShell>
+    </OverlayFrame>
   );
 }
 
@@ -268,7 +251,23 @@ export const CompactionSelector = memo(function CompactionSelector({
     [settings?.mode],
   );
   const compressionPercentage = compressionPercentageFor(settings);
-  const [editingRate, setEditingRate] = useState(false);
+  const wizard = useWizard<"picker" | "edit">({ initial: "picker" });
+  const { canGoBack, back, goTo } = wizard;
+
+  const leave = useCallback(() => {
+    if (canGoBack) {
+      back();
+    } else {
+      onCancel();
+    }
+  }, [back, canGoBack, onCancel]);
+
+  useKeyBindings("compaction-selector", [
+    {
+      scope: "overlay",
+      bindings: wizardBindings({ canGoBack, onBack: leave, onCancel }),
+    },
+  ]);
 
   const rows = useMemo(
     () =>
@@ -283,12 +282,12 @@ export const CompactionSelector = memo(function CompactionSelector({
   const handleSelect = useCallback(
     (key: string) => {
       if (key === COMPRESSION_RATE_ROW_KEY) {
-        setEditingRate(true);
+        goTo("edit");
         return;
       }
       onSave({ mode: key as CompactionMode });
     },
-    [onSave],
+    [goTo, onSave],
   );
 
   const saveRate = useCallback(
@@ -298,13 +297,11 @@ export const CompactionSelector = memo(function CompactionSelector({
     [currentMode, onSave],
   );
 
-  if (editingRate) {
+  if (wizard.step === "edit") {
     return (
       <CompressionRateEditor
         currentPercentage={compressionPercentage}
         onSave={saveRate}
-        onBack={() => setEditingRate(false)}
-        onCancel={onCancel}
       />
     );
   }
@@ -312,14 +309,14 @@ export const CompactionSelector = memo(function CompactionSelector({
   const initialCursorIndex = Math.max(0, modes.indexOf(currentMode));
 
   return (
-    <OverlayShell command="/compaction" title="Configure compaction mode">
+    <OverlayFrame command="/compaction" title="Configure compaction mode">
       <SingleSelectPicker
         items={rows}
         initialCursorIndex={initialCursorIndex}
         onSelect={handleSelect}
-        onCancel={onCancel}
+        onCancel={leave}
         footer=" Enter select · ↑↓/jk navigate · Esc cancel · the last row edits the compression rate"
       />
-    </OverlayShell>
+    </OverlayFrame>
   );
 });

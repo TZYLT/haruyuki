@@ -13,6 +13,7 @@ import { colors } from "@/cli/components/colors";
 import { Text } from "@/cli/components/Text";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import {
+  type ListAnchor,
   type OverlayListItem,
   orderedKeys,
   swapWithin,
@@ -58,6 +59,16 @@ export interface SingleSelectPickerProps {
   /** Called when user presses Escape or Ctrl-C */
   onCancel: () => void;
   /**
+   * Window size. Unset renders the whole list, which is what every caller had;
+   * a face whose list can grow past the screen asks for a window (`/compact`'s
+   * topic blocks do) and gets the toolkit's `↑/↓ N more` rows with it.
+   */
+  rows?: number;
+  /** Where the window sits relative to the cursor. `edge` unless a face asks. */
+  anchor?: ListAnchor;
+  /** Whether the windowed list prints `↑/↓ N more`. On unless the face does. */
+  indicators?: boolean;
+  /**
    * Override item rendering. When provided, the picker uses this
    * instead of its default label + description rendering.
    * The picker still handles cursor state and input. Return `null` for
@@ -102,6 +113,9 @@ export const SingleSelectPicker = memo(function SingleSelectPicker({
   initialCursorIndex = 0,
   onSelect,
   onCancel,
+  rows,
+  anchor,
+  indicators,
   renderItem,
   footer,
 }: SingleSelectPickerProps) {
@@ -109,6 +123,8 @@ export const SingleSelectPicker = memo(function SingleSelectPicker({
     owner: "single-select-picker",
     items,
     initialCursorIndex,
+    rows,
+    anchor,
     onConfirm: (key, index) => {
       // A blocked row confirms nothing — but it still consumes Enter, which is
       // what the picker did.
@@ -123,6 +139,9 @@ export const SingleSelectPicker = memo(function SingleSelectPicker({
       <OverlayListView
         items={items}
         cursor={list.cursor}
+        rows={rows}
+        anchor={anchor}
+        indicators={indicators}
         renderRow={renderItem}
       />
 

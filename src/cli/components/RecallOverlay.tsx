@@ -10,9 +10,13 @@
  * the `/recall` command uses, so the picker and the typed form cannot disagree
  * about what a valid value is.
  */
-import { Box, type Key, useInput } from "ink";
+import { Box } from "ink";
 import { memo, useCallback, useMemo, useState } from "react";
 import { parseRecallCount, parseRecallRatio } from "@/cli/commands/recall";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
+import { OverlayFrame } from "@/cli/overlay/frame";
+import { OverlayTextField } from "@/cli/overlay/text-view";
+import { useWizard, wizardBindings } from "@/cli/overlay/wizard";
 import type { ResolvedRecallSettings } from "@/recall-settings";
 import {
   isRecallDisplay,
@@ -21,9 +25,6 @@ import {
 import type { RecallDiversity } from "@/reminders/recall-port";
 import { isRecallDiversity } from "@/reminders/recall-port";
 import type { Settings } from "@/settings-manager";
-import { colors } from "./colors";
-import { OverlayShell } from "./OverlayShell";
-import { PasteAwareTextInput } from "./PasteAwareTextInput";
 import { type SelectableItem, SingleSelectPicker } from "./SingleSelectPicker";
 import { Text } from "./Text";
 
@@ -204,22 +205,18 @@ interface RowEditorProps {
   row: RecallNumberRow;
   current: number;
   onSave: (value: number) => void;
-  onBack: () => void;
-  onCancel: () => void;
 }
 
-/** Second view: one line of text for one numeric knob. */
-function RowEditor({ row, current, onSave, onBack, onCancel }: RowEditorProps) {
+/**
+ * Second view: one line of text for one numeric knob.
+ *
+ * It binds nothing. Escape from here is "back to the list" and Ctrl+C is "close
+ * the overlay", which is the pair `wizardBindings` answers for every step — so
+ * the editor is only the line, the caret and the parse.
+ */
+function RowEditor({ row, current, onSave }: RowEditorProps) {
   const [draft, setDraft] = useState(String(current));
   const [error, setError] = useState("");
-
-  useInput((input: string, key: Key) => {
-    if (key.ctrl && input === "c") {
-      onCancel();
-      return;
-    }
-    if (key.escape) onBack();
-  });
 
   const submit = useCallback(
     (text: string) => {
@@ -234,24 +231,21 @@ function RowEditor({ row, current, onSave, onBack, onCancel }: RowEditorProps) {
   );
 
   return (
-    <OverlayShell command="/recall" title={row.label}>
+    <OverlayFrame command="/recall" title={row.label}>
       <Box flexDirection="column">
         <Box marginBottom={1}>
           <Text>{`${row.prompt} Currently ${numberRowValue(row, current)}.`}</Text>
         </Box>
 
-        <Box>
-          <Text color={colors.approval.header}>{"> "}</Text>
-          <PasteAwareTextInput
-            value={draft}
-            onChange={(value) => {
-              setDraft(value);
-              setError("");
-            }}
-            onSubmit={submit}
-            placeholder={String(current)}
-          />
-        </Box>
+        <OverlayTextField
+          value={draft}
+          onChange={(value) => {
+            setDraft(value);
+            setError("");
+          }}
+          onSubmit={submit}
+          placeholder={String(current)}
+        />
 
         {error ? (
           <Box marginTop={1}>
@@ -263,20 +257,50 @@ function RowEditor({ row, current, onSave, onBack, onCancel }: RowEditorProps) {
           <Text dimColor>Enter to save · Esc back · Ctrl-C cancel</Text>
         </Box>
       </Box>
-    </OverlayShell>
+    </OverlayFrame>
   );
 }
 
 type SubPicker = "display" | "diversity";
+
+/** Which of the overlay's views is on screen. */
+type RecallStep = "list" | SubPicker | "edit";
 
 export const RecallOverlay = memo(function RecallOverlay({
   settings,
   onSave,
   onCancel,
 }: RecallOverlayProps) {
+  const wizard = useWizard<RecallStep>({ initial: "list" });
+  const { canGoBack, back, goTo } = wizard;
   const [editing, setEditing] = useState<RecallNumberRow | null>(null);
-  const [subPicker, setSubPicker] = useState<SubPicker | null>(null);
   const rows = useMemo(() => buildRecallPickerRows(settings), [settings]);
+
+  /**
+   * Escape from a view that has one below it, and the close when it does not.
+   *
+   * The pickers are handed this as their own cancel, which is exactly what this
+   * face did before: their cancel binding consumes Escape *and* Ctrl+C, so
+   * Ctrl+C on a sub-picker went back rather than out. That is preserved here on
+   * purpose — the wizard's rule (Ctrl+C closes from anywhere) is the one
+   * `/connect` needed, and changing it under a face that never asked is not what
+   * this batch is for.
+   */
+  const leave = useCallback(() => {
+    setEditing(null);
+    if (canGoBack) {
+      back();
+    } else {
+      onCancel();
+    }
+  }, [back, canGoBack, onCancel]);
+
+  useKeyBindings("recall-overlay", [
+    {
+      scope: "overlay",
+      bindings: wizardBindings({ canGoBack, onBack: leave, onCancel }),
+    },
+  ]);
 
   const handleSelect = useCallback(
     (key: string) => {
@@ -285,17 +309,20 @@ export const RecallOverlay = memo(function RecallOverlay({
         return;
       }
       if (key === RECALL_DISPLAY_ROW_KEY) {
-        setSubPicker("display");
+        goTo("display");
         return;
       }
       if (key === RECALL_DIVERSITY_ROW_KEY) {
-        setSubPicker("diversity");
+        goTo("diversity");
         return;
       }
       const row = findNumberRow(key);
-      if (row) setEditing(row);
+      if (row) {
+        setEditing(row);
+        goTo("edit");
+      }
     },
-    [onSave, settings.enabled],
+    [goTo, onSave, settings.enabled],
   );
 
   if (editing) {
@@ -306,15 +333,13 @@ export const RecallOverlay = memo(function RecallOverlay({
         onSave={(value) =>
           onSave({ [editing.key]: value } as Partial<Settings>)
         }
-        onBack={() => setEditing(null)}
-        onCancel={onCancel}
       />
     );
   }
 
-  if (subPicker === "display") {
+  if (wizard.step === "display") {
     return (
-      <OverlayShell
+      <OverlayFrame
         command="/recall"
         title="How much of a recalled block to show"
       >
@@ -323,16 +348,16 @@ export const RecallOverlay = memo(function RecallOverlay({
           onSelect={(key) => {
             if (isRecallDisplay(key)) onSave({ recallDisplay: key });
           }}
-          onCancel={() => setSubPicker(null)}
+          onCancel={leave}
           footer=" Enter select · ↑↓/jk navigate · Esc back"
         />
-      </OverlayShell>
+      </OverlayFrame>
     );
   }
 
-  if (subPicker === "diversity") {
+  if (wizard.step === "diversity") {
     return (
-      <OverlayShell command="/recall" title="How the slots are shared out">
+      <OverlayFrame command="/recall" title="How the slots are shared out">
         <SingleSelectPicker
           items={buildDiversityRows(settings.diversity)}
           onSelect={(key) => {
@@ -340,21 +365,21 @@ export const RecallOverlay = memo(function RecallOverlay({
               onSave({ recallDiversity: key });
             }
           }}
-          onCancel={() => setSubPicker(null)}
+          onCancel={leave}
           footer=" Enter select · ↑↓/jk navigate · Esc back"
         />
-      </OverlayShell>
+      </OverlayFrame>
     );
   }
 
   return (
-    <OverlayShell command="/recall" title="Configure passive recall">
+    <OverlayFrame command="/recall" title="Configure passive recall">
       <SingleSelectPicker
         items={rows}
         onSelect={handleSelect}
-        onCancel={onCancel}
+        onCancel={leave}
         footer=" Enter select · ↑↓/jk navigate · Esc cancel"
       />
-    </OverlayShell>
+    </OverlayFrame>
   );
 });

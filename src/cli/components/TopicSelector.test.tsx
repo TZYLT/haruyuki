@@ -9,7 +9,7 @@
  * that is not wrapped in `<Text>`. Without a mount, that mistake is invisible
  * until a user opens `/compact`.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { Readable, Writable } from "node:stream";
 import { render } from "ink";
 import stripAnsi from "strip-ansi";
@@ -22,6 +22,7 @@ import {
   TopicSelector,
 } from "@/cli/components/TopicSelector";
 import type { TopicTrimRequest } from "@/cli/helpers/topic-trim-request";
+import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
 
 function block(overrides: Partial<TopicBlock> & { index: number }): TopicBlock {
   return {
@@ -228,6 +229,8 @@ async function renderTopicSelector(columns = 100): Promise<string> {
 }
 
 describe("TopicSelector mount", () => {
+  afterEach(resetInkTtyState);
+
   test("renders the hint line in a narrow terminal without an Ink text error", async () => {
     const output = await renderTopicSelector(100);
 
@@ -259,5 +262,40 @@ describe("TopicSelector mount", () => {
       'marker "Auth token refresh" at message-local-anchor, rewound 2 user turns',
     );
     expect(output).toContain(" Enter trim · ↑↓/jk navigate · Esc cancel");
+  });
+
+  test("windows a long block list at ten and says what is below", async () => {
+    // A conversation with a block per topic used to render every one of them:
+    // the frame grew past the screen and pushed the hint line — and the composer
+    // behind it — out of view. The window is the one visible change this face was
+    // signed off for, so it is pinned here rather than left to the toolkit.
+    const blocks = Array.from({ length: 14 }, (_, i) =>
+      block({ index: i + 1, title: `Topic ${i + 1}` }),
+    );
+    const request: TopicTrimRequest = {
+      blocks,
+      suggestionIndex: 1,
+      onPick: () => {},
+    };
+    const tty = mountInkTty(
+      <TopicSelector request={request} onCancel={() => {}} />,
+      {
+        columns: 100,
+        rows: 40,
+      },
+    );
+    try {
+      const rows = await tty.rows();
+      const painted = rows.join("\n");
+      // Ten block rows on screen, the eleventh and beyond behind the indicator.
+      const blockRows = rows.filter((row) => /^\s*>?\s*\d+\. Topic /.test(row));
+      expect(blockRows).toHaveLength(10);
+      expect(painted).not.toContain("Topic 11");
+      expect(painted).toContain("↓ 5 more");
+      // Cancel rides with the window: it is a row like any other.
+      expect(painted).not.toContain("Cancel · keep the context as it is");
+    } finally {
+      tty.stop();
+    }
   });
 });

@@ -18,10 +18,19 @@ import {
   topicBlockBoundaryNote,
 } from "@/cli/helpers/topic-list";
 import type { TopicTrimRequest } from "@/cli/helpers/topic-trim-request";
-import { OverlayShell } from "./OverlayShell";
+import { OverlayFrame } from "@/cli/overlay/frame";
 import { type SelectableItem, SingleSelectPicker } from "./SingleSelectPicker";
 
 export const TOPIC_TRIM_CANCEL_KEY = "cancel";
+
+/**
+ * How many blocks the picker shows at once. A long conversation has a block per
+ * topic, and this list used to render all of them: the frame grew past the
+ * screen and pushed the hint line — and the composer behind it — out of view.
+ * The toolkit's window keeps it at ten and says what is above and below, which
+ * is the one visible change this face was signed off for.
+ */
+const TOPIC_WINDOW_ROWS = 10;
 
 /**
  * The picker rows, oldest block first. Block 1 is selectable like any other: the
@@ -100,10 +109,11 @@ export const TopicSelector = memo(function TopicSelector({
   }, [settle, request, onCancel]);
 
   return (
-    <OverlayShell command="/compact" title="Choose the topic block to keep">
+    <OverlayFrame command="/compact" title="Choose the topic block to keep">
       <SingleSelectPicker
         items={items}
         initialCursorIndex={initialCursorIndex}
+        rows={TOPIC_WINDOW_ROWS}
         onSelect={(key) => {
           if (key === TOPIC_TRIM_CANCEL_KEY) {
             dismiss();
@@ -114,6 +124,6 @@ export const TopicSelector = memo(function TopicSelector({
         onCancel={dismiss}
         footer=" Enter trim · ↑↓/jk navigate · Esc cancel · a block that keeps more than the compression rate is cut down to it"
       />
-    </OverlayShell>
+    </OverlayFrame>
   );
 });

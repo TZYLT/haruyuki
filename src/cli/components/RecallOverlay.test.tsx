@@ -4,7 +4,7 @@
  * knob appears exactly once and that the sub-pickers mark the current value, since
  * that marker is the only thing telling the user what they are changing.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   buildDisplayRows,
   buildDiversityRows,
@@ -12,8 +12,11 @@ import {
   RECALL_DISPLAY_ROW_KEY,
   RECALL_DIVERSITY_ROW_KEY,
   RECALL_TOGGLE_ROW_KEY,
+  RecallOverlay,
 } from "@/cli/components/RecallOverlay";
 import { RECALL_SETTING_DEFAULTS } from "@/recall-settings";
+import type { Settings } from "@/settings-manager";
+import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
 
 describe("the picker rows", () => {
   test("names every knob once, in the order a person meets them", () => {
@@ -83,5 +86,147 @@ describe("the sub-pickers", () => {
     expect(rows.filter((row) => row.isCurrent).map((row) => row.key)).toEqual([
       "file",
     ]);
+  });
+});
+
+/**
+ * The overlay's steps and the keys that walk them: the rows open a view of their
+ * own, Escape returns to the list from there, and the numeric editor is a real
+ * editor (it has the caret and the paste channel the composer has) whose value
+ * only reaches `onSave` when the setting's own parser accepts it.
+ */
+const ESC = "\u001b";
+const ENTER = "\r";
+const CTRL_C = "\u0003";
+const DOWN = "\u001b[B";
+const HOME = "\u001b[H";
+
+afterEach(resetInkTtyState);
+
+/** A frame's worth of settling, so a key lands on the render before it. */
+const settle = (ms = 60) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Press keys one at a time, letting each frame land.
+ *
+ * `mountInkTty.press` spaces keys by 30ms; that is enough for a single key and
+ * not reliably enough for a *navigation* run, where the key after a cursor move
+ * must be answered by the table that move produced. Pressed too close together
+ * the same key has been observed to advance the cursor twice — the input
+ * router's raw path and Ink's fallback both reading one dispatch — so these
+ * tests wait a frame between keys and assert the migration, not the router's
+ * timing. (Recorded as a finding in the batch's ledger: it reproduces on
+ * pre-batch faces too, and predates this work.)
+ */
+async function pressKeysSlowly(
+  tty: ReturnType<typeof mountInkTty>,
+  ...keys: string[]
+): Promise<void> {
+  for (const key of keys) {
+    await tty.press(key);
+    await settle();
+  }
+}
+
+function mountOverlay(): {
+  tty: ReturnType<typeof mountInkTty>;
+  saved: Partial<Settings>[];
+  cancels: string[];
+} {
+  const saved: Partial<Settings>[] = [];
+  const cancels: string[] = [];
+  const tty = mountInkTty(
+    <RecallOverlay
+      settings={RECALL_SETTING_DEFAULTS}
+      onSave={(updates) => saved.push(updates)}
+      onCancel={() => cancels.push("cancel")}
+    />,
+    { columns: 90, rows: 30 },
+  );
+  return { tty, saved, cancels };
+}
+
+describe("the overlay's keys", () => {
+  test("Escape at the list cancels", async () => {
+    const { tty, cancels } = mountOverlay();
+    try {
+      expect(await tty.text()).toContain("Configure passive recall");
+      await pressKeysSlowly(tty, ESC);
+      expect(cancels).toEqual(["cancel"]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("Enter opens a row's own view, and Escape walks back to the list", async () => {
+    const { tty, cancels } = mountOverlay();
+    try {
+      // Row 1 is the display tier; row 2 is the first numeric knob.
+      await pressKeysSlowly(tty, DOWN, ENTER);
+      expect(await tty.text()).toContain(
+        "How much of a recalled block to show",
+      );
+
+      await pressKeysSlowly(tty, ESC);
+      let painted = await tty.text();
+      expect(painted).toContain("Configure passive recall");
+      // A step's Escape is a step back, never a close.
+      expect(cancels).toEqual([]);
+
+      // Home first: the picker instance is reused across the step change, so its
+      // cursor is wherever the display round trip left it rather than back at the
+      // top. (That reuse is the pre-migration behaviour too — the same component
+      // type in the same position.)
+      await pressKeysSlowly(tty, HOME, DOWN, DOWN, ENTER);
+      painted = await tty.text();
+      expect(painted).toContain("Passages per turn");
+      await pressKeysSlowly(tty, ESC);
+      expect((await tty.text()).includes("Configure passive recall")).toBe(
+        true,
+      );
+      expect(cancels).toEqual([]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the numeric editor saves what the setting's parser accepts", async () => {
+    const { tty, saved } = mountOverlay();
+    try {
+      await pressKeysSlowly(tty, DOWN, DOWN, ENTER);
+      expect(await tty.text()).toContain("Passages per turn");
+
+      // The draft opens at the current value with the caret at its end, so the
+      // key appends — which is what the hand-rolled field did too.
+      await pressKeysSlowly(tty, "7", ENTER);
+      expect(saved).toEqual([{ recallLimit: 37 }]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the numeric editor refuses what it cannot parse, and says so", async () => {
+    const { tty, saved } = mountOverlay();
+    try {
+      await pressKeysSlowly(tty, DOWN, DOWN, ENTER);
+      await pressKeysSlowly(tty, "x", ENTER);
+      const painted = await tty.text();
+      expect(painted).toContain("Enter a number the setting accepts.");
+      expect(saved).toEqual([]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("Ctrl+C closes the overlay from the editor", async () => {
+    const { tty, cancels } = mountOverlay();
+    try {
+      await pressKeysSlowly(tty, DOWN, DOWN, ENTER);
+      expect(await tty.text()).toContain("Passages per turn");
+      await tty.press(CTRL_C);
+      expect(cancels).toEqual(["cancel"]);
+    } finally {
+      tty.stop();
+    }
   });
 });
