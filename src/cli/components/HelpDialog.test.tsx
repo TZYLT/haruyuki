@@ -1,7 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { Readable, Writable } from "node:stream";
-import { render } from "ink";
-import stripAnsi from "strip-ansi";
 import { commands } from "@/cli/commands/registry";
 import {
   type InkTty,
@@ -10,89 +7,15 @@ import {
 } from "@/test-utils/ink-tty";
 import { HelpDialog } from "./HelpDialog";
 
-class CaptureStream extends Writable {
-  columns = 100;
-  rows = 24;
-  isTTY = true;
-  chunks: string[] = [];
-
-  override _write(
-    chunk: Buffer | string,
-    _encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ) {
-    this.chunks.push(String(chunk));
-    callback();
-  }
-}
-
-function createInputStream(): NodeJS.ReadStream {
-  const input = new Readable({ read() {} }) as NodeJS.ReadStream;
-  input.isTTY = true;
-  input.setRawMode = () => input;
-  input.ref = () => input;
-  input.unref = () => input;
-  return input;
-}
-
-async function renderHelpDialog(
-  interact?: (stdin: NodeJS.ReadStream) => void | Promise<void>,
-): Promise<string> {
-  const stdout = new CaptureStream() as CaptureStream & NodeJS.WriteStream;
-  const stdin = createInputStream();
-  const instance = render(<HelpDialog onClose={() => {}} />, {
-    stdout,
-    stdin,
-    debug: false,
-    patchConsole: false,
-    exitOnCtrlC: false,
-  });
-
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  await interact?.(stdin);
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  instance.unmount();
-  instance.cleanup();
-
-  return stripAnsi(stdout.chunks.join(""));
-}
-
-test("HelpDialog renders its footer without raw Ink text", async () => {
-  const output = await renderHelpDialog();
-
-  expect(output).toContain("Haruyuki v");
-  expect(output).toContain("↑↓ scroll · ←→ page · Tab switch · Esc cancel");
-});
-
-test("HelpDialog keeps spacing between commands and descriptions", async () => {
-  const output = await renderHelpDialog();
-
-  expect(output).toContain("/model Switch model");
-});
-
-test("HelpDialog scrolls commands with down arrow", async () => {
-  const output = await renderHelpDialog(async (stdin) => {
-    for (let i = 0; i < 10; i += 1) {
-      stdin.push("\x1b[B");
-      await new Promise((resolve) => setTimeout(resolve, 1));
-    }
-  });
-
-  expect(output).toContain("Page 2/");
-});
-
 /**
- * The migration's own assertions (B8), on the frame.
+ * `/help`, judged on the frame.
  *
- * The face is **page-aligned**, which is the whole reason the list model grew
- * `anchor: "page"`: the window moves a whole page at a time, the cursor lands on
- * the page's first row when the page turns, and ↑/↓ cross a page boundary
- * without the list sliding. A list can be wired perfectly and still scroll like
- * the wrong anchor, which is exactly what a state assertion cannot see.
- *
- * The list's length comes from the command registry plus whatever custom
- * commands this checkout has, so the expected page count is computed from the
- * same source the component reads rather than hard-coded.
+ * Rows, never the stdout chunk stream: joining raw Ink writes re-asserts Ink's
+ * own diffing instead of what is on screen, and `src/cli/AGENTS.md` records the
+ * class of bug where a key path is wired perfectly, the state is what the test
+ * asserts, and the frame is empty. The three tests that used the chunk stream
+ * (the footer, a command row's spacing, and the page line after ten ↓) are the
+ * cases below now, at the layer they are about.
  */
 const ESC = "\u001b";
 const CTRL_C = "\u0003";
@@ -152,6 +75,11 @@ describe("HelpDialog on the overlay toolkit", () => {
       expect(rows[5]).toContain(`Commands (${total})`);
       expect(pageLine(rows)).toBe(`  Page 1/${Math.ceil(total / PAGE_SIZE)}`);
       expect(rows.at(-1)).toBe("↑↓ scroll · ←→ page · Tab switch · Esc cancel");
+
+      // Name and description on one row, one space apart: the list paints both
+      // itself rather than leaning on Ink to lay out two columns. This was the
+      // chunk stream's `toContain("/model Switch model")`.
+      expect(rows).toContain("  /model Switch model");
 
       // One page of rows, and nothing but the frame's blank line and the footer
       // after the tenth one.
