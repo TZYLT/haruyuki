@@ -36,6 +36,7 @@ const MIGRATED_FACES = [
   "components/HooksManager.tsx",
   "components/McpSelector.tsx",
   "components/MessageSearch.tsx",
+  "components/ModelReasoningSelector.tsx",
   "components/PinDialog.tsx",
   "components/ProviderSelector.tsx",
   "components/RecallOverlay.tsx",

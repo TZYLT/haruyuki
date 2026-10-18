@@ -1,8 +1,10 @@
-import { Box, useInput } from "ink";
+import { Box } from "ink";
 import { useEffect, useMemo, useState } from "react";
 import type { ModelReasoningSelection } from "@/agent/model";
 import { formatXhighEffortLabel } from "@/agent/reasoning-effort-label";
+import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { OverlayFrame } from "@/cli/overlay/frame";
+import { moveCursor } from "@/cli/overlay/list-model";
 import { colors } from "./colors";
 import type { ModelSelectorSelection } from "./ModelSelector";
 import { Text } from "./Text";
@@ -87,42 +89,70 @@ export function ModelReasoningSelector({
     return effortIndex >= 0 ? effortIndex + 1 : 0;
   }, [effortOptions, selectedOption]);
 
-  useInput((input, key) => {
-    if (options.length === 0) {
-      if (key.escape || (key.ctrl && input === "c")) {
-        onCancel();
-      }
-      return;
-    }
-
-    if (key.ctrl && input === "c") {
-      onCancel();
-      return;
-    }
-
-    if (key.escape) {
-      onCancel();
-      return;
-    }
-
-    if (key.return) {
-      if (selectedOption) {
-        onSelect(selectedOption);
-      }
-      return;
-    }
-
-    if (key.leftArrow) {
-      setSelectedIndex((prev) =>
-        prev === 0 ? options.length - 1 : Math.max(0, prev - 1),
-      );
-      return;
-    }
-
-    if (key.rightArrow || key.tab) {
-      setSelectedIndex((prev) => (prev + 1) % options.length);
-    }
-  });
+  useKeyBindings("model-reasoning-selector", [
+    {
+      scope: "overlay",
+      bindings: [
+        // Escape is never declined in this tree — an overlay that cannot be left
+        // is a trap — and Ctrl+C is the same action here, as it always was.
+        {
+          id: "model-reasoning.cancel",
+          chords: [{ key: "escape" }, { key: "c", ctrl: true }],
+          run: () => {
+            onCancel();
+            return "consumed";
+          },
+        },
+        {
+          id: "model-reasoning.select",
+          chords: [{ key: "return" }],
+          run: () => {
+            if (!selectedOption) return "declined";
+            onSelect(selectedOption);
+            return "consumed";
+          },
+        },
+        {
+          id: "model-reasoning.previous",
+          chords: [{ key: "leftArrow" }],
+          run: () => {
+            if (options.length === 0) return "declined";
+            setSelectedIndex((prev) =>
+              moveCursor({
+                cursor: prev,
+                count: options.length,
+                delta: -1,
+                wrap: true,
+              }),
+            );
+            return "consumed";
+          },
+        },
+        {
+          // Shift+Tab too: Ink reports the modifier, and the hand-written
+          // handler this replaced read `key.tab` without looking at it.
+          id: "model-reasoning.next",
+          chords: [
+            { key: "rightArrow" },
+            { key: "tab" },
+            { key: "tab", shift: true },
+          ],
+          run: () => {
+            if (options.length === 0) return "declined";
+            setSelectedIndex((prev) =>
+              moveCursor({
+                cursor: prev,
+                count: options.length,
+                delta: 1,
+                wrap: true,
+              }),
+            );
+            return "consumed";
+          },
+        },
+      ],
+    },
+  ]);
 
   const effortLabel = selectedOption
     ? formatEffortLabel(selectedOption.effort, hasDistinctMaxTier)
