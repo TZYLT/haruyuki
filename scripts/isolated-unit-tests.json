@@ -102,6 +102,11 @@
       "reason": "Renders Ink while creating the process-global backend against a temporary HARUYUKI_HOME; a shared worker must not inherit that backend instance, and the test must not read or write the operator's real harness root."
     },
     {
+      "path": "src/cli/components/FileAutocomplete.test.tsx",
+      "timeoutMs": 15000,
+      "reason": "Replaces the file-autocomplete module with a fake provider so the popup's rows can be judged on the frame without spawning `fd` (which is not on PATH under the redirected test HOME). A Bun module mock is global to its worker."
+    },
+    {
       "path": "src/cli/app/use-configuration-handlers.test.tsx",
       "timeoutMs": 15000,
       "reason": "Renders the reasoning picker while replacing the shared runtime model catalog; shared batches can retain prior catalog or Ink state."
