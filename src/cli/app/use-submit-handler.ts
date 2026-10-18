@@ -858,23 +858,17 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           return { submitted: true };
         }
 
-        // Special handling for /install-github-app command - interactive setup wizard
+        // /install-github-app: the installer flow went with the API backend, so
+        // this reports why instead. The `localModelCatalog` guard it used to
+        // carry only ever chose between this and the flow, and the local backend
+        // (the only backend) always reports the catalog.
         if (trimmed === "/install-github-app") {
-          if (getBackend().capabilities.localModelCatalog) {
-            const cmd = commandRunner.start(
-              trimmed,
-              "Checking GitHub App installer support...",
-            );
-            cmd.fail(
-              "GitHub App installation is not supported by the local backend.",
-            );
-            return { submitted: true };
-          }
-          openOverlay(
-            "install-github-app",
-            "/install-github-app",
-            "Opening GitHub App installer...",
-            "GitHub App installer dismissed",
+          const cmd = commandRunner.start(
+            trimmed,
+            "Checking GitHub App installer support...",
+          );
+          cmd.fail(
+            "GitHub App installation is not supported by the local backend.",
           );
           return { submitted: true };
         }

@@ -107,7 +107,6 @@ const TRANSITIONAL = [
   "src/cli/helpers/reflection-completion.ts",
   "src/cli/helpers/reflection-launcher.ts",
   "src/cli/app/submit-diagnostics-commands.ts",
-  "src/cli/commands/install-github-app.ts",
   "src/cli/app/AppCoordinator.tsx",
   "src/web/generate-memory-viewer.ts",
   "src/tools/impl/native-session-capture.ts",

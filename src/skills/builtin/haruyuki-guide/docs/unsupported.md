@@ -101,12 +101,8 @@ what it does".
 
 Some source strings still name hosted hosts, and none of them is a runtime
 route: the Slack presenter builds viewer links against the hosted chat host
-(`src/channels/slack/presentation.ts:31`), the app-URL helper does the same for
-desktop sessions (`src/cli/helpers/app-urls.ts:3`), and the GitHub-app installer
-writes hosted documentation links into the workflow it generates
-(`src/cli/commands/install-github-app.ts:246-274`). The installer's link to the
-upstream GitHub Action is a third-party reference and is intentionally left as
-upstream writes it.
+(`src/channels/slack/presentation.ts:31`), and the app-URL helper does the same
+for desktop sessions (`src/cli/helpers/app-urls.ts:3`).
 
 ## Surfaces that are not the CLI
 

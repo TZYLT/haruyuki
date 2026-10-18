@@ -70,7 +70,6 @@ export type ActiveOverlay =
   | "memory"
   | "pin"
   | "mcp"
-  | "install-github-app"
   | "help"
   | "hooks"
   | "connect"
