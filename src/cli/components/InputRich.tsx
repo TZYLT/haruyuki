@@ -1879,9 +1879,6 @@ export function Input({
               />
             )}
 
-            {/* The leader prefix's own line: renders nothing unless it is armed. */}
-            {!suppressDividers && <LeaderHint />}
-
             {!suppressDividers && (
               <StatuslineSlot
                 ctrlCPressed={ctrlCPressed}
@@ -1909,6 +1906,8 @@ export function Input({
             )}
 
             {!suppressDividers && modPanelRowBelow}
+            {/* The frame's last row: the leader line, and the hints when idle. */}
+            {!suppressDividers && <LeaderHint />}
           </Box>
         ) : reserveInputSpace ? (
           <Box height={inputChromeHeight} />

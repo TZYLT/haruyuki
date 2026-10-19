@@ -211,8 +211,10 @@ describe("composer leader prefix", () => {
     try {
       await composer.press(CTRL_X);
       const frame = await composer.press("a");
-      // The prefix was left, and the letter reached the draft.
-      expect(frame).not.toContain("ctrl+x");
+      // The prefix was left, and the letter reached the draft. The bottom row
+      // still names the prefix (M6's hint row does), so the armed *list* is what
+      // has to be gone.
+      expect(frame).not.toContain("列出可用键");
       expect(frame).toMatch(/^>\s*a\s*$/m);
     } finally {
       composer.unmount();
@@ -225,7 +227,7 @@ describe("composer leader prefix", () => {
       await composer.press(CTRL_X);
       await composer.press("?");
       const frame = await composer.press(ESCAPE);
-      expect(frame).not.toContain("ctrl+x");
+      expect(frame).not.toContain("列出可用键");
       expect(frame).not.toContain("esc 退出");
     } finally {
       composer.unmount();

@@ -232,6 +232,12 @@ describe("mouse input", () => {
     const stream = fakeMouseStream();
     const shell = mountMouse(stream);
     try {
+      // Mount settles into two frames on purpose: the hint row names the mouse
+      // paths only once reporting is actually on (`useMouseInput` enables it in
+      // an effect), so the line is repainted once for that. The claim here is
+      // about the click, which must not repaint at all.
+      await tick();
+      await tick();
       const before = shell.chunkCount();
       // A left press on the transcript: nothing acts on it yet, so it must not
       // repaint (a frame would mean the bytes went somewhere) and must never be

@@ -2,13 +2,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { Writable } from "node:stream";
 import { render } from "ink";
+import { resetTabsForTests } from "@/cli/app/tabs";
 import {
   registerBindingOwner,
   resetBindingOwners,
 } from "@/cli/helpers/input-router";
 import { LEADER_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { armLeader, disarmLeader, resetLeader } from "@/cli/helpers/leader";
-import { LeaderHint } from "./LeaderHint";
+import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
+import { contextHint, LeaderHint } from "./LeaderHint";
 
 /**
  * The hint is the leader's only affordance, and its two guarantees are what the
@@ -118,13 +120,18 @@ async function frame(): Promise<string> {
 afterEach(() => {
   resetLeader();
   resetBindingOwners();
+  resetMouseTrackingForTests();
+  resetTabsForTests();
 });
 
 describe("LeaderHint", () => {
-  test("renders nothing while the prefix is off", async () => {
+  test("the idle row names the context's keys, not the armed list", async () => {
     registerLeaderBindings();
     const output = await frame();
-    expect(output).not.toContain("ctrl+x");
+    // M6's hint row (《38》§7.3): always one row, always the current context.
+    expect(output).toContain("Enter 发送");
+    expect(output).toContain("/tabs 标签");
+    // The leader's own entry list belongs to the armed state.
     expect(output).not.toContain("列出可用键");
   });
 
@@ -146,11 +153,39 @@ describe("LeaderHint", () => {
     expect(output).toContain("esc");
   });
 
-  test("collapses again when the prefix is left", async () => {
+  test("collapses back to the idle row when the prefix is left", async () => {
     registerLeaderBindings();
     armLeader();
     disarmLeader();
     const output = await frame();
-    expect(output).not.toContain("ctrl+x");
+    expect(output).not.toContain("列出可用键");
+    expect(output).toContain("Enter 发送");
+  });
+});
+
+describe("the idle hint line", () => {
+  test("a conversation offers sending, the tab commands and the leader", () => {
+    const line = contextHint({ pageActive: false, mouseEnabled: true });
+    expect(line).toContain("Enter 发送");
+    expect(line).toContain("Shift+Enter 换行");
+    expect(line).toContain("/tabs 标签");
+    expect(line).toContain("ctrl+x ? 键位");
+  });
+
+  test("without mouse reporting it names the command path instead", () => {
+    const line = contextHint({ pageActive: false, mouseEnabled: false });
+    expect(line).toContain("/tabs 标签");
+    expect(line).toContain("/close 关标签");
+    // Nothing tells the user to click when clicking does nothing.
+    expect(line).not.toContain("点标签");
+  });
+
+  test("a page points at the way back, whichever input is available", () => {
+    expect(contextHint({ pageActive: true, mouseEnabled: true })).toStartWith(
+      "点标签切换",
+    );
+    expect(contextHint({ pageActive: true, mouseEnabled: false })).toContain(
+      "/close 关标签",
+    );
   });
 });
