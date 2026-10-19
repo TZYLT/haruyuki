@@ -12,7 +12,9 @@ export interface ConversationSwitchContext {
     | "clear"
     | "search"
     | "agent-switch"
-    | "fork";
+    | "fork"
+    /** A click on the tab strip: the same switch, asked for with the mouse. */
+    | "tab";
   conversationId: string;
   isDefault: boolean;
 
@@ -80,7 +82,11 @@ export function buildConversationSwitchAlert(
     parts.push("Review the in-context messages for full conversation history.");
   } else {
     const via =
-      ctx.origin === "resume-selector" ? "/resume selector" : "/resume";
+      ctx.origin === "resume-selector"
+        ? "/resume selector"
+        : ctx.origin === "tab"
+          ? "the tab strip"
+          : "/resume";
     parts.push(`Conversation resumed via ${via}.`);
     pushConversationMeta(parts, ctx);
     pushMessageHistory(parts, ctx);

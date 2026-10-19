@@ -13,6 +13,7 @@ import {
   type MutableRefObject,
   type SetStateAction,
   useCallback,
+  useMemo,
 } from "react";
 import {
   extractConflictDetail,
@@ -59,6 +60,7 @@ import { debugLog, debugWarn } from "@/utils/debug";
 import { LLM_API_ERROR_MAX_RETRIES } from "./constants";
 import { uid } from "./ids";
 import { getPreferredAgentModelHandle } from "./model-config";
+import { createTabStripActions } from "./tab-strip-actions";
 import type {
   ActiveOverlay,
   AppCommandRunner,
@@ -864,10 +866,67 @@ export function useConversationSwitching(ctx: ConversationSwitchingContext) {
     ],
   );
 
+  /**
+   * The shell's tab strip: what a click on it means.
+   *
+   * The behaviour lives in `tab-strip-actions.ts` — the two clicks are a policy
+   * question with a ruling behind each, not another conversation-switch hook — and
+   * this only hands it the switch it must perform and the facts it must decide on.
+   */
+  const tabStrip = useMemo(
+    () =>
+      createTabStripActions({
+        conversationIdRef,
+        isAgentBusy,
+        setQueuedOverlayAction,
+        switchDeps: {
+          agentId,
+          agentState,
+          buffersRef,
+          contextTrackerRef,
+          emittedIdsRef,
+          hasBackfilledRef,
+          pendingConversationSwitchRef,
+          recoverRestoredPendingApprovals,
+          resetBootstrapReminderState,
+          resetDeferredToolCallCommits,
+          resetTrajectoryBases,
+          setCommandRunning,
+          setConversationAutoTitleEligibility,
+          setConversationIdAndRef,
+          setLines,
+          setStaticItems,
+          setStaticRenderEpoch,
+        },
+      }),
+    [
+      agentId,
+      agentState,
+      isAgentBusy,
+      setQueuedOverlayAction,
+      conversationIdRef,
+      buffersRef,
+      contextTrackerRef,
+      emittedIdsRef,
+      hasBackfilledRef,
+      pendingConversationSwitchRef,
+      recoverRestoredPendingApprovals,
+      resetBootstrapReminderState,
+      resetDeferredToolCallCommits,
+      resetTrajectoryBases,
+      setCommandRunning,
+      setConversationAutoTitleEligibility,
+      setConversationIdAndRef,
+      setLines,
+      setStaticItems,
+      setStaticRenderEpoch,
+    ],
+  );
   return {
     handleBtwCommand,
     handleBtwJump,
     handleAgentSelect,
     handleCreateNewAgent,
+    tabStrip,
   };
 }

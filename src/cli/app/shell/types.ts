@@ -1,6 +1,22 @@
 import type { AppViewProps } from "@/cli/app/AppView";
 
 /**
+ * What the shell's tab strip does when it is clicked.
+ *
+ * The shell draws the row and hit-tests it; the *meaning* of a click is the
+ * conversation core's, because showing a conversation is a switch and closing one
+ * is a view plus a runtime decision. So the shell is handed these two callbacks
+ * and nothing else — it never learns what a conversation switch is, which is what
+ * keeps the two shells differing by shell alone.
+ *
+ * Both are keyed by tab id: a conversation id, or one of the two page ids.
+ */
+export type TabStripProjection = {
+  onSelect: (tabId: string) => void;
+  onClose: (tabId: string) => void;
+};
+
+/**
  * Projection handed from the conversation core (`AppCoordinator`) to a shell.
  *
  * A shell owns presentation only: it renders the terminal-title writer and the
@@ -16,4 +32,12 @@ export type AppShellProps = AppViewProps & {
   terminalTitleTaskRunning: boolean;
   /** Transient `/title` preview override; `undefined` means "no preview". */
   terminalTitlePreviewOverride: string | null | undefined;
+  /**
+   * The tab strip's behaviour.
+   *
+   * Drawn by the full-screen shell only: the append shell receives it and has no
+   * row to attach it to, which is how the compatibility mode stays without a
+   * strip. Nothing in core branches on which shell is reading this.
+   */
+  tabStrip: TabStripProjection;
 };

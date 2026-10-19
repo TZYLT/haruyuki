@@ -5,7 +5,7 @@
   "src/backend/local/local-backend.ts": 1028,
   "src/backend/local/local-store.ts": 3242,
   "src/backend/pi-stream-adapter.test.ts": 1144,
-  "src/cli/app/AppCoordinator.tsx": 4612,
+  "src/cli/app/AppCoordinator.tsx": 4591,
   "src/cli/app/AppView.tsx": 1352,
   "src/cli/app/use-approval-flow.ts": 1063,
   "src/cli/app/use-configuration-handlers.ts": 1365,

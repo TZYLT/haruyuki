@@ -86,7 +86,7 @@ export function V2Shell(props: AppShellProps) {
 
   return (
     <FullScreenFrame>
-      <TabStrip />
+      <TabStrip {...props.tabStrip} />
       <ShellFrame
         {...props}
         transcript={pageIsActive ? PageShell : V2Transcript}

@@ -20,8 +20,20 @@ import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
  * can be wired perfectly and paint nothing, and no state assertion can see that.
  */
 
-function mountStrip(columns: number) {
-  return mountInkTty(<TabStrip />, { columns, rows: 24 });
+function mountStrip(
+  columns: number,
+  handlers: {
+    onSelect?: (tabId: string) => void;
+    onClose?: (tabId: string) => void;
+  } = {},
+) {
+  return mountInkTty(
+    <TabStrip
+      onSelect={handlers.onSelect ?? (() => {})}
+      onClose={handlers.onClose ?? (() => {})}
+    />,
+    { columns, rows: 24 },
+  );
 }
 
 afterEach(() => {

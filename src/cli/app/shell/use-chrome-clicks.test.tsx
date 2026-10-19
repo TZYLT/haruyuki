@@ -1,0 +1,161 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { Box, Text } from "ink";
+import {
+  beginSelection,
+  hasSelection,
+  resetViewportSelectionForTests,
+} from "@/cli/app/viewport-selection";
+import { resetInputScopes } from "@/cli/helpers/focus-ledger";
+import { resetBindingOwners } from "@/cli/helpers/input-router";
+import { resetMouseHandlers } from "@/cli/helpers/mouse-router";
+import {
+  useInputRouter,
+  useInputScopeClaim,
+} from "@/cli/hooks/use-input-router";
+import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
+import type { TabStripRegion } from "./tab-strip-layout";
+import { useChromeClicks } from "./use-chrome-clicks";
+
+/**
+ * The strip's mouse path, driven through the **real** router and the **real**
+ * report parser.
+ *
+ * Three claims can only be judged here: a press and release on the tab row is a
+ * click and resolves to the rectangle the strip drew; a drag is not a click; and
+ * the two blocking rules hold — an overlay that owns the keyboard also owns the
+ * pointer, and a page's main area is not selectable text. The pure click window
+ * is unit-tested in `chrome-click.test.ts`; what is left is the wiring, which is
+ * exactly the layer `src/cli/AGENTS.md` warns can be perfect and do nothing.
+ */
+
+const ESC = "\u001B";
+
+const press = (column: number, row = 1) => `${ESC}[<0;${column};${row}M`;
+const release = (column: number, row = 1) => `${ESC}[<0;${column};${row}m`;
+const dragTo = (column: number, row = 1) => `${ESC}[<32;${column};${row}M`;
+
+/** The row the layout hands back for a two-tab strip, plus a fake `×`. */
+const REGIONS: TabStripRegion[] = [
+  { id: "conv-a", part: "name", from: 1, to: 10 },
+  { id: "conv-b", part: "name", from: 12, to: 21 },
+  { id: "conv-b", part: "close", from: 22, to: 23 },
+];
+
+type Harness = {
+  selected: string[];
+  closed: string[];
+  /** The widget under test, with the pieces the app mounts around it. */
+  element(options?: {
+    overlay?: boolean;
+    pageActive?: boolean;
+  }): React.ReactNode;
+};
+
+function probe(
+  harness: Harness,
+  options: { overlay?: boolean; pageActive?: boolean } = {},
+) {
+  return <Probe harness={harness} options={options} />;
+}
+
+function Probe({
+  harness,
+  options,
+}: {
+  harness: Harness;
+  options: { overlay?: boolean; pageActive?: boolean };
+}) {
+  useInputRouter();
+  useInputScopeClaim("overlay", options.overlay === true);
+  useChromeClicks({
+    regions: REGIONS,
+    onSelect: (tabId) => {
+      harness.selected.push(tabId);
+    },
+    onClose: (tabId) => {
+      harness.closed.push(tabId);
+    },
+    pageActive: options.pageActive === true,
+  });
+  return (
+    <Box>
+      <Text>probe</Text>
+    </Box>
+  );
+}
+
+function mount(options: { overlay?: boolean; pageActive?: boolean } = {}) {
+  const harness: Harness = { selected: [], closed: [], element: () => null };
+  const shell = mountInkTty(probe(harness, options), { columns: 80, rows: 24 });
+  return { harness, shell };
+}
+
+afterEach(() => {
+  resetInkTtyState();
+  resetInputScopes();
+  resetBindingOwners();
+  resetMouseHandlers();
+  resetViewportSelectionForTests();
+});
+
+describe("a click on the tab row", () => {
+  test("a name click switches to that tab", async () => {
+    const { harness, shell } = mount();
+    try {
+      await shell.press(press(4), release(4));
+      expect(harness.selected).toEqual(["conv-a"]);
+      expect(harness.closed).toEqual([]);
+    } finally {
+      shell.stop();
+    }
+  });
+
+  test("a click on the × closes that tab, and the name is not sent", async () => {
+    const { harness, shell } = mount();
+    try {
+      await shell.press(press(22), release(22));
+      expect(harness.closed).toEqual(["conv-b"]);
+      expect(harness.selected).toEqual([]);
+    } finally {
+      shell.stop();
+    }
+  });
+
+  test("a drag that begins on a tab is neither a click nor a selection", async () => {
+    const { harness, shell } = mount();
+    try {
+      await shell.press(press(4), dragTo(9), release(9));
+      expect(harness.selected).toEqual([]);
+      expect(harness.closed).toEqual([]);
+      expect(hasSelection()).toBe(false);
+    } finally {
+      shell.stop();
+    }
+  });
+
+  test("an overlay that owns the keyboard owns the pointer too", async () => {
+    const { harness, shell } = mount({ overlay: true });
+    try {
+      await shell.press(press(4), release(4));
+      expect(harness.selected).toEqual([]);
+      // And the leftover selection is untouched: the click was declined, not
+      // quietly turned into something else.
+      beginSelection({ row: 3, column: 1 });
+      expect(hasSelection()).toBe(true);
+    } finally {
+      shell.stop();
+    }
+  });
+
+  test("a press in a page's main area starts no selection", async () => {
+    const { harness, shell } = mount({ pageActive: true });
+    try {
+      beginSelection({ row: 5, column: 1 });
+      await shell.press(press(4, 5), release(4, 5));
+      expect(hasSelection()).toBe(false);
+      expect(harness.selected).toEqual([]);
+    } finally {
+      shell.stop();
+    }
+  });
+});

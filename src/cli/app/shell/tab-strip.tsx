@@ -2,7 +2,12 @@
 
 import { Box, Text } from "ink";
 import type { ReactNode } from "react";
-import { allTabs, type TabsState, useTabsState } from "@/cli/app/tabs";
+import {
+  allTabs,
+  type TabsState,
+  useActiveTabIsPage,
+  useTabsState,
+} from "@/cli/app/tabs";
 import { colors } from "@/cli/components/colors";
 import { solidRule } from "@/cli/helpers/rule-lines";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
@@ -11,6 +16,8 @@ import {
   type TabStripItem,
   type TabStripLayout,
 } from "./tab-strip-layout";
+import type { TabStripProjection } from "./types";
+import { useChromeClicks } from "./use-chrome-clicks";
 
 /**
  * The top bar: one row of tabs and the rule under it (《38》§2.2, §3).
@@ -85,10 +92,18 @@ function segmentsForText(layout: TabStripLayout): ReactNode {
   });
 }
 
-export function TabStrip() {
+export function TabStrip({ onSelect, onClose }: TabStripProjection) {
   const state = useTabsState();
+  const pageActive = useActiveTabIsPage();
   const columns = useTerminalWidth();
   const layout = layoutTabStrip(tabStripItems(state), columns);
+
+  useChromeClicks({
+    regions: layout.regions,
+    onSelect,
+    onClose,
+    pageActive,
+  });
 
   return (
     <Box flexDirection="column" flexShrink={0}>

@@ -17,7 +17,6 @@ import {
 } from "react";
 import type { ApprovalResult } from "@/agent/approval-execution";
 import { prefetchAvailableModelHandles } from "@/agent/available-models";
-import { getResumeDataFromBackend } from "@/agent/check-approval";
 import { setCurrentAgentId } from "@/agent/context";
 import { regenerateConversationDescription } from "@/agent/conversation-description";
 import { buildConversationModelCarryoverUpdate } from "@/agent/conversation-model-carryover";
@@ -72,10 +71,7 @@ import { isLocalAgentId } from "@/cli/helpers/app-urls";
 import { backfillBuffers } from "@/cli/helpers/backfill";
 import { chunkLog } from "@/cli/helpers/chunk-log";
 import { buildCliModContext } from "@/cli/helpers/cli-mod-context";
-import {
-  createContextTracker,
-  resetContextHistory,
-} from "@/cli/helpers/context-tracker";
+import { createContextTracker } from "@/cli/helpers/context-tracker";
 import {
   generateConversationTitleFromSummary,
   getConversationTitleSettings,
@@ -220,6 +216,7 @@ import {
   buildStartupCommandHints,
   hasConversationContent,
 } from "./startup-hints";
+import { switchConversationDirect } from "./submit-navigation-commands";
 import type {
   ActiveOverlay,
   AppProps,
@@ -3637,6 +3634,7 @@ export function App({
     handleBtwJump,
     handleAgentSelect,
     handleCreateNewAgent,
+    tabStrip,
   } = useConversationSwitching({
     abortControllerRef,
     agentId,
@@ -4007,58 +4005,36 @@ export function App({
           output: "Processing queued conversation switch...",
           phase: "running",
         });
-
-        // Execute the conversation switch asynchronously
-        (async () => {
-          setCommandRunning(true);
-          try {
-            if (action.conversationId === conversationId) {
-              cmd.finish("Already on this conversation", true);
-            } else {
-              if (agentState) {
-                const resumeData = await getResumeDataFromBackend(
-                  agentState,
-                  action.conversationId,
-                );
-
-                setConversationIdAndRef(action.conversationId);
-                setConversationAutoTitleEligibility(false);
-
-                pendingConversationSwitchRef.current = {
-                  origin: "resume-selector",
-                  conversationId: action.conversationId,
-                  isDefault: action.conversationId === "default",
-                  messageCount: resumeData.messageHistory.length,
-                  messageHistory: resumeData.messageHistory,
-                };
-
-                settingsManager.persistSession(agentId, action.conversationId);
-
-                // Reset context tokens for new conversation
-                resetContextHistory(contextTrackerRef.current);
-                resetBootstrapReminderState();
-
-                if (resumeData.pendingApprovals.length > 0) {
-                  await recoverRestoredPendingApprovals(
-                    resumeData.pendingApprovals,
-                  );
-                }
-
-                cmd.finish(
-                  `Switched to conversation (${resumeData.messageHistory.length} messages)`,
-                  true,
-                );
-              }
-            }
-          } catch (error) {
-            cmd.fail(
-              `Failed to switch conversation: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          } finally {
-            setCommandRunning(false);
-            refreshDerived();
-          }
-        })();
+        if (action.conversationId === conversationId) {
+          cmd.finish("Already on this conversation", true);
+        } else {
+          // The same switch every other path performs, so a deferred one cannot
+          // diverge from a direct one (it used to: this branch reset the context
+          // counters but never rebuilt the transcript).
+          void switchConversationDirect(
+            {
+              agentId,
+              agentState,
+              buffersRef,
+              contextTrackerRef,
+              emittedIdsRef,
+              hasBackfilledRef,
+              pendingConversationSwitchRef,
+              recoverRestoredPendingApprovals,
+              resetBootstrapReminderState,
+              resetDeferredToolCallCommits,
+              resetTrajectoryBases,
+              setCommandRunning,
+              setConversationAutoTitleEligibility,
+              setConversationIdAndRef,
+              setLines,
+              setStaticItems,
+              setStaticRenderEpoch,
+            },
+            action.conversationId,
+            { origin: "resume-selector", command: cmd },
+          ).finally(refreshDerived);
+        }
       } else if (action.type === "switch_toolset") {
         handleToolsetSelect(action.toolsetId, action.commandId);
       } else if (action.type === "set_experiment") {
@@ -4097,6 +4073,8 @@ export function App({
     commandRunner.start,
     recoverRestoredPendingApprovals,
     resetBootstrapReminderState,
+    resetDeferredToolCallCommits,
+    resetTrajectoryBases,
     setConversationAutoTitleEligibility,
     setConversationIdAndRef,
     queuedOverlayAction,
@@ -4596,6 +4574,7 @@ export function App({
       terminalTitleConfigRefreshEpoch={terminalTitleConfigRefreshEpoch}
       terminalTitleTaskRunning={terminalTitleTaskRunning}
       terminalTitlePreviewOverride={terminalTitlePreviewOverride}
+      tabStrip={tabStrip}
       onTitlePreview={setTerminalTitlePreviewOverride}
       onTitlePreviewEnd={clearTerminalTitlePreviewOverride}
       modAdapter={modAdapter}
