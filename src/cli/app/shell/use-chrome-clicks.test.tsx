@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Box, Text } from "ink";
+import { useEffect } from "react";
 import {
   beginSelection,
   hasSelection,
@@ -7,7 +8,10 @@ import {
 } from "@/cli/app/viewport-selection";
 import { resetInputScopes } from "@/cli/helpers/focus-ledger";
 import { resetBindingOwners } from "@/cli/helpers/input-router";
-import { resetMouseHandlers } from "@/cli/helpers/mouse-router";
+import {
+  registerMouseHandler,
+  resetMouseHandlers,
+} from "@/cli/helpers/mouse-router";
 import {
   useInputRouter,
   useInputScopeClaim,
@@ -44,11 +48,8 @@ const REGIONS: TabStripRegion[] = [
 type Harness = {
   selected: string[];
   closed: string[];
-  /** The widget under test, with the pieces the app mounts around it. */
-  element(options?: {
-    overlay?: boolean;
-    pageActive?: boolean;
-  }): React.ReactNode;
+  /** Reports a later layer (the selection) would have seen. */
+  late: string[];
 };
 
 function probe(
@@ -77,6 +78,16 @@ function Probe({
     },
     pageActive: options.pageActive === true,
   });
+  // A handler registered *after* the chrome layer, standing in for the selection:
+  // it must not see the tail of a gesture the chrome layer already claimed.
+  useEffect(
+    () =>
+      registerMouseHandler((report) => {
+        harness.late.push(`${report.kind}:${report.row}:${report.column}`);
+        return false;
+      }),
+    [harness.late],
+  );
   return (
     <Box>
       <Text>probe</Text>
@@ -85,7 +96,7 @@ function Probe({
 }
 
 function mount(options: { overlay?: boolean; pageActive?: boolean } = {}) {
-  const harness: Harness = { selected: [], closed: [], element: () => null };
+  const harness: Harness = { selected: [], closed: [], late: [] };
   const shell = mountInkTty(probe(harness, options), { columns: 80, rows: 24 });
   return { harness, shell };
 }
@@ -154,6 +165,23 @@ describe("a click on the tab row", () => {
       await shell.press(press(4, 5), release(4, 5));
       expect(hasSelection()).toBe(false);
       expect(harness.selected).toEqual([]);
+    } finally {
+      shell.stop();
+    }
+  });
+
+  test("the release of a chrome press is not offered to the selection", async () => {
+    const { harness, shell } = mount();
+    try {
+      // A press on the tab row released a row lower is not a click — and it is
+      // still this layer's gesture, not the selection's. Handing the release on
+      // would look to the selection like the end of a drag it never began.
+      await shell.press(press(4, 1), release(4, 12));
+      expect(harness.selected).toEqual([]);
+      expect(harness.closed).toEqual([]);
+      expect(harness.late.filter((seen) => seen.startsWith("release"))).toEqual(
+        [],
+      );
     } finally {
       shell.stop();
     }

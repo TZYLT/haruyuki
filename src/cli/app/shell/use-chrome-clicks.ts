@@ -92,8 +92,14 @@ export function useChromeClicks(options: ChromeClicksOptions): void {
         return true;
       }
 
+      // A press this layer claimed owns its release even when it was not a click:
+      // a slow press, or a release on a different cell after the motion handler
+      // cancelled the candidate. Returning `false` there would hand the tail of a
+      // chrome gesture to the selection layer, which reads a release as the end of
+      // a drag it never had.
+      const wasPending = tracker.current.isPending();
       const point = tracker.current.release(report, Date.now());
-      if (!point) return false;
+      if (!point) return wasPending;
       const region = regionAt(latest.current.regions, point.column);
       if (!region) return true;
       if (region.part === "close") latest.current.onClose(region.id);
