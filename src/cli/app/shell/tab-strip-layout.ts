@@ -4,6 +4,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@/cli/display/statusline/formatting";
+import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 
 /**
  * The tab row's geometry: what goes on it, at which columns, and which columns
@@ -60,10 +61,17 @@ const MARKER = "> ";
 const MARKER_BLANK = "  ";
 
 /** The close hot zone, glyph included. */
-const CLOSE = " ×";
+const CLOSE = ` ${CLI_GLYPHS.close}`;
 
-/** The unread mark, drawn before the title. */
-const UNREAD = "• ";
+/**
+ * The unread mark, drawn before the title.
+ *
+ * Exported because the strip has to find it again in the painted name to give it
+ * its own colour, and a second copy of the string in the component would drift:
+ * the search would simply stop matching, and the mark would lose its colour with
+ * no error. One constant, two readers.
+ */
+export const TAB_UNREAD_MARK = `${CLI_GLYPHS.bullet} `;
 
 export type TabStripItem = {
   id: string;
@@ -114,7 +122,7 @@ type Cell = {
 function cellFor(item: TabStripItem): Cell {
   const marker = item.active ? MARKER : MARKER_BLANK;
   const title = truncateToWidth(item.title, TAB_TITLE_COLUMNS);
-  const unread = item.unread ? UNREAD : "";
+  const unread = item.unread ? TAB_UNREAD_MARK : "";
   return {
     item,
     name: `${marker}${unread}${title}`,
@@ -318,8 +326,13 @@ export function layoutTabStrip(
   });
   const rightText = rightSegments.map((segment) => segment.text).join("");
 
+  // No floor of one: the row must never be wider than `columns`. On a row that
+  // already fills the terminal exactly, a forced pad column pushes the last tab's
+  // final column past the edge — clipped by the paint, and its click region
+  // unreachable. The pages' gap is not at risk: `conversationBudget` already
+  // subtracted it, so admitted pages always leave `TAB_GAP` columns of slack.
   const pad = Math.max(
-    1,
+    0,
     width - visibleWidth(leftText) - visibleWidth(rightText),
   );
   segments.push({ text: " ".repeat(pad) });

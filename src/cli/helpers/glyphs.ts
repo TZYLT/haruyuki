@@ -11,4 +11,6 @@ export const CLI_GLYPHS = {
   result: "└",
   /** Multi-line command continuation bar */
   continuation: "│",
+  /** Close affordance on a tab of the shell's top bar */
+  close: "×",
 } as const;

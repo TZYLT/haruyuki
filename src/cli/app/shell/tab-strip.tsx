@@ -13,6 +13,7 @@ import { solidRule } from "@/cli/helpers/rule-lines";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import {
   layoutTabStrip,
+  TAB_UNREAD_MARK,
   type TabStripItem,
   type TabStripLayout,
 } from "./tab-strip-layout";
@@ -50,24 +51,22 @@ export function tabStripItems(state: TabsState): TabStripItem[] {
   }));
 }
 
-/** The unread mark, with the blank that stands in for it on a read tab. */
-const UNREAD_MARK = "• ";
-
 /**
  * Split a tab's unread mark out of its name so the mark can carry its own colour.
  *
  * The strip reserves the marker's column on every conversation cell, so the name
  * either starts with the mark or with the blank standing in for it — the search is
  * for the mark followed by its space, which a title cannot fake at that offset.
+ * The mark itself comes from the layout (`TAB_UNREAD_MARK`), not from a copy here.
  */
 function withUnreadMark(text: string): ReactNode {
-  const index = text.indexOf(UNREAD_MARK);
+  const index = text.indexOf(TAB_UNREAD_MARK);
   if (index < 0) return text;
   return (
     <>
       {text.slice(0, index)}
-      <Text color={colors.status.processing}>{UNREAD_MARK}</Text>
-      {text.slice(index + UNREAD_MARK.length)}
+      <Text color={colors.status.processing}>{TAB_UNREAD_MARK}</Text>
+      {text.slice(index + TAB_UNREAD_MARK.length)}
     </>
   );
 }

@@ -240,4 +240,77 @@ describe("the tab row", () => {
       layoutTabStrip([conversation("a", { active: true })], 0).segments,
     ).toEqual([]);
   });
+
+  test("a row that fills the terminal exactly is not pushed past it", () => {
+    // `> ` plus a six-column title is eight columns; at eight columns the row is
+    // the whole terminal, so there is no room for a padding column. Padding there
+    // anyway put the tab's last column outside the screen — painted clipped, and
+    // its click region unreachable.
+    const layout = layoutTabStrip(
+      [conversation("a", { title: "abcdef", active: true, closeable: false })],
+      8,
+    );
+    const text = draw(layout);
+    expect(visibleWidth(text)).toBe(8);
+    expect(layout.regions.map((region) => [region.from, region.to])).toEqual([
+      [1, 8],
+    ]);
+  });
+});
+
+/**
+ * The row's invariants, at every width a terminal is actually opened at: it fills
+ * the columns it was given, every click rectangle stays inside them, and the
+ * current tab is never the one that collapsed away.
+ *
+ * A layout is the one thing here that a state assertion cannot judge — before the
+ * exact-fill case above, every unit test passed while an eight-column terminal drew
+ * nine columns.
+ */
+describe("the tab row, at every width", () => {
+  const ITEMS: TabStripItem[] = [
+    conversation("a", { title: "M6 shell work", active: true, unread: true }),
+    conversation("b", { title: "Ledger" }),
+    conversation("c", { title: "Diff face review" }),
+    conversation("d", { title: "数据库迁移与回滚策略", unread: true }),
+    page("usage"),
+    page("settings"),
+  ];
+
+  test("the row fills the terminal and its regions stay inside it", () => {
+    for (let columns = 24; columns <= 140; columns += 1) {
+      const layout = layoutTabStrip(ITEMS, columns);
+      // The pair carries `columns` into the failure message: a bare `toBe` on 140
+      // iterations reports "expected 57, got 58" with no way to tell which width.
+      expect({ columns, width: visibleWidth(draw(layout)) }).toEqual({
+        columns,
+        width: columns,
+      });
+
+      let previousTo = 0;
+      for (const region of layout.regions) {
+        // An explicit message: "expected 57, got 58" over 117 widths names neither
+        // the width nor the region.
+        if (region.from <= previousTo || region.to > columns) {
+          throw new Error(
+            `columns ${columns}: region ${JSON.stringify(region)} is outside the row`,
+          );
+        }
+        previousTo = region.to;
+      }
+    }
+  });
+
+  test("the current tab is never the one collapsed away", () => {
+    for (let columns = 24; columns <= 140; columns += 1) {
+      const layout = layoutTabStrip(ITEMS, columns);
+      const names = layout.regions
+        .filter((region) => region.part === "name")
+        .map((region) => region.id);
+      expect({ columns, hasCurrent: names.includes("a") }).toEqual({
+        columns,
+        hasCurrent: true,
+      });
+    }
+  });
 });
