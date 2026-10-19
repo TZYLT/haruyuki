@@ -24,9 +24,11 @@ export const ChromeHeightContext = createContext<number | null>(null);
  *
  * Lives next to the measurement because both the transcript band and the page
  * body subtract the same chrome, and they must guess the same number while they
- * are waiting for it.
+ * are waiting for it. Six rows is the idle composer: the gap above it, two
+ * dividers, the draft, the status line and the hint row. It is a *first-frame*
+ * guess only — the measurement replaces it on the same commit's layout effect.
  */
-export const CHROME_RESERVE_ROWS = 4;
+export const CHROME_RESERVE_ROWS = 6;
 
 export function useChromeHeight(): number | null {
   return useContext(ChromeHeightContext);
