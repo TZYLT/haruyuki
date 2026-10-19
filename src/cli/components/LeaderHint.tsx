@@ -43,20 +43,32 @@ import { getNotice, subscribeToNotice } from "@/cli/helpers/notice";
  * one where its behaviour lives is enough.
  */
 
-/** The one-line idle hint: what the current context's keys are. */
+/**
+ * The one-line idle hint: what the current context's keys are.
+ *
+ * **It only names commands that exist.** Both the design's hint row (《38》§3.2) and
+ * this one want `/tabs`, `/close` and `/settings` printed here, but those commands
+ * are the `page` batch's (P2) — on a keyboard-only fallback a hint that resolves to
+ * "unknown command" is worse than no hint, so the row says what the app can
+ * actually do and P2 replaces the copy when the commands land. What it does *not*
+ * leave out is the way back: with the mouse off and a page in the main area, the
+ * leader's own mouse toggle is the only way out of it.
+ */
 export function contextHint(input: {
   pageActive: boolean;
   mouseEnabled: boolean;
 }): string {
-  const leader = `${LEADER_KEY_CHORDS.activate.map(describeChord).join("/")} ? 键位`;
+  const prefix = LEADER_KEY_CHORDS.activate.map(describeChord).join("/");
+  const leader = `${prefix} ? 键位`;
+  const enableMouse = `${prefix} ${LEADER_KEY_CHORDS.toggleMouse[0].key} 打开鼠标`;
   if (input.pageActive) {
     return input.mouseEnabled
-      ? `点标签切换 · /tabs 标签 · ${leader}`
-      : `/tabs 标签 · /close 关标签 · ${leader}`;
+      ? `点标签切换 · ${leader}`
+      : `${enableMouse} · ${leader}`;
   }
   return input.mouseEnabled
-    ? `Enter 发送 · Shift+Enter 换行 · /tabs 标签 · ${leader}`
-    : `Enter 发送 · /tabs 标签 · /close 关标签 · ${leader}`;
+    ? `Enter 发送 · Shift+Enter 换行 · 拖拽选中 · ${leader}`
+    : `Enter 发送 · Shift+Enter 换行 · ${leader}`;
 }
 
 /**

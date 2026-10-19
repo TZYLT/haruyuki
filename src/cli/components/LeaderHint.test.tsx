@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { Writable } from "node:stream";
 import { render } from "ink";
 import { resetTabsForTests } from "@/cli/app/tabs";
+import { commands } from "@/cli/commands/registry";
 import {
   registerBindingOwner,
   resetBindingOwners,
@@ -130,7 +131,7 @@ describe("LeaderHint", () => {
     const output = await frame();
     // M6's hint row (《38》§7.3): always one row, always the current context.
     expect(output).toContain("Enter 发送");
-    expect(output).toContain("/tabs 标签");
+    expect(output).toContain("ctrl+x ? 键位");
     // The leader's own entry list belongs to the armed state.
     expect(output).not.toContain("列出可用键");
   });
@@ -164,28 +165,49 @@ describe("LeaderHint", () => {
 });
 
 describe("the idle hint line", () => {
-  test("a conversation offers sending, the tab commands and the leader", () => {
+  test("a conversation offers sending, the mouse path and the leader", () => {
     const line = contextHint({ pageActive: false, mouseEnabled: true });
     expect(line).toContain("Enter 发送");
     expect(line).toContain("Shift+Enter 换行");
-    expect(line).toContain("/tabs 标签");
+    expect(line).toContain("拖拽选中");
     expect(line).toContain("ctrl+x ? 键位");
   });
 
-  test("without mouse reporting it names the command path instead", () => {
+  test("without mouse reporting it drops what needs the mouse", () => {
     const line = contextHint({ pageActive: false, mouseEnabled: false });
-    expect(line).toContain("/tabs 标签");
-    expect(line).toContain("/close 关标签");
+    expect(line).toContain("Enter 发送");
     // Nothing tells the user to click when clicking does nothing.
     expect(line).not.toContain("点标签");
+    expect(line).not.toContain("拖拽");
   });
 
-  test("a page points at the way back, whichever input is available", () => {
-    expect(contextHint({ pageActive: true, mouseEnabled: true })).toStartWith(
-      "点标签切换",
-    );
-    expect(contextHint({ pageActive: true, mouseEnabled: false })).toContain(
-      "/close 关标签",
+  test("a page offers the way back, whichever input is available", () => {
+    const withMouse = contextHint({ pageActive: true, mouseEnabled: true });
+    expect(withMouse).toStartWith("点标签切换");
+    // With reporting off the leader's own toggle is the only way out of a page,
+    // so that is what the row names.
+    const withoutMouse = contextHint({ pageActive: true, mouseEnabled: false });
+    expect(withoutMouse).toContain("ctrl+x m 打开鼠标");
+  });
+
+  /**
+   * The row's one hard rule: it never names a slash command the app does not have.
+   * The design's copy (`/tabs`, `/close`, `/settings`) belongs to the batch that
+   * registers them; until then a name here would resolve to "unknown command".
+   */
+  test("it names no slash command that is not registered", () => {
+    const lines = [
+      contextHint({ pageActive: false, mouseEnabled: true }),
+      contextHint({ pageActive: false, mouseEnabled: false }),
+      contextHint({ pageActive: true, mouseEnabled: true }),
+      contextHint({ pageActive: true, mouseEnabled: false }),
+    ];
+    const named = new Set<string>();
+    for (const line of lines) {
+      for (const match of line.matchAll(/\/[a-z][a-z-]*/g)) named.add(match[0]);
+    }
+    expect([...named].filter((name) => commands[name] === undefined)).toEqual(
+      [],
     );
   });
 });
