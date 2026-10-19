@@ -19,6 +19,15 @@ import {
  */
 export const ChromeHeightContext = createContext<number | null>(null);
 
+/**
+ * Fallback reserve used until a region reports its measured height.
+ *
+ * Lives next to the measurement because both the transcript band and the page
+ * body subtract the same chrome, and they must guess the same number while they
+ * are waiting for it.
+ */
+export const CHROME_RESERVE_ROWS = 4;
+
 export function useChromeHeight(): number | null {
   return useContext(ChromeHeightContext);
 }

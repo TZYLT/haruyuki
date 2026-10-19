@@ -1,10 +1,15 @@
 import { Box } from "ink";
 import type { ReactNode } from "react";
+import type { AppViewProps } from "@/cli/app/AppView";
+import { PageShell } from "@/cli/app/shell/page-shell";
 import { ShellFrame } from "@/cli/app/shell/ShellFrame";
+import { TabStrip } from "@/cli/app/shell/tab-strip";
+import { TAB_STRIP_ROWS } from "@/cli/app/shell/tab-strip-layout";
 import type { AppShellProps } from "@/cli/app/shell/types";
 import { useExitSummaryAfterTeardown } from "@/cli/app/shell/use-exit-summary";
 import { useMouseInput } from "@/cli/app/shell/use-mouse-input";
 import { useTerminalSelection } from "@/cli/app/shell/use-terminal-selection";
+import { useActiveTabIsPage } from "@/cli/app/tabs";
 import { ViewportTranscript } from "@/cli/app/ViewportTranscript";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
 
@@ -36,6 +41,23 @@ export function FullScreenFrame({ children }: { children: ReactNode }) {
 }
 
 /**
+ * The transcript region with the shell's top rows reserved.
+ *
+ * `ViewportTranscript` sizes its band as `terminalRows - chrome - panel`, and both
+ * of those are measured inside `AppView`; the rows the *shell* draws above the
+ * band are not, and only the shell knows them. Reserving them here keeps that
+ * knowledge in the file that draws the strip rather than teaching the band about
+ * a tab row it cannot see.
+ *
+ * A module-level component, not an inline arrow: `ShellFrame` renders `transcript`
+ * as a component type, and a fresh function identity per render would remount the
+ * band — and remounting it drops the viewport's scroll position.
+ */
+function V2Transcript(props: AppViewProps) {
+  return <ViewportTranscript {...props} reserveTopRows={TAB_STRIP_ROWS} />;
+}
+
+/**
  * Full-screen shell (`ui_v2=on`).
  *
  * Draws the transcript in a bounded, bottom-pinned viewport instead of an
@@ -43,6 +65,11 @@ export function FullScreenFrame({ children }: { children: ReactNode }) {
  * alt-screen buffer itself is enabled by `render({ alternateScreen })` at the
  * process entry, which is also why this shell — and not the append one — hands
  * the exit summary to the process entry to print after teardown.
+ *
+ * It also owns the M6 shell's two top rows: the tab strip and the rule under it.
+ * They are drawn here, outside `AppView`, because they are chrome the shell adds
+ * to the frame — the append shell does not draw them at all, which is what keeps
+ * the compatibility mode frozen without a mode branch anywhere in core.
  */
 export function V2Shell(props: AppShellProps) {
   useExitSummaryAfterTeardown(props);
@@ -52,11 +79,18 @@ export function V2Shell(props: AppShellProps) {
   // Drag selection over the rendered rows, its highlight, and Ctrl+X y.
   useTerminalSelection({
     items: () => [...props.staticItems, ...props.liveItems],
+    bandTopRow: TAB_STRIP_ROWS,
   });
+  // The tab row replaces the main area with a page when one is focused.
+  const pageIsActive = useActiveTabIsPage();
 
   return (
     <FullScreenFrame>
-      <ShellFrame {...props} transcript={ViewportTranscript} />
+      <TabStrip />
+      <ShellFrame
+        {...props}
+        transcript={pageIsActive ? PageShell : V2Transcript}
+      />
     </FullScreenFrame>
   );
 }

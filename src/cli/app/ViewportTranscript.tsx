@@ -15,7 +15,11 @@ import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
 import type { AppViewProps } from "./AppView";
 import { fitBlockedItemsFromEnd } from "./blocked-window";
-import { useChromeHeight, useMeasuredChromeHeight } from "./chrome-height";
+import {
+  CHROME_RESERVE_ROWS,
+  useChromeHeight,
+  useMeasuredChromeHeight,
+} from "./chrome-height";
 import { composeTranscript, transcriptCoreIds } from "./composed-transcript";
 import { FocusedApproval } from "./FocusedApproval";
 import type { WalkIndex } from "./history-blocks";
@@ -59,8 +63,17 @@ import {
   subscribeToViewportTop,
 } from "./viewport-scroll";
 
-/** Fallback chrome reserve used until the shell reports its measured height. */
-export const CHROME_RESERVE_ROWS = 4;
+/**
+ * The transcript region's props: the app's projection plus the rows the shell
+ * draws above the band.
+ *
+ * `reserveTopRows` is not part of `AppViewProps` because `AppView` does not draw
+ * those rows — the full-screen shell does, and it is the only thing that knows
+ * how many there are. The append shell draws none, so it passes none.
+ */
+export type ViewportTranscriptProps = AppViewProps & {
+  reserveTopRows?: number;
+};
 
 /**
  * The rows the full-screen viewport reserves for one item: exactly what
@@ -98,7 +111,7 @@ export function viewportItemRows(
  * itself from the chrome it is told about, and this panel is not part of that
  * number.
  */
-export function ViewportTranscript(props: AppViewProps) {
+export function ViewportTranscript(props: ViewportTranscriptProps) {
   const {
     staticItems,
     liveItems,
@@ -122,6 +135,7 @@ export function ViewportTranscript(props: AppViewProps) {
     queuedDecisions,
     stubDescriptions,
     showApprovalPreview,
+    reserveTopRows = 0,
   } = props;
 
   const terminalRows = useTerminalRows();
@@ -136,7 +150,8 @@ export function ViewportTranscript(props: AppViewProps) {
     1,
     terminalRows -
       (measuredChromeRows ?? CHROME_RESERVE_ROWS) -
-      (panelRows ?? 0),
+      (panelRows ?? 0) -
+      reserveTopRows,
   );
 
   // Older history, paged in behind the resume window's cap. Subscribing to the rows

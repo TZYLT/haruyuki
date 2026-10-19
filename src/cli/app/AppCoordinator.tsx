@@ -216,6 +216,10 @@ import {
   reasoningEffortLlmConfigPatch,
 } from "./model-config";
 import { prepareSessionExit } from "./session";
+import {
+  buildStartupCommandHints,
+  hasConversationContent,
+} from "./startup-hints";
 import type {
   ActiveOverlay,
   AppProps,
@@ -228,104 +232,13 @@ import { useBashHandlers } from "./use-bash-handlers";
 import { useConfigurationHandlers } from "./use-configuration-handlers";
 import { useConversationLoop } from "./use-conversation-loop";
 import { useConversationSwitching } from "./use-conversation-switching";
+import { useConversationTab } from "./use-conversation-tab";
 import { useFeedbackHandler } from "./use-feedback-handler";
 import { useInterruptHandler } from "./use-interrupt-handler";
 import { useEstimatedLiveHeight } from "./use-live-height";
 import { useQueuedApprovalSubmit } from "./use-queued-approval-submit";
 import { useReasoningCycle } from "./use-reasoning-cycle";
 import { useSubmitHandler } from "./use-submit-handler";
-
-function buildStartupCommandHints(options: {
-  isResumingConversation: boolean;
-  isPinned: boolean;
-  isLocalBackend: boolean;
-  hasMessages: boolean;
-  /**
-   * Retained in the signature so the startup hint `useEffect` dependency lists
-   * keep their shape; the hint that used it pointed at `/login`, which is gone.
-   */
-  hasCloudCredentials: boolean;
-  hasAvailableLocalModels: boolean;
-}): string[] {
-  const {
-    isResumingConversation,
-    isPinned,
-    isLocalBackend,
-    hasMessages,
-    hasCloudCredentials: _hasCloudCredentials,
-    hasAvailableLocalModels,
-  } = options;
-
-  const baseHints = isResumingConversation
-    ? [
-        "→ **/agents**    list all agents",
-        "→ **/resume**    browse all conversations",
-        "→ **/new**       start a new conversation",
-        "→ **/init**      initialize your agent's memory",
-      ]
-    : isPinned
-      ? [
-          "→ **/agents**    list all agents",
-          "→ **/resume**    resume a previous conversation",
-          "→ **/memory**    view your agent's memory",
-          "→ **/init**      initialize your agent's memory",
-        ]
-      : [
-          "→ **/agents**    list all agents",
-          "→ **/resume**    resume a previous conversation",
-          "→ **/pin**       save + name your agent",
-          "→ **/init**      initialize your agent's memory",
-        ];
-
-  const onboardingHints: string[] = [];
-
-  if (isLocalBackend && !hasAvailableLocalModels) {
-    onboardingHints.push(
-      "→ **/model**     switch models",
-      "→ **/connect**   configure your llm api keys",
-    );
-  }
-
-  if (!hasMessages) {
-    onboardingHints.push(
-      "→ **/rename**    name your agent",
-      "→ **/init**      initialize your agent's memory",
-    );
-  }
-
-  const dedupedHints: string[] = [];
-  const seenHints = new Set<string>();
-
-  for (const hint of [...onboardingHints, ...baseHints]) {
-    if (seenHints.has(hint)) {
-      continue;
-    }
-    seenHints.add(hint);
-    dedupedHints.push(hint);
-    if (dedupedHints.length === 5) {
-      break;
-    }
-  }
-
-  return dedupedHints;
-}
-
-function hasConversationContent(lines: Line[]): boolean {
-  return lines.some((line) => {
-    switch (line.kind) {
-      case "user":
-      case "assistant":
-      case "reasoning":
-      case "tool_call":
-      case "error":
-      case "command":
-      case "bash_command":
-        return true;
-      default:
-        return false;
-    }
-  });
-}
 
 export function App({
   agentId: initialAgentId,
@@ -1179,6 +1092,13 @@ export function App({
     [],
   );
   useConversationTitleSync(conversationId, setConversationSummary);
+  // The tab strip's model follows the conversation the app is on: a switch opens
+  // or focuses a tab, a new summary retitles it.
+  useConversationTab({
+    conversationId,
+    summary: conversationSummary,
+    streaming,
+  });
   const deriveAutoConversationTitle = useCallback(() => {
     if (firstUserQueryRef.current) {
       return firstUserQueryRef.current;

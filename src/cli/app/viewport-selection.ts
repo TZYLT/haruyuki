@@ -50,10 +50,31 @@ interface CapturedSelection {
   text: string;
   rows: string[];
   bandRows: number;
+  /** The band's first screen row-1 when the drag was made (shell top rows). */
+  bandTopRow: number;
   scrollRows: number;
 }
 
 let captured: CapturedSelection | null = null;
+
+/**
+ * The rows the shell drew above the transcript band.
+ *
+ * The band used to be the top of the frame, so a drag's screen rows were band
+ * rows. The M6 shell draws a tab row and a rule above it, so this is the offset
+ * between the two — written by the shell that draws them
+ * (`use-terminal-selection`), read here whenever a drag or a highlight needs to
+ * know which screen rows the transcript owns.
+ */
+let bandTopRow = 0;
+
+export function setBandTopRow(rows: number): void {
+  bandTopRow = Math.max(0, Math.floor(rows));
+}
+
+export function getBandTopRow(): number {
+  return bandTopRow;
+}
 
 function publish(): void {
   version += 1;
@@ -78,24 +99,27 @@ function shiftedBy(
 /**
  * Read a selection off the frame it was dragged on.
  *
- * Rows past the band are chrome — the input, the status line — so they are not
- * part of a selection at all, and a frame that cannot be located yields nothing:
- * the same refusal the painter makes, for the same reason (a wrong row is worse
- * than no row). The band is the limit here rather than a later clamp, because
- * this text is what a copy returns and it must not be allowed to contain the
- * input's own text.
+ * Rows outside the band are chrome — the tab strip above it, the input and the
+ * status line below — so they are not part of a selection at all, and a frame that
+ * cannot be located yields nothing: the same refusal the painter makes, for the
+ * same reason (a wrong row is worse than no row). The band is the limit here
+ * rather than a later clamp, because this text is what a copy returns and it must
+ * not be allowed to contain the input's own text.
  */
 function captureSelection(
   frameSelection: FrameSelection,
 ): CapturedSelection | null {
   const frame = getTerminalFrame();
   if (!frame?.anchored) return null;
+  const top = getBandTopRow();
   const band = Math.max(1, getViewportRows());
+  const firstRow = top + 1;
+  const lastBandRow = top + band;
   const { start, end } = orderSelection(frameSelection);
-  if (start.row > band) return null;
-  const last = Math.min(end.row, band, frame.lines.length);
+  if (start.row > lastBandRow) return null;
+  const last = Math.min(end.row, lastBandRow, frame.lines.length);
   const rows: string[] = [];
-  for (let row = Math.max(1, start.row); row <= last; row += 1) {
+  for (let row = Math.max(firstRow, start.row); row <= last; row += 1) {
     rows.push(frame.lines[row - 1] ?? "");
   }
   if (rows.length === 0) return null;
@@ -112,6 +136,7 @@ function captureSelection(
     }),
     rows,
     bandRows: getViewportRows(),
+    bandTopRow: top,
     scrollRows: getViewportScrollRows(),
   };
 }
@@ -134,7 +159,8 @@ export function visibleSelection(): FrameSelection | null {
   const shift =
     getViewportScrollRows() -
     captured.scrollRows +
-    (getViewportRows() - captured.bandRows);
+    (getViewportRows() - captured.bandRows) +
+    (getBandTopRow() - captured.bandTopRow);
   const candidate = shift === 0 ? selection : shiftedBy(selection, shift);
 
   const { start, end } = orderSelection(candidate);
@@ -274,6 +300,7 @@ export function copySourceFor(
 export function resetViewportSelectionForTests(): void {
   selection = null;
   captured = null;
+  bandTopRow = 0;
   version = 0;
   listeners.clear();
 }

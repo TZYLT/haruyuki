@@ -8,8 +8,10 @@ import {
   clearSelection,
   copySourceFor,
   extendSelection,
+  getBandTopRow,
   getSelectedText,
   lastAnswerText,
+  setBandTopRow,
   subscribeToSelection,
   visibleSelection,
 } from "@/cli/app/viewport-selection";
@@ -105,12 +107,14 @@ function paintSelection(): void {
   const target = new Map<number, string>();
   if (selection) {
     const { start, end } = orderSelection(selection);
-    // Rows past the band are chrome: the band can shrink under a standing
+    // Rows outside the band are chrome — the tab row and its rule above, the
+    // input and the status line below. The band can shrink under a standing
     // selection (the leader hint appears on the key press before the copy), and a
     // highlight drawn over the input would both look wrong and be copied.
+    const top = getBandTopRow();
     const band = Math.max(1, getViewportRows());
-    const lastRow = Math.min(end.row, frame.lines.length, band);
-    for (let row = Math.max(1, start.row); row <= lastRow; row += 1) {
+    const lastRow = Math.min(end.row, frame.lines.length, top + band);
+    for (let row = Math.max(top + 1, start.row); row <= lastRow; row += 1) {
       const span = rowSelectionSpan(selection, row, frame.widths[row - 1] ?? 0);
       if (!span) continue;
       const marked = highlightRow(
@@ -145,7 +149,8 @@ function paintSelection(): void {
 }
 
 function isInsideBand(row: number): boolean {
-  return row >= 1 && row <= getViewportRows();
+  const top = getBandTopRow();
+  return row > top && row <= top + getViewportRows();
 }
 
 function clampedToBand(
@@ -155,9 +160,10 @@ function clampedToBand(
   row: number;
   column: number;
 } {
+  const top = getBandTopRow();
   const rows = Math.max(1, getViewportRows());
   return {
-    row: Math.min(Math.max(1, row), rows),
+    row: Math.min(Math.max(top + 1, row), top + rows),
     column: Math.max(1, column),
   };
 }
@@ -193,12 +199,34 @@ export interface TerminalSelectionOptions {
    * clipboard of the machine they run on.
    */
   copyLocally?: (text: string) => boolean;
+  /**
+   * Screen rows the shell draws above the band: the M6 tab strip and its rule.
+   *
+   * Zero — the append shell and every M3-era frame — means the band starts at the
+   * top of the screen, which is what the whole selection path used to assume.
+   */
+  bandTopRow?: number;
 }
 
 export function useTerminalSelection(
   options: TerminalSelectionOptions = {},
 ): void {
-  const { stream = process.stdout, items, copyLocally } = options;
+  const {
+    stream = process.stdout,
+    items,
+    copyLocally,
+    bandTopRow = 0,
+  } = options;
+
+  // The offset is read by mouse reports and by the painter, both of which run
+  // long after this effect, so setting it from an effect (rather than passing it
+  // down) cannot race with a report.
+  useEffect(() => {
+    setBandTopRow(bandTopRow);
+    return () => {
+      setBandTopRow(0);
+    };
+  }, [bandTopRow]);
 
   useEffect(() => {
     const repaint = () => paintSelection();

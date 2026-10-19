@@ -35,14 +35,12 @@ import { Readable, Writable } from "node:stream";
 import { render } from "ink";
 import { useMemo, useRef, useState } from "react";
 import type { AppViewProps } from "@/cli/app/AppView";
+import { CHROME_RESERVE_ROWS } from "@/cli/app/chrome-height";
 import { MAX_VIEWPORT_ITEMS } from "@/cli/app/history-window";
 import { resetOlderHistoryForTests } from "@/cli/app/older-history";
 import { measureTranscriptItemRows } from "@/cli/app/row-model";
 import type { StaticItem } from "@/cli/app/types";
-import {
-  CHROME_RESERVE_ROWS,
-  ViewportTranscript,
-} from "@/cli/app/ViewportTranscript";
+import { ViewportTranscript } from "@/cli/app/ViewportTranscript";
 import { resetViewportScroll } from "@/cli/app/viewport-scroll";
 import { fitScrolledItemsFromEnd } from "@/cli/app/viewport-window";
 import { createBuffers, type Line } from "@/cli/helpers/accumulator";
