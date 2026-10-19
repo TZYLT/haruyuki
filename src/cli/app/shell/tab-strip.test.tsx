@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { clearAllSubagents } from "@/agent/subagent-state";
 import type { AppViewProps } from "@/cli/app/AppView";
 import { ChromeHeightContext } from "@/cli/app/chrome-height";
 import { PageShell } from "@/cli/app/shell/page-shell";
@@ -36,9 +37,32 @@ function mountStrip(
   );
 }
 
+/**
+ * A page's props, narrowed to what the panel below it reads.
+ *
+ * The page's own layout ignores the rest of `AppViewProps`; this is the same
+ * narrowing `ViewportPanel`'s test makes, with the same fixture: an approval whose
+ * tool call is not in any transcript.
+ */
+const APPROVAL_PAGE_PROPS = {
+  currentApproval: {
+    toolCallId: "ap-1",
+    toolName: "MysteryTool",
+    toolArgs: JSON.stringify({ key: "value" }),
+  },
+  currentApprovalContext: undefined,
+  precomputedDiffsRef: { current: new Map() },
+  handleApproveCurrent: async () => {},
+  handleApproveAlways: async () => {},
+  handleDenyCurrent: async () => {},
+  handleCancelApprovals: () => {},
+  showApprovalPreview: true,
+} as unknown as AppViewProps;
+
 afterEach(() => {
   resetTabsForTests();
   resetInkTtyState();
+  clearAllSubagents();
 });
 
 describe("the tab strip frame", () => {
@@ -135,6 +159,28 @@ describe("the tab strip frame", () => {
       expect(rows.length).toBe(14);
       expect(rows[0]).toContain("Settings");
       expect(rows.join("\n")).toContain("通用");
+    } finally {
+      page.stop();
+    }
+  });
+
+  test("a page still shows the approval that is blocking the input", async () => {
+    // The approval surface lives under the transcript band, and a page replaces
+    // the band. Without the panel below it, a tool asking for permission while the
+    // user reads Settings would disable the input and draw nothing to answer — a
+    // session stuck on an invisible question.
+    openConversationTab("M6 shell", "M6 shell");
+    focusTab("settings");
+    const page = mountInkTty(
+      <ChromeHeightContext.Provider value={8}>
+        <PageShell {...APPROVAL_PAGE_PROPS} />
+      </ChromeHeightContext.Provider>,
+      { columns: 80, rows: 24 },
+    );
+    try {
+      const rows = await page.rows({ keepTrailingBlanks: true });
+      expect(rows[0]).toContain("Settings");
+      expect(rows.join("\n")).toContain("MysteryTool");
     } finally {
       page.stop();
     }

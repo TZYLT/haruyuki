@@ -2,8 +2,13 @@
 
 import { Box, Text } from "ink";
 import type { AppViewProps } from "@/cli/app/AppView";
-import { CHROME_RESERVE_ROWS, useChromeHeight } from "@/cli/app/chrome-height";
+import {
+  CHROME_RESERVE_ROWS,
+  useChromeHeight,
+  useMeasuredChromeHeight,
+} from "@/cli/app/chrome-height";
 import { findTab, useTabsState } from "@/cli/app/tabs";
+import { ViewportPanel } from "@/cli/app/ViewportPanel";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
 import { TAB_STRIP_ROWS } from "./tab-strip-layout";
 
@@ -16,35 +21,58 @@ import { TAB_STRIP_ROWS } from "./tab-strip-layout";
  * tab row would look broken the first time someone clicks `Settings`.
  *
  * It sizes itself the way the transcript does, and for the same reason: the band
- * is `terminalRows - chrome - top`, where the chrome is what the composer
- * measured on the previous frame and the top rows are the strip's. A page that
+ * is `terminalRows - chrome - panel - top`, where the chrome and the panel are
+ * what the previous frame measured and the top rows are the strip's. A page that
  * instead let flex decide would be laid out by a column whose height nothing
  * fixes, and the composer would jump to just under the strip.
+ *
+ * **It draws the same panel the transcript does**, and that is not decoration: the
+ * approval surface and the running-subagent group live below the band, and a page
+ * replaces the band only. Without this panel, a tool that asks for permission
+ * while the user is reading Settings would find the input disabled and the
+ * approval nowhere on screen — the session would be stuck with nothing to answer.
+ * `approvalIsDrawn` is `false` because a page never draws a transcript row, so the
+ * focused approval is always the panel's.
  */
-export function PageShell(_props: AppViewProps) {
+export function PageShell(props: AppViewProps) {
   const state = useTabsState();
   const tab = findTab(state.activeId, state);
   const terminalRows = useTerminalRows();
   const chromeRows = useChromeHeight();
+  const { ref: panelRef, rows: panelRows } = useMeasuredChromeHeight();
   const height = Math.max(
     1,
-    terminalRows - (chromeRows ?? CHROME_RESERVE_ROWS) - TAB_STRIP_ROWS,
+    terminalRows -
+      (chromeRows ?? CHROME_RESERVE_ROWS) -
+      (panelRows ?? 0) -
+      TAB_STRIP_ROWS,
   );
 
   const title = tab?.title ?? "Settings";
   const description = PAGE_DESCRIPTIONS[tab?.id ?? "settings"];
 
   return (
-    <Box
-      height={height}
-      flexShrink={0}
-      flexDirection="column"
-      paddingX={1}
-      overflow="hidden"
-    >
-      <Text bold>{title}</Text>
-      <Text dimColor>{description}</Text>
-    </Box>
+    <>
+      {/* The page body is the frame's elastic box while a page is shown, exactly
+          as the transcript band is: it is sized from the *previous* frame's
+          measurements, so when those are stale Yoga has to take the extra rows
+          from somewhere, and nothing measures this box. */}
+      <Box
+        height={height}
+        flexDirection="column"
+        flexShrink={1}
+        overflow="hidden"
+        paddingX={1}
+      >
+        <Text bold>{title}</Text>
+        <Text dimColor>{description}</Text>
+      </Box>
+      <ViewportPanel
+        panelRef={panelRef}
+        approvalIsDrawn={false}
+        approval={props}
+      />
+    </>
   );
 }
 
