@@ -13,6 +13,7 @@ import type { ApprovalRequest } from "@/cli/helpers/stream";
 import { settingsManager } from "@/settings-manager";
 import { uid } from "./ids";
 import type { ActiveOverlay, AppCommandRunner, StaticItem } from "./types";
+import { clearSelection } from "./viewport-selection";
 
 type SubmitCommandResult = { submitted: boolean };
 
@@ -88,9 +89,14 @@ export type ConversationSwitchOutcome =
  * One implementation for every direct switch — `/resume <id>` as a command and a
  * click on a conversation tab — because the alternative was two copies of the
  * same twenty steps (validate, persist, remember the switch, clear the buffers,
- * backfill, restore approvals) that had already started to drift. The caller
- * owns the *report*: a command passes its handle and gets the success/failure row,
- * a click passes none and reports a failure in the one-line notice instead.
+ * backfill, restore approvals) that had already started to drift. A third copy
+ * lived in the queued-action branch and had drifted furthest: it reset the context
+ * counters but never rebuilt the transcript, so a switch deferred to the end of a
+ * turn showed the previous conversation's rows. Both now come through here.
+ *
+ * The caller owns the *report*: a command passes its handle and gets the
+ * success/failure row, a click passes none and reports a failure in the one-line
+ * notice instead.
  *
  * `"already on this conversation"` is deliberately not an outcome: the caller
  * knows the conversation it is on (a command's `conversationId` prop, a click's
@@ -158,6 +164,10 @@ export async function switchConversationDirect(
     ctx.buffersRef.current.byId.clear();
     ctx.buffersRef.current.order = [];
     ctx.buffersRef.current.tokenCount = 0;
+    // A selection is text read off the frame the drag was made on, so it belongs
+    // to the transcript being left. Keeping it would let the copy key return lines
+    // from a conversation the user is no longer looking at.
+    clearSelection();
     resetContextHistory(ctx.contextTrackerRef.current);
     ctx.resetBootstrapReminderState();
     ctx.emittedIdsRef.current.clear();
