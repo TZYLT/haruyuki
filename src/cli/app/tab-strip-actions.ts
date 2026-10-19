@@ -7,6 +7,7 @@ import {
   type ConversationSwitchDeps,
   switchConversationDirect,
 } from "./submit-navigation-commands";
+import { queueOrRefuseSwitch } from "./switch-policy";
 import {
   focusTab,
   getOpenConversations,
@@ -62,11 +63,17 @@ export function createTabStripActions(
       return;
     }
     if (deps.isAgentBusy()) {
-      deps.setQueuedOverlayAction({
-        type: "switch_conversation",
-        conversationId: tabId,
+      // No command row: a click is not a typed command. The policy decides
+      // whether the switch waits for the turn or is refused with a notice.
+      queueOrRefuseSwitch({
+        output:
+          "Conversation switch queued – will switch after current task completes",
+        defer: () =>
+          deps.setQueuedOverlayAction({
+            type: "switch_conversation",
+            conversationId: tabId,
+          }),
       });
-      showNotice("会话切换已排队 · 当前回合结束后切换");
       return;
     }
     void switchTo(tabId).then((outcome) => {

@@ -74,6 +74,7 @@ import type { QueuedMessage } from "@/utils/message-queue-bridge";
 import { ChromeHeightContext, useMeasuredChromeHeight } from "./chrome-height";
 import { ExitStats } from "./ExitStats";
 import { uid } from "./ids";
+import { queueOrRefuseSwitch } from "./switch-policy";
 import type {
   ActiveOverlay,
   AppCommandRunner,
@@ -796,23 +797,21 @@ export function AppView(props: AppViewRenderProps) {
                     return;
                   }
 
-                  // If agent is busy, queue the switch for after end_turn
+                  // A switch asked for while the turn runs: the shell's policy
+                  // decides between deferring it and refusing it.
                   if (isAgentBusy()) {
-                    const cmd =
-                      overlayCommand ??
-                      commandRunner.start(
-                        "/resume",
-                        "Conversation switch queued – will switch after current task completes",
-                      );
-                    cmd.update({
+                    queueOrRefuseSwitch({
+                      commandRunner,
+                      commandInput: "/resume",
                       output:
                         "Conversation switch queued – will switch after current task completes",
-                      phase: "running",
-                    });
-                    setQueuedOverlayAction({
-                      type: "switch_conversation",
-                      conversationId: convId,
-                      commandId: cmd.id,
+                      command: overlayCommand,
+                      defer: (commandId) =>
+                        setQueuedOverlayAction({
+                          type: "switch_conversation",
+                          conversationId: convId,
+                          commandId,
+                        }),
                     });
                     return;
                   }
@@ -1075,21 +1074,18 @@ export function AppView(props: AppViewRenderProps) {
                   // Same agent, different conversation: switch conversation
                   // (Reuses ConversationSelector's onSelect logic pattern)
                   if (isAgentBusy()) {
-                    const cmd =
-                      overlayCommand ??
-                      commandRunner.start(
-                        "/search",
-                        "Conversation switch queued – will switch after current task completes",
-                      );
-                    cmd.update({
+                    queueOrRefuseSwitch({
+                      commandRunner,
+                      commandInput: "/search",
                       output:
                         "Conversation switch queued – will switch after current task completes",
-                      phase: "running",
-                    });
-                    setQueuedOverlayAction({
-                      type: "switch_conversation",
-                      conversationId: actualTargetConv,
-                      commandId: cmd.id,
+                      command: overlayCommand,
+                      defer: (commandId) =>
+                        setQueuedOverlayAction({
+                          type: "switch_conversation",
+                          conversationId: actualTargetConv,
+                          commandId,
+                        }),
                     });
                     return;
                   }

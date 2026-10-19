@@ -60,6 +60,7 @@ import { debugLog, debugWarn } from "@/utils/debug";
 import { LLM_API_ERROR_MAX_RETRIES } from "./constants";
 import { uid } from "./ids";
 import { getPreferredAgentModelHandle } from "./model-config";
+import { queueOrRefuseSwitch } from "./switch-policy";
 import { createTabStripActions } from "./tab-strip-actions";
 import type {
   ActiveOverlay,
@@ -521,24 +522,22 @@ export function useConversationSwitching(ctx: ConversationSwitchingContext) {
       // Drop any pending reasoning-tier debounce before switching contexts.
       resetPendingReasoningCycle();
 
-      // If agent is busy, queue the switch for after end_turn
+      // If agent is busy, queue the switch for after end_turn — or refuse it,
+      // when the mounted shell's policy says a hidden deferral is the worse lie.
       if (isAgentBusy()) {
-        const cmd =
-          overlayCommand ??
-          commandRunner.start(
-            "/agents",
-            "Agent switch queued – will switch after current task completes",
-          );
-        cmd.update({
+        queueOrRefuseSwitch({
+          commandRunner,
+          commandInput: "/agents",
           output:
             "Agent switch queued – will switch after current task completes",
-          phase: "running",
-        });
-        setQueuedOverlayAction({
-          type: "switch_agent",
-          agentId: targetAgentId,
-          commandId: cmd.id,
-          backendMode: opts?.backendMode,
+          command: overlayCommand,
+          defer: (commandId) =>
+            setQueuedOverlayAction({
+              type: "switch_agent",
+              agentId: targetAgentId,
+              commandId,
+              backendMode: opts?.backendMode,
+            }),
         });
         return;
       }
