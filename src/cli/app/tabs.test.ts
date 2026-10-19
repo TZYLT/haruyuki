@@ -15,6 +15,7 @@ import {
   setTabTitle,
   setTabUnread,
   subscribeToTabs,
+  tabTitleFor,
 } from "./tabs";
 
 /**
@@ -149,6 +150,18 @@ describe("the tab model", () => {
     expect(conversationTitle("   ", "conv-1")).toBe("conv-1");
   });
 
+  test("an absent summary never demotes a tab that already has a title", () => {
+    openConversationTab("conv-1", "Ledger work");
+    // The app clears a conversation's summary when it switches away, so `null`
+    // arriving for a tab that is already open means "nothing new to say" — not
+    // "show the id".
+    expect(tabTitleFor("conv-1", null)).toBe("Ledger work");
+    expect(tabTitleFor("conv-1", "  ")).toBe("Ledger work");
+    // A real summary still wins, and a conversation with no tab falls back.
+    expect(tabTitleFor("conv-1", "Renamed later")).toBe("Renamed later");
+    expect(tabTitleFor("conv-9", null)).toBe("conv-9");
+  });
+
   test("the snapshot is stable until something changes", () => {
     const before = getTabsState();
     expect(getTabsState()).toBe(before);
@@ -165,6 +178,8 @@ describe("the tab model", () => {
     setTabUnread("conv-9", true);
     setTabTitle("conv-9", "nope");
     focusTab("conv-1");
+    // Opening the tab that is already current, with the title it already has.
+    openConversationTab("conv-1", "first");
     expect(notified).toBe(1);
     unsubscribe();
   });

@@ -2,10 +2,10 @@
 
 import { useEffect, useRef } from "react";
 import {
-  conversationTitle,
   focusTab,
   openConversationTab,
   setTabTitle,
+  tabTitleFor,
 } from "./tabs";
 
 /**
@@ -25,6 +25,10 @@ import {
  *   yank the user off the page they were reading the moment a background title
  *   landed.
  *
+ * Which of the two titles a tab gets is the model's decision (`tabTitleFor`), not
+ * this hook's: an absent summary must not demote a tab that already shows
+ * something true.
+ *
  * A turn starting focuses the conversation tab back, because the answer to
  * something the user just sent must not arrive hidden behind a page.
  */
@@ -41,7 +45,7 @@ export function useConversationTab(input: ConversationTabInput): void {
   const recordedRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const title = conversationTitle(summary, conversationId);
+    const title = tabTitleFor(conversationId, summary);
     if (recordedRef.current === conversationId) {
       setTabTitle(conversationId, title);
       return;

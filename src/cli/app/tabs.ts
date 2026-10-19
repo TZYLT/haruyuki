@@ -169,17 +169,48 @@ export function conversationTitle(
 }
 
 /**
+ * The title a tab should show, from what the app knows right now.
+ *
+ * A summary is a real title; the conversation id is only the fallback for having
+ * none. **And an existing tab's own title outranks the fallback**, which is the
+ * rule that keeps a summary arriving as `null` (a switch clears it — it belongs to
+ * the conversation being left) from demoting a tab the user is looking at to its
+ * id. `conversationTitle` alone cannot express that: it only sees one conversation.
+ */
+export function tabTitleFor(
+  conversationId: string,
+  summary: string | null,
+): string {
+  if (summary !== null && summary.trim().length > 0) {
+    return conversationTitle(summary, conversationId);
+  }
+  return findTab(conversationId)?.title ?? conversationId;
+}
+
+/**
  * Record that a conversation is open and make it the active tab.
  *
  * Every switch path ends here, so opening the same conversation twice focuses the
  * tab it already has instead of growing a second one — which is also what keeps
- * the strip's order stable when the user moves back and forth.
+ * the strip's order stable when the user moves back and forth. Opening the tab
+ * that is already open, with the title it already has, changes nothing at all.
  */
 export function openConversationTab(
   conversationId: string,
   title: string,
 ): void {
   const existing = state.conversations.find((tab) => tab.id === conversationId);
+  if (
+    existing &&
+    existing.title === title &&
+    !existing.unread &&
+    state.activeId === conversationId
+  ) {
+    // Nothing to publish: the tab is already exactly this. Replacing the snapshot
+    // would repaint the row for no change, and the store's identity is what tells
+    // `useSyncExternalStore` whether anything happened.
+    return;
+  }
   const conversations = existing
     ? state.conversations.map((tab) =>
         tab.id === conversationId ? { ...tab, title, unread: false } : tab,

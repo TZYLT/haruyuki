@@ -308,9 +308,12 @@ export function App({
   useEffect(() => {
     conversationIdRef.current = conversationId;
   }, [conversationId]);
+  // A summary belongs to the conversation it describes, so a switch invalidates it:
+  // otherwise the strip and the terminal title keep showing the previous one.
   const setConversationIdAndRef = useCallback((nextConversationId: string) => {
     conversationIdRef.current = nextConversationId;
     setConversationId(nextConversationId);
+    setConversationSummary(null);
   }, []);
 
   // Tracks the transcript start index for the current user turn across
@@ -4008,9 +4011,6 @@ export function App({
         if (action.conversationId === conversationId) {
           cmd.finish("Already on this conversation", true);
         } else {
-          // The same switch every other path performs, so a deferred one cannot
-          // diverge from a direct one (it used to: this branch reset the context
-          // counters but never rebuilt the transcript).
           void switchConversationDirect(
             {
               agentId,
