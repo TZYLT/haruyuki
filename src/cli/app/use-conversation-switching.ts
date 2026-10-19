@@ -60,6 +60,7 @@ import { debugLog, debugWarn } from "@/utils/debug";
 import { LLM_API_ERROR_MAX_RETRIES } from "./constants";
 import { uid } from "./ids";
 import { getPreferredAgentModelHandle } from "./model-config";
+import { switchConversationDirect } from "./submit-navigation-commands";
 import { queueOrRefuseSwitch } from "./switch-policy";
 import { createTabStripActions } from "./tab-strip-actions";
 import type {
@@ -878,25 +879,30 @@ export function useConversationSwitching(ctx: ConversationSwitchingContext) {
         conversationIdRef,
         isAgentBusy,
         setQueuedOverlayAction,
-        switchDeps: {
-          agentId,
-          agentState,
-          buffersRef,
-          contextTrackerRef,
-          emittedIdsRef,
-          hasBackfilledRef,
-          pendingConversationSwitchRef,
-          recoverRestoredPendingApprovals,
-          resetBootstrapReminderState,
-          resetDeferredToolCallCommits,
-          resetTrajectoryBases,
-          setCommandRunning,
-          setConversationAutoTitleEligibility,
-          setConversationIdAndRef,
-          setLines,
-          setStaticItems,
-          setStaticRenderEpoch,
-        },
+        switchTo: (conversationId) =>
+          switchConversationDirect(
+            {
+              agentId,
+              agentState,
+              buffersRef,
+              contextTrackerRef,
+              emittedIdsRef,
+              hasBackfilledRef,
+              pendingConversationSwitchRef,
+              recoverRestoredPendingApprovals,
+              resetBootstrapReminderState,
+              resetDeferredToolCallCommits,
+              resetTrajectoryBases,
+              setCommandRunning,
+              setConversationAutoTitleEligibility,
+              setConversationIdAndRef,
+              setLines,
+              setStaticItems,
+              setStaticRenderEpoch,
+            },
+            conversationId,
+            { origin: "tab" },
+          ),
       }),
     [
       agentId,

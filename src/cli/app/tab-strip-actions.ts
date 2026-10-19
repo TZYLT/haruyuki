@@ -3,10 +3,7 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { showNotice } from "@/cli/helpers/notice";
 import type { TabStripProjection } from "./shell/types";
-import {
-  type ConversationSwitchDeps,
-  switchConversationDirect,
-} from "./submit-navigation-commands";
+import type { ConversationSwitchOutcome } from "./submit-navigation-commands";
 import { queueOrRefuseSwitch } from "./switch-policy";
 import {
   focusTab,
@@ -15,6 +12,7 @@ import {
   removeConversationTab,
 } from "./tabs";
 import type { QueuedOverlayAction } from "./types";
+import { clearSelection } from "./viewport-selection";
 
 /**
  * What a click on the tab strip means, as one plain function of the app's state.
@@ -23,6 +21,11 @@ import type { QueuedOverlayAction } from "./types";
  * because the size ratchet caps that file, and out of the shell because showing a
  * conversation is a switch — the shell is handed these two callbacks and never
  * learns what one is.
+ *
+ * The switch arrives as a function rather than as the pile of state it needs
+ * (`switchTo`): these two clicks are the only part of a conversation switch that is
+ * a *policy* decision, and taking the switch as a parameter is what lets that
+ * decision be judged without a backend behind it.
  *
  * The two clicks differ in how much they can damage:
  *
@@ -36,6 +39,10 @@ import type { QueuedOverlayAction } from "./types";
  *   area to another conversation first, and is refused when there is no other —
  *   the main area always shows a conversation (2026-10-19 ruling).
  *
+ * Both clicks cancel a standing selection, because both replace the text it was
+ * taken from. A selection is *text read off the frame at drag time*, so a stale one
+ * would let `Ctrl+X y` copy lines out of a conversation the user has left.
+ *
  * The conversation the app is on is read from a ref at click time, never captured:
  * a click can arrive several turns after the render that installed these
  * callbacks.
@@ -45,19 +52,17 @@ export type TabStripActionDeps = {
   conversationIdRef: MutableRefObject<string>;
   isAgentBusy: () => boolean;
   setQueuedOverlayAction: Dispatch<SetStateAction<QueuedOverlayAction>>;
-  /** Everything a direct conversation switch needs. */
-  switchDeps: ConversationSwitchDeps;
+  /** Load a conversation into the main area. */
+  switchTo: (conversationId: string) => Promise<ConversationSwitchOutcome>;
 };
 
 export function createTabStripActions(
   deps: TabStripActionDeps,
 ): TabStripProjection {
-  const switchTo = (conversationId: string) =>
-    switchConversationDirect(deps.switchDeps, conversationId, {
-      origin: "tab",
-    });
+  const switchTo = deps.switchTo;
 
   function onSelect(tabId: string): void {
+    clearSelection();
     if (isPageTabId(tabId) || tabId === deps.conversationIdRef.current) {
       focusTab(tabId);
       return;
@@ -105,6 +110,7 @@ export function createTabStripActions(
     if (!next) return;
     void switchTo(next.id).then((outcome) => {
       if (outcome.status === "switched") {
+        clearSelection();
         removeConversationTab(tabId);
         return;
       }
