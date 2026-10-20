@@ -11,6 +11,7 @@ import {
 } from "@/cli/components/transcript-display-state";
 import { WelcomeScreen } from "@/cli/components/WelcomeScreen";
 import { APP_KEY_CHORDS } from "@/cli/helpers/keymap";
+import { getTerminalFrame } from "@/cli/helpers/terminal-frame";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
 import { debugLog } from "@/utils/debug";
@@ -466,17 +467,30 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
    * the band painted content at its top and left the rest empty. Two very different
    * causes produce exactly that picture — the row model over-measuring the visible
    * items (so the content box is shorter than the band and the offset lifts it off
-   * the bottom), or the window not being resident (a page that has not been
-   * materialized is counted with an estimate). The numbers that separate them are
-   * the band height, the window's item range, its offset, and which pages are
-   * resident; on the screen all of it is invisible.
+   * the bottom), or the window not being filled (a page that has not been
+   * materialized contributes an estimate, an anchor that outlived its item, a fit
+   * that clamps at the end of history).
+   *
+   * `blankTail` is the measurement that separates them: it counts the empty rows at
+   * the band's bottom **in the frame that was just written**, so a log line carries
+   * both what the model believed (`window`, `offset`, `fromBottom`, `anchor`) and
+   * what the screen actually got. On screen all of it is invisible.
    */
   useEffect(() => {
     if (process.env.HARUYUKI_DEBUG_VIEWPORT !== "1") return;
     const resident = window.resident;
+    const frame = getTerminalFrame();
+    const top = props.reserveTopRows ?? 0;
+    let blankTail = 0;
+    if (frame) {
+      for (let row = top + height - 1; row > top; row -= 1) {
+        if ((frame.lines[row] ?? "").trim().length > 0) break;
+        blankTail += 1;
+      }
+    }
     debugLog(
       "viewport",
-      `band=${height} items=${items.length} prefix=${olderPrefix} pages=${olderBlocks.length} window=${window.start}..${window.end} offset=${window.contentOffset} fromBottom=${window.scrollFromBottom} anchor=${window.anchor.end}/${window.anchor.delta} resident=${resident === null ? "core" : `${resident.from}..${resident.to}`}`,
+      `band=${height} blankTail=${blankTail} items=${items.length} prefix=${olderPrefix} pages=${olderBlocks.length} window=${window.start}..${window.end} offset=${window.contentOffset} fromBottom=${window.scrollFromBottom} anchor=${window.anchor.end}/${window.anchor.delta} resident=${resident === null ? "core" : `${resident.from}..${resident.to}`}`,
     );
   }, [
     height,
@@ -490,6 +504,7 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
     window.scrollFromBottom,
     window.anchor,
     window.resident,
+    props.reserveTopRows,
   ]);
 
   // Forget the heights measured under the previous layout, so the walk re-measures
