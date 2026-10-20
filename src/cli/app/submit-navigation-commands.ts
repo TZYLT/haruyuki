@@ -11,6 +11,7 @@ import type { ConversationSwitchContext } from "@/cli/helpers/conversation-switc
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import type { ApprovalRequest } from "@/cli/helpers/stream";
 import { settingsManager } from "@/settings-manager";
+import { clearTranscriptScreen } from "./clear-transcript-screen";
 import { uid } from "./ids";
 import type { ActiveOverlay, AppCommandRunner, StaticItem } from "./types";
 import { clearSelection } from "./viewport-selection";
@@ -174,6 +175,10 @@ export async function switchConversationDirect(
     ctx.resetDeferredToolCallCommits();
     ctx.setStaticItems([]);
     ctx.setStaticRenderEpoch((e) => e + 1);
+    // The frame that follows shares nothing with the one before it, so start the
+    // screen over as well: a few rows below the new (shorter) transcript would
+    // otherwise keep the conversation being left on them (`clear-transcript-screen.ts`).
+    clearTranscriptScreen();
     ctx.resetTrajectoryBases();
 
     const separator = { kind: "separator" as const, id: uid("sep") };

@@ -57,6 +57,7 @@ import { settingsManager } from "@/settings-manager";
 import type { PreparedScopeToolContext } from "@/tools/toolset";
 import { debugLog, debugWarn } from "@/utils/debug";
 
+import { clearTranscriptScreen } from "./clear-transcript-screen";
 import { LLM_API_ERROR_MAX_RETRIES } from "./constants";
 import { uid } from "./ids";
 import { getPreferredAgentModelHandle } from "./model-config";
@@ -788,6 +789,10 @@ export function useConversationSwitching(ctx: ConversationSwitchingContext) {
         resetDeferredToolCallCommits();
         setStaticItems([]);
         setStaticRenderEpoch((e) => e + 1);
+        // `/new` starts a conversation the screen has never shown: the rows the
+        // previous one left behind are not repainted by anything
+        // (`clear-transcript-screen.ts`).
+        clearTranscriptScreen();
         resetTrajectoryBases();
 
         // Update agent state
