@@ -80,10 +80,21 @@ export function subscribeToMouseTracking(listener: () => void): () => void {
 export function enableMouseTracking(
   stream: MouseTrackingStream = process.stdout,
 ): boolean {
-  if (enabled || stream.isTTY !== true) return false;
+  if (enabled) return false;
+  // Not a TTY means no mode was written, and the caller cannot tell that apart
+  // from "the user's terminal ignores mouse reports": every click then does
+  // nothing and there is no trace of why. One line in the session log names it —
+  // when a session log exists yet: the shell can mount before the session log is
+  // initialised, in which case this line is dropped. The click trace in
+  // `mouse-router.ts` is the one that is always there.
+  if (stream.isTTY !== true) {
+    debugWarn("mouse", "not a TTY: mouse reporting was never requested");
+    return false;
+  }
   enabled = true;
   currentStream = stream;
   write(stream, MOUSE_TRACKING_ENABLE);
+  debugWarn("mouse", `reporting on (${MOUSE_TRACKING_ENABLE.length} bytes)`);
   if (!exitHook) {
     exitHook = () => {
       disableMouseTracking();
@@ -106,6 +117,7 @@ export function disableMouseTracking(): boolean {
   const stream = currentStream;
   currentStream = null;
   if (stream) write(stream, MOUSE_TRACKING_DISABLE);
+  debugWarn("mouse", "reporting off");
   publish();
   return true;
 }

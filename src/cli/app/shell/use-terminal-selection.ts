@@ -243,38 +243,51 @@ export function useTerminalSelection(
   }, []);
 
   useEffect(() => {
-    return registerMouseHandler((report) => {
-      // The wheel belongs to the scroll layer, which runs before this one.
-      if (report.wheel) return false;
-      if (report.kind === "press") {
-        if (report.button !== "left") return false;
-        if (!isInsideBand(report.row)) {
-          // A click outside the transcript (the input, the status line) ends the
-          // selection, the way clicking away from a selection does anywhere else.
-          clearSelection();
+    return registerMouseHandler(
+      (report) => {
+        // Rows above the band are the shell's chrome — the tab row and the rule
+        // under it. They are not text, so this layer declines them outright rather
+        // than reading a press there as "the user clicked outside the transcript,
+        // end the selection": the chrome layer owns that row (it is consulted
+        // first), and the two layers disagreeing about a row is how a click gets
+        // swallowed twice over.
+        if (getBandTopRow() > 0 && report.row <= getBandTopRow()) return false;
+        // The wheel belongs to the scroll layer, which runs before this one.
+        if (report.wheel) return false;
+        if (report.kind === "press") {
+          if (report.button !== "left") return false;
+          if (!isInsideBand(report.row)) {
+            // A click outside the transcript (the input, the status line) ends the
+            // selection, the way clicking away from a selection does anywhere else.
+            clearSelection();
+            return true;
+          }
+          if (!canSelectOnScreen()) {
+            // A drag that does nothing looks exactly like a broken key path, and this
+            // is the only state where the app deliberately draws nothing.
+            debugWarn(
+              "selection",
+              "no anchored frame: the drag cannot be placed on screen",
+            );
+            return true;
+          }
+          beginSelection({
+            row: report.row,
+            column: Math.max(1, report.column),
+          });
           return true;
         }
-        if (!canSelectOnScreen()) {
-          // A drag that does nothing looks exactly like a broken key path, and this
-          // is the only state where the app deliberately draws nothing.
-          debugWarn(
-            "selection",
-            "no anchored frame: the drag cannot be placed on screen",
-          );
+        if (report.kind === "move") {
+          // `1002` reports motion only while a button is held, so a move is a drag.
+          extendSelection(clampedToBand(report.row, report.column));
           return true;
         }
-        beginSelection({ row: report.row, column: Math.max(1, report.column) });
+        // A release keeps what was dragged: the copy key is what commits it, so a
+        // stray drag never overwrites the clipboard on its own.
         return true;
-      }
-      if (report.kind === "move") {
-        // `1002` reports motion only while a button is held, so a move is a drag.
-        extendSelection(clampedToBand(report.row, report.column));
-        return true;
-      }
-      // A release keeps what was dragged: the copy key is what commits it, so a
-      // stray drag never overwrites the clipboard on its own.
-      return true;
-    });
+      },
+      { name: "selection" },
+    );
   }, []);
 
   useKeyBindings("selection", [

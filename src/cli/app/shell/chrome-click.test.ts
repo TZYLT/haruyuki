@@ -1,15 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import type { MouseReport } from "@/cli/helpers/mouse-sequence";
-import { CLICK_MAX_MS, createClickTracker } from "./chrome-click";
+import {
+  CLICK_MAX_MS,
+  CLICK_SLOP_COLUMNS,
+  createClickTracker,
+} from "./chrome-click";
 
 /**
  * Telling a click from a drag, which is the whole reason the strip can be
  * operated with the mouse at all.
  *
- * The cases are the shapes the terminal actually sends: a press and a release on
- * one cell, the same two with a column of travel between them (a drag), a slow
- * pair, a release with no press, and a drag that starts on a tab and ends in the
- * transcript.
+ * The cases are the shapes the terminal actually sends — not the shapes a
+ * hand-written pair of reports sends. A terminal under `1002` describes a click as
+ * press → **motion** → release, and the motion arrives even when it stays inside
+ * the cell; that difference is what the machine found (the tab row ignoring every
+ * click) after a synthetic test had passed, so it is pinned here.
  */
 
 function report(overrides: Partial<MouseReport> = {}): MouseReport {
@@ -34,20 +39,51 @@ describe("a chrome click", () => {
     expect(tracker.isPending()).toBe(false);
   });
 
-  test("travel between press and release is a drag", () => {
+  test("motion in the middle of the gesture does not cancel the click", () => {
+    // Exactly what `1002` sends for a still click: the terminal reports motion
+    // while the button is held, sometimes at the same cell.
     const tracker = createClickTracker();
     tracker.press(report(), 1_000);
+    tracker.move(report({ kind: "move", column: 4 }));
+    tracker.move(report({ kind: "move", column: 5 }));
     expect(
-      tracker.release(report({ kind: "release", column: 9 }), 1_050),
+      tracker.release(report({ kind: "release", column: 5 }), 1_100),
+    ).toEqual({
+      row: 1,
+      column: 4,
+    });
+  });
+
+  test("a release within the slop still resolves to the cell that was pressed", () => {
+    const tracker = createClickTracker();
+    tracker.press(report({ column: 10, row: 1 }), 1_000);
+    tracker.move(report({ kind: "move", column: 10 + CLICK_SLOP_COLUMNS }));
+    // The press cell, not the release cell: what the user aimed at is the tab.
+    expect(
+      tracker.release(
+        report({ kind: "release", column: 10 + CLICK_SLOP_COLUMNS }),
+        1_100,
+      ),
+    ).toEqual({ row: 1, column: 10 });
+  });
+
+  test("travel past the slop between press and release is a drag", () => {
+    const tracker = createClickTracker();
+    tracker.press(report(), 1_000);
+    tracker.move(report({ kind: "move", column: 20 }));
+    expect(
+      tracker.release(report({ kind: "release", column: 20 }), 1_050),
     ).toBeNull();
   });
 
-  test("motion cancels the candidate outright", () => {
+  test("a release whose button code was cleared is still the end of the click", () => {
+    // X10 reports a release as button `none` (code 3); requiring `left` on the
+    // release threw every such click away.
     const tracker = createClickTracker();
     tracker.press(report(), 1_000);
-    tracker.cancel();
-    expect(tracker.release(report({ kind: "release" }), 1_050)).toBeNull();
-    expect(tracker.isPending()).toBe(false);
+    expect(
+      tracker.release(report({ kind: "release", button: "none" }), 1_100),
+    ).toEqual({ row: 1, column: 4 });
   });
 
   test("a press held longer than the window is not a click", () => {

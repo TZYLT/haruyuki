@@ -1,4 +1,5 @@
 import type { EventEmitter } from "node:events";
+import { debugLog } from "@/utils/debug";
 import { consultedInputScopes } from "./focus-ledger";
 import type { KeyBinding, KeyBindingTable, KeyEvent } from "./input-keys";
 import { describeChord, matchingBindings } from "./input-keys";
@@ -313,6 +314,17 @@ export function installInputRouter(
       if (mouse) {
         routeMouseReport(mouse);
         return true;
+      }
+      // `HARUYUKI_DEBUG_MOUSE=1`: an escape payload the mouse grammar did *not*
+      // match. It is logged because that is the one shape the router cannot
+      // report on — a report split across two reads, or one mangled by the
+      // terminal — and without it "the click did nothing" cannot be told apart
+      // from "the click never arrived" (`mouse-router.ts` explains the rest).
+      if (
+        process.env.HARUYUKI_DEBUG_MOUSE === "1" &&
+        payload.startsWith("\u001B")
+      ) {
+        debugLog("mouse-raw", JSON.stringify(payload));
       }
       const claimed = shieldKeyEvent(payload);
       if (claimed) {

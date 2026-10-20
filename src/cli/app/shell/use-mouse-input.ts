@@ -43,19 +43,22 @@ export function useMouseInput(
   }, [stream]);
 
   useEffect(() => {
-    return registerMouseHandler((report) => {
-      if (report.wheel === "up") {
-        scrollTranscriptWheel("up");
-        return true;
-      }
-      if (report.wheel === "down") {
-        scrollTranscriptWheel("down");
-        return true;
-      }
-      // Clicks and drags belong to the selection layer (M3-5); until it is
-      // mounted, a click is spent here rather than typed into the draft.
-      return false;
-    });
+    return registerMouseHandler(
+      (report) => {
+        if (report.wheel === "up") {
+          scrollTranscriptWheel("up");
+          return true;
+        }
+        if (report.wheel === "down") {
+          scrollTranscriptWheel("down");
+          return true;
+        }
+        // Clicks and drags belong to the selection layer (M3-5); until it is
+        // mounted, a click is spent here rather than typed into the draft.
+        return false;
+      },
+      { name: "wheel" },
+    );
   }, []);
 
   useKeyBindings("mouse", [

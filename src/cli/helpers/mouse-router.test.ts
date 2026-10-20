@@ -70,4 +70,50 @@ describe("mouse routing", () => {
     registerMouseHandler(() => {});
     expect(routeMouseReport(report())).toBe(true);
   });
+
+  test("chrome is consulted before the content layers, whatever order they registered in", () => {
+    // The reported defect: the selection layer is offered every press and claims
+    // it ("end the selection"), so while the order was registration order the tab
+    // row was clickable only if the strip's effect happened to run first. Chrome
+    // registered *last* here, on purpose.
+    const seen: string[] = [];
+    registerMouseHandler(
+      () => {
+        seen.push("selection");
+        return true;
+      },
+      { name: "selection" },
+    );
+    registerMouseHandler(
+      () => {
+        seen.push("chrome");
+        return true;
+      },
+      { layer: "chrome" },
+    );
+
+    expect(routeMouseReport(report())).toBe(true);
+    expect(seen).toEqual(["chrome"]);
+  });
+
+  test("a declining chrome layer falls through to the content layer", () => {
+    const seen: string[] = [];
+    registerMouseHandler(
+      () => {
+        seen.push("chrome");
+        return false;
+      },
+      { layer: "chrome" },
+    );
+    registerMouseHandler(
+      () => {
+        seen.push("selection");
+        return true;
+      },
+      { name: "selection" },
+    );
+
+    expect(routeMouseReport(report())).toBe(true);
+    expect(seen).toEqual(["chrome", "selection"]);
+  });
 });

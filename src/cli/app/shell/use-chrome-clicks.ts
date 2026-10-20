@@ -33,7 +33,10 @@ import type { TabStripRegion } from "./tab-strip-layout";
  *
  * The handler is registered once and reads its inputs through a ref: the layout
  * changes on every title or resize, and re-registering a mouse handler mid-drag
- * would reorder the handler chain.
+ * would reorder the handler chain. It registers on the **chrome** layer, which the
+ * router consults before the wheel and the selection whatever order the tree
+ * mounted in — the alternative is an effect order deciding whether the top bar is
+ * clickable (`mouse-router.ts`).
  */
 export type ChromeClicksOptions = {
   /** The tab row's clickable rectangles, from the layout the strip drew. */
@@ -68,43 +71,48 @@ export function useChromeClicks(options: ChromeClicksOptions): void {
   latest.current = options;
 
   useEffect(() => {
-    return registerMouseHandler((report) => {
-      if (pointerIsBlocked()) return false;
-      if (report.wheel) return false;
+    return registerMouseHandler(
+      (report) => {
+        if (pointerIsBlocked()) return false;
+        if (report.wheel) return false;
 
-      if (report.kind === "press") {
-        if (report.button !== "left") return false;
-        if (report.row === TAB_ROW) {
-          tracker.current.press(report, Date.now());
+        if (report.kind === "press") {
+          if (report.button !== "left") return false;
+          if (report.row === TAB_ROW) {
+            tracker.current.press(report, Date.now());
+            return true;
+          }
+          if (latest.current.pageActive && report.row > TAB_ROW) {
+            clearSelection();
+            return true;
+          }
+          return false;
+        }
+
+        if (report.kind === "move") {
+          // A drag that began on the strip is not a click and not a selection: the
+          // whole gesture stays here, and `chrome-click.ts` decides at release
+          // whether the pointer stayed close enough to count as a click.
+          if (!tracker.current.isPending()) return false;
+          tracker.current.move(report);
           return true;
         }
-        if (latest.current.pageActive && report.row > TAB_ROW) {
-          clearSelection();
-          return true;
-        }
-        return false;
-      }
 
-      if (report.kind === "move") {
-        // A drag that began on the strip is not a click and not a selection.
-        if (!tracker.current.isPending()) return false;
-        tracker.current.cancel();
+        // A press this layer claimed owns its release even when it was not a click:
+        // a slow press, or a release on a different cell after the motion handler
+        // cancelled the candidate. Returning `false` there would hand the tail of a
+        // chrome gesture to the selection layer, which reads a release as the end of
+        // a drag it never had.
+        const wasPending = tracker.current.isPending();
+        const point = tracker.current.release(report, Date.now());
+        if (!point) return wasPending;
+        const region = regionAt(latest.current.regions, point.column);
+        if (!region) return true;
+        if (region.part === "close") latest.current.onClose(region.id);
+        else latest.current.onSelect(region.id);
         return true;
-      }
-
-      // A press this layer claimed owns its release even when it was not a click:
-      // a slow press, or a release on a different cell after the motion handler
-      // cancelled the candidate. Returning `false` there would hand the tail of a
-      // chrome gesture to the selection layer, which reads a release as the end of
-      // a drag it never had.
-      const wasPending = tracker.current.isPending();
-      const point = tracker.current.release(report, Date.now());
-      if (!point) return wasPending;
-      const region = regionAt(latest.current.regions, point.column);
-      if (!region) return true;
-      if (region.part === "close") latest.current.onClose(region.id);
-      else latest.current.onSelect(region.id);
-      return true;
-    });
+      },
+      { layer: "chrome" },
+    );
   }, []);
 }
