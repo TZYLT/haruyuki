@@ -456,7 +456,15 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
       for (let offset = 0; fitted.start + offset < fitted.end; offset += 1) {
         const index = (fitted.start + offset) as WalkIndex;
         const item = itemAtWalkIndex(index);
-        debugRows.push(`${index}:${item?.kind ?? "page"}:${measure(index)}`);
+        // The tool's own name matters: "tool_call:35" cannot be checked against a
+        // renderer, "tool_call(memory_apply_patch):35" can (2026-10-20).
+        const label =
+          item === undefined
+            ? "page"
+            : item.kind === "tool_call"
+              ? `tool_call(${item.name})`
+              : item.kind;
+        debugRows.push(`${index}:${label}:${measure(index)}`);
       }
     }
     return { ...fitted, debugRows };
