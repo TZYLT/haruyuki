@@ -17,7 +17,10 @@ import { openConversationTab, resetTabsForTests } from "@/cli/app/tabs";
 import type { StaticItem } from "@/cli/app/types";
 import { ViewportTranscript } from "@/cli/app/ViewportTranscript";
 import { resetViewportScroll } from "@/cli/app/viewport-scroll";
-import { visibleWidth } from "@/cli/display/statusline/formatting";
+import {
+  ROW_SAFETY_COLUMNS,
+  visibleWidth,
+} from "@/cli/display/statusline/formatting";
 import { createBuffers } from "@/cli/helpers/accumulator";
 import {
   getTerminalFrame,
@@ -235,10 +238,14 @@ describe("the frame with the tab strip on it", () => {
         // that keeps costing the top row: a line one column past the edge is
         // wrapped by the terminal (not by Ink), which adds a physical line and
         // scrolls the frame. It has now been broken by a tab title's ellipsis, a
-        // markdown table and a memory diff's prose (2026-10-20), so the whole
-        // frame is held to it.
+        // markdown table, a memory diff's prose and the rule under the tabs
+        // (2026-10-20), so the whole frame is held to it — and to the margin the
+        // rest of the shell already spends, because a row that ends *on* the last
+        // column is the pending-wrap state that costs the same line.
         for (const line of frame) {
-          expect(visibleWidth(line)).toBeLessThanOrEqual(TERMINAL_COLUMNS);
+          expect(visibleWidth(line)).toBeLessThanOrEqual(
+            TERMINAL_COLUMNS - ROW_SAFETY_COLUMNS,
+          );
         }
         // And the two rows above the band are always on it. The rule carries the
         // rail's junction (`《38》§2.2`) at the column the same geometry puts the
@@ -251,7 +258,7 @@ describe("the frame with the tab strip on it", () => {
         expect(geometry.junctionColumn).toBe(69);
         const junction = geometry.junctionColumn - 1;
         expect(frame[1]).toBe(
-          `${"─".repeat(junction)}┬${"─".repeat(TERMINAL_COLUMNS - junction - 1)}`,
+          `${"─".repeat(junction)}┬${"─".repeat(TERMINAL_COLUMNS - ROW_SAFETY_COLUMNS - junction - 1)}`,
         );
         // The rail itself is on the frame, its divider standing in the junction's
         // column for **every** band row — including the rows below the last
@@ -323,6 +330,71 @@ describe("the frame with the tab strip on it", () => {
         // The transcript really is tall here, so the band is not empty by
         // accident.
         expect(frame.join("\n")).toContain("answer 59");
+      }
+    } finally {
+      unsubscribe();
+      instance.unmount();
+      instance.cleanup();
+      restore();
+    }
+  });
+
+  test("an item taller than the band is clipped by the band, not over it", async () => {
+    // The machine showed the strip painted over by transcript rows: `顺带一句` on
+    // the tab row, the rule running through the same line, and the rail two rows
+    // below the text. The cause is an item taller than the band — the window is
+    // then a slice through the middle of it, `contentOffset` goes **negative**, and
+    // that offset used to be the `marginTop` of the box that also clipped the rows.
+    // Ink applies only the innermost clip (`output.js`: `clips.at(-1)`), so a
+    // shifted box clips against its own, shifted rectangle — as good as no clip at
+    // all, and every row above the band edge lands on the shell's chrome.
+    openConversationTab("conv-1", "M6 shell");
+    const restore = resizeProcessStdout(TERMINAL_ROWS, TERMINAL_COLUMNS);
+    const stdout = new CaptureStream() as CaptureStream & NodeJS.WriteStream;
+    installTerminalFrameCapture(stdout);
+    // 20 rows each in a 22-row band: the window holds one item and cannot fit it.
+    const items: StaticItem[] = Array.from({ length: 8 }, (_, index) => ({
+      kind: "assistant",
+      id: `long-${index}`,
+      text: Array.from(
+        { length: 20 },
+        (_, line) => `long ${index} line ${line}`,
+      ).join("\n"),
+      phase: "finished",
+    }));
+
+    const frames: string[][] = [];
+    const unsubscribe = subscribeToTerminalFrame(() => {
+      const frame = getTerminalFrame();
+      if (frame) frames.push([...frame.text]);
+    });
+
+    const instance = render(<Shell chromeRows={CHROME_ROWS} items={items} />, {
+      stdin: fakeStdin(),
+      stdout,
+      debug: false,
+      patchConsole: false,
+      exitOnCtrlC: false,
+      alternateScreen: true,
+    });
+
+    try {
+      await waitForRender();
+      await waitForRender();
+      const geometry = sidebarGeometry(TERMINAL_COLUMNS, TERMINAL_ROWS);
+      const junction = geometry.junctionColumn - 1;
+      for (const frame of frames.slice(-3)) {
+        expect(frame.length).toBeLessThanOrEqual(TERMINAL_ROWS);
+        // The two shell rows are exactly what they are: tabs, then the rule. A
+        // transcript row on either of them is the defect, not a cosmetic drift.
+        expect(frame[0]).toContain("Settings");
+        expect(frame[0]).not.toContain("long ");
+        expect(frame[1]).toContain("┬");
+        expect(frame[1]).not.toContain("long ");
+        // And the rail starts where the band starts, so its rows and the text's
+        // rows are the same rows — the other half of what the machine showed.
+        expect(frame[TAB_STRIP_ROWS]?.at(junction)).toBe("│");
+        expect(frame.join("\n")).toContain("long ");
       }
     } finally {
       unsubscribe();

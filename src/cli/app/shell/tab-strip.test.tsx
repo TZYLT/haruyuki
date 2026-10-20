@@ -114,8 +114,12 @@ describe("the tab strip frame", () => {
       expect(rows[0]?.indexOf("Usage")).toBeLessThan(
         rows[0]?.indexOf("Settings") ?? -1,
       );
-      // The rule is the row's full width, and it is a rule.
-      expect(rows[1]).toBe("─".repeat(100));
+      // The rule is the row's width — the terminal less the safety margin, the
+      // same two columns the tab row itself spends (`ROW_SAFETY_COLUMNS`). It used
+      // to run edge to edge, and that made it the one row of the frame writing the
+      // terminal's final column: the terminal then wraps the next write, the frame
+      // gains a line, and the alternate screen scrolls this strip away.
+      expect(rows[1]).toBe("─".repeat(100 - ROW_SAFETY_COLUMNS));
     } finally {
       shell.stop();
     }
@@ -166,7 +170,7 @@ describe("the tab strip frame", () => {
       const rows = await shell.rows();
       // No wrapping: the strip is a fixed two rows whatever it had to drop.
       expect(rows.length).toBe(2);
-      expect(rows[1]).toBe("─".repeat(80));
+      expect(rows[1]).toBe("─".repeat(80 - ROW_SAFETY_COLUMNS));
       // The current tab survives, and what did not fit is counted.
       expect(rows[0]).toStartWith("> M6 shell");
       expect(rows[0]).toMatch(/\+\d+/);
@@ -210,7 +214,7 @@ describe("the tab strip frame", () => {
       expect(rows.length).toBe(2);
       expect(rows[0]?.length).toBeLessThanOrEqual(100);
       expect(rows[0]).toEndWith("Settings");
-      expect(rows[1]).toBe("─".repeat(100));
+      expect(rows[1]).toBe("─".repeat(100 - ROW_SAFETY_COLUMNS));
     } finally {
       shell.stop();
       queried.restore();

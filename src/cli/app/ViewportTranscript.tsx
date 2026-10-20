@@ -562,7 +562,17 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
    */
   const logged = useRef({ at: 0, count: 0 });
   useEffect(() => {
-    if (process.env.HARUYUKI_DEBUG_VIEWPORT !== "1") return;
+    const wantBlankTail = process.env.HARUYUKI_DEBUG_VIEWPORT === "1";
+    // A **negative** offset is logged in every debug session, because it is the
+    // state that cost the machine a shell: the window's top then sits above the
+    // band's, the rows above the band edge are dropped (`overflow` on the band's
+    // fixed clip box), and — before that box was fixed — they were painted over the
+    // tab row and the rule. It also means the row model measured more rows than the
+    // band can show while only a few of them have ink, which is what "the band is
+    // mostly empty" looks like. One line per second, capped, is enough to tell the
+    // two apart on the next report.
+    const offsetDropped = window.contentOffset < 0;
+    if (!offsetDropped && !wantBlankTail) return;
     if (!isDebugLogFileReady()) return;
     const frame = getTerminalFrame();
     const top = props.reserveTopRows ?? 0;
@@ -573,7 +583,7 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
         blankTail += 1;
       }
     }
-    if (blankTail <= 0) return;
+    if (!offsetDropped && blankTail <= 0) return;
     const now = Date.now();
     if (now - logged.current.at < 1_000) return;
     if (logged.current.count >= VIEWPORT_LOG_LIMIT) return;
@@ -715,103 +725,114 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
         overflow="hidden"
         flexShrink={1}
       >
-        {/* The window's own offset: the band shows the rows this shift leaves
-            inside it. A negative shift is what puts the middle of a tall item on
-            screen, and what makes a wheel notch move the text instead of
-            repainting the same frame.
+        {/* **The clip box and the shift are two boxes, and that is the whole point.**
+            The window's offset can be negative (a tall item scrolled to its middle),
+            and Ink applies only the *innermost* clip (`output.js`: `clips.at(-1)`),
+            so a box that both clips and carries the offset clips against its own
+            moved rectangle — which is no clip at all. The machine showed exactly
+            that: with one long item in the band, the transcript's first rows were
+            painted over the tab row and the rule (the band's own rows ended at the
+            band's width, so the rule survived to the right of them), and the rail,
+            which does not move, sat two rows below them.
 
-            **With a rail this box clips itself.** The band's clip is the box that
-            draws the row; a child one level down that leaves its height to its
-            content is laid out at the content's height, and the rows past the band
-            come out anyway — on the machine that was a frame taller than the
-            terminal, which scrolled the tab strip off the top. Height and
-            `overflow` here keep the rows inside before anything above has to. */}
+            Fixed outer box: the band's own rectangle, in the band's own place.
+            Shifted inner box: no `overflow`, so the clip that reaches the items is
+            the outer box's, and the rows the shift pushes past its top edge are
+            dropped instead of drawn over the shell's chrome. */}
         <Box
           flexDirection="column"
           flexShrink={0}
           width={railWidth > 0 ? bandColumns : undefined}
-          height={railWidth > 0 ? height : undefined}
-          overflow={railWidth > 0 ? "hidden" : undefined}
-          marginTop={window.contentOffset}
+          height={height}
+          overflow="hidden"
         >
-          {visible.map((item, offset) => {
-            const index = window.start + offset;
-            const marginTop = index > 0 ? 1 : 0;
-            const toolCallId =
-              item.kind === "tool_call" ? item.toolCallId : undefined;
-            const itemName = item.kind === "tool_call" ? item.name : undefined;
-            const isCurrentApproval =
-              toolCallId !== undefined &&
-              toolCallId === currentApproval?.toolCallId;
+          <Box
+            flexDirection="column"
+            flexShrink={0}
+            marginTop={window.contentOffset}
+          >
+            {visible.map((item, offset) => {
+              const index = window.start + offset;
+              const marginTop = index > 0 ? 1 : 0;
+              const toolCallId =
+                item.kind === "tool_call" ? item.toolCallId : undefined;
+              const itemName =
+                item.kind === "tool_call" ? item.name : undefined;
+              const isCurrentApproval =
+                toolCallId !== undefined &&
+                toolCallId === currentApproval?.toolCallId;
 
-            if (isCurrentApproval && currentApproval) {
+              if (isCurrentApproval && currentApproval) {
+                return (
+                  <Box
+                    key={item.id}
+                    flexDirection="column"
+                    marginTop={marginTop}
+                    {...shrinkProof}
+                  >
+                    <FocusedApproval
+                      view={props}
+                      precomputedDiff={
+                        toolCallId
+                          ? precomputedDiffsRef.current.get(toolCallId)
+                          : undefined
+                      }
+                    />
+                  </Box>
+                );
+              }
+
+              const isQueued =
+                toolCallId !== undefined && queuedIds.has(toolCallId);
+              const isPending =
+                toolCallId !== undefined && pendingIds.has(toolCallId);
+              if (isQueued || isPending) {
+                return (
+                  <Box
+                    key={item.id}
+                    flexDirection="column"
+                    marginTop={marginTop}
+                    {...shrinkProof}
+                  >
+                    <PendingApprovalStub
+                      toolName={
+                        (toolCallId
+                          ? approvalMap.get(toolCallId)?.toolName
+                          : null) ||
+                        itemName ||
+                        "Unknown"
+                      }
+                      description={
+                        toolCallId
+                          ? stubDescriptions.get(toolCallId)
+                          : undefined
+                      }
+                      decision={
+                        isQueued && toolCallId
+                          ? queuedDecisions.get(toolCallId)
+                          : undefined
+                      }
+                    />
+                  </Box>
+                );
+              }
+
               return (
-                <Box
-                  key={item.id}
-                  flexDirection="column"
-                  marginTop={marginTop}
-                  {...shrinkProof}
-                >
-                  <FocusedApproval
-                    view={props}
-                    precomputedDiff={
-                      toolCallId
-                        ? precomputedDiffsRef.current.get(toolCallId)
-                        : undefined
-                    }
+                <Box key={item.id} flexDirection="column" {...shrinkProof}>
+                  <TranscriptItemView
+                    item={item}
+                    index={index}
+                    columns={contentColumns}
+                    statusLinePrompt={statusLinePrompt}
+                    showCompactionsEnabled={showCompactionsEnabled}
+                    precomputedDiffs={precomputedDiffsRef.current}
+                    hiddenToolCallId={expandedToolCallId ?? undefined}
+                    lastShellToolCallId={lastShellToolCallId ?? undefined}
                   />
                 </Box>
               );
-            }
-
-            const isQueued =
-              toolCallId !== undefined && queuedIds.has(toolCallId);
-            const isPending =
-              toolCallId !== undefined && pendingIds.has(toolCallId);
-            if (isQueued || isPending) {
-              return (
-                <Box
-                  key={item.id}
-                  flexDirection="column"
-                  marginTop={marginTop}
-                  {...shrinkProof}
-                >
-                  <PendingApprovalStub
-                    toolName={
-                      (toolCallId
-                        ? approvalMap.get(toolCallId)?.toolName
-                        : null) ||
-                      itemName ||
-                      "Unknown"
-                    }
-                    description={
-                      toolCallId ? stubDescriptions.get(toolCallId) : undefined
-                    }
-                    decision={
-                      isQueued && toolCallId
-                        ? queuedDecisions.get(toolCallId)
-                        : undefined
-                    }
-                  />
-                </Box>
-              );
-            }
-
-            return (
-              <Box key={item.id} flexDirection="column" {...shrinkProof}>
-                <TranscriptItemView
-                  item={item}
-                  index={index}
-                  columns={contentColumns}
-                  statusLinePrompt={statusLinePrompt}
-                  showCompactionsEnabled={showCompactionsEnabled}
-                  precomputedDiffs={precomputedDiffsRef.current}
-                  hiddenToolCallId={expandedToolCallId ?? undefined}
-                  lastShellToolCallId={lastShellToolCallId ?? undefined}
-                />
-              </Box>
-            );
-          })}
+            })}
+          </Box>
         </Box>
 
         {/* The rail, inside the band's row: it gets the band's own height, so a

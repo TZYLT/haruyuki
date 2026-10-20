@@ -188,15 +188,24 @@ export function TabStrip({
       ? Math.max(0, frameColumns - ROW_SAFETY_COLUMNS)
       : tabStripColumns(queried, inkColumns);
   const layout = layoutTabStrip(tabStripItems(state), columns);
-  // The rule is drawn to the full laid-out width, and the rail's divider meets it
-  // at the junction the geometry computes — the same function the band reads, so
-  // the `┬` cannot end up beside the rail instead of on it. The rail itself stops
-  // two columns short of the right edge (`sidebarGeometry`), which is why the
-  // junction is not `ruleWidth - railWidth + 1`.
-  const ruleWidth = columns > 0 ? columns + ROW_SAFETY_COLUMNS : 0;
+  // The rule is drawn to the same width the row above it was laid out at, which is
+  // the terminal less `ROW_SAFETY_COLUMNS`. It used to be drawn to the *full*
+  // terminal width — edge to edge, as `《36》N1`'s eyeball check asks — and that made
+  // it the only row in the frame that writes the terminal's final column. A row
+  // that reaches the last column leaves the terminal in the pending-wrap state, so
+  // the write that follows wraps and the frame gains a physical line: the alternate
+  // screen scrolls and the row that goes is this strip. The rail's own rows used to
+  // do the same thing (`sidebarGeometry`). Two columns of rule are a gap, a scrolled
+  // tab row is a dead feature.
+  //
+  // The junction still comes from the *frame's* width, because that is the number
+  // the band and the rail resolve their geometry from: passing the two-columns-short
+  // rule width would put the `┬` two columns left of the divider it is meant to
+  // meet.
+  const ruleWidth = columns;
   const terminalRows = useTerminalRows();
   const junctionColumn = sidebarGeometry(
-    ruleWidth,
+    columns + ROW_SAFETY_COLUMNS,
     terminalRows,
   ).junctionColumn;
 
