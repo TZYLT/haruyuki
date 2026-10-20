@@ -13,6 +13,7 @@ import { WelcomeScreen } from "@/cli/components/WelcomeScreen";
 import { APP_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
+import { debugLog } from "@/utils/debug";
 import type { AppViewProps } from "./AppView";
 import { fitBlockedItemsFromEnd } from "./blocked-window";
 import {
@@ -457,6 +458,39 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
   ]);
 
   const rowsKey = useMemo(() => rowLayoutKey(layout), [layout]);
+
+  /**
+   * `HARUYUKI_DEBUG_VIEWPORT=1`: one line per window, into the session log.
+   *
+   * The machine reported "big blocks of text vanish while scrolling" (2026-10-20):
+   * the band painted content at its top and left the rest empty. Two very different
+   * causes produce exactly that picture — the row model over-measuring the visible
+   * items (so the content box is shorter than the band and the offset lifts it off
+   * the bottom), or the window not being resident (a page that has not been
+   * materialized is counted with an estimate). The numbers that separate them are
+   * the band height, the window's item range, its offset, and which pages are
+   * resident; on the screen all of it is invisible.
+   */
+  useEffect(() => {
+    if (process.env.HARUYUKI_DEBUG_VIEWPORT !== "1") return;
+    const resident = window.resident;
+    debugLog(
+      "viewport",
+      `band=${height} items=${items.length} prefix=${olderPrefix} pages=${olderBlocks.length} window=${window.start}..${window.end} offset=${window.contentOffset} fromBottom=${window.scrollFromBottom} anchor=${window.anchor.end}/${window.anchor.delta} resident=${resident === null ? "core" : `${resident.from}..${resident.to}`}`,
+    );
+  }, [
+    height,
+    items.length,
+    olderPrefix,
+    olderBlocks.length,
+    window,
+    window.start,
+    window.end,
+    window.contentOffset,
+    window.scrollFromBottom,
+    window.anchor,
+    window.resident,
+  ]);
 
   // Forget the heights measured under the previous layout, so the walk re-measures
   // those pages instead of skipping them with a stale number. Publishes only on a real
