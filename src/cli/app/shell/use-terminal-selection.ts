@@ -8,9 +8,11 @@ import {
   clearSelection,
   copySourceFor,
   extendSelection,
+  getBandColumns,
   getBandTopRow,
   getSelectedText,
   lastAnswerText,
+  setBandColumns,
   setBandTopRow,
   subscribeToSelection,
   visibleSelection,
@@ -113,9 +115,12 @@ function paintSelection(): void {
     // highlight drawn over the input would both look wrong and be copied.
     const top = getBandTopRow();
     const band = Math.max(1, getViewportRows());
+    const columns = getBandColumns();
     const lastRow = Math.min(end.row, frame.lines.length, top + band);
     for (let row = Math.max(top + 1, start.row); row <= lastRow; row += 1) {
-      const span = rowSelectionSpan(selection, row, frame.widths[row - 1] ?? 0);
+      const frameWidth = frame.widths[row - 1] ?? 0;
+      const limit = columns > 0 ? Math.min(frameWidth, columns) : frameWidth;
+      const span = rowSelectionSpan(selection, row, limit);
       if (!span) continue;
       const marked = highlightRow(
         frame.lines[row - 1] ?? "",
@@ -146,6 +151,15 @@ function paintSelection(): void {
   // on its next write by counting up from the bottom of its output, so a painter
   // that left the cursor on a painted row would displace every frame after it.
   writeToTerminal(out + CURSOR_TO_LINE_START(frame.cursorRow));
+}
+
+/**
+ * Where a drag's column has to stop: the last transcript column when the rail is
+ * drawn (`0` means "no rail, the whole screen is text").
+ */
+function clampColumn(column: number): number {
+  const band = getBandColumns();
+  return band > 0 ? Math.min(Math.max(1, column), band) : Math.max(1, column);
 }
 
 function isInsideBand(row: number): boolean {
@@ -206,6 +220,11 @@ export interface TerminalSelectionOptions {
    * top of the screen, which is what the whole selection path used to assume.
    */
   bandTopRow?: number;
+  /**
+   * Screen columns the transcript owns. The M6 rail occupies the rest of the band
+   * and is chrome, so a selection stops at this column (`0` = the whole width).
+   */
+  bandColumns?: number;
 }
 
 export function useTerminalSelection(
@@ -216,6 +235,7 @@ export function useTerminalSelection(
     items,
     copyLocally,
     bandTopRow = 0,
+    bandColumns = 0,
   } = options;
 
   // The offset is read by mouse reports and by the painter, both of which run
@@ -223,10 +243,12 @@ export function useTerminalSelection(
   // down) cannot race with a report.
   useEffect(() => {
     setBandTopRow(bandTopRow);
+    setBandColumns(bandColumns);
     return () => {
       setBandTopRow(0);
+      setBandColumns(0);
     };
-  }, [bandTopRow]);
+  }, [bandTopRow, bandColumns]);
 
   useEffect(() => {
     const repaint = () => paintSelection();
@@ -256,6 +278,13 @@ export function useTerminalSelection(
         if (report.wheel) return false;
         if (report.kind === "press") {
           if (report.button !== "left") return false;
+          // A press on the rail is a press on chrome: it ends a selection the way
+          // clicking the input does, and it never starts one — the rail is not
+          // text and has nothing to drag over.
+          if (getBandColumns() > 0 && report.column > getBandColumns()) {
+            clearSelection();
+            return true;
+          }
           if (!isInsideBand(report.row)) {
             // A click outside the transcript (the input, the status line) ends the
             // selection, the way clicking away from a selection does anywhere else.
@@ -273,13 +302,15 @@ export function useTerminalSelection(
           }
           beginSelection({
             row: report.row,
-            column: Math.max(1, report.column),
+            column: clampColumn(report.column),
           });
           return true;
         }
         if (report.kind === "move") {
           // `1002` reports motion only while a button is held, so a move is a drag.
-          extendSelection(clampedToBand(report.row, report.column));
+          extendSelection(
+            clampedToBand(report.row, clampColumn(report.column)),
+          );
           return true;
         }
         // A release keeps what was dragged: the copy key is what commits it, so a

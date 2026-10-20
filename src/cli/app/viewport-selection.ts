@@ -1,3 +1,4 @@
+﻿import { visibleWidth } from "@/cli/display/statusline/formatting";
 import { getTerminalFrame } from "@/cli/helpers/terminal-frame";
 import {
   type FramePoint,
@@ -68,6 +69,24 @@ let captured: CapturedSelection | null = null;
  */
 let bandTopRow = 0;
 
+/**
+ * Columns the transcript band owns, or `0` for the whole screen width.
+ *
+ * The M6 rail sits to the right of the band and is **not selectable**: it is
+ * chrome, it never scrolls, and a drag that ran into it used to copy `│ ctx 62%`
+ * into the middle of a sentence. `use-terminal-selection` clamps drags to this
+ * number, so a selection stops at the last transcript column.
+ */
+let bandColumns = 0;
+
+export function setBandColumns(columns: number): void {
+  bandColumns = Math.max(0, Math.floor(columns));
+}
+
+export function getBandColumns(): number {
+  return bandColumns;
+}
+
 export function setBandTopRow(rows: number): void {
   bandTopRow = Math.max(0, Math.floor(rows));
 }
@@ -83,6 +102,20 @@ function publish(): void {
 
 function samePoint(a: FramePoint, b: FramePoint): boolean {
   return a.row === b.row && a.column === b.column;
+}
+
+/** Cut a line to `width` columns — no ellipsis: this is copied text, not a label. */
+function cutToWidth(line: string, width: number): string {
+  if (visibleWidth(line) <= width) return line;
+  let out = "";
+  let used = 0;
+  for (const char of line) {
+    const charWidth = visibleWidth(char);
+    if (used + charWidth > width) break;
+    out += char;
+    used += charWidth;
+  }
+  return out;
 }
 
 /** The same selection, with every row moved by `rows`. Columns are untouched. */
@@ -123,17 +156,36 @@ function captureSelection(
     rows.push(frame.lines[row - 1] ?? "");
   }
   if (rows.length === 0) return null;
-  return {
-    text: selectionText(frame, {
-      anchor: {
-        ...frameSelection.anchor,
-        row: Math.min(frameSelection.anchor.row, last),
-      },
-      head: {
-        ...frameSelection.head,
-        row: Math.min(frameSelection.head.row, last),
-      },
+  // The drag's own columns are clamped too: a drag that began inside the band and
+  // ran into the rail must not have the rail's text appended to the sentence it
+  // covered.
+  const clampColumn = (point: FramePoint): FramePoint =>
+    bandColumns > 0
+      ? { ...point, column: Math.min(point.column, bandColumns) }
+      : point;
+  const text = selectionText(frame, {
+    anchor: clampColumn({
+      ...frameSelection.anchor,
+      row: Math.min(frameSelection.anchor.row, last),
     }),
+    head: clampColumn({
+      ...frameSelection.head,
+      row: Math.min(frameSelection.head.row, last),
+    }),
+  });
+  // A selection that spans rows copies the *whole* line for every row between the
+  // anchor and the head, so clamping the head alone still let `│ ctx 62%` into the
+  // middle of a paragraph. The rail's columns are chrome on every row, so the
+  // captured text is trimmed to the band's width row by row.
+  const boundedText =
+    bandColumns > 0
+      ? text
+          .split("\n")
+          .map((line) => cutToWidth(line, bandColumns))
+          .join("\n")
+      : text;
+  return {
+    text: boundedText,
     rows,
     bandRows: getViewportRows(),
     bandTopRow: top,
@@ -301,6 +353,7 @@ export function resetViewportSelectionForTests(): void {
   selection = null;
   captured = null;
   bandTopRow = 0;
+  bandColumns = 0;
   version = 0;
   listeners.clear();
 }

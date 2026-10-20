@@ -1,9 +1,13 @@
-import { Box } from "ink";
+import { Box, useStdout } from "ink";
 import type { ReactNode } from "react";
 import type { AppViewProps } from "@/cli/app/AppView";
 import { PageShell } from "@/cli/app/shell/page-shell";
 import { ShellFrame } from "@/cli/app/shell/ShellFrame";
 import { ContextSidebarScope } from "@/cli/app/shell/sidebar-scope";
+import {
+  sidebarWidth,
+  transcriptColumns,
+} from "@/cli/app/shell/sidebar-sections";
 import { TabStrip } from "@/cli/app/shell/tab-strip";
 import { TAB_STRIP_ROWS } from "@/cli/app/shell/tab-strip-layout";
 import type { AppShellProps } from "@/cli/app/shell/types";
@@ -82,9 +86,26 @@ export function V2Shell(props: AppShellProps) {
   // the reason this shell wants the mouse at all.
   useMouseInput();
   // Drag selection over the rendered rows, its highlight, and Ctrl+X y.
+  //
+  // The drag stops at the transcript's last column: the rail is chrome beside the
+  // band, and a selection that ran into it would copy `│ ctx 62%` into the middle
+  // of a sentence. The width is the same `min(console, ink)` the strip and the
+  // bands resolve, so the boundary the painter uses is the boundary they drew.
+  const { stdout } = useStdout();
+  const inkColumns =
+    typeof stdout?.columns === "number" && stdout.columns > 0
+      ? stdout.columns
+      : undefined;
+  const frameColumns =
+    inkColumns === undefined
+      ? props.columns
+      : Math.min(props.columns, inkColumns);
+  const terminalRows = useTerminalRows();
+  const railWidth = sidebarWidth(frameColumns, terminalRows);
   useTerminalSelection({
     items: () => [...props.staticItems, ...props.liveItems],
     bandTopRow: TAB_STRIP_ROWS,
+    bandColumns: railWidth > 0 ? transcriptColumns(frameColumns, railWidth) : 0,
   });
   // The tab row replaces the main area with a page when one is focused.
   const pageIsActive = useActiveTabIsPage();
@@ -95,7 +116,7 @@ export function V2Shell(props: AppShellProps) {
           append shell never provides it, so its band has no rail and needs no
           branch of its own. */}
       <ContextSidebarScope.Provider value>
-        <TabStrip {...props.tabStrip} />
+        <TabStrip {...props.tabStrip} frameColumns={frameColumns} />
         <ShellFrame
           {...props}
           transcript={pageIsActive ? PageShell : V2Transcript}

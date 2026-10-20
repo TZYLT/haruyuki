@@ -7,7 +7,8 @@ import {
   subscribeToSubagentLifecycle,
 } from "@/agent/subagent-state";
 import type { AppViewProps } from "@/cli/app/AppView";
-import { colors } from "@/cli/components/colors";
+import { visibleWidth } from "@/cli/display/statusline/formatting";
+import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { type MemfsStats, readMemfsStats } from "@/cli/helpers/memfs-stats";
 import {
   buildSidebarSections,
@@ -46,11 +47,13 @@ export function ContextSidebar({
   width,
   projection,
 }: ContextSidebarProps) {
+  const blockWidth = Math.max(1, width);
+  const rows = Math.max(1, height);
   const contentWidth = sidebarContentColumns(width);
   const specs = buildSidebarSections({ ...projection, width: contentWidth });
-  const fitted = fitSidebarSections(specs, height);
+  const fitted = fitSidebarSections(specs, rows);
 
-  const rows = fitted.flatMap((section, index) => [
+  const content = fitted.flatMap((section, index) => [
     ...(index > 0
       ? [{ key: `${section.spec.id}:gap`, text: "", title: false }]
       : []),
@@ -62,29 +65,42 @@ export function ContextSidebar({
     })),
   ]);
 
+  // **Every row is `│ ` plus its text, padded to the block's width.** The divider
+  // used to be the box's left border, and a border is not a row: it was drawn by
+  // the border machinery at a different moment from the content, which on the
+  // machine showed up as a rail whose rule started one row late and whose text
+  // did not line up with the `┬` above it. A painted glyph is the same row as its
+  // text, so the column cannot drift — and the rows below the last section keep
+  // the rule standing, because they are rows too.
+  const painted = Array.from({ length: rows }, (_, index) => {
+    const row = content[index];
+    const prefix = CLI_GLYPHS.rail;
+    const text = row?.text ?? "";
+    const line = text.length > 0 ? `${prefix} ${text}` : prefix;
+    const padding = Math.max(0, blockWidth - visibleWidth(line));
+    return {
+      key: row?.key ?? `blank:${index}`,
+      line: line + " ".repeat(padding),
+      title: row?.title ?? false,
+    };
+  });
+
   return (
     <Box
-      width={Math.max(1, width)}
-      height={Math.max(1, height)}
+      width={blockWidth}
+      height={rows}
       flexDirection="column"
       flexShrink={0}
       overflow="hidden"
-      paddingLeft={1}
-      borderStyle="single"
-      borderTop={false}
-      borderRight={false}
-      borderBottom={false}
-      // The same colour the strip's rule uses: the divider is chrome, not content.
-      borderColor={colors.input.border}
     >
-      {rows.map((row) => (
+      {painted.map((row) => (
         <Text
           key={row.key}
           bold={row.title}
           dimColor={!row.title}
           wrap="truncate-end"
         >
-          {row.text}
+          {row.line}
         </Text>
       ))}
     </Box>

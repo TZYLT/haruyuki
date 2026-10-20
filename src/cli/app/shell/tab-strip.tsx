@@ -157,7 +157,21 @@ function segmentsForText(layout: TabStripLayout): ReactNode {
   });
 }
 
-export function TabStrip({ onSelect, onClose }: TabStripProjection) {
+export function TabStrip({
+  onSelect,
+  onClose,
+  frameColumns,
+}: TabStripProjection & {
+  /**
+   * The width the shell laid the frame out at, when it knows it.
+   *
+   * The shell resolves `min(console, ink)` once and hands the same number to the
+   * band, the rail and this row; without it the strip re-derives the width from
+   * the live console while the band uses the debounced one, and during a resize
+   * the `┬` and the rail's divider settle on different columns.
+   */
+  frameColumns?: number;
+}) {
   const state = useTabsState();
   const pageActive = useActiveTabIsPage();
   const { stdout } = useStdout();
@@ -166,7 +180,10 @@ export function TabStrip({ onSelect, onClose }: TabStripProjection) {
       ? stdout.columns
       : undefined;
   const queried = useTerminalWidth();
-  const columns = tabStripColumns(queried, inkColumns);
+  const columns =
+    frameColumns !== undefined
+      ? Math.max(0, frameColumns - ROW_SAFETY_COLUMNS)
+      : tabStripColumns(queried, inkColumns);
   const layout = layoutTabStrip(tabStripItems(state), columns);
   // The rule is drawn to the full laid-out width, and the rail's divider meets it
   // at the last `railWidth` columns — the same arithmetic the band uses, so the

@@ -11,6 +11,10 @@ export const CLI_GLYPHS = {
   result: "└",
   /** Multi-line command continuation bar */
   continuation: "│",
+  /** The static rail's divider: one column, every band row, meeting the rule */
+  rail: "│",
+  /** Where the rail's divider meets the strip's rule */
+  railJunction: "┬",
   /** Close affordance on a tab of the shell's top bar */
   close: "×",
 } as const;

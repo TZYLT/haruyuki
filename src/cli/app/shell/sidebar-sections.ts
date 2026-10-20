@@ -237,9 +237,11 @@ function clock(ms: number): string {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function megabytes(bytes: number): string {
-  const mb = bytes / 1_048_576;
-  return `${mb < 10 ? (Math.round(mb * 10) / 10).toFixed(1) : Math.round(mb)} MB`;
+function bytesLabel(bytes: number): string {
+  // Bytes, not MB: a rail that rounds 1,176,320 to "1.1 MB" hides the only digit
+  // that changes from turn to turn. The separator is the locale's, so the number
+  // stays readable at seven digits.
+  return `${Math.max(0, Math.round(bytes)).toLocaleString("en-US")} B`;
 }
 
 function signed(n: number): string {
@@ -278,17 +280,17 @@ function contextSection(projection: SidebarProjection) {
   return {
     detail: [
       `ctx ${percent === null ? "—" : `${percent}%`} · ${hasUsage ? formatCompact(used as number) : "—"} / ${limit === null ? "—" : formatCompact(limit)}`,
-      // "系统提示" is the one component the Usage page's breakdown will own; until
-      // it lands the rail refuses to guess it apart from the conversation.
-      `系统 — · 对话 ${hasUsage ? formatCompact(used as number) : "—"}`,
-      `思考 ${formatCompact(projection.reasoningTokens)} · ${projection.stepCount} 轮`,
+      // "sys" is the one component the Usage page's breakdown will own; until it
+      // lands the rail refuses to guess it apart from the conversation.
+      `sys — · chat ${hasUsage ? formatCompact(used as number) : "—"}`,
+      `reasoning ${formatCompact(projection.reasoningTokens)} · ${projection.stepCount} turns`,
     ],
     summary: `ctx ${percent === null ? "—" : `${percent}%`}`,
   };
 }
 
 function turnSection(projection: SidebarProjection) {
-  const head = `${projection.stepCount} 步 · ${clock(projection.sessionWallMs)}`;
+  const head = `${projection.stepCount} steps · ${clock(projection.sessionWallMs)}`;
   return {
     detail: [
       head,
@@ -301,16 +303,16 @@ function turnSection(projection: SidebarProjection) {
 function usageSection(projection: SidebarProjection) {
   const today = projection.today;
   if (!today) {
-    return { detail: ["今日 —（台账未接）"], summary: "今日 —" };
+    return { detail: ["today — (ledger pending)"], summary: "today —" };
   }
   return {
     detail: [
-      `缓存读 ${formatCompact(today.cacheReadTokens)}`,
-      `非缓存 ${formatCompact(today.uncachedTokens)}`,
-      `写入 ${formatCompact(today.writeTokens)}`,
-      `成本 $${today.costUsd.toFixed(2)}`,
+      `cache read ${formatCompact(today.cacheReadTokens)}`,
+      `uncached ${formatCompact(today.uncachedTokens)}`,
+      `write ${formatCompact(today.writeTokens)}`,
+      `cost $${today.costUsd.toFixed(2)}`,
     ],
-    summary: `今日 $${today.costUsd.toFixed(2)}`,
+    summary: `today $${today.costUsd.toFixed(2)}`,
   };
 }
 
@@ -326,22 +328,25 @@ function agentsSection(projection: SidebarProjection) {
   if (hidden > 0) detail.push(`+${hidden}`);
   return {
     detail,
-    summary: `${agents.length} 个在跑`,
+    summary: `${agents.length} running`,
   };
 }
 
 function memfsSection(projection: SidebarProjection) {
   const memfs = projection.memfs;
   if (!memfs) {
-    return { detail: ["近 7 天 —", "改动 —", "总量 —"], summary: "记忆 —" };
+    return {
+      detail: ["7d — commits", "— lines", "total —"],
+      summary: "7d — commits",
+    };
   }
   return {
     detail: [
-      `7 天 ${memfs.commits7d} 提交`,
-      `改动 ${signed(memfs.changedLines7d)} 行`,
-      `总量 ${megabytes(memfs.totalBytes)}`,
+      `7d ${memfs.commits7d} commits`,
+      `${signed(memfs.changedLines7d)} lines`,
+      `total ${bytesLabel(memfs.totalBytes)}`,
     ],
-    summary: `7 天 ${memfs.commits7d} 提交`,
+    summary: `7d ${memfs.commits7d} commits`,
   };
 }
 

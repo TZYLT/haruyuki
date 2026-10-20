@@ -18,6 +18,7 @@ import {
   hasSelection,
   lastAnswerText,
   resetViewportSelectionForTests,
+  setBandColumns,
   subscribeToSelection,
   visibleSelection,
 } from "@/cli/app/viewport-selection";
@@ -215,6 +216,34 @@ describe("viewport selection", () => {
     beginSelection({ row: 3, column: 1 });
     extendSelection({ row: 5, column: 3 });
     expect(getSelectedText()).toBe("");
+  });
+
+  test("the copy stops at the rail, not at the edge of the screen", () => {
+    const stream = {
+      isTTY: true,
+      write(_chunk: string) {
+        return true;
+      },
+    };
+    installTerminalFrameCapture(stream);
+    stream.write(
+      `\u001B[2J\u001B[Halpha bravo│ ctx 62%\ncharlie delta│ 12 steps\n`,
+    );
+
+    setViewportRows(2);
+    // The rail is ten columns in from the right; the transcript owns the rest.
+    setBandColumns(11);
+    beginSelection({ row: 1, column: 1 });
+    extendSelection({ row: 1, column: 30 });
+    // `alpha bravo` is eleven columns; the divider and everything after it is
+    // chrome and must not be appended to the copy.
+    expect(getSelectedText()).toBe("alpha bravo");
+
+    // A drag that runs onto the next row is clamped on both.
+    clearSelection();
+    beginSelection({ row: 1, column: 1 });
+    extendSelection({ row: 2, column: 30 });
+    expect(getSelectedText()).toBe("alpha bravo\ncharlie del");
   });
 
   test("finds the last answer, not the last line", () => {

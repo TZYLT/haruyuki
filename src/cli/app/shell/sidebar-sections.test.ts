@@ -205,8 +205,8 @@ describe("buildSidebarSections", () => {
     const context = buildSidebarSections(projection()).find(
       (item) => item.id === "context",
     );
-    expect(context?.detail[1]).toBe("系统 — · 对话 84k");
-    expect(context?.detail[2]).toBe("思考 800 · 12 轮");
+    expect(context?.detail[1]).toBe("sys — · chat 84k");
+    expect(context?.detail[2]).toBe("reasoning 800 · 12 turns");
   });
 
   test("the session section is titled Turn", () => {
@@ -214,7 +214,7 @@ describe("buildSidebarSections", () => {
       (item) => item.id === "turn",
     );
     expect(turn?.title).toBe("Turn");
-    expect(turn?.detail).toEqual(["12 步 · 00:42", "1.2k out · 3.4k in"]);
+    expect(turn?.detail).toEqual(["12 steps · 00:42", "1.2k out · 3.4k in"]);
   });
 
   test("an empty agent list hides its section instead of printing zero", () => {
@@ -245,7 +245,7 @@ describe("buildSidebarSections", () => {
     const placeholder = buildSidebarSections(projection()).find(
       (item) => item.id === "usage",
     );
-    expect(placeholder?.detail).toEqual(["今日 —（台账未接）"]);
+    expect(placeholder?.detail).toEqual(["today — (ledger pending)"]);
 
     const wired = buildSidebarSections(
       projection({
@@ -258,18 +258,18 @@ describe("buildSidebarSections", () => {
       }),
     ).find((item) => item.id === "usage");
     expect(wired?.detail).toEqual([
-      "缓存读 1.2k",
-      "非缓存 3.4k",
-      "写入 500",
-      "成本 $0.12",
+      "cache read 1.2k",
+      "uncached 3.4k",
+      "write 500",
+      "cost $0.12",
     ]);
   });
 
-  test("memfs says what is missing, and formats the totals when present", () => {
+  test("memfs says what is missing, and counts bytes rather than megabytes", () => {
     const placeholder = buildSidebarSections(projection()).find(
       (item) => item.id === "memfs",
     );
-    expect(placeholder?.detail).toEqual(["近 7 天 —", "改动 —", "总量 —"]);
+    expect(placeholder?.detail).toEqual(["7d — commits", "— lines", "total —"]);
 
     const wired = buildSidebarSections(
       projection({
@@ -277,9 +277,9 @@ describe("buildSidebarSections", () => {
       }),
     ).find((item) => item.id === "memfs");
     expect(wired?.detail).toEqual([
-      "7 天 12 提交",
-      "改动 +340 行",
-      "总量 1.2 MB",
+      "7d 12 commits",
+      "+340 lines",
+      "total 1,258,291 B",
     ]);
   });
 

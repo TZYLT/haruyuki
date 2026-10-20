@@ -132,7 +132,11 @@ function Shell({ chromeRows }: { chromeRows: number }) {
   return (
     <FullScreenFrame>
       <ContextSidebarScope.Provider value>
-        <TabStrip onSelect={() => {}} onClose={() => {}} />
+        <TabStrip
+          onSelect={() => {}}
+          onClose={() => {}}
+          frameColumns={TERMINAL_COLUMNS}
+        />
         <Box flexDirection="column">
           <ChromeHeightContext.Provider value={rows}>
             <ViewportTranscript
@@ -240,12 +244,20 @@ describe("the frame with the tab strip on it", () => {
           `${"─".repeat(junction)}┬${"─".repeat(TERMINAL_COLUMNS - junction - 1)}`,
         );
         // The rail itself is on the frame, its divider standing in the junction's
-        // column for every band row.
-        expect(frame.slice(TAB_STRIP_ROWS).join("\n")).toContain("Context");
-        const railRows = frame
-          .slice(TAB_STRIP_ROWS)
-          .filter((line) => line.at(junction) === "│");
-        expect(railRows.length).toBeGreaterThan(0);
+        // column for **every** band row — including the rows below the last
+        // section, which is what makes the rule continuous instead of stopping
+        // where the content does.
+        const bandRows = frame.slice(TAB_STRIP_ROWS);
+        expect(bandRows.join("\n")).toContain("Context");
+        const dividerRows = bandRows.filter(
+          (line) => line.at(junction) === "│",
+        );
+        expect(dividerRows.length).toBeGreaterThanOrEqual(15);
+        // Nothing to the left of the divider is rail text: the band's own columns
+        // stay the transcript's.
+        expect(
+          bandRows.some((line) => line.slice(junction).includes("ctx ")),
+        ).toBe(true);
       }
     } finally {
       unsubscribe();
