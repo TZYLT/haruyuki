@@ -9,7 +9,7 @@ import {
   subscribeToTerminalFrame,
 } from "@/cli/helpers/terminal-frame";
 import { resolveUiV2Once } from "@/experiments/ui-v2";
-import { debugLog } from "@/utils/debug";
+import { debugLog, suppressDebugScreenOutput } from "@/utils/debug";
 
 /**
  * The full-screen shell's terminal hand-over, in one place.
@@ -31,6 +31,15 @@ import { debugLog } from "@/utils/debug";
 export function wireFullScreenTerminal(
   stream: FrameStream = process.stdout,
 ): boolean {
+  // The screen belongs to Ink from the first frame on, which is *before* the
+  // session log exists (`debugLogFile.init()` runs once the agent is resolved).
+  // Any debug line written in that window goes to the console, Ink answers a console
+  // write with a repaint, and a line written per frame therefore feeds itself: the
+  // machine saw it as "tens of thousands of frames of log, the UI never loads"
+  // (2026-10-20). This call is evaluated as a `render()` option, i.e. exactly at
+  // that boundary.
+  suppressDebugScreenOutput();
+
   const fullScreen = resolveUiV2Once();
   if (!fullScreen) return false;
   installTerminalFrameCapture(stream);

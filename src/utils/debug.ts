@@ -86,6 +86,28 @@ function printDebugLine(line: string, level: "log" | "warn" = "log"): void {
   console.error(colored);
 }
 
+/**
+ * Stop letting debug lines go to the screen, right now.
+ *
+ * `debugLogFile.init()` does this too, but it runs once the session's agent is
+ * resolved — **after** the interactive shell has drawn its first frame. Any log in
+ * that window is printed with `console.error`, Ink owns the terminal, and Ink
+ * answers a console write by repainting the frame: one log line becomes one frame.
+ * For a line written per frame that is a self-feeding loop ("tens of thousands of
+ * frames of log, the UI never loads", 2026-10-20).
+ *
+ * So the ownership boundary is not "the log file exists", it is "Ink is about to
+ * draw". The process entry calls this immediately before `render()`.
+ */
+export function suppressDebugScreenOutput(): void {
+  screenOutputSuppressed = true;
+}
+
+/** Whether debug lines are being persisted to a session log yet. */
+export function isDebugLogFileReady(): boolean {
+  return debugLogFile.hasLogFile();
+}
+
 // ---------------------------------------------------------------------------
 // Always-on debug log file
 // ---------------------------------------------------------------------------
@@ -136,6 +158,11 @@ class DebugLogFile {
     this.bytesWritten = 0;
     this.truncationNoted = false;
     this.pruneOldSessions();
+  }
+
+  /** Whether a session log file is in place (i.e. `init()` has run). */
+  hasLogFile(): boolean {
+    return this.logPath !== null;
   }
 
   /** Append a single line to the log file (best-effort, sync). */

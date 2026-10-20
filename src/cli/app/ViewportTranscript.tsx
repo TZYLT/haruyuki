@@ -1,5 +1,5 @@
 import { Box } from "ink";
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { PendingApprovalStub } from "@/cli/components/PendingApprovalStub";
 import {
   getRecallDisplay,
@@ -14,7 +14,7 @@ import { APP_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { getTerminalFrame } from "@/cli/helpers/terminal-frame";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
-import { debugLog } from "@/utils/debug";
+import { debugLog, isDebugLogFileReady } from "@/utils/debug";
 import type { AppViewProps } from "./AppView";
 import { fitBlockedItemsFromEnd } from "./blocked-window";
 import {
@@ -76,6 +76,15 @@ import {
 export type ViewportTranscriptProps = AppViewProps & {
   reserveTopRows?: number;
 };
+
+/**
+ * How many anomaly lines `HARUYUKI_DEBUG_VIEWPORT` may write per session.
+ *
+ * A cap, not a rate: the point is a handful of examples of a state the user can see
+ * and the numbers behind it. An unbounded per-render log is what made the UI
+ * unusable once already (see the log's own comment).
+ */
+const VIEWPORT_LOG_LIMIT = 40;
 
 /**
  * The rows the full-screen viewport reserves for one item: exactly what
@@ -393,7 +402,36 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
      */
     const itemAtWalkIndex = (index: WalkIndex): StaticItem | undefined =>
       items.at(index - olderPrefix);
-    return fitBlockedItemsFromEnd({
+    const debugRows: string[] = [];
+    const measure = (index: WalkIndex): number => {
+      const item = itemAtWalkIndex(index);
+      if (item === undefined) {
+        const owning = historyBlockAt(olderBlocks, index);
+        const block = owning === null ? undefined : olderBlocks[owning];
+        const rows = block?.rows ?? null;
+        if (rows === null) return 1;
+        return Math.max(
+          1,
+          Math.ceil(rows / Math.max(1, block?.itemCount ?? 1)),
+        );
+      }
+      return viewportItemRows(item, {
+        ...layout,
+        index,
+        diffs: precomputedDiffs,
+        substitutions: {
+          currentApproval,
+          currentApprovalContext,
+          approvalMap,
+          pendingIds,
+          queuedIds,
+          queuedDecisions,
+          stubDescriptions,
+          showPreview: showApprovalPreview,
+        },
+      });
+    };
+    const fitted = fitBlockedItemsFromEnd({
       blocks: olderBlocks,
       coreItemCount: Math.max(
         0,
@@ -409,35 +447,19 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
       // in — while `isMaterialized` keeps that number out of the ledger, because a
       // page recorded from rows nobody measured can never be drawn again.
       isMaterialized: (index) => itemAtWalkIndex(index) !== undefined,
-      measure: (index) => {
-        const item = itemAtWalkIndex(index);
-        if (item === undefined) {
-          const owning = historyBlockAt(olderBlocks, index);
-          const block = owning === null ? undefined : olderBlocks[owning];
-          const rows = block?.rows ?? null;
-          if (rows === null) return 1;
-          return Math.max(
-            1,
-            Math.ceil(rows / Math.max(1, block?.itemCount ?? 1)),
-          );
-        }
-        return viewportItemRows(item, {
-          ...layout,
-          index,
-          diffs: precomputedDiffs,
-          substitutions: {
-            currentApproval,
-            currentApprovalContext,
-            approvalMap,
-            pendingIds,
-            queuedIds,
-            queuedDecisions,
-            stubDescriptions,
-            showPreview: showApprovalPreview,
-          },
-        });
-      },
+      measure,
     });
+    if (process.env.HARUYUKI_DEBUG_VIEWPORT === "1") {
+      // What the model *believes* about each visible item, for the anomaly line: the
+      // over-measured item is the one whose number is a lie, and only the model's own
+      // numbers can name it.
+      for (let offset = 0; fitted.start + offset < fitted.end; offset += 1) {
+        const index = (fitted.start + offset) as WalkIndex;
+        const item = itemAtWalkIndex(index);
+        debugRows.push(`${index}:${item?.kind ?? "page"}:${measure(index)}`);
+      }
+    }
+    return { ...fitted, debugRows };
   }, [
     items,
     height,
@@ -461,24 +483,34 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
   const rowsKey = useMemo(() => rowLayoutKey(layout), [layout]);
 
   /**
-   * `HARUYUKI_DEBUG_VIEWPORT=1`: one line per window, into the session log.
+   * `HARUYUKI_DEBUG_VIEWPORT=1`: one line **per anomaly**, into the session log.
    *
    * The machine reported "big blocks of text vanish while scrolling" (2026-10-20):
-   * the band painted content at its top and left the rest empty. Two very different
+   * the band painted content at its top and left the rest empty. Two different
    * causes produce exactly that picture — the row model over-measuring the visible
-   * items (so the content box is shorter than the band and the offset lifts it off
+   * items (the content box is then shorter than the band and the offset lifts it off
    * the bottom), or the window not being filled (a page that has not been
    * materialized contributes an estimate, an anchor that outlived its item, a fit
    * that clamps at the end of history).
    *
-   * `blankTail` is the measurement that separates them: it counts the empty rows at
-   * the band's bottom **in the frame that was just written**, so a log line carries
-   * both what the model believed (`window`, `offset`, `fromBottom`, `anchor`) and
-   * what the screen actually got. On screen all of it is invisible.
+   * `blankTail` separates them: it counts the empty rows at the band's bottom **in
+   * the frame that was just written**, so one line carries both what the model
+   * believed (`window`, `offset`, `fromBottom`, `anchor`, `resident`) and what the
+   * screen got.
+   *
+   * Three guards, because the first version of this log was a mistake worth
+   * recording: it wrote a line **per render**, and the session log can be initialised
+   * *after* the shell draws, so those lines went to the console, Ink repainted for
+   * each one, and the repaint wrote another line — a self-feeding loop that made the
+   * UI unusable ("tens of thousands of frames of log", 2026-10-20). So: only when
+   * something is actually wrong (`blankTail > 0`), only when the session log exists
+   * (a line that cannot be persisted is a line that would be printed), and at most
+   * once per second up to a hard cap.
    */
+  const logged = useRef({ at: 0, count: 0 });
   useEffect(() => {
     if (process.env.HARUYUKI_DEBUG_VIEWPORT !== "1") return;
-    const resident = window.resident;
+    if (!isDebugLogFileReady()) return;
     const frame = getTerminalFrame();
     const top = props.reserveTopRows ?? 0;
     let blankTail = 0;
@@ -488,9 +520,16 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
         blankTail += 1;
       }
     }
+    if (blankTail <= 0) return;
+    const now = Date.now();
+    if (now - logged.current.at < 1_000) return;
+    if (logged.current.count >= VIEWPORT_LOG_LIMIT) return;
+    logged.current.at = now;
+    logged.current.count += 1;
+    const resident = window.resident;
     debugLog(
       "viewport",
-      `band=${height} blankTail=${blankTail} items=${items.length} prefix=${olderPrefix} pages=${olderBlocks.length} window=${window.start}..${window.end} offset=${window.contentOffset} fromBottom=${window.scrollFromBottom} anchor=${window.anchor.end}/${window.anchor.delta} resident=${resident === null ? "core" : `${resident.from}..${resident.to}`}`,
+      `band=${height} blankTail=${blankTail} items=${items.length} prefix=${olderPrefix} pages=${olderBlocks.length} window=${window.start}..${window.end} offset=${window.contentOffset} fromBottom=${window.scrollFromBottom} anchor=${window.anchor.end}/${window.anchor.delta} resident=${resident === null ? "core" : `${resident.from}..${resident.to}`} rows=${window.debugRows?.join(",") ?? "-"}`,
     );
   }, [
     height,
