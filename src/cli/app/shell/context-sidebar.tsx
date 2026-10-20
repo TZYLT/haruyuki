@@ -8,6 +8,7 @@ import {
 } from "@/agent/subagent-state";
 import type { AppViewProps } from "@/cli/app/AppView";
 import { colors } from "@/cli/components/colors";
+import { type MemfsStats, readMemfsStats } from "@/cli/helpers/memfs-stats";
 import {
   buildSidebarSections,
   fitSidebarSections,
@@ -126,6 +127,25 @@ export function ContextSidebarSlot({
     return () => clearInterval(timer);
   }, [running.length]);
 
+  // Memory stats are read on three events and never per frame: mount (the
+  // session starting), a conversation switch, and a turn finishing (`streaming`
+  // going false). Each read is a git call, so a per-frame read would be a
+  // subprocess per repaint — the exact "1 s ticker on the whole tree" the rail
+  // must not be.
+  const [memfs, setMemfs] = useState<MemfsStats | null>(null);
+  useEffect(() => {
+    // Triggers, not reads: a switch and a finished turn are *when* to re-read.
+    void view.conversationId;
+    void view.streaming;
+    let cancelled = false;
+    void readMemfsStats(view.agentId).then((stats) => {
+      if (!cancelled) setMemfs(stats);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [view.agentId, view.conversationId, view.streaming]);
+
   const stats = view.sessionStatsRef.current.getSnapshot();
   const now = Date.now();
   const projection: Omit<SidebarProjection, "width"> = {
@@ -143,11 +163,10 @@ export function ContextSidebarSlot({
           ? Math.max(0, now - agent.startedAtMs)
           : Math.max(0, agent.elapsedMs),
     })),
-    // Both land with their own readers: today's usage needs P4's ledger, and the
-    // memory figures need a git/disk reader that no part of M6 owns yet. The
-    // sections say so instead of printing a zero that would read as a measurement.
+    // Today's usage needs P4's ledger (`《33》§12`); until it lands the section
+    // says so instead of printing a zero that would read as a measurement.
     today: null,
-    memfs: null,
+    memfs,
   };
 
   return (
