@@ -1,4 +1,4 @@
-import { Box } from "ink";
+import { Box, useStdout } from "ink";
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { PendingApprovalStub } from "@/cli/components/PendingApprovalStub";
 import {
@@ -51,6 +51,9 @@ import {
   type RowMeasureOptions,
   rowLayoutKey,
 } from "./row-model";
+import { ContextSidebarSlot } from "./shell/context-sidebar";
+import { useHasContextSidebar } from "./shell/sidebar-scope";
+import { sidebarWidth, transcriptColumns } from "./shell/sidebar-sections";
 import { TranscriptItemView } from "./TranscriptItem";
 import type { StaticItem } from "./types";
 import { ViewportPanel } from "./ViewportPanel";
@@ -358,7 +361,29 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
   // disagreement, and a line that ends inside the terminal cannot wrap. The cost is
   // two columns of right margin on the transcript, which is the same trade the
   // chrome rows already make.
-  const contentColumns = Math.max(1, columns - ROW_SAFETY_COLUMNS);
+  // The rail takes its columns off the *band*, not off the frame: `《38》§6.3`'s
+  // table says the transcript + gutter + rail always sum to the terminal's
+  // columns, so the band lays out one gutter narrower than the frame and the
+  // rail's divider sits in the last column before its own block.
+  //
+  // The width is `min(console, ink)` for the reason the strip already pays for:
+  // on Windows the console answers with the screen *buffer*, and a row laid out
+  // against the larger number is a row Ink wraps — which costs a physical line
+  // and scrolls the top off the alternate screen. The strip resolves the same
+  // pair the same way, so the `┬` and the divider land in one column.
+  const { stdout } = useStdout();
+  const inkColumns =
+    typeof stdout?.columns === "number" && stdout.columns > 0
+      ? stdout.columns
+      : undefined;
+  const frameColumns =
+    inkColumns === undefined ? columns : Math.min(columns, inkColumns);
+  const railWidth = useHasContextSidebar()
+    ? sidebarWidth(frameColumns, terminalRows)
+    : 0;
+  const bandColumns =
+    railWidth > 0 ? transcriptColumns(frameColumns, railWidth) : columns;
+  const contentColumns = Math.max(1, bandColumns - ROW_SAFETY_COLUMNS);
 
   // Everything an item's height depends on, built **once** and used for both the
   // measurement below and the ledger key: a page's height is measured and then
@@ -685,7 +710,7 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
           a squeezed box reports a squeezed height. */}
       <Box
         height={height}
-        flexDirection="column"
+        flexDirection={railWidth > 0 ? "row" : "column"}
         overflow="hidden"
         flexShrink={1}
       >
@@ -696,6 +721,7 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
         <Box
           flexDirection="column"
           flexShrink={0}
+          width={railWidth > 0 ? bandColumns : undefined}
           marginTop={window.contentOffset}
         >
           {visible.map((item, offset) => {
@@ -777,6 +803,13 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
             );
           })}
         </Box>
+
+        {/* The rail, inside the band's row: it gets the band's own height, so a
+            folded rail and a tall one are the same frame geometry, and the
+            divider is the box's border rather than a glyph per line. */}
+        {railWidth > 0 && (
+          <ContextSidebarSlot view={props} height={height} width={railWidth} />
+        )}
       </Box>
 
       {/* Below the band, above the input: running subagents, and the focused

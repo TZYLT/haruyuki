@@ -1,6 +1,6 @@
 // src/cli/app/shell/page-shell.tsx
 
-import { Box, Text } from "ink";
+import { Box, Text, useStdout } from "ink";
 import type { AppViewProps } from "@/cli/app/AppView";
 import {
   CHROME_RESERVE_ROWS,
@@ -10,6 +10,9 @@ import {
 import { findTab, useTabsState } from "@/cli/app/tabs";
 import { ViewportPanel } from "@/cli/app/ViewportPanel";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
+import { ContextSidebarSlot } from "./context-sidebar";
+import { useHasContextSidebar } from "./sidebar-scope";
+import { sidebarWidth, transcriptColumns } from "./sidebar-sections";
 import { TAB_STRIP_ROWS } from "./tab-strip-layout";
 
 /**
@@ -51,6 +54,25 @@ export function PageShell(props: AppViewProps) {
   const title = tab?.title ?? "Settings";
   const description = PAGE_DESCRIPTIONS[tab?.id ?? "settings"];
 
+  // The rail is the band's neighbour on a page too (`《38》§2.3`: the Settings
+  // frame keeps it): a page replaces the transcript, not the shell's geometry.
+  // `min(console, ink)` — the same pair the strip resolves, so the divider and
+  // the `┬` land in one column.
+  const { stdout } = useStdout();
+  const inkColumns =
+    typeof stdout?.columns === "number" && stdout.columns > 0
+      ? stdout.columns
+      : undefined;
+  const frameColumns =
+    inkColumns === undefined
+      ? props.columns
+      : Math.min(props.columns, inkColumns);
+  const railWidth = useHasContextSidebar()
+    ? sidebarWidth(frameColumns, terminalRows)
+    : 0;
+  const bandColumns =
+    railWidth > 0 ? transcriptColumns(frameColumns, railWidth) : props.columns;
+
   return (
     <>
       {/* The page body is the frame's elastic box while a page is shown, exactly
@@ -59,13 +81,23 @@ export function PageShell(props: AppViewProps) {
           from somewhere, and nothing measures this box. */}
       <Box
         height={height}
-        flexDirection="column"
+        flexDirection={railWidth > 0 ? "row" : "column"}
         flexShrink={1}
         overflow="hidden"
-        paddingX={1}
       >
-        <Text bold>{title}</Text>
-        <Text dimColor>{description}</Text>
+        <Box
+          flexDirection="column"
+          flexShrink={0}
+          width={railWidth > 0 ? bandColumns : undefined}
+          overflow="hidden"
+          paddingX={1}
+        >
+          <Text bold>{title}</Text>
+          <Text dimColor>{description}</Text>
+        </Box>
+        {railWidth > 0 && (
+          <ContextSidebarSlot view={props} height={height} width={railWidth} />
+        )}
       </Box>
       <ViewportPanel
         panelRef={panelRef}

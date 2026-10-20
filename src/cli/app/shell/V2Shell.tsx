@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { AppViewProps } from "@/cli/app/AppView";
 import { PageShell } from "@/cli/app/shell/page-shell";
 import { ShellFrame } from "@/cli/app/shell/ShellFrame";
+import { ContextSidebarScope } from "@/cli/app/shell/sidebar-scope";
 import { TabStrip } from "@/cli/app/shell/tab-strip";
 import { TAB_STRIP_ROWS } from "@/cli/app/shell/tab-strip-layout";
 import type { AppShellProps } from "@/cli/app/shell/types";
@@ -90,11 +91,16 @@ export function V2Shell(props: AppShellProps) {
 
   return (
     <FullScreenFrame>
-      <TabStrip {...props.tabStrip} />
-      <ShellFrame
-        {...props}
-        transcript={pageIsActive ? PageShell : V2Transcript}
-      />
+      {/* The rail is this shell's, and the bands read that from the scope: the
+          append shell never provides it, so its band has no rail and needs no
+          branch of its own. */}
+      <ContextSidebarScope.Provider value>
+        <TabStrip {...props.tabStrip} />
+        <ShellFrame
+          {...props}
+          transcript={pageIsActive ? PageShell : V2Transcript}
+        />
+      </ContextSidebarScope.Provider>
     </FullScreenFrame>
   );
 }

@@ -11,8 +11,12 @@ import {
 import { colors } from "@/cli/components/colors";
 import { ROW_SAFETY_COLUMNS } from "@/cli/display/statusline/formatting";
 import { solidRule } from "@/cli/helpers/rule-lines";
-import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
+import {
+  useTerminalRows,
+  useTerminalWidth,
+} from "@/cli/hooks/use-terminal-width";
 import { debugWarn } from "@/utils/debug";
+import { sidebarWidth } from "./sidebar-sections";
 import {
   layoutTabStrip,
   TAB_UNREAD_MARK,
@@ -97,6 +101,23 @@ export function tabStripColumns(
 }
 
 /**
+ * The rule under the strip, with the rail's junction when the rail is drawn.
+ *
+ * `《38》§2.2`'s frame puts a `┬` where the rail's divider meets the rule: the
+ * divider is a column, and a rule that runs straight through it reads as a line
+ * the rail is lying on top of. The junction sits one past the gutter, which is
+ * exactly where the sidebar block starts.
+ */
+export function ruleWithJunction(ruleWidth: number, railWidth: number): string {
+  if (ruleWidth <= 0) return "";
+  const ruler = solidRule(ruleWidth);
+  if (railWidth <= 0 || railWidth >= ruleWidth) return ruler;
+  const junction = ruleWidth - railWidth + 1;
+  if (junction < 1 || junction > ruleWidth) return ruler;
+  return `${ruler.slice(0, junction - 1)}┬${ruler.slice(junction)}`;
+}
+
+/**
  * Split a tab's unread mark out of its name so the mark can carry its own colour.
  *
  * The strip reserves the marker's column on every conversation cell, so the name
@@ -147,6 +168,12 @@ export function TabStrip({ onSelect, onClose }: TabStripProjection) {
   const queried = useTerminalWidth();
   const columns = tabStripColumns(queried, inkColumns);
   const layout = layoutTabStrip(tabStripItems(state), columns);
+  // The rule is drawn to the full laid-out width, and the rail's divider meets it
+  // at the last `railWidth` columns — the same arithmetic the band uses, so the
+  // `┬` cannot end up beside the rail instead of on it.
+  const ruleWidth = columns > 0 ? columns + ROW_SAFETY_COLUMNS : 0;
+  const terminalRows = useTerminalRows();
+  const railWidth = sidebarWidth(ruleWidth, terminalRows);
 
   useChromeClicks({
     regions: layout.regions,
@@ -175,7 +202,7 @@ export function TabStrip({ onSelect, onClose }: TabStripProjection) {
         {segmentsForText(layout)}
       </Box>
       <Text color={colors.input.border} wrap="truncate">
-        {solidRule(columns > 0 ? columns + ROW_SAFETY_COLUMNS : 0)}
+        {ruleWithJunction(ruleWidth, railWidth)}
       </Text>
     </Box>
   );

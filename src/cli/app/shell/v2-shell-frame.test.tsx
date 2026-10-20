@@ -2,11 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Readable, Writable } from "node:stream";
 import { Box, render, Text } from "ink";
 import { useRef } from "react";
+import { SessionStats } from "@/agent/stats";
 import {
   ChromeHeightContext,
   useMeasuredChromeHeight,
 } from "@/cli/app/chrome-height";
 import { resetOlderHistoryForTests } from "@/cli/app/older-history";
+import { ContextSidebarScope } from "@/cli/app/shell/sidebar-scope";
+import { sidebarWidth } from "@/cli/app/shell/sidebar-sections";
 import { TabStrip } from "@/cli/app/shell/tab-strip";
 import { TAB_STRIP_ROWS } from "@/cli/app/shell/tab-strip-layout";
 import { FullScreenFrame } from "@/cli/app/shell/V2Shell";
@@ -125,43 +128,47 @@ function ChromeRows({ rows }: { rows: number }) {
 function Shell({ chromeRows }: { chromeRows: number }) {
   const { ref, rows } = useMeasuredChromeHeight();
   const buffersRef = useRef(createBuffers());
+  const sessionStatsRef = useRef(new SessionStats());
   return (
     <FullScreenFrame>
-      <TabStrip onSelect={() => {}} onClose={() => {}} />
-      <Box flexDirection="column">
-        <ChromeHeightContext.Provider value={rows}>
-          <ViewportTranscript
-            {...({
-              staticItems: [],
-              liveItems: [],
-              columns: TERMINAL_COLUMNS,
-              agentId: "agent-1",
-              conversationId: "conv-1",
-              buffersRef,
-              statusLinePrompt: ">",
-              showCompactionsEnabled: false,
-              precomputedDiffsRef: { current: new Map() },
-              expandedToolCallId: null,
-              lastShellToolCallId: null,
-              loadingState: "ready",
-              continueSession: false,
-              agentState: null,
-              currentApproval: undefined,
-              currentApprovalContext: undefined,
-              approvalMap: new Map(),
-              pendingIds: new Set(),
-              queuedIds: new Set(),
-              queuedDecisions: new Map(),
-              stubDescriptions: new Map(),
-              showApprovalPreview: false,
-              reserveTopRows: TAB_STRIP_ROWS,
-            } as unknown as Parameters<typeof ViewportTranscript>[0])}
-          />
-        </ChromeHeightContext.Provider>
-        <Box ref={ref} flexDirection="column" flexShrink={0}>
-          {chromeRows > 0 ? <ChromeRows rows={chromeRows} /> : null}
+      <ContextSidebarScope.Provider value>
+        <TabStrip onSelect={() => {}} onClose={() => {}} />
+        <Box flexDirection="column">
+          <ChromeHeightContext.Provider value={rows}>
+            <ViewportTranscript
+              {...({
+                staticItems: [],
+                liveItems: [],
+                columns: TERMINAL_COLUMNS,
+                agentId: "agent-1",
+                conversationId: "conv-1",
+                buffersRef,
+                sessionStatsRef,
+                statusLinePrompt: ">",
+                showCompactionsEnabled: false,
+                precomputedDiffsRef: { current: new Map() },
+                expandedToolCallId: null,
+                lastShellToolCallId: null,
+                loadingState: "ready",
+                continueSession: false,
+                agentState: null,
+                currentApproval: undefined,
+                currentApprovalContext: undefined,
+                approvalMap: new Map(),
+                pendingIds: new Set(),
+                queuedIds: new Set(),
+                queuedDecisions: new Map(),
+                stubDescriptions: new Map(),
+                showApprovalPreview: false,
+                reserveTopRows: TAB_STRIP_ROWS,
+              } as unknown as Parameters<typeof ViewportTranscript>[0])}
+            />
+          </ChromeHeightContext.Provider>
+          <Box ref={ref} flexDirection="column" flexShrink={0}>
+            {chromeRows > 0 ? <ChromeRows rows={chromeRows} /> : null}
+          </Box>
         </Box>
-      </Box>
+      </ContextSidebarScope.Provider>
     </FullScreenFrame>
   );
 }
@@ -222,9 +229,23 @@ describe("the frame with the tab strip on it", () => {
         for (const line of frame) {
           expect(visibleWidth(line)).toBeLessThanOrEqual(TERMINAL_COLUMNS);
         }
-        // And the two rows above the band are always on it.
+        // And the two rows above the band are always on it. The rule carries the
+        // rail's junction (`《38》§2.2`), one column past the gutter — at 100
+        // columns that is column 71.
         expect(frame[0]).toContain("Settings");
-        expect(frame[1]).toBe("─".repeat(TERMINAL_COLUMNS));
+        const railWidth = sidebarWidth(TERMINAL_COLUMNS, TERMINAL_ROWS);
+        expect(railWidth).toBe(30);
+        const junction = TERMINAL_COLUMNS - railWidth;
+        expect(frame[1]).toBe(
+          `${"─".repeat(junction)}┬${"─".repeat(TERMINAL_COLUMNS - junction - 1)}`,
+        );
+        // The rail itself is on the frame, its divider standing in the junction's
+        // column for every band row.
+        expect(frame.slice(TAB_STRIP_ROWS).join("\n")).toContain("Context");
+        const railRows = frame
+          .slice(TAB_STRIP_ROWS)
+          .filter((line) => line.at(junction) === "│");
+        expect(railRows.length).toBeGreaterThan(0);
       }
     } finally {
       unsubscribe();
