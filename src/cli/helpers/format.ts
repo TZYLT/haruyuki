@@ -42,17 +42,23 @@ export function estimateTokens(text: string): number {
   return bytesToTokens(Buffer.byteLength(text, "utf8"));
 }
 
+/**
+ * A permission mode's label: the mode's name, and a marker only when one is asked
+ * for.
+ *
+ * The markers this used to default to (`⏵⏵`, `⚡︎`, `🔒`) are font-dependent: on the
+ * machine this is developed on they render as empty boxes, and each one occupies
+ * a column count `string-width` does not predict — which is enough to make the
+ * status row one column too wide, wrap it, and (with the frame pinned to the
+ * screen's height) scroll the tab row away (2026-10-20). The mode's own name is
+ * the label; `""` asks for no marker at all.
+ */
 export function formatModeLabel(
   modeName: string,
   modeGlyph?: string | null,
 ): string {
-  if (modeGlyph === "") {
-    return modeName;
-  }
-  if (modeGlyph === "⚡︎") {
-    return `${modeGlyph}${modeName}`;
-  }
-  return `${modeGlyph ?? "⏵⏵"} ${modeName}`;
+  if (!modeGlyph) return modeName;
+  return `${modeGlyph} ${modeName}`;
 }
 
 export function formatElapsedLabel(ms: number): string {

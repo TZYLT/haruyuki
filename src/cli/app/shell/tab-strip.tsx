@@ -9,6 +9,7 @@ import {
   useTabsState,
 } from "@/cli/app/tabs";
 import { colors } from "@/cli/components/colors";
+import { ROW_SAFETY_COLUMNS } from "@/cli/display/statusline/formatting";
 import { solidRule } from "@/cli/helpers/rule-lines";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { debugWarn } from "@/utils/debug";
@@ -77,7 +78,9 @@ export function tabStripColumns(
 ): number {
   // A stream that cannot answer (a pipe, or a layout that has not run yet) leaves
   // the queried width alone; zero is not a width, it is a missing one.
-  if (inkColumns === undefined || inkColumns <= 0) return queried;
+  if (inkColumns === undefined || inkColumns <= 0) {
+    return Math.max(0, queried - ROW_SAFETY_COLUMNS);
+  }
   const mismatch = `${queried}->${inkColumns}`;
   if (queried !== inkColumns && reportedWidthMismatch !== mismatch) {
     reportedWidthMismatch = mismatch;
@@ -86,7 +89,11 @@ export function tabStripColumns(
       `console reports ${queried} columns, ink lays out ${inkColumns}; using ${Math.min(queried, inkColumns)}`,
     );
   }
-  return Math.min(queried, inkColumns);
+  // This row is assembled from segments (marker, title, `×`, pages) and is the
+  // row the alternate screen scrolls away, so it keeps the safety margin
+  // (`ROW_SAFETY_COLUMNS`): a glyph the terminal draws wider than the width table
+  // believes must land inside the terminal, not past its edge.
+  return Math.max(0, Math.min(queried, inkColumns) - ROW_SAFETY_COLUMNS);
 }
 
 /**
@@ -154,7 +161,12 @@ export function TabStrip({ onSelect, onClose }: TabStripProjection) {
           boxes, so Ink cannot truncate between them the way it truncates one
           string. Clipping keeps a miscounted glyph a clipped column instead of a
           wrapped line, which would cost the frame a row — and this row is the one
-          the alternate screen scrolls away. */}
+          the alternate screen scrolls away.
+
+          The box is the row's own width (the terminal's, less the safety margin);
+          the rule below is drawn to the *full* terminal width, because a repeated
+          box-drawing glyph is the one row whose width can be checked by eye and
+          because an edge-to-edge rule is what the design asks for (《36》N1). */}
       <Box
         width={columns > 0 ? columns : undefined}
         overflow="hidden"
@@ -163,7 +175,7 @@ export function TabStrip({ onSelect, onClose }: TabStripProjection) {
         {segmentsForText(layout)}
       </Box>
       <Text color={colors.input.border} wrap="truncate">
-        {solidRule(columns)}
+        {solidRule(columns > 0 ? columns + ROW_SAFETY_COLUMNS : 0)}
       </Text>
     </Box>
   );

@@ -19,7 +19,10 @@ import type { getSubagentLifecycleSnapshot } from "@/agent/subagent-state";
 import { getServerUrl } from "@/backend/api/server-url";
 import { appendInputHistory } from "@/cli/components/input-history";
 import { shouldRenderDefaultStatuslineRenderer } from "@/cli/display/statusline/default-renderer-activation";
-import { truncateToWidth } from "@/cli/display/statusline/formatting";
+import {
+  ROW_SAFETY_COLUMNS,
+  truncateToWidth,
+} from "@/cli/display/statusline/formatting";
 import {
   buildDefaultStatuslineParts,
   renderDefaultStatusline,
@@ -93,10 +96,17 @@ const EMPTY_COMPOSER_PROMPT_HINTS = [
   'Try "review this pull request"',
 ];
 
+/**
+ * What the transient permission-mode hint says: the mode's name, no marker glyph.
+ *
+ * The markers this used to draw are font dependent — on the machine this is
+ * developed on they paint as empty boxes, and `⚡︎` alone is enough to make the
+ * status row wider than the terminal, wrap it, and scroll the tab row off the frame
+ * (reported 2026-10-20).
+ */
 function getPermissionModeTransientHintInfo(mode: PermissionMode): {
   name: string;
   color: string;
-  glyph?: string;
 } {
   switch (mode) {
     case "acceptEdits":
@@ -105,19 +115,13 @@ function getPermissionModeTransientHintInfo(mode: PermissionMode): {
       return {
         name: "standard (request approval) mode",
         color: colors.status.processingShimmer,
-        glyph: "▶",
       };
     case "unrestricted":
-      return {
-        name: "unrestricted mode",
-        color: colors.status.success,
-        glyph: "⚡︎",
-      };
+      return { name: "unrestricted mode", color: colors.status.success };
     case "strict":
       return {
         name: "strict (all tools require approval)",
         color: colors.status.error,
-        glyph: "🔒",
       };
   }
 }
@@ -195,7 +199,7 @@ function StatuslinePreemptionView({
 function StatuslineBashModeHint() {
   return (
     <Text>
-      <Text color={colors.bash.prompt}>⏵⏵ bash mode</Text>
+      <Text color={colors.bash.prompt}>&gt;&gt; bash mode</Text>
       <Text color={colors.bash.prompt} dimColor>
         {" "}
         (backspace to exit)
@@ -452,7 +456,7 @@ const StatuslineSlot = memo(function StatuslineSlot({
   }
 
   return (
-    <Box flexDirection="row" marginBottom={1}>
+    <Box flexDirection="row" marginBottom={1} paddingRight={ROW_SAFETY_COLUMNS}>
       <Box flexGrow={1} paddingRight={1}>
         {hideFooterContent ? <Text> </Text> : leftContent}
       </Box>
@@ -1665,7 +1669,6 @@ export function Input({
   const modeInfo = useMemo<{
     name: string;
     color: string;
-    glyph?: string;
     showExitHint?: boolean;
   } | null>(() => {
     // Fall through to permission modes
@@ -1676,7 +1679,6 @@ export function Input({
         return {
           name: "standard (request approval) mode",
           color: colors.status.processingShimmer,
-          glyph: "▶",
         };
       case "unrestricted":
         // Default mode — show nothing so the built-in idle row owns the space.
@@ -1698,7 +1700,6 @@ export function Input({
       type: "permission-mode",
       modeName: hintInfo.name,
       modeColor: hintInfo.color,
-      modeGlyph: hintInfo.glyph,
       showExitHint: false,
     });
   }, [currentMode, showStatuslineTransientHint]);
@@ -1886,7 +1887,7 @@ export function Input({
                 isBashMode={isBashMode}
                 modeName={modeInfo?.name ?? null}
                 modeColor={modeInfo?.color ?? null}
-                modeGlyph={modeInfo?.glyph ?? null}
+                modeGlyph={null}
                 showExitHint={modeInfo?.showExitHint ?? false}
                 isOpenAICodexProvider={
                   currentModelProvider === OPENAI_CODEX_PROVIDER_NAME
@@ -1943,7 +1944,6 @@ export function Input({
     escapePressed,
     modeInfo?.name,
     modeInfo?.color,
-    modeInfo?.glyph,
     modeInfo?.showExitHint,
     currentModel,
     currentReasoningEffort,

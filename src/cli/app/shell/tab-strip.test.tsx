@@ -10,6 +10,7 @@ import {
   resetTabsForTests,
   setTabUnread,
 } from "@/cli/app/tabs";
+import { ROW_SAFETY_COLUMNS } from "@/cli/display/statusline/formatting";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
 
 /**
@@ -216,13 +217,19 @@ describe("the tab strip frame", () => {
     }
   });
 
-  test("the row is the narrower of the console's answer and Ink's", () => {
-    expect(tabStripColumns(102, 100)).toBe(100);
-    expect(tabStripColumns(98, 100)).toBe(98);
-    expect(tabStripColumns(100, 100)).toBe(100);
+  test("the row is the narrower of the console's answer and Ink's, less the margin", () => {
+    // The margin (`ROW_SAFETY_COLUMNS`) is spent on every answer: the row is
+    // assembled from segments and the terminal's advance width for an ambiguous
+    // glyph is not knowable from the width table, so the row never touches the
+    // edge. Losing two columns of padding is the cheap side of that trade.
+    expect(tabStripColumns(102, 100)).toBe(100 - ROW_SAFETY_COLUMNS);
+    expect(tabStripColumns(98, 100)).toBe(98 - ROW_SAFETY_COLUMNS);
+    expect(tabStripColumns(100, 100)).toBe(100 - ROW_SAFETY_COLUMNS);
     // A stream that cannot report (a pipe) leaves the queried width alone.
-    expect(tabStripColumns(100, undefined)).toBe(100);
-    expect(tabStripColumns(100, 0)).toBe(100);
+    expect(tabStripColumns(100, undefined)).toBe(100 - ROW_SAFETY_COLUMNS);
+    expect(tabStripColumns(100, 0)).toBe(100 - ROW_SAFETY_COLUMNS);
+    // Nothing to lay out stays nothing.
+    expect(tabStripColumns(1, 1)).toBe(0);
   });
 
   test("a page still shows the approval that is blocking the input", async () => {

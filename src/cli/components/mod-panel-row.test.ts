@@ -72,8 +72,11 @@ describe("renderModPanelLines", () => {
       return ctx.row(ctx.cwd, ctx.model.displayName ?? "", ctx.width);
     });
 
+    // A mod's `row()` keeps the row margin (`ROW_SAFETY_COLUMNS`): the line ends
+    // two columns short of the width, because a glyph the terminal draws wider
+    // than the width table believes must not push the row past the edge.
     expect(renderModPanelLines(panel, 40, CONTEXT)).toEqual([
-      "/tmp/project                     GPT-5.5",
+      "/tmp/project                   GPT-5.5",
     ]);
   });
 });
