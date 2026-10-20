@@ -16,11 +16,12 @@
  * Pure and I/O-free: it only reads the tool's own argument JSON.
  */
 
-import { selectMemoryDiffRows } from "@/cli/helpers/memory-diff-rows";
+import {
+  memoryContentWidth,
+  memoryContextWidth,
+  selectMemoryDiffRows,
+} from "@/cli/helpers/memory-diff-rows";
 import { countTextRows } from "@/cli/helpers/text-metrics";
-
-/** Rows the renderer shows behind a 4-column indent. */
-const MEMORY_INDENT_WIDTH = 4;
 
 /** Cap on the `memory_apply_patch` preview lines (mirrors the renderer). */
 const MEMORY_PATCH_MAX_LINES = 8;
@@ -54,7 +55,7 @@ export function memoryResultRows(
     return memoryPatchRows(args, columns);
   }
 
-  const contentWidth = Math.max(1, columns - MEMORY_INDENT_WIDTH);
+  const contentWidth = memoryContentWidth(columns);
   const command = args.command;
   const path =
     firstString(args, ["file_path", "path", "old_path"]) ?? "unknown";
@@ -132,8 +133,8 @@ function memoryPatchRows(
   args: Record<string, unknown>,
   columns: number,
 ): number {
-  const contentWidth = Math.max(1, columns - MEMORY_INDENT_WIDTH);
-  const contextWidth = Math.max(1, columns - MEMORY_INDENT_WIDTH - 2);
+  const contentWidth = memoryContentWidth(columns);
+  const contextWidth = memoryContextWidth(columns);
   const patch = typeof args.input === "string" ? args.input : "";
   const lines = patch.split("\n");
 

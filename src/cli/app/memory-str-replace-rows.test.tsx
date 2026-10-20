@@ -14,6 +14,10 @@
  */
 
 import { expect, test } from "bun:test";
+import {
+  ROW_SAFETY_COLUMNS,
+  visibleWidth,
+} from "@/cli/display/statusline/formatting";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { mountInkTty } from "@/test-utils/ink-tty";
 import { measureTranscriptItemRows } from "./row-model";
@@ -46,7 +50,7 @@ function memoryReplace(oldStr: string, newStr: string): StaticItem {
 
 async function compare(
   item: StaticItem,
-): Promise<{ predicted: number; painted: number }> {
+): Promise<{ predicted: number; painted: number; widest: number }> {
   const predicted = measureTranscriptItemRows(item, {
     columns: COLUMNS,
     index: 1,
@@ -66,12 +70,15 @@ async function compare(
     { columns: COLUMNS, rows: ROWS },
   );
   let painted = 0;
+  let widest = 0;
   try {
-    painted = (await shell.rows()).length;
+    const rows = await shell.rows();
+    painted = rows.length;
+    for (const row of rows) widest = Math.max(widest, visibleWidth(row));
   } finally {
     shell.stop();
   }
-  return { predicted, painted };
+  return { predicted, painted, widest };
 }
 
 test("a one-line replace is measured as the handful of rows it draws", async () => {
@@ -89,4 +96,21 @@ test("a multi-line replace counts its changed lines, not the widest one times te
   const item = memoryReplace(before, after);
   const { predicted, painted } = await compare(item);
   expect(Math.abs(predicted - painted)).toBeLessThanOrEqual(1);
+});
+
+test("no preview line reaches past the terminal, so nothing wraps", async () => {
+  // The machine's report of a memory diff: "flickers, the selection lands on the
+  // wrong rows, the tab row disappears", with a lone `e` on its own line. That is a
+  // long preview line ending one column past the terminal: the terminal wraps it,
+  // the frame grows a line, the alternate screen scrolls, and every row the
+  // selection painter measured moves. The text below is deliberately full of the
+  // characters `string-width` and a terminal disagree about.
+  const long =
+    "Evidence 2026-09-25: setting the window to 64k took effect within a minute — “an auto‑compaction fired — and its stats recorded `context_window: 64000`” … while `letta model get` still said 1,000,000/384,000.";
+  const item = memoryReplace(long, `${long} 改`);
+  const { predicted, painted, widest } = await compare(item);
+  expect(Math.abs(predicted - painted)).toBeLessThanOrEqual(1);
+  // Two columns of slack (`ROW_SAFETY_COLUMNS`): a row that ends inside the
+  // terminal cannot wrap, whatever the terminal's own idea of a glyph's width is.
+  expect(widest).toBeLessThanOrEqual(COLUMNS - ROW_SAFETY_COLUMNS);
 });

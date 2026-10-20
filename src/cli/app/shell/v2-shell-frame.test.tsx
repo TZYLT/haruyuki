@@ -13,6 +13,7 @@ import { FullScreenFrame } from "@/cli/app/shell/V2Shell";
 import { openConversationTab, resetTabsForTests } from "@/cli/app/tabs";
 import { ViewportTranscript } from "@/cli/app/ViewportTranscript";
 import { resetViewportScroll } from "@/cli/app/viewport-scroll";
+import { visibleWidth } from "@/cli/display/statusline/formatting";
 import { createBuffers } from "@/cli/helpers/accumulator";
 import {
   getTerminalFrame,
@@ -212,6 +213,15 @@ describe("the frame with the tab strip on it", () => {
         // Never taller than the terminal: that is what scrolls the alternate
         // screen and takes the top rows with it.
         expect(frame.length).toBeLessThanOrEqual(TERMINAL_ROWS);
+        // And **never wider than the terminal either** — this is the invariant
+        // that keeps costing the top row: a line one column past the edge is
+        // wrapped by the terminal (not by Ink), which adds a physical line and
+        // scrolls the frame. It has now been broken by a tab title's ellipsis, a
+        // markdown table and a memory diff's prose (2026-10-20), so the whole
+        // frame is held to it.
+        for (const line of frame) {
+          expect(visibleWidth(line)).toBeLessThanOrEqual(TERMINAL_COLUMNS);
+        }
         // And the two rows above the band are always on it.
         expect(frame[0]).toContain("Settings");
         expect(frame[1]).toBe("─".repeat(TERMINAL_COLUMNS));

@@ -18,6 +18,38 @@
  */
 
 import * as Diff from "diff";
+import { ROW_SAFETY_COLUMNS } from "@/cli/display/statusline/formatting";
+
+/** Columns the memory preview indents its content by. */
+export const MEMORY_INDENT_WIDTH = 4;
+
+/**
+ * The width a memory preview line may occupy.
+ *
+ * One number, because two files draw and measure these lines: the renderer
+ * (`MemoryDiffRenderer`) and the row model (`memory-result-rows`). It is
+ * `columns - indent - ROW_SAFETY_COLUMNS`, and the margin is not decoration — the
+ * machine reported "a memory diff on screen flickers, the selection lands on the
+ * wrong rows, the tab row disappears" (2026-10-20), and the frame showed a lone `e`
+ * on its own line: a wrapped preview line that ended **one column** past the
+ * terminal. The terminal wrapped it, the frame grew a line, the alternate screen
+ * scrolled, and every row the painter had measured moved by one.
+ *
+ * Ink wraps at the width it is given using a table that does not know how wide the
+ * terminal draws `“`, `”` or `—`; two columns of slack absorb that disagreement, and
+ * a line that ends inside the terminal cannot wrap.
+ */
+export function memoryContentWidth(columns: number): number {
+  return Math.max(
+    1,
+    Math.floor(columns) - MEMORY_INDENT_WIDTH - ROW_SAFETY_COLUMNS,
+  );
+}
+
+/** The narrower box a patch's context lines are drawn in. */
+export function memoryContextWidth(columns: number): number {
+  return Math.max(1, memoryContentWidth(columns) - 2);
+}
 
 /** Cap on the preview rows (the renderer's own limit). */
 export const MEMORY_DIFF_MAX_ROWS = 10;

@@ -10,6 +10,7 @@ import {
   subscribeToThinkingDisplay,
 } from "@/cli/components/transcript-display-state";
 import { WelcomeScreen } from "@/cli/components/WelcomeScreen";
+import { ROW_SAFETY_COLUMNS } from "@/cli/display/statusline/formatting";
 import { APP_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { getTerminalFrame } from "@/cli/helpers/terminal-frame";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
@@ -341,6 +342,24 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
   const olderPrefix = useSyncExternalStore(subscribeToOlderHistory, () =>
     olderHistoryPrefixItems(conversationId),
   );
+  // The band lays its content out two columns narrower than the terminal
+  // (`ROW_SAFETY_COLUMNS`), and this is the one place that decides it — items are
+  // both measured and drawn with this number, so they cannot disagree.
+  //
+  // Why the whole transcript and not one renderer at a time: a wrapped line that
+  // ends one column past the terminal is wrapped *again* by the terminal, which
+  // costs a physical line, which makes the frame taller than the screen, which
+  // scrolls the alternate buffer and takes the top row (the tab strip) with it —
+  // and every row the selection painter measured moves by one, so the highlight
+  // lands on the wrong text. The machine has paid for that three times on three
+  // different renderers (a tab title's `…`, a markdown table, a memory diff's
+  // prose: 2026-10-20). Ink wraps with a width table that cannot know how wide this
+  // terminal draws `“`, `”`, `—` or `…`; two columns of slack absorb the
+  // disagreement, and a line that ends inside the terminal cannot wrap. The cost is
+  // two columns of right margin on the transcript, which is the same trade the
+  // chrome rows already make.
+  const contentColumns = Math.max(1, columns - ROW_SAFETY_COLUMNS);
+
   // Everything an item's height depends on, built **once** and used for both the
   // measurement below and the ledger key: a page's height is measured and then
   // *skipped* by every later walk, so a resize, a `Ctrl+T`/`Ctrl+R` toggle or an
@@ -350,7 +369,7 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
   // check).
   const layout = useMemo<RowLayoutOptions>(
     () => ({
-      columns,
+      columns: contentColumns,
       terminalRows,
       userPromptPrefix: statusLinePrompt ? `${statusLinePrompt} ` : undefined,
       reasoningExpanded,
@@ -369,7 +388,7 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
       ].join(","),
     }),
     [
-      columns,
+      contentColumns,
       terminalRows,
       statusLinePrompt,
       reasoningExpanded,
@@ -747,7 +766,7 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
                 <TranscriptItemView
                   item={item}
                   index={index}
-                  columns={columns}
+                  columns={contentColumns}
                   statusLinePrompt={statusLinePrompt}
                   showCompactionsEnabled={showCompactionsEnabled}
                   precomputedDiffs={precomputedDiffsRef.current}

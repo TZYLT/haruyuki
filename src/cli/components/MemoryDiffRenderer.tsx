@@ -1,7 +1,11 @@
 import * as Diff from "diff";
 import { Box } from "ink";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
-import { selectMemoryDiffRows } from "@/cli/helpers/memory-diff-rows";
+import {
+  memoryContentWidth,
+  memoryContextWidth,
+  selectMemoryDiffRows,
+} from "@/cli/helpers/memory-diff-rows";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { colors } from "./colors";
 import { Text } from "./Text";
@@ -72,7 +76,7 @@ export function MemoryDiffRenderer({
         const insertText = stringArg(args, "insert_text") ?? "";
         const insertLine = args.insert_line;
         const prefixWidth = 4; // "    " indent
-        const contentWidth = Math.max(0, columns - prefixWidth);
+        const contentWidth = memoryContentWidth(columns);
         return (
           <Box flexDirection="column">
             <Box flexDirection="row">
@@ -119,7 +123,7 @@ export function MemoryDiffRenderer({
         const description = stringArg(args, "description") ?? "";
         const fileText = stringArg(args, "file_text") ?? "";
         const prefixWidth = 4; // "    " indent
-        const contentWidth = Math.max(0, columns - prefixWidth);
+        const contentWidth = memoryContentWidth(columns);
         return (
           <Box flexDirection="column">
             <Box flexDirection="row">
@@ -174,7 +178,7 @@ export function MemoryDiffRenderer({
 
       case "delete": {
         const prefixWidth = 4;
-        const contentWidth = Math.max(0, columns - prefixWidth);
+        const contentWidth = memoryContentWidth(columns);
         return (
           <Box flexDirection="row">
             <Box width={prefixWidth} flexShrink={0}>
@@ -200,7 +204,7 @@ export function MemoryDiffRenderer({
         const newBlockName = memoryBlockName(newPath);
         const description = args.description;
         const prefixWidth = 4;
-        const contentWidth = Math.max(0, columns - prefixWidth);
+        const contentWidth = memoryContentWidth(columns);
         if (description) {
           return (
             <Box flexDirection="row">
@@ -247,7 +251,7 @@ export function MemoryDiffRenderer({
 
       default: {
         const defaultPrefixWidth = 4;
-        const defaultContentWidth = Math.max(0, columns - defaultPrefixWidth);
+        const defaultContentWidth = memoryContentWidth(columns);
         return (
           <Box flexDirection="row">
             <Box width={defaultPrefixWidth} flexShrink={0}>
@@ -299,7 +303,7 @@ function MemoryStrReplaceDiff({
   );
 
   const prefixWidth = 4;
-  const contentWidth = Math.max(0, columns - prefixWidth);
+  const contentWidth = memoryContentWidth(columns);
 
   return (
     <Box flexDirection="column">
@@ -361,7 +365,7 @@ function DiffLine({
     type === "add" ? colors.diff.addedWordBg : colors.diff.removedWordBg;
 
   const prefixWidth = 4; // "    " indent
-  const contentWidth = Math.max(0, columns - prefixWidth);
+  const contentWidth = memoryContentWidth(columns);
 
   // Word-level diff if we have something to compare
   if (compareContent !== undefined && content.trim() && compareContent.trim()) {
@@ -462,7 +466,7 @@ function PatchDiffRenderer({
   const hasMore = lines.length > maxLines;
 
   const prefixWidth = 4; // "    " indent
-  const contentWidth = Math.max(0, columns - prefixWidth);
+  const contentWidth = memoryContentWidth(columns);
 
   return (
     <Box flexDirection="column">
@@ -541,7 +545,7 @@ function PatchDiffRenderer({
               <Box width={prefixWidth + 2} flexShrink={0}>
                 <Text dimColor>{"      "}</Text>
               </Box>
-              <Box flexGrow={1} width={Math.max(0, columns - prefixWidth - 2)}>
+              <Box flexGrow={1} width={memoryContextWidth(columns)}>
                 <Text dimColor wrap="wrap">
                   {content}
                 </Text>
