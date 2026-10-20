@@ -64,8 +64,24 @@ export const STATIC_ITEM_GAP_ROWS = 1;
 /** Gutter `CommandMessage` draws before its output (`  └  `). */
 const COMMAND_OUTPUT_GUTTER_WIDTH = 5;
 
-/** Approximate height of the welcome banner (it is a fixed template). */
-const WELCOME_ROWS = 12;
+/**
+ * Rows the welcome banner occupies, measured against the component.
+ *
+ * It used to be **12** — "approximate height (it is a fixed template)", which was
+ * wrong twice over: the template is a 4-row logo beside 3 text rows, so the banner
+ * is 5 rows including its own `marginTop`, and the two states it can be in (no
+ * agent yet, or an agent with model and path) differ again. Measured against
+ * `WelcomeScreen` itself at 120 columns: **4 rows painted, 5 laid out** (the last
+ * row is blank, which is why a frame read trims it). A model that claims 12 for a
+ * 5-row banner believes the viewport is filled when it is not: the content box is
+ * shorter than the band, the offset lifts it off the bottom, and the machine sees
+ * "big blocks of text vanish while scrolling" (2026-10-20, `blankTail=14` in the
+ * window that starts at the banner).
+ *
+ * `welcomeBannerRows` in the fidelity test is the guard: it renders the real
+ * component and fails if this number drifts.
+ */
+const WELCOME_ROWS = 5;
 
 /** Rows per subagent entry in a committed subagent group. */
 const SUBAGENT_ROWS = 4;
