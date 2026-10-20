@@ -15,12 +15,44 @@ export function truncateStatuslineText(
 }
 
 /**
+ * The ellipsis this app truncates with, and the columns it needs.
+ *
+ * `string-width` calls U+2026 "ambiguous": one column on most terminals and **two**
+ * on one that treats East Asian ambiguous characters as wide — which the machine
+ * this is developed on does. Measured there on 2026-10-20: a tab title truncated
+ * with `…` made the row one column wider than the terminal, the row wrapped, the
+ * frame grew a line, and the alternate screen scrolled — taking the whole tab row
+ * with it, with a lone `s` left at the top. Counting the ellipsis as wide costs
+ * one column of padding on a terminal where it is narrow; counting it narrow costs
+ * a whole row on a terminal where it is wide. The two directions are not
+ * comparable, so this side wins.
+ */
+const ELLIPSIS = "…";
+const ELLIPSIS_WIDTH = 2;
+
+/** One glyph's width, with this app's ellipsis counted as the wide character it is. */
+function glyphWidth(ch: string): number {
+  return ch === ELLIPSIS ? ELLIPSIS_WIDTH : stringWidth(ch);
+}
+
+/**
  * Visible width of a string in terminal columns, ignoring ANSI escape codes
  * (colors, OSC 8 links) and accounting for wide characters (CJK, emoji) that
  * occupy two columns and zero-width/combining marks.
+ *
+ * The ellipsis is counted as two columns (`ELLIPSIS_WIDTH`) because a terminal
+ * that renders ambiguous characters wide draws it that way; a row laid out with
+ * the narrower number is one column too long there, and one column is the
+ * difference between a row and a wrapped line.
  */
 export function visibleWidth(value: string): number {
-  return stringWidth(value);
+  const base = stringWidth(value);
+  if (base === 0 || !value.includes(ELLIPSIS)) return base;
+  let ellipses = 0;
+  for (const ch of value) {
+    if (ch === ELLIPSIS) ellipses += 1;
+  }
+  return base + ellipses * (ELLIPSIS_WIDTH - 1);
 }
 
 /**
@@ -32,17 +64,17 @@ export function visibleWidth(value: string): number {
 export function truncateToWidth(value: string, width: number): string {
   if (width <= 0) return "";
   if (visibleWidth(value) <= width) return value;
-  if (width === 1) return "…";
-  const budget = width - 1; // reserve one column for the ellipsis
+  if (width < ELLIPSIS_WIDTH) return "";
+  const budget = width - ELLIPSIS_WIDTH;
   let out = "";
   let used = 0;
   for (const ch of stripAnsi(value)) {
-    const w = stringWidth(ch);
+    const w = glyphWidth(ch);
     if (used + w > budget) break;
     out += ch;
     used += w;
   }
-  return `${out}…`;
+  return `${out}${ELLIPSIS}`;
 }
 
 /**
