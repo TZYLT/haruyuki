@@ -1,4 +1,4 @@
-// src/cli/app/shell/context-sidebar.tsx
+﻿// src/cli/app/shell/context-sidebar.tsx
 
 import { Box, Text } from "ink";
 import { useEffect, useState, useSyncExternalStore } from "react";
@@ -7,7 +7,6 @@ import {
   subscribeToSubagentLifecycle,
 } from "@/agent/subagent-state";
 import type { AppViewProps } from "@/cli/app/AppView";
-import { visibleWidth } from "@/cli/display/statusline/formatting";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { type MemfsStats, readMemfsStats } from "@/cli/helpers/memfs-stats";
 import {
@@ -65,22 +64,27 @@ export function ContextSidebar({
     })),
   ]);
 
-  // **Every row is `│ ` plus its text, padded to the block's width.** The divider
-  // used to be the box's left border, and a border is not a row: it was drawn by
-  // the border machinery at a different moment from the content, which on the
-  // machine showed up as a rail whose rule started one row late and whose text
-  // did not line up with the `┬` above it. A painted glyph is the same row as its
-  // text, so the column cannot drift — and the rows below the last section keep
-  // the rule standing, because they are rows too.
+  // **Every row is `│ ` plus its text — and nothing else.** The divider used to be
+  // the box's left border, and a border is not a row: it was drawn by the border
+  // machinery at a different moment from the content, which on the machine showed
+  // up as a rail whose rule started one row late and whose text did not line up
+  // with the `┬` above it. A painted glyph is the same row as its text, so the
+  // column cannot drift — and the rows below the last section keep the rule
+  // standing, because they are rows too.
+  //
+  // **No trailing padding.** Filling each row out to the block's width writes the
+  // terminal's last columns on every band row, and a row that reaches the final
+  // column leaves the terminal in the pending-wrap state — on the machine that was
+  // a frame taller than the screen, with the tab strip scrolled off the top. The
+  // box still reserves its width (that is what places the divider); the spaces at
+  // its right edge are simply never written.
   const painted = Array.from({ length: rows }, (_, index) => {
     const row = content[index];
     const prefix = CLI_GLYPHS.rail;
     const text = row?.text ?? "";
-    const line = text.length > 0 ? `${prefix} ${text}` : prefix;
-    const padding = Math.max(0, blockWidth - visibleWidth(line));
     return {
       key: row?.key ?? `blank:${index}`,
-      line: line + " ".repeat(padding),
+      line: text.length > 0 ? `${prefix} ${text}` : prefix,
       title: row?.title ?? false,
     };
   });

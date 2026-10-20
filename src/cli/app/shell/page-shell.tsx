@@ -1,4 +1,4 @@
-// src/cli/app/shell/page-shell.tsx
+﻿// src/cli/app/shell/page-shell.tsx
 
 import { Box, Text, useStdout } from "ink";
 import type { AppViewProps } from "@/cli/app/AppView";
@@ -12,7 +12,7 @@ import { ViewportPanel } from "@/cli/app/ViewportPanel";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
 import { ContextSidebarSlot } from "./context-sidebar";
 import { useHasContextSidebar } from "./sidebar-scope";
-import { sidebarWidth, transcriptColumns } from "./sidebar-sections";
+import { sidebarGeometry } from "./sidebar-sections";
 import { TAB_STRIP_ROWS } from "./tab-strip-layout";
 
 /**
@@ -67,11 +67,11 @@ export function PageShell(props: AppViewProps) {
     inkColumns === undefined
       ? props.columns
       : Math.min(props.columns, inkColumns);
-  const railWidth = useHasContextSidebar()
-    ? sidebarWidth(frameColumns, terminalRows)
-    : 0;
-  const bandColumns =
-    railWidth > 0 ? transcriptColumns(frameColumns, railWidth) : props.columns;
+  const geometry = useHasContextSidebar()
+    ? sidebarGeometry(frameColumns, terminalRows)
+    : { railWidth: 0, bandColumns: frameColumns, junctionColumn: 0 };
+  const railWidth = geometry.railWidth;
+  const bandColumns = geometry.bandColumns;
 
   return (
     <>

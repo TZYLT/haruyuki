@@ -91,6 +91,47 @@ export function sidebarContentColumns(width: number): number {
 }
 
 /**
+ * The band's and the rail's columns for a frame `columns` wide.
+ *
+ * **The last two columns of the terminal are never written.** The rest of this
+ * tree already leaves that margin (the strip builds its row `ROW_SAFETY_COLUMNS`
+ * short, the transcript band does the same), and the rail made it matter: a row
+ * that reaches the final column leaves the terminal in the pending-wrap state, so
+ * the next write wraps and the frame grows by a line. After the rail was painted
+ * as full-width rows, every band row ended at the last column and the machine
+ * showed exactly that — the tab strip scrolled away and the transcript looked
+ * re-wrapped. The design table's numbers assume the full width; the two columns
+ * are the price of not scrolling the screen.
+ */
+export type SidebarGeometry = {
+  /** The rail's block width, or `0` when it folds. */
+  railWidth: number;
+  /** Columns the transcript/page body may occupy (gutter and rail excluded). */
+  bandColumns: number;
+  /** 1-based column the rail's divider stands in, or `0` when folded. */
+  junctionColumn: number;
+};
+
+export function sidebarGeometry(
+  columns: number,
+  rows: number,
+): SidebarGeometry {
+  const total = Math.max(1, Math.floor(columns));
+  // Two columns of margin, the same trade every other row in the frame makes.
+  const usable = Math.max(1, total - 2);
+  const railWidth = sidebarWidth(total, rows);
+  if (railWidth <= 0) {
+    return { railWidth: 0, bandColumns: usable, junctionColumn: 0 };
+  }
+  const bandColumns = transcriptColumns(usable, railWidth);
+  return {
+    railWidth,
+    bandColumns,
+    junctionColumn: bandColumns + SIDEBAR_GUTTER_COLUMNS + 1,
+  };
+}
+
+/**
  * One section, as the content decides it.
  *
  * `detail` is the rows drawn when the section has room; `summary` is the single

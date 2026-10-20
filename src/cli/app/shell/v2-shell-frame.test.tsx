@@ -9,11 +9,12 @@ import {
 } from "@/cli/app/chrome-height";
 import { resetOlderHistoryForTests } from "@/cli/app/older-history";
 import { ContextSidebarScope } from "@/cli/app/shell/sidebar-scope";
-import { sidebarWidth } from "@/cli/app/shell/sidebar-sections";
+import { sidebarGeometry } from "@/cli/app/shell/sidebar-sections";
 import { TabStrip } from "@/cli/app/shell/tab-strip";
 import { TAB_STRIP_ROWS } from "@/cli/app/shell/tab-strip-layout";
 import { FullScreenFrame } from "@/cli/app/shell/V2Shell";
 import { openConversationTab, resetTabsForTests } from "@/cli/app/tabs";
+import type { StaticItem } from "@/cli/app/types";
 import { ViewportTranscript } from "@/cli/app/ViewportTranscript";
 import { resetViewportScroll } from "@/cli/app/viewport-scroll";
 import { visibleWidth } from "@/cli/display/statusline/formatting";
@@ -125,7 +126,13 @@ function ChromeRows({ rows }: { rows: number }) {
 }
 
 /** The shell's frame: the strip, the transcript band, and the measured chrome. */
-function Shell({ chromeRows }: { chromeRows: number }) {
+function Shell({
+  chromeRows,
+  items = [],
+}: {
+  chromeRows: number;
+  items?: StaticItem[];
+}) {
   const { ref, rows } = useMeasuredChromeHeight();
   const buffersRef = useRef(createBuffers());
   const sessionStatsRef = useRef(new SessionStats());
@@ -141,7 +148,7 @@ function Shell({ chromeRows }: { chromeRows: number }) {
           <ChromeHeightContext.Provider value={rows}>
             <ViewportTranscript
               {...({
-                staticItems: [],
+                staticItems: items,
                 liveItems: [],
                 columns: TERMINAL_COLUMNS,
                 agentId: "agent-1",
@@ -234,12 +241,15 @@ describe("the frame with the tab strip on it", () => {
           expect(visibleWidth(line)).toBeLessThanOrEqual(TERMINAL_COLUMNS);
         }
         // And the two rows above the band are always on it. The rule carries the
-        // rail's junction (`《38》§2.2`), one column past the gutter — at 100
-        // columns that is column 71.
+        // rail's junction (`《38》§2.2`) at the column the same geometry puts the
+        // divider in — at 100 columns the rail is 30 wide, the band 67, and the
+        // divider column 69.
         expect(frame[0]).toContain("Settings");
-        const railWidth = sidebarWidth(TERMINAL_COLUMNS, TERMINAL_ROWS);
-        expect(railWidth).toBe(30);
-        const junction = TERMINAL_COLUMNS - railWidth;
+        const geometry = sidebarGeometry(TERMINAL_COLUMNS, TERMINAL_ROWS);
+        expect(geometry.railWidth).toBe(30);
+        expect(geometry.bandColumns).toBe(67);
+        expect(geometry.junctionColumn).toBe(69);
+        const junction = geometry.junctionColumn - 1;
         expect(frame[1]).toBe(
           `${"─".repeat(junction)}┬${"─".repeat(TERMINAL_COLUMNS - junction - 1)}`,
         );
@@ -258,6 +268,61 @@ describe("the frame with the tab strip on it", () => {
         expect(
           bandRows.some((line) => line.slice(junction).includes("ctx ")),
         ).toBe(true);
+      }
+    } finally {
+      unsubscribe();
+      instance.unmount();
+      instance.cleanup();
+      restore();
+    }
+  });
+
+  test("a tall transcript with a rail is clipped inside the band", async () => {
+    // The machine reported this after the rail moved into the band: the band's
+    // rows stopped being the clipping box's direct children, the extra rows were
+    // laid out at their own height, the frame grew past the terminal, and the
+    // alternate screen scrolled the strip off the top. More items than the band
+    // can show is the state that reproduces it.
+    openConversationTab("conv-1", "M6 shell");
+    const restore = resizeProcessStdout(TERMINAL_ROWS, TERMINAL_COLUMNS);
+    const stdout = new CaptureStream() as CaptureStream & NodeJS.WriteStream;
+    installTerminalFrameCapture(stdout);
+    const items: StaticItem[] = Array.from({ length: 60 }, (_, index) => ({
+      kind: "assistant",
+      id: `answer-${index}`,
+      text: `answer ${index}`,
+      phase: "finished",
+    }));
+
+    const frames: string[][] = [];
+    const unsubscribe = subscribeToTerminalFrame(() => {
+      const frame = getTerminalFrame();
+      if (frame) frames.push([...frame.text]);
+    });
+
+    const instance = render(<Shell chromeRows={CHROME_ROWS} items={items} />, {
+      stdin: fakeStdin(),
+      stdout,
+      debug: false,
+      patchConsole: false,
+      exitOnCtrlC: false,
+      alternateScreen: true,
+    });
+
+    try {
+      await waitForRender();
+      await waitForRender();
+      for (const frame of frames.slice(-3)) {
+        // The frame is exactly the terminal, never taller: a taller one is what
+        // scrolls the top away.
+        expect(frame.length).toBeLessThanOrEqual(TERMINAL_ROWS);
+        // And the two top rows never move: the strip, then the rule with the
+        // rail's junction.
+        expect(frame[0]).toContain("Settings");
+        expect(frame[1]).toContain("┬");
+        // The transcript really is tall here, so the band is not empty by
+        // accident.
+        expect(frame.join("\n")).toContain("answer 59");
       }
     } finally {
       unsubscribe();

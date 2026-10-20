@@ -53,7 +53,7 @@ import {
 } from "./row-model";
 import { ContextSidebarSlot } from "./shell/context-sidebar";
 import { useHasContextSidebar } from "./shell/sidebar-scope";
-import { sidebarWidth, transcriptColumns } from "./shell/sidebar-sections";
+import { sidebarGeometry } from "./shell/sidebar-sections";
 import { TranscriptItemView } from "./TranscriptItem";
 import type { StaticItem } from "./types";
 import { ViewportPanel } from "./ViewportPanel";
@@ -378,11 +378,12 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
       : undefined;
   const frameColumns =
     inkColumns === undefined ? columns : Math.min(columns, inkColumns);
-  const railWidth = useHasContextSidebar()
-    ? sidebarWidth(frameColumns, terminalRows)
-    : 0;
-  const bandColumns =
-    railWidth > 0 ? transcriptColumns(frameColumns, railWidth) : columns;
+  const hasRail = useHasContextSidebar();
+  const geometry = hasRail
+    ? sidebarGeometry(frameColumns, terminalRows)
+    : { railWidth: 0, bandColumns: frameColumns, junctionColumn: 0 };
+  const railWidth = geometry.railWidth;
+  const bandColumns = geometry.bandColumns;
   const contentColumns = Math.max(1, bandColumns - ROW_SAFETY_COLUMNS);
 
   // Everything an item's height depends on, built **once** and used for both the
@@ -717,11 +718,20 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
         {/* The window's own offset: the band shows the rows this shift leaves
             inside it. A negative shift is what puts the middle of a tall item on
             screen, and what makes a wheel notch move the text instead of
-            repainting the same frame. */}
+            repainting the same frame.
+
+            **With a rail this box clips itself.** The band's clip is the box that
+            draws the row; a child one level down that leaves its height to its
+            content is laid out at the content's height, and the rows past the band
+            come out anyway — on the machine that was a frame taller than the
+            terminal, which scrolled the tab strip off the top. Height and
+            `overflow` here keep the rows inside before anything above has to. */}
         <Box
           flexDirection="column"
           flexShrink={0}
           width={railWidth > 0 ? bandColumns : undefined}
+          height={railWidth > 0 ? height : undefined}
+          overflow={railWidth > 0 ? "hidden" : undefined}
           marginTop={window.contentOffset}
         >
           {visible.map((item, offset) => {

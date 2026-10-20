@@ -9,6 +9,7 @@ import {
   type SidebarProjection,
   type SidebarSectionSpec,
   sidebarContentColumns,
+  sidebarGeometry,
   sidebarWidth,
   transcriptColumns,
 } from "./sidebar-sections";
@@ -80,6 +81,40 @@ describe("sidebarContentColumns", () => {
   test("the divider and its space come out of the block", () => {
     expect(sidebarContentColumns(30)).toBe(28);
     expect(sidebarContentColumns(24)).toBe(22);
+  });
+});
+
+describe("sidebarGeometry", () => {
+  test("the band and the rail stop two columns short of the terminal", () => {
+    const geometry = sidebarGeometry(100, 30);
+    expect(geometry).toEqual({
+      railWidth: 30,
+      bandColumns: 67,
+      junctionColumn: 69,
+    });
+    // The whole row's width: band + gutter + rail, two columns left empty so no
+    // row ever reaches the terminal's last column.
+    expect(geometry.bandColumns + 1 + geometry.railWidth).toBe(98);
+  });
+
+  test("a folded rail gives the band the usable width and no junction", () => {
+    expect(sidebarGeometry(70, 30)).toEqual({
+      railWidth: 0,
+      bandColumns: 68,
+      junctionColumn: 0,
+    });
+    expect(sidebarGeometry(120, 24)).toEqual({
+      railWidth: 0,
+      bandColumns: 118,
+      junctionColumn: 0,
+    });
+  });
+
+  test("the junction is where the rail's divider starts", () => {
+    for (const columns of [80, 90, 100, 120, 140]) {
+      const geometry = sidebarGeometry(columns, 30);
+      expect(geometry.junctionColumn).toBe(geometry.bandColumns + 2);
+    }
   });
 });
 

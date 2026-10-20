@@ -10,13 +10,14 @@ import {
 } from "@/cli/app/tabs";
 import { colors } from "@/cli/components/colors";
 import { ROW_SAFETY_COLUMNS } from "@/cli/display/statusline/formatting";
+import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { solidRule } from "@/cli/helpers/rule-lines";
 import {
   useTerminalRows,
   useTerminalWidth,
 } from "@/cli/hooks/use-terminal-width";
 import { debugWarn } from "@/utils/debug";
-import { sidebarWidth } from "./sidebar-sections";
+import { sidebarGeometry } from "./sidebar-sections";
 import {
   layoutTabStrip,
   TAB_UNREAD_MARK,
@@ -108,13 +109,15 @@ export function tabStripColumns(
  * the rail is lying on top of. The junction sits one past the gutter, which is
  * exactly where the sidebar block starts.
  */
-export function ruleWithJunction(ruleWidth: number, railWidth: number): string {
+export function ruleWithJunction(
+  ruleWidth: number,
+  junctionColumn: number,
+): string {
   if (ruleWidth <= 0) return "";
   const ruler = solidRule(ruleWidth);
-  if (railWidth <= 0 || railWidth >= ruleWidth) return ruler;
-  const junction = ruleWidth - railWidth + 1;
-  if (junction < 1 || junction > ruleWidth) return ruler;
-  return `${ruler.slice(0, junction - 1)}┬${ruler.slice(junction)}`;
+  // `0` (the rail folds) and "outside the rule" both mean no junction at all.
+  if (junctionColumn < 1 || junctionColumn > ruleWidth) return ruler;
+  return `${ruler.slice(0, junctionColumn - 1)}${CLI_GLYPHS.railJunction}${ruler.slice(junctionColumn)}`;
 }
 
 /**
@@ -186,11 +189,16 @@ export function TabStrip({
       : tabStripColumns(queried, inkColumns);
   const layout = layoutTabStrip(tabStripItems(state), columns);
   // The rule is drawn to the full laid-out width, and the rail's divider meets it
-  // at the last `railWidth` columns — the same arithmetic the band uses, so the
-  // `┬` cannot end up beside the rail instead of on it.
+  // at the junction the geometry computes — the same function the band reads, so
+  // the `┬` cannot end up beside the rail instead of on it. The rail itself stops
+  // two columns short of the right edge (`sidebarGeometry`), which is why the
+  // junction is not `ruleWidth - railWidth + 1`.
   const ruleWidth = columns > 0 ? columns + ROW_SAFETY_COLUMNS : 0;
   const terminalRows = useTerminalRows();
-  const railWidth = sidebarWidth(ruleWidth, terminalRows);
+  const junctionColumn = sidebarGeometry(
+    ruleWidth,
+    terminalRows,
+  ).junctionColumn;
 
   useChromeClicks({
     regions: layout.regions,
@@ -219,7 +227,7 @@ export function TabStrip({
         {segmentsForText(layout)}
       </Box>
       <Text color={colors.input.border} wrap="truncate">
-        {ruleWithJunction(ruleWidth, railWidth)}
+        {ruleWithJunction(ruleWidth, junctionColumn)}
       </Text>
     </Box>
   );

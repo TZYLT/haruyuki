@@ -4,10 +4,7 @@ import type { AppViewProps } from "@/cli/app/AppView";
 import { PageShell } from "@/cli/app/shell/page-shell";
 import { ShellFrame } from "@/cli/app/shell/ShellFrame";
 import { ContextSidebarScope } from "@/cli/app/shell/sidebar-scope";
-import {
-  sidebarWidth,
-  transcriptColumns,
-} from "@/cli/app/shell/sidebar-sections";
+import { sidebarGeometry } from "@/cli/app/shell/sidebar-sections";
 import { TabStrip } from "@/cli/app/shell/tab-strip";
 import { TAB_STRIP_ROWS } from "@/cli/app/shell/tab-strip-layout";
 import type { AppShellProps } from "@/cli/app/shell/types";
@@ -101,11 +98,11 @@ export function V2Shell(props: AppShellProps) {
       ? props.columns
       : Math.min(props.columns, inkColumns);
   const terminalRows = useTerminalRows();
-  const railWidth = sidebarWidth(frameColumns, terminalRows);
+  const geometry = sidebarGeometry(frameColumns, terminalRows);
   useTerminalSelection({
     items: () => [...props.staticItems, ...props.liveItems],
     bandTopRow: TAB_STRIP_ROWS,
-    bandColumns: railWidth > 0 ? transcriptColumns(frameColumns, railWidth) : 0,
+    bandColumns: geometry.bandColumns,
   });
   // The tab row replaces the main area with a page when one is focused.
   const pageIsActive = useActiveTabIsPage();
