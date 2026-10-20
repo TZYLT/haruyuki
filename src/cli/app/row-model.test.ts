@@ -76,9 +76,12 @@ describe("markdownRowCount", () => {
 
     test("grid rows grow with the number of cell lines", () => {
       const wrapping = `| a | b |\n| --- | --- |\n| ${"x".repeat(60)} | 2 |`;
-      // The first cell wraps to two lines at its column, so the record is two
-      // rows tall: header + rule + 2.
-      expect(markdownRowCount(wrapping, 40, { contentWidth: 40 })).toBe(4);
+      // The first cell wraps at its column, so the record is more than one line
+      // tall: header + rule + its wrapped lines. The table lays itself out two
+      // columns narrower than the width it is given (`ROW_SAFETY_COLUMNS`, so a
+      // row cannot end past the terminal's edge), so the cell wraps one line
+      // earlier than it did before that margin existed.
+      expect(markdownRowCount(wrapping, 40, { contentWidth: 40 })).toBe(5);
     });
 
     test("a table too narrow for its columns falls back to stacked records", () => {

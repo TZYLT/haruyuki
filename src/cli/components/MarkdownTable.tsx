@@ -1,6 +1,9 @@
 import { Box } from "ink";
 import type React from "react";
-import stringWidth from "string-width";
+import {
+  ROW_SAFETY_COLUMNS,
+  visibleWidth,
+} from "@/cli/display/statusline/formatting";
 import { colors } from "./colors.js";
 import { InlineMarkdown } from "./InlineMarkdownRenderer.js";
 import { Text } from "./Text";
@@ -131,13 +134,13 @@ export function tableCellDisplayText(value: string): string {
 }
 
 function displayWidth(value: string): number {
-  return stringWidth(tableCellDisplayText(value));
+  return visibleWidth(tableCellDisplayText(value));
 }
 
 function longestTokenWidth(value: string): number {
   return tableCellDisplayText(value)
     .split(/\s+/)
-    .reduce((maximum, token) => Math.max(maximum, stringWidth(token)), 0);
+    .reduce((maximum, token) => Math.max(maximum, visibleWidth(token)), 0);
 }
 
 function collectColumnMetrics(
@@ -152,7 +155,7 @@ function collectColumnMetrics(
       tableCellDisplayText(value).split(/\s+/).filter(Boolean),
     );
     const longTokenCount = bodyTokens.filter(
-      (token) => stringWidth(token) >= 20,
+      (token) => visibleWidth(token) >= 20,
     ).length;
     const totalWords = nonEmptyValues.reduce(
       (total, value) =>
@@ -263,7 +266,7 @@ function allocateColumnWidths(
 }
 
 function hardWrappedTokenLines(token: string, width: number): number {
-  return Math.max(1, Math.ceil(stringWidth(token) / Math.max(1, width)));
+  return Math.max(1, Math.ceil(visibleWidth(token) / Math.max(1, width)));
 }
 
 function wrappedLineCount(value: string, width: number): number {
@@ -273,7 +276,7 @@ function wrappedLineCount(value: string, width: number): number {
   let lines = 1;
   let currentWidth = 0;
   for (const word of words) {
-    const wordWidth = stringWidth(word);
+    const wordWidth = visibleWidth(word);
     if (wordWidth > width) {
       if (currentWidth > 0) lines++;
       lines += hardWrappedTokenLines(word, width) - 1;
@@ -301,7 +304,7 @@ function rowNeedsRecordLayout(
     const width = widths[column] ?? MIN_COLUMN_WIDTH;
     const hasWideToken = tableCellDisplayText(cell)
       .split(/\s+/)
-      .some((token) => stringWidth(token) > width);
+      .some((token) => visibleWidth(token) > width);
     const kind = metrics[column]?.kind ?? "compact";
     if (kind === "compact") return hasWideToken;
     if (kind === "token-heavy") {
@@ -367,6 +370,18 @@ function recordLayout(
   };
 }
 
+/**
+ * Size the table for the columns it has.
+ *
+ * The outer box is `contentWidth` wide, but the grid is laid out two columns
+ * narrower (`ROW_SAFETY_COLUMNS`): a table row is assembled from segment boxes, so
+ * Ink cannot truncate it, and a row that ends past the terminal's edge is wrapped
+ * by the terminal — one extra line, which in the full-screen shell scrolls the
+ * whole frame up and takes the tab row with it. That is what the machine reported
+ * on 2026-10-20 ("scrolling to one particular text loses the top bar, and the
+ * selection lands on the wrong rows"): the table was exactly `contentWidth` wide by
+ * the width table's arithmetic and two columns wider on the screen.
+ */
 export function layoutMarkdownTable(
   table: ParsedMarkdownTable,
   contentWidth?: number,
@@ -375,17 +390,19 @@ export function layoutMarkdownTable(
   const overhead =
     table.headers.length * CELL_PADDING * 2 +
     Math.max(0, table.headers.length - 1) * COLUMN_GAP;
-  const availableWidth =
+  const safeWidth =
     contentWidth === undefined
       ? undefined
-      : Math.max(0, contentWidth - overhead);
+      : Math.max(0, contentWidth - ROW_SAFETY_COLUMNS);
+  const availableWidth =
+    safeWidth === undefined ? undefined : Math.max(0, safeWidth - overhead);
   const columnWidths = allocateColumnWidths(metrics, availableWidth);
 
   if (
     columnWidths === null ||
     shouldRenderRecords(table, columnWidths, metrics)
   ) {
-    return recordLayout(table, metrics, contentWidth);
+    return recordLayout(table, metrics, safeWidth);
   }
   return { mode: "grid", columnWidths };
 }
