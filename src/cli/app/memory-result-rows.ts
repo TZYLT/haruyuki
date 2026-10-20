@@ -6,23 +6,21 @@
  * of the changed content, with its own caps. The full-screen shell has to
  * predict those rows without rendering, so the layout is mirrored here.
  *
- * Exact for every `memory` command and for `memory_apply_patch`. The one
- * approximation is `str_replace`: the renderer runs a line diff (`diff.diffLines`)
- * and shows at most `MEMORY_STR_REPLACE_MAX_ROWS` changed lines, and running that
- * diff here would duplicate its row selection. The bound treats every old and new
- * line as a changed line measured at its wrapped width, so it over-estimates
- * rather than hiding a change.
+ * Exact for every `memory` command and for `memory_apply_patch` — including
+ * `str_replace`, whose preview rows are the renderer's own selection
+ * (`helpers/memory-diff-rows.ts`). It used to be an over-estimate instead: every
+ * old and new line counted at the widest row's height, which claimed 35 rows for a
+ * preview that draws four and left the viewport believing an empty band was full
+ * (2026-10-20).
  *
  * Pure and I/O-free: it only reads the tool's own argument JSON.
  */
 
+import { selectMemoryDiffRows } from "@/cli/helpers/memory-diff-rows";
 import { countTextRows } from "@/cli/helpers/text-metrics";
 
 /** Rows the renderer shows behind a 4-column indent. */
 const MEMORY_INDENT_WIDTH = 4;
-
-/** Cap on the `str_replace` preview rows (mirrors the renderer). */
-const MEMORY_STR_REPLACE_MAX_ROWS = 10;
 
 /** Cap on the `memory_apply_patch` preview lines (mirrors the renderer). */
 const MEMORY_PATCH_MAX_LINES = 8;
@@ -158,27 +156,33 @@ function memoryPatchRows(
   return rows;
 }
 
-/** Documented over-estimate for the `memory str_replace` diff (see module doc). */
+/**
+ * Rows the `memory str_replace` preview occupies.
+ *
+ * Exact, and it used to not be: the first version took every old and new line,
+ * measured the **widest** one and multiplied by the number of candidates — a
+ * deliberate over-estimate that produced 35 rows for a preview that draws four.
+ * The viewport believed the band was full and stopped asking for items, which the
+ * machine reported as "big blocks of text vanish while scrolling" (2026-10-20,
+ * `blankTail=19` with `tool_call(memory):35` in the window).
+ *
+ * The rows are the renderer's own selection (`memory-diff-rows.ts`), each measured
+ * at the box it is drawn in: the same 4-column indent for every line.
+ */
 function memoryStrReplaceRows(
   oldStr: string,
   newStr: string,
   blockName: string,
   contentWidth: number,
 ): number {
-  const candidates = [
-    ...oldStr.split("\n").map((line) => `- ${line}`),
-    ...newStr.split("\n").map((line) => `+ ${line}`),
-  ];
-  let widestRow = 1;
-  for (const candidate of candidates) {
-    widestRow = Math.max(widestRow, countTextRows(candidate, contentWidth));
+  const { rows, hiddenCount } = selectMemoryDiffRows(oldStr, newStr);
+  let total = countTextRows(`Updated memory block ${blockName}`, contentWidth);
+  for (const row of rows) {
+    const prefix = row.type === "add" ? "+" : "-";
+    total += countTextRows(`${prefix} ${row.content}`, contentWidth);
   }
-  const shown = Math.min(MEMORY_STR_REPLACE_MAX_ROWS, candidates.length);
-  return (
-    countTextRows(`Updated memory block ${blockName}`, contentWidth) +
-    shown * widestRow +
-    (candidates.length > MEMORY_STR_REPLACE_MAX_ROWS ? 1 : 0)
-  );
+  if (hiddenCount > 0) total += 1;
+  return total;
 }
 
 /** First non-empty string among `keys`. */

@@ -1,6 +1,7 @@
 import * as Diff from "diff";
 import { Box } from "ink";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
+import { selectMemoryDiffRows } from "@/cli/helpers/memory-diff-rows";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { colors } from "./colors";
 import { Text } from "./Text";
@@ -289,73 +290,13 @@ function MemoryStrReplaceDiff({
   newStr: string;
   columns: number;
 }) {
-  // Use line-level diff to find what actually changed
-  const lineDiffs = Diff.diffLines(oldStr, newStr);
-
-  // Build display rows: only show added/removed lines, not unchanged
-  // For adjacent remove/add pairs, enable word-level highlighting
-  type DiffRow = {
-    type: "add" | "remove";
-    content: string;
-    pairContent?: string; // For word-level diff when remove is followed by add
-  };
-  const rows: DiffRow[] = [];
-
-  for (let i = 0; i < lineDiffs.length; i++) {
-    const part = lineDiffs[i];
-    if (!part) continue;
-
-    // Skip unchanged lines (context)
-    if (!part.added && !part.removed) continue;
-
-    // Split the value into individual lines (remove trailing newline)
-    const lines = part.value.replace(/\n$/, "").split("\n");
-
-    if (part.removed) {
-      // Check if next part is an addition (for word-level diff pairing)
-      const nextPart = lineDiffs[i + 1];
-      const nextIsAdd = nextPart?.added;
-      const nextLines = nextIsAdd
-        ? nextPart.value.replace(/\n$/, "").split("\n")
-        : [];
-
-      lines.forEach((line, lineIdx) => {
-        rows.push({
-          type: "remove",
-          content: line,
-          // Pair with corresponding add line for word-level diff (if same count)
-          pairContent:
-            nextIsAdd && lines.length === nextLines.length
-              ? nextLines[lineIdx]
-              : undefined,
-        });
-      });
-    } else if (part.added) {
-      // Check if previous part was a removal (already handled pairing above)
-      const prevPart = lineDiffs[i - 1];
-      const prevIsRemove = prevPart?.removed;
-      const prevLines = prevIsRemove
-        ? prevPart.value.replace(/\n$/, "").split("\n")
-        : [];
-
-      lines.forEach((line, lineIdx) => {
-        rows.push({
-          type: "add",
-          content: line,
-          // Pair with corresponding remove line for word-level diff (if same count)
-          pairContent:
-            prevIsRemove && lines.length === prevLines.length
-              ? prevLines[lineIdx]
-              : undefined,
-        });
-      });
-    }
-  }
-
-  // Limit display to avoid huge diffs
-  const maxRows = 10;
-  const displayRows = rows.slice(0, maxRows);
-  const hasMore = rows.length > maxRows;
+  // Which changed lines are drawn is shared with the transcript row model
+  // (`helpers/memory-diff-rows.ts`): the model predicts this block's height, and
+  // two copies of "which rows show" is how the viewport drifts from the screen.
+  const { rows: displayRows, hiddenCount } = selectMemoryDiffRows(
+    oldStr,
+    newStr,
+  );
 
   const prefixWidth = 4;
   const contentWidth = Math.max(0, columns - prefixWidth);
@@ -381,6 +322,7 @@ function MemoryStrReplaceDiff({
 
       {displayRows.map((row, i) => (
         <DiffLine
+          // biome-ignore lint/suspicious/noArrayIndexKey: rows are positional output
           key={`diff-${i}-${row.type}-${row.content.substring(0, 20)}`}
           type={row.type}
           content={row.content}
@@ -389,9 +331,9 @@ function MemoryStrReplaceDiff({
         />
       ))}
 
-      {hasMore && (
+      {hiddenCount > 0 && (
         <Text dimColor>
-          {"    "}... {rows.length - maxRows} more lines
+          {"    "}... {hiddenCount} more lines
         </Text>
       )}
     </Box>
