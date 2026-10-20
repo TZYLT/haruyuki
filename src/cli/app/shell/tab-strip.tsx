@@ -1,4 +1,4 @@
-﻿// src/cli/app/shell/tab-strip.tsx
+// src/cli/app/shell/tab-strip.tsx
 
 import { Box, Text, useStdout } from "ink";
 import type { ReactNode } from "react";
@@ -137,7 +137,8 @@ export function TabStrip({ onSelect, onClose }: TabStripProjection) {
     typeof stdout?.columns === "number" && stdout.columns > 0
       ? stdout.columns
       : undefined;
-  const columns = tabStripColumns(useTerminalWidth(), inkColumns);
+  const queried = useTerminalWidth();
+  const columns = tabStripColumns(queried, inkColumns);
   const layout = layoutTabStrip(tabStripItems(state), columns);
 
   useChromeClicks({
@@ -159,7 +160,7 @@ export function TabStrip({ onSelect, onClose }: TabStripProjection) {
         overflow="hidden"
         flexShrink={0}
       >
-        <Text wrap="truncate">{segmentsForText(layout)}</Text>
+        {segmentsForText(layout)}
       </Box>
       <Text color={colors.input.border} wrap="truncate">
         {solidRule(columns)}

@@ -1,4 +1,4 @@
-import { Box, Text } from "ink";
+import { Box, Text, useStdout } from "ink";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useActiveTabIsPage } from "@/cli/app/tabs";
 import { colors } from "@/cli/components/colors";
@@ -15,6 +15,10 @@ import {
   subscribeToMouseTracking,
 } from "@/cli/helpers/mouse-tracking";
 import { getNotice, subscribeToNotice } from "@/cli/helpers/notice";
+import {
+  useTerminalRows,
+  useTerminalWidth,
+} from "@/cli/hooks/use-terminal-width";
 
 /**
  * The frame's bottom row: the leader's visible half, the composer's transient
@@ -91,6 +95,26 @@ function summarise(entries: ReturnType<typeof leaderEntries>): string {
     .join(" · ");
 }
 
+/**
+ * `HARUYUKI_DEBUG_SIZE=1`: the numbers the frame was laid out from, printed on the
+ * hint row — the one row that is always on screen, including when the top rows
+ * have scrolled off it.
+ *
+ * Two rounds of the same report ("the tab row is not there") could not be settled
+ * from a screenshot because the interesting numbers were never on it: the console's
+ * answer and the stream's can disagree, and which one is off is a fact about the
+ * machine (2026-10-20). Temporary: the sizes are reconciled in
+ * `hooks/use-terminal-width.ts`, and this readout can go once they agree there.
+ */
+function useSizeReadout(): string {
+  const columns = useTerminalWidth();
+  const rows = useTerminalRows();
+  const { stdout } = useStdout();
+  if (process.env.HARUYUKI_DEBUG_SIZE !== "1") return "";
+  const ink = `${stdout?.columns ?? "-"}x${stdout?.rows ?? "-"}`;
+  return `[q=${columns}x${rows} ink=${ink}]`;
+}
+
 export function LeaderHint() {
   const [armed, setArmed] = useState(isLeaderArmed);
   const [helpOpen, setHelpOpen] = useState(isLeaderHelpOpen);
@@ -100,6 +124,7 @@ export function LeaderHint() {
     isMouseTrackingEnabled,
   );
   const pageActive = useActiveTabIsPage();
+  const size = useSizeReadout();
 
   useEffect(() => {
     const sync = () => {
@@ -121,10 +146,11 @@ export function LeaderHint() {
   }
 
   if (!armed) {
+    const hint = contextHint({ pageActive, mouseEnabled });
     return (
       <Box>
         <Text dimColor wrap="truncate">
-          {contextHint({ pageActive, mouseEnabled })}
+          {size ? `${size} ${hint}` : hint}
         </Text>
       </Box>
     );
