@@ -1,6 +1,6 @@
-// src/cli/app/shell/tab-strip.tsx
+﻿// src/cli/app/shell/tab-strip.tsx
 
-import { Box, Text } from "ink";
+import { Box, Text, useStdout } from "ink";
 import type { ReactNode } from "react";
 import {
   allTabs,
@@ -11,6 +11,7 @@ import {
 import { colors } from "@/cli/components/colors";
 import { solidRule } from "@/cli/helpers/rule-lines";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
+import { debugWarn } from "@/utils/debug";
 import {
   layoutTabStrip,
   TAB_UNREAD_MARK,
@@ -49,6 +50,43 @@ export function tabStripItems(state: TabsState): TabStripItem[] {
     unread: tab.kind === "conversation" ? tab.unread : false,
     closeable: tab.kind === "conversation" && closableConversation,
   }));
+}
+
+/**
+ * The width this row may occupy: never more than the width Ink lays out at.
+ *
+ * The row is *exactly* its column count, with the pages pinned to its right edge,
+ * so a count one column too large does not clip — it **wraps**, costing a line
+ * and, because a frame taller than the screen scrolls the alternate screen, the
+ * tab row itself. That is what the first machine run showed: row 1 holding the
+ * tail `gs` of `Settings`, the rule on row 2, and nothing clickable anywhere
+ * (2026-10-20).
+ *
+ * `useTerminalWidth` queries the console, which on Windows answers with the
+ * *screen buffer*; `stdout.columns` is what Ink wraps against. When they disagree
+ * the smaller one is the only safe answer — a row two columns short is a slightly
+ * wider gap, a row two columns long is a dead feature. The mismatch is reported
+ * once per distinct pair, so the session log records which way the machine is
+ * wrong instead of it being invisible.
+ */
+let reportedWidthMismatch: string | null = null;
+
+export function tabStripColumns(
+  queried: number,
+  inkColumns: number | undefined,
+): number {
+  // A stream that cannot answer (a pipe, or a layout that has not run yet) leaves
+  // the queried width alone; zero is not a width, it is a missing one.
+  if (inkColumns === undefined || inkColumns <= 0) return queried;
+  const mismatch = `${queried}->${inkColumns}`;
+  if (queried !== inkColumns && reportedWidthMismatch !== mismatch) {
+    reportedWidthMismatch = mismatch;
+    debugWarn(
+      "tab-strip",
+      `console reports ${queried} columns, ink lays out ${inkColumns}; using ${Math.min(queried, inkColumns)}`,
+    );
+  }
+  return Math.min(queried, inkColumns);
 }
 
 /**
@@ -94,7 +132,12 @@ function segmentsForText(layout: TabStripLayout): ReactNode {
 export function TabStrip({ onSelect, onClose }: TabStripProjection) {
   const state = useTabsState();
   const pageActive = useActiveTabIsPage();
-  const columns = useTerminalWidth();
+  const { stdout } = useStdout();
+  const inkColumns =
+    typeof stdout?.columns === "number" && stdout.columns > 0
+      ? stdout.columns
+      : undefined;
+  const columns = tabStripColumns(useTerminalWidth(), inkColumns);
   const layout = layoutTabStrip(tabStripItems(state), columns);
 
   useChromeClicks({
@@ -106,7 +149,18 @@ export function TabStrip({ onSelect, onClose }: TabStripProjection) {
 
   return (
     <Box flexDirection="column" flexShrink={0}>
-      <Text wrap="truncate">{segmentsForText(layout)}</Text>
+      {/* A fixed-width, clipping box: the row's segments are separate inline
+          boxes, so Ink cannot truncate between them the way it truncates one
+          string. Clipping keeps a miscounted glyph a clipped column instead of a
+          wrapped line, which would cost the frame a row — and this row is the one
+          the alternate screen scrolls away. */}
+      <Box
+        width={columns > 0 ? columns : undefined}
+        overflow="hidden"
+        flexShrink={0}
+      >
+        <Text wrap="truncate">{segmentsForText(layout)}</Text>
+      </Box>
       <Text color={colors.input.border} wrap="truncate">
         {solidRule(columns)}
       </Text>

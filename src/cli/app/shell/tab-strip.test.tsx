@@ -3,7 +3,7 @@ import { clearAllSubagents } from "@/agent/subagent-state";
 import type { AppViewProps } from "@/cli/app/AppView";
 import { ChromeHeightContext } from "@/cli/app/chrome-height";
 import { PageShell } from "@/cli/app/shell/page-shell";
-import { TabStrip } from "@/cli/app/shell/tab-strip";
+import { TabStrip, tabStripColumns } from "@/cli/app/shell/tab-strip";
 import {
   focusTab,
   openConversationTab,
@@ -35,6 +35,37 @@ function mountStrip(
     />,
     { columns, rows: 24 },
   );
+}
+
+/**
+ * Make the console answer with a width of its own.
+ *
+ * `useTerminalWidth` queries `process.stdout.getWindowSize()` while Ink lays out
+ * against the stream's `columns`, so on a real machine the two can disagree —
+ * which is what the first run showed. Pinning only one of them is how this test
+ * says so.
+ */
+function withQueriedColumns(
+  columns: number,
+  rows = 24,
+): { restore: () => void } {
+  const saved = Object.getOwnPropertyDescriptor(
+    process.stdout,
+    "getWindowSize",
+  );
+  Object.defineProperty(process.stdout, "getWindowSize", {
+    configurable: true,
+    value: () => [columns, rows],
+  });
+  return {
+    restore: () => {
+      if (saved) {
+        Object.defineProperty(process.stdout, "getWindowSize", saved);
+        return;
+      }
+      delete (process.stdout as { getWindowSize?: unknown }).getWindowSize;
+    },
+  };
 }
 
 /**
@@ -162,6 +193,36 @@ describe("the tab strip frame", () => {
     } finally {
       page.stop();
     }
+  });
+
+  test("a console that reports a wider screen cannot push the row off the frame", async () => {
+    // The first machine run: the console answered with the screen *buffer* width,
+    // the strip laid the row out at that width, and the row wrapped by the
+    // difference — one extra line, which scrolled the alternate screen and took
+    // the whole tab row with it (row 1 was the tail `gs` of `Settings`).
+    openConversationTab("conv-1", "M6 shell");
+    openConversationTab("conv-2", "Ledger work");
+    const queried = withQueriedColumns(102);
+    const shell = mountStrip(100);
+    try {
+      const rows = await shell.rows();
+      expect(rows.length).toBe(2);
+      expect(rows[0]?.length).toBeLessThanOrEqual(100);
+      expect(rows[0]).toEndWith("Settings");
+      expect(rows[1]).toBe("─".repeat(100));
+    } finally {
+      shell.stop();
+      queried.restore();
+    }
+  });
+
+  test("the row is the narrower of the console's answer and Ink's", () => {
+    expect(tabStripColumns(102, 100)).toBe(100);
+    expect(tabStripColumns(98, 100)).toBe(98);
+    expect(tabStripColumns(100, 100)).toBe(100);
+    // A stream that cannot report (a pipe) leaves the queried width alone.
+    expect(tabStripColumns(100, undefined)).toBe(100);
+    expect(tabStripColumns(100, 0)).toBe(100);
   });
 
   test("a page still shows the approval that is blocking the input", async () => {
