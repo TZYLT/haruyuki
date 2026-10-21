@@ -189,6 +189,12 @@ function pinProcessStdout(columns: number, rows: number): () => void {
   ] as const) {
     Object.defineProperty(process.stdout, key, { configurable: true, value });
   }
+  // A real terminal tells the app the size *and* reports the change: the width
+  // hooks cache the last answer in a module store and only re-read it on
+  // `resize`, so a pin without the event leaves the store at whatever the
+  // previous mount's size was — the next frame then lays itself out for a
+  // terminal that is not the one it is drawn on, and only some test orders see it.
+  process.stdout.emit("resize");
   return () => {
     for (const key of ["columns", "rows"] as const) {
       const descriptor = saved[key];
@@ -198,5 +204,6 @@ function pinProcessStdout(columns: number, rows: number): () => void {
         delete (process.stdout as { columns?: number; rows?: number })[key];
       }
     }
+    process.stdout.emit("resize");
   };
 }

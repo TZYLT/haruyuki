@@ -75,6 +75,7 @@ export type ActiveOverlay =
   | "connect"
   | "skills"
   | "window-title"
+  | "tabs"
   | null;
 
 export type QueuedOverlayAction =
@@ -235,3 +236,35 @@ export type StaticItem =
       precomputedDiff?: AdvancedDiffSuccess;
     }
   | Line;
+
+/**
+ * What the top bar's tab strip does when it is clicked, and what `/tabs` does.
+ *
+ * The shell draws the row and hit-tests it; the *meaning* of a click is the
+ * conversation core's, because showing a conversation is a switch and closing one
+ * is a view plus a runtime decision. So the shell is handed these callbacks and
+ * nothing else — it never learns what a conversation switch is, which is what
+ * keeps the two shells differing by shell alone. The face reads the same object,
+ * so a click on the strip and a row in `/tabs` cannot disagree.
+ *
+ * All three are keyed by tab id: a conversation id, or one of the two page ids.
+ *
+ * It lives in `app/types.ts` rather than `shell/types.ts` because both ends need
+ * it — the shell that draws the row and `AppView`, which mounts the `/tabs` face —
+ * and `shell/types.ts` already imports `AppViewProps`, so declaring it there would
+ * make the pair circular.
+ */
+export type TabStripProjection = {
+  onSelect: (tabId: string) => void;
+  onClose: (tabId: string) => void;
+  /**
+   * The collapsed `+N` marker was clicked.
+   *
+   * It is the only object on the row that stands for the tabs which are *not*
+   * there, so it is the natural thing to aim at when the tab you want is hidden
+   * (《38》§3.8, ruled 2026-10-20). It opens the `/tabs` face — a counter that
+   * cannot be clicked leaves a mouse user with no way to reach the hidden tabs at
+   * all.
+   */
+  onOverflow: () => void;
+};

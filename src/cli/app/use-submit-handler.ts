@@ -6,14 +6,7 @@ import type {
   AgentState,
   MessageCreate,
 } from "@letta-ai/letta-client/resources/agents/agents";
-import type { ApprovalCreate } from "@letta-ai/letta-client/resources/agents/messages";
-import type { LlmConfig } from "@letta-ai/letta-client/resources/models/models";
-import {
-  type Dispatch,
-  type MutableRefObject,
-  type SetStateAction,
-  useCallback,
-} from "react";
+import { useCallback } from "react";
 import type { ApprovalResult } from "@/agent/approval-execution";
 import {
   buildFreshDenialApprovals,
@@ -35,10 +28,8 @@ import {
   detectPersonalityFromPersonaFile,
   getPersonaFilePath,
 } from "@/agent/personality";
-import type { PersonalityId } from "@/agent/personality-presets";
 import { requestCloudReflectionRun } from "@/agent/reflection-runs";
 import { recordSessionEnd } from "@/agent/session-history";
-import type { SessionStats } from "@/agent/stats";
 import { getBackend } from "@/backend";
 import { getClient } from "@/backend/api/client";
 import type { CustomCommand } from "@/cli/commands/custom";
@@ -46,18 +37,15 @@ import {
   handleModsCommand,
   parseModsGenerateEnvCommand,
 } from "@/cli/commands/mods";
-import type { CommandHandle } from "@/cli/commands/runner";
 import { validateAgentName } from "@/cli/components/PinDialog";
-import { type Buffers, type Line, toLines } from "@/cli/helpers/accumulator";
+import { toLines } from "@/cli/helpers/accumulator";
 import { buildChatUrl, isLocalAgentId } from "@/cli/helpers/app-urls";
 import {
   CHDIR_USAGE,
   parseChdirCommand,
   resolveChdirTarget,
 } from "@/cli/helpers/chdir-command";
-import type { ContextTracker } from "@/cli/helpers/context-tracker";
 import { resetContextHistory } from "@/cli/helpers/context-tracker";
-import type { ConversationSwitchContext } from "@/cli/helpers/conversation-switch-alert";
 import { buildDoctorMessage } from "@/cli/helpers/doctor-command";
 import { formatErrorDetails } from "@/cli/helpers/error-formatter";
 import {
@@ -88,7 +76,6 @@ import {
   buildReflectionSelectorPrompt,
   readReflectionAutoSelection,
 } from "@/cli/helpers/reflection-transcript";
-import type { ApprovalRequest } from "@/cli/helpers/stream";
 import {
   estimateSystemTokens,
   setSystemPromptDoctorState,
@@ -101,16 +88,11 @@ import {
   parseModSlashCommand,
   runModCommandWithTimeout,
 } from "@/cli/mods/command-runtime";
-import type {
-  ModCommandContext,
-  ModConversationCloseReason,
-} from "@/cli/mods/types";
-import type { LocalModAdapter } from "@/cli/mods/use-local-mod-adapter";
+import type { ModCommandContext } from "@/cli/mods/types";
 import { SYSTEM_REMINDER_CLOSE, SYSTEM_REMINDER_OPEN } from "@/constants";
 import { experimentManager } from "@/experiments/manager";
 import { runSessionStartHooks, runUserPromptSubmitHooks } from "@/hooks";
 import { createModConversationHandle } from "@/mods/conversation-handle";
-import type { QueueRuntime } from "@/queue/queue-runtime";
 import {
   buildSharedReminderParts,
   prependReminderPartsToContent,
@@ -119,7 +101,6 @@ import { runPostTurnMemorySync } from "@/reminders/memory-git-sync";
 import {
   enqueueMemoryGitSyncReminder,
   markSecretsInfoReminderPending,
-  type SharedReminderState,
 } from "@/reminders/state";
 import { getCurrentWorkingDirectory } from "@/runtime-context";
 import { settingsManager } from "@/settings-manager";
@@ -148,41 +129,11 @@ import {
 } from "./submit-compact-commands";
 import { handleConnectionCommand } from "./submit-connection-commands";
 import { handleDiagnosticsCommand } from "./submit-diagnostics-commands";
+import type { SubmitHandlerContext } from "./submit-handler-context";
 import { handleNavigationCommand } from "./submit-navigation-commands";
 import { handleProfileCommand } from "./submit-profile-commands";
+import { focusTab, getTabsState } from "./tabs";
 import { bindTuiClientPreferences, buildTuiTurnInput } from "./turn-input";
-import type {
-  ActiveOverlay,
-  AppCommandRunner,
-  ProcessConversation,
-  StaticItem,
-} from "./types";
-
-type BashCommandCacheEntry = {
-  input: string;
-  output: string;
-};
-
-type PendingGitReminder = {
-  dirty: boolean;
-  aheadOfRemote: boolean;
-  summary: string;
-};
-
-type ProfileConfirmPending = {
-  name: string;
-  agentId: string;
-  cmdId: string;
-};
-
-type WorktreeDiffSelectorPending = {
-  worktrees: import("@/web/worktree-diff-list").WorktreeDiffOption[];
-};
-
-type ModelSelectorOptions = {
-  filterProvider?: string;
-  forceRefresh?: boolean;
-};
 
 async function findCustomCommandByName(
   commandName: string,
@@ -190,148 +141,6 @@ async function findCustomCommandByName(
   const { findCustomCommand } = await import("@/cli/commands/custom.js");
   return findCustomCommand(commandName);
 }
-
-type SubmitHandlerContext = {
-  abortControllerRef: MutableRefObject<AbortController | null>;
-  agentDescription: string | null;
-  agentId: string;
-  agentIdRef: MutableRefObject<string>;
-  agentLastRunAt: string | null;
-  agentName: string | null;
-  agentState: AgentState | null | undefined;
-  agentStateRef: MutableRefObject<AgentState | null | undefined>;
-  appendTaskNotificationEvents: (summaries: string[]) => boolean;
-  bashCommandCacheRef: MutableRefObject<BashCommandCacheEntry[]>;
-  buffersRef: MutableRefObject<Buffers>;
-  checkPendingApprovalsForSlashCommand: () => Promise<
-    { blocked: true } | { blocked: false }
-  >;
-  commandRunner: AppCommandRunner;
-  commandRunning: boolean;
-  consumeQueuedApprovalInputForCurrentConversation: (
-    otid?: string,
-  ) => ApprovalCreate | null;
-  contextTrackerRef: MutableRefObject<ContextTracker>;
-  conversationGenerationRef: MutableRefObject<number>;
-  conversationId: string;
-  conversationIdRef: MutableRefObject<string>;
-  currentModelHandle: string | null;
-  currentModelId: string | null;
-  currentModelLabel: string | null;
-  currentModelProvider: string | null;
-  effectiveContextWindowSize: number | undefined;
-  emittedIdsRef: MutableRefObject<Set<string>>;
-  modAdapter: LocalModAdapter;
-  firstUserQueryRef: MutableRefObject<string | null>;
-  flushPendingReasoningEffort: () => Promise<void>;
-  generateConversationDescription: (options?: {
-    force?: boolean;
-  }) => Promise<void>;
-  generateConversationTitle: () => Promise<string | null>;
-  handleAgentSelect: (
-    targetAgentId: string,
-    opts?: {
-      profileName?: string;
-      conversationId?: string;
-      commandId?: string;
-    },
-  ) => Promise<void>;
-  handleBtwCommand: (question: string) => Promise<void>;
-  handleExit: () => Promise<void>;
-  hasBackfilledRef: MutableRefObject<boolean>;
-  isAgentBusy: () => boolean;
-  isExecutingTool: boolean;
-  llmConfigRef: MutableRefObject<LlmConfig | null>;
-  maybeCarryOverActiveConversationModel: (
-    targetConversationId: string,
-  ) => Promise<void>;
-  needsEagerApprovalCheck: boolean;
-  openTrajectorySegment: () => void;
-  overrideContentPartsRef: MutableRefObject<MessageCreate["content"] | null>;
-  pendingApprovals: ApprovalRequest[];
-  pendingConversationSwitchRef: MutableRefObject<ConversationSwitchContext | null>;
-  pendingGitReminderRef: MutableRefObject<PendingGitReminder | null>;
-  processConversation: ProcessConversation;
-  processConversationWithQueuedApprovals: ProcessConversation;
-  profileConfirmPending: ProfileConfirmPending | null;
-  projectDirectory: string;
-  queuedApprovalResults: ApprovalResult[] | null;
-  reasoningTabCycleEnabled: boolean;
-  recoverRestoredPendingApprovals: (
-    approvals: ApprovalRequest[],
-    options?: { notifyOnManualApproval?: boolean },
-  ) => Promise<void>;
-  refreshDerived: () => void;
-  resetBootstrapReminderState: (pendingConversationBootstrap?: boolean) => void;
-  resetDeferredToolCallCommits: () => void;
-  resetPendingReasoningCycle: () => void;
-  resetTrajectoryBases: () => void;
-  runEndHooks: (reason?: ModConversationCloseReason) => Promise<void>;
-  sessionHooksRanRef: MutableRefObject<boolean>;
-  sessionStartFeedbackRef: MutableRefObject<string[]>;
-  sessionStatsRef: MutableRefObject<SessionStats>;
-  openOverlay: (
-    overlay: NonNullable<ActiveOverlay>,
-    input: string,
-    openingOutput: string,
-    dismissOutput: string,
-  ) => CommandHandle;
-  setAgentDescription: Dispatch<SetStateAction<string | null>>;
-  setActiveOverlay: Dispatch<SetStateAction<ActiveOverlay>>;
-  setAgentState: Dispatch<SetStateAction<AgentState | null | undefined>>;
-  setCommandRunning: (value: boolean) => void;
-  setConversationAutoTitleEligibility: (enabled: boolean) => void;
-  setConversationIdAndRef: (nextConversationId: string) => void;
-  setConversationSummary: (summary: string | null) => void;
-  setConversationOverrideContextWindowLimit: Dispatch<
-    SetStateAction<number | null>
-  >;
-  setConversationOverrideModelSettings: Dispatch<
-    SetStateAction<AgentState["model_settings"] | null>
-  >;
-  setCurrentPersonalityId: Dispatch<SetStateAction<PersonalityId | null>>;
-  setDequeueEpoch: Dispatch<SetStateAction<number>>;
-  setFeedbackPrefill: Dispatch<SetStateAction<string>>;
-  setHasConversationModelOverride: (value: boolean) => void;
-  setLines: Dispatch<SetStateAction<Line[]>>;
-  setLlmConfig: Dispatch<SetStateAction<LlmConfig | null>>;
-  markLocalModelsAvailable: () => void;
-  setModelSelectorOptions: Dispatch<SetStateAction<ModelSelectorOptions>>;
-  setNeedsEagerApprovalCheck: Dispatch<SetStateAction<boolean>>;
-  setProfileConfirmPending: Dispatch<
-    SetStateAction<ProfileConfirmPending | null>
-  >;
-  setWorktreeDiffSelectorPending: Dispatch<
-    SetStateAction<WorktreeDiffSelectorPending | null>
-  >;
-  setReasoningTabCycleEnabled: Dispatch<SetStateAction<boolean>>;
-  setSearchQuery: Dispatch<SetStateAction<string>>;
-  setStaticItems: Dispatch<SetStateAction<StaticItem[]>>;
-  setStaticRenderEpoch: Dispatch<SetStateAction<number>>;
-  setStreaming: (value: boolean) => void;
-  setThinkingMessage: Dispatch<SetStateAction<string>>;
-  setTokenStreamingEnabled: Dispatch<SetStateAction<boolean>>;
-  setTrajectoryTokenBase: Dispatch<SetStateAction<number>>;
-  sharedReminderStateRef: MutableRefObject<SharedReminderState>;
-  shouldAutoGenerateConversationTitleRef: MutableRefObject<boolean>;
-
-  streaming: boolean;
-  systemInfoReminderEnabled: boolean;
-  tokenStreamingEnabled: boolean;
-  trajectoryRunTokenStartRef: MutableRefObject<number>;
-  trajectoryTokenDisplayRef: MutableRefObject<number>;
-  tuiQueueRef: MutableRefObject<QueueRuntime | null>;
-  updateAgentName: (name: string) => void;
-  updateMemorySyncCommand: (
-    commandId: string,
-    output: string,
-    success: boolean,
-    input?: string,
-    keepRunning?: boolean,
-  ) => void;
-  userCancelledRef: MutableRefObject<boolean>;
-  onReload?: () => Promise<void>;
-};
 
 export function useSubmitHandler(ctx: SubmitHandlerContext) {
   const {
@@ -393,6 +202,7 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
     sessionStartFeedbackRef,
     sessionStatsRef,
     openOverlay,
+    tabStrip,
     setAgentDescription,
     setAgentState,
     setCommandRunning,
@@ -1327,6 +1137,38 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           return { submitted: true };
         }
 
+        // The top bar's own commands (M6-P2).
+        //
+        // The strip is operated by the mouse, and the hint row has been printing
+        // `/tabs` since P0 while the command did not exist (`《39》§2 #8`): a
+        // keyboard-only user could not change tabs at all. These four are that
+        // path, and each answers with the *same* action a click on the strip has —
+        // switching and closing are the core's decisions, not a second version of
+        // them written inside a command handler.
+        if (trimmed === "/tabs") {
+          openOverlay("tabs", "/tabs", "标签列表", "标签列表已关闭");
+          return { submitted: true };
+        }
+
+        if (trimmed === "/close") {
+          tabStrip.onClose(getTabsState().activeId);
+          return { submitted: true };
+        }
+
+        // `/usage` and `/settings` are the two fixed page tabs: the command is the
+        // keyboard's way to focus them (《38》§3.2 — "/usage 切到 Usage 页", no
+        // longer printed into the transcript). The page itself is the answer, so
+        // there is no command row to finish.
+        if (trimmed === "/usage") {
+          focusTab("usage");
+          return { submitted: true };
+        }
+
+        if (trimmed === "/settings") {
+          focusTab("settings");
+          return { submitted: true };
+        }
+
         const diagnosticsCommandResult = await handleDiagnosticsCommand(
           trimmed,
           {
@@ -1339,7 +1181,6 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
             currentModelId,
             effectiveContextWindowSize,
             llmConfigRef,
-            sessionStatsRef,
             setAgentState,
             setCommandRunning,
             setConversationOverrideContextWindowLimit,

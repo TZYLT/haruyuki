@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { visibleWidth } from "@/cli/display/statusline/formatting";
 import {
   layoutTabStrip,
+  TAB_OVERFLOW_ID,
   TAB_STRIP_ROWS,
   TAB_TITLE_COLUMNS,
   type TabStripItem,
@@ -312,5 +313,29 @@ describe("the tab row, at every width", () => {
         hasCurrent: true,
       });
     }
+  });
+
+  test("a collapsed count is a rectangle you can click (《38》§3.8)", () => {
+    // The `+N` marker is the only object on the row that stands for the tabs which
+    // are not drawn, so it is what a mouse user aims at to see them. Without a
+    // region it is a counter: readable, and dead.
+    const collapsed = layoutTabStrip(ITEMS, 80);
+    const marker = collapsed.regions.find(
+      (region) => region.part === "overflow",
+    );
+    expect(marker).toBeDefined();
+    expect(marker?.id).toBe(TAB_OVERFLOW_ID);
+    // Its columns are the marker's own characters, not the gap before them.
+    const text = draw(collapsed).slice(
+      (marker?.from ?? 1) - 1,
+      marker?.to ?? 0,
+    );
+    expect(text).toMatch(/^\+\d+$/);
+
+    // Wide enough for every tab: no marker, so no rectangle either.
+    const roomy = layoutTabStrip(ITEMS, 140);
+    expect(roomy.regions.some((region) => region.part === "overflow")).toBe(
+      false,
+    );
   });
 });

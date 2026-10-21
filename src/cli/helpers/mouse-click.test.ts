@@ -4,7 +4,7 @@ import {
   CLICK_MAX_MS,
   CLICK_SLOP_COLUMNS,
   createClickTracker,
-} from "./chrome-click";
+} from "./mouse-click";
 
 /**
  * Telling a click from a drag, which is the whole reason the strip can be

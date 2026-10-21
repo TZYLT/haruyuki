@@ -29,9 +29,6 @@ export function ShellFrame({
     terminalTitleConfigRefreshEpoch,
     terminalTitleTaskRunning,
     terminalTitlePreviewOverride,
-    // The strip is the shell's own chrome, not part of what `AppView` draws: it
-    // is pulled out here so it never reaches a component that has no row for it.
-    tabStrip: _tabStrip,
     ...appViewProps
   } = viewProps;
 

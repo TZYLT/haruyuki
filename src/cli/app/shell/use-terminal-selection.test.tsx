@@ -83,6 +83,7 @@ interface Harness {
 function mountSelection(options: {
   items: () => readonly StaticItem[];
   copied: string[];
+  pageActive?: boolean;
 }): Harness {
   const stdin = new Readable({ read() {} }) as NodeJS.ReadStream;
   stdin.isTTY = true;
@@ -95,6 +96,7 @@ function mountSelection(options: {
     useTerminalSelection({
       stream: stdout,
       items: options.items,
+      pageActive: options.pageActive === true,
       // The real command would overwrite this machine's clipboard.
       copyLocally: (text) => {
         options.copied.push(text);
@@ -208,6 +210,30 @@ describe("terminal selection", () => {
       // into the rows Ink drew.
       expect(out).toContain(`${INVERSE_ON}alpha bravo`);
       expect(out).toContain(`${INVERSE_ON}cha${ESC}[27mrlie delta`);
+    } finally {
+      shell.unmount();
+    }
+  });
+
+  test("a page holding the band turns selection off", async () => {
+    // P2: the band is not the transcript while a page is up, but this hook is
+    // mounted by the shell and outlives it. A press it claimed would start a drag
+    // over rows nobody is drawing — so it stands down, and the page's own rows
+    // (`use-mouse-rows`, the `page` layer) answer instead.
+    const copied: string[] = [];
+    const shell = mountSelection({
+      items: () => [ANSWER],
+      copied,
+      pageActive: true,
+    });
+    try {
+      setViewportRows(3);
+      await shell.press(LEFT_PRESS(1, 1));
+      await shell.send(LEFT_DRAG(3, 2), LEFT_RELEASE(3, 2));
+
+      expect(hasSelection()).toBe(false);
+      // And no highlight was spliced into the frame.
+      expect(shell.output()).not.toContain(INVERSE_ON);
     } finally {
       shell.unmount();
     }

@@ -385,12 +385,41 @@ export const commands: Record<string, Command> = {
     },
   },
   "/usage": {
-    desc: "Show session usage statistics and balance",
+    desc: "Open the Usage page (overview + breakdown)",
     order: 33,
     noArgs: true,
     handler: () => {
-      // Handled specially in App.tsx to display usage stats
-      return "Fetching usage statistics...";
+      // Handled specially in App.tsx: it switches the main area to the Usage tab.
+      return "Opening usage...";
+    },
+  },
+  "/tabs": {
+    desc: "List open tabs (switch with Enter, close with D)",
+    order: 32.9,
+    noArgs: true,
+    handler: () => {
+      // Handled specially in App.tsx: it raises the /tabs face.
+      return "Opening tabs...";
+    },
+  },
+  "/close": {
+    desc: "Close the current tab",
+    order: 32.8,
+    noArgs: true,
+    handler: () => {
+      // Handled specially in App.tsx: closing a tab is a view decision with a
+      // ruling behind it (busy / last tab), so it goes through the strip's own
+      // action rather than a second implementation.
+      return "Closing tab...";
+    },
+  },
+  "/settings": {
+    desc: "Open the Settings page",
+    order: 32.7,
+    noArgs: true,
+    handler: () => {
+      // Handled specially in App.tsx: it switches the main area to the Settings tab.
+      return "Opening settings...";
     },
   },
   "/context": {

@@ -4,6 +4,7 @@ import { Writable } from "node:stream";
 import { render } from "ink";
 import { resetTabsForTests } from "@/cli/app/tabs";
 import { commands } from "@/cli/commands/registry";
+import { visibleWidth } from "@/cli/helpers/ansi-scan";
 import {
   registerBindingOwner,
   resetBindingOwners,
@@ -165,29 +166,52 @@ describe("LeaderHint", () => {
 });
 
 describe("the idle hint line", () => {
-  test("a conversation offers sending, the mouse path and the leader", () => {
+  test("a conversation offers sending, the tab list and the leader", () => {
     const line = contextHint({ pageActive: false, mouseEnabled: true });
     expect(line).toContain("Enter 发送");
     expect(line).toContain("Shift+Enter 换行");
-    expect(line).toContain("拖拽选中");
+    // P2 registered the commands the design's copy names, so the row says them
+    // now: `/tabs` is the keyboard's way to change tabs.
+    expect(line).toContain("/tabs 标签");
     expect(line).toContain("ctrl+x ? 键位");
   });
 
-  test("without mouse reporting it drops what needs the mouse", () => {
+  test("without mouse reporting the row leads with the way back", () => {
     const line = contextHint({ pageActive: false, mouseEnabled: false });
     expect(line).toContain("Enter 发送");
+    expect(line).toContain("ctrl+x m 开鼠标");
     // Nothing tells the user to click when clicking does nothing.
     expect(line).not.toContain("点标签");
     expect(line).not.toContain("拖拽");
+    // The keyboard's own door to the strip survives with the mouse off.
+    expect(line).toContain("/tabs 标签");
+    expect(line).toContain("/close 关");
   });
 
   test("a page offers the way back, whichever input is available", () => {
     const withMouse = contextHint({ pageActive: true, mouseEnabled: true });
     expect(withMouse).toStartWith("点标签切换");
+    expect(withMouse).toContain("Esc 回会话");
     // With reporting off the leader's own toggle is the only way out of a page,
     // so that is what the row names.
     const withoutMouse = contextHint({ pageActive: true, mouseEnabled: false });
-    expect(withoutMouse).toContain("ctrl+x m 打开鼠标");
+    expect(withoutMouse).toContain("ctrl+x m 开鼠标");
+    expect(withoutMouse).toContain("Esc 回会话");
+  });
+
+  /**
+   * The row is one line at every width, and it is truncated rather than wrapped —
+   * so the leader hint has to survive the longest variant on the narrowest screen
+   * the shell supports (80 columns, 《38》§6.3's fold threshold).
+   */
+  test("the longest variant still shows the leader hint at 80 columns", () => {
+    const lines = [
+      contextHint({ pageActive: false, mouseEnabled: false }),
+      contextHint({ pageActive: true, mouseEnabled: false }),
+    ];
+    for (const line of lines) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(76);
+    }
   });
 
   /**

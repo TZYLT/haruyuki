@@ -1,7 +1,7 @@
 import { Box, useStdout } from "ink";
 import type { ReactNode } from "react";
 import type { AppViewProps } from "@/cli/app/AppView";
-import { PageShell } from "@/cli/app/shell/page-shell";
+import { PageHost } from "@/cli/app/pages/page-host";
 import { ShellFrame } from "@/cli/app/shell/ShellFrame";
 import { ContextSidebarScope } from "@/cli/app/shell/sidebar-scope";
 import { sidebarGeometry } from "@/cli/app/shell/sidebar-sections";
@@ -104,13 +104,16 @@ export function V2Shell(props: AppShellProps) {
       : Math.min(props.columns, inkColumns);
   const terminalRows = useTerminalRows();
   const geometry = sidebarGeometry(frameColumns, terminalRows);
+  // The tab row replaces the main area with a page when one is focused.
+  const pageIsActive = useActiveTabIsPage();
+  // The selection stands down while a page holds the band: there is no transcript
+  // text under the pointer, and it is the page's rows that answer a press now.
   useTerminalSelection({
     items: () => [...props.staticItems, ...props.liveItems],
     bandTopRow: TAB_STRIP_ROWS,
     bandColumns: geometry.bandColumns,
+    pageActive: pageIsActive,
   });
-  // The tab row replaces the main area with a page when one is focused.
-  const pageIsActive = useActiveTabIsPage();
 
   return (
     <FullScreenFrame>
@@ -121,7 +124,7 @@ export function V2Shell(props: AppShellProps) {
         <TabStrip {...props.tabStrip} frameColumns={frameColumns} />
         <ShellFrame
           {...props}
-          transcript={pageIsActive ? PageShell : V2Transcript}
+          transcript={pageIsActive ? PageHost : V2Transcript}
         />
       </ContextSidebarScope.Provider>
     </FullScreenFrame>

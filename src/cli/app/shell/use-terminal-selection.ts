@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { StaticItem } from "@/cli/app/types";
 import { getViewportRows } from "@/cli/app/viewport-scroll";
 import {
@@ -225,6 +225,16 @@ export interface TerminalSelectionOptions {
    * and is chrome, so a selection stops at this column (`0` = the whole width).
    */
   bandColumns?: number;
+  /**
+   * Whether a page is holding the main area instead of the transcript.
+   *
+   * A page replaces the band, so there is no transcript text under the pointer to
+   * drag over — but this hook outlives the band (it is mounted by the shell, the
+   * band is mounted by the core), and a press it claimed would start a selection
+   * over rows that are no longer drawn. It stands down instead, and the page owns
+   * every press inside the band (`app/pages/page-frame.tsx`).
+   */
+  pageActive?: boolean;
 }
 
 export function useTerminalSelection(
@@ -236,7 +246,13 @@ export function useTerminalSelection(
     copyLocally,
     bandTopRow = 0,
     bandColumns = 0,
+    pageActive = false,
   } = options;
+
+  // Read at event time: the page can open several frames after this effect ran,
+  // and a stale `false` here is a selection starting over a page.
+  const pageActiveRef = useRef(pageActive);
+  pageActiveRef.current = pageActive;
 
   // The offset is read by mouse reports and by the painter, both of which run
   // long after this effect, so setting it from an effect (rather than passing it
@@ -276,6 +292,11 @@ export function useTerminalSelection(
         if (getBandTopRow() > 0 && report.row <= getBandTopRow()) return false;
         // The wheel belongs to the scroll layer, which runs before this one.
         if (report.wheel) return false;
+        // A page owns the band: there is nothing of the transcript under the
+        // pointer to select, and the page's own rows are claimed before this
+        // layer anyway. Declining keeps this hook from ending a selection it
+        // never saw start — and from starting one over an unmounted band.
+        if (pageActiveRef.current) return false;
         if (report.kind === "press") {
           if (report.button !== "left") return false;
           // A press on the rail is a press on chrome: it ends a selection the way

@@ -22,8 +22,6 @@ import { CompactionOverlay } from "@/cli/components/CompactionOverlay";
 import { ConversationSelector } from "@/cli/components/ConversationSelector";
 import { ExperimentSelector } from "@/cli/components/ExperimentSelector";
 import { FeedbackDialog } from "@/cli/components/FeedbackDialog";
-import { HelpDialog } from "@/cli/components/HelpDialog";
-import { HooksManager } from "@/cli/components/HooksManager";
 import { Input } from "@/cli/components/InputRich";
 import { McpSelector } from "@/cli/components/McpSelector";
 import { MemfsTreeViewer } from "@/cli/components/MemfsTreeViewer";
@@ -38,7 +36,6 @@ import { PersonalitySelector } from "@/cli/components/PersonalitySelector";
 import { PinDialog } from "@/cli/components/PinDialog";
 import { ProviderSelector } from "@/cli/components/ProviderSelector";
 import { RecallOverlay } from "@/cli/components/RecallOverlay";
-import { SkillsDialog } from "@/cli/components/SkillsDialog";
 import { SleeptimeSelector } from "@/cli/components/SleeptimeSelector";
 import { SubagentManager } from "@/cli/components/SubagentManager";
 import { SystemPromptSelector } from "@/cli/components/SystemPromptSelector";
@@ -74,6 +71,7 @@ import type { QueuedMessage } from "@/utils/message-queue-bridge";
 import { ChromeHeightContext, useMeasuredChromeHeight } from "./chrome-height";
 import { ExitStats } from "./ExitStats";
 import { uid } from "./ids";
+import { SimpleOverlayRoutes } from "./simple-overlay-routes";
 import { queueOrRefuseSwitch } from "./switch-policy";
 import type {
   ActiveOverlay,
@@ -81,6 +79,7 @@ import type {
   AppLoadingState,
   QueuedOverlayAction,
   StaticItem,
+  TabStripProjection,
 } from "./types";
 
 type ModelSelectorOptions = {
@@ -106,6 +105,11 @@ type QueuedApprovalDecision = {
 
 export type AppViewProps = {
   activeOverlay: ActiveOverlay;
+  /**
+   * The strip's behaviour, shared with the `/tabs` face. Drawn by the full-screen
+   * shell only; the append shell has no row to attach it to.
+   */
+  tabStrip: TabStripProjection;
   agentId: string;
   agentName: string | null;
   agentState: AgentState | null | undefined;
@@ -434,6 +438,7 @@ export function AppView(props: AppViewRenderProps) {
     contextWindowSize,
     uiPermissionMode,
     updateAgentName,
+    tabStrip,
   } = props;
 
   const Transcript = props.transcript;
@@ -1274,18 +1279,13 @@ export function AppView(props: AppViewRenderProps) {
               />
             )}
 
-            {/* Help Dialog - conditionally mounted as overlay */}
-            {activeOverlay === "help" && <HelpDialog onClose={closeOverlay} />}
-
-            {/* Skills Dialog - browse available skills */}
-            {activeOverlay === "skills" && (
-              <SkillsDialog onClose={closeOverlay} agentId={agentId} />
-            )}
-
-            {/* Hooks Manager - for managing hooks configuration */}
-            {activeOverlay === "hooks" && (
-              <HooksManager onClose={closeOverlay} />
-            )}
+            {/* The faces with no wiring of their own: help, skills, hooks, tabs. */}
+            <SimpleOverlayRoutes
+              activeOverlay={activeOverlay}
+              onClose={closeOverlay}
+              agentId={agentId}
+              tabStrip={tabStrip}
+            />
 
             {/* Pin Dialog - for naming agent before pinning */}
             {activeOverlay === "pin" && (

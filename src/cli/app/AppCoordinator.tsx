@@ -54,7 +54,6 @@ import {
 import { refreshCustomCommands } from "@/cli/commands/custom";
 import {
   type CommandFinishedEvent,
-  type CommandHandle,
   createCommandRunner,
 } from "@/cli/commands/runner";
 import type { BtwState } from "@/cli/components/BtwPane";
@@ -217,6 +216,7 @@ import {
   hasConversationContent,
 } from "./startup-hints";
 import { switchConversationDirect } from "./submit-navigation-commands";
+import { useActiveTabIsPage } from "./tabs";
 import type {
   ActiveOverlay,
   AppProps,
@@ -233,6 +233,10 @@ import { useConversationTab } from "./use-conversation-tab";
 import { useFeedbackHandler } from "./use-feedback-handler";
 import { useInterruptHandler } from "./use-interrupt-handler";
 import { useEstimatedLiveHeight } from "./use-live-height";
+import {
+  type PendingOverlayCommand,
+  useOverlayCommands,
+} from "./use-overlay-commands";
 import { useQueuedApprovalSubmit } from "./use-queued-approval-submit";
 import { useReasoningCycle } from "./use-reasoning-cycle";
 import { useSubmitHandler } from "./use-submit-handler";
@@ -644,12 +648,7 @@ export function App({
 
   // Overlay/selector state - only one can be open at a time
   const [activeOverlay, setActiveOverlay] = useState<ActiveOverlay>(null);
-  const pendingOverlayCommandRef = useRef<{
-    overlay: ActiveOverlay;
-    command: CommandHandle;
-    openingOutput: string;
-    dismissOutput: string;
-  } | null>(null);
+  const pendingOverlayCommandRef = useRef<PendingOverlayCommand | null>(null);
   const memoryFilesystemInitializedRef = useRef(false);
   const memfsWatcherRef = useRef<ReturnType<
     typeof import("node:fs").watch
@@ -2311,88 +2310,21 @@ export function App({
     [recordCommandReminder, refreshDerived],
   );
 
-  const startOverlayCommand = useCallback(
-    (
-      overlay: ActiveOverlay,
-      input: string,
-      openingOutput: string,
-      dismissOutput: string,
-    ) => {
-      const pending = pendingOverlayCommandRef.current;
-      if (pending && pending.overlay === overlay) {
-        pending.openingOutput = openingOutput;
-        pending.dismissOutput = dismissOutput;
-        return pending.command;
-      }
-      const command = commandRunner.start(input, openingOutput);
-      pendingOverlayCommandRef.current = {
-        overlay,
-        command,
-        openingOutput,
-        dismissOutput,
-      };
-      return command;
-    },
-    [commandRunner],
-  );
-
-  const consumeOverlayCommand = useCallback((overlay: ActiveOverlay) => {
-    const pending = pendingOverlayCommandRef.current;
-    if (!pending || pending.overlay !== overlay) {
-      return null;
-    }
-    pendingOverlayCommandRef.current = null;
-    return pending.command;
-  }, []);
-
-  // Combines startOverlayCommand + setActiveOverlay — these are always called together.
-  const openOverlay = useCallback(
-    (
-      overlay: NonNullable<ActiveOverlay>,
-      input: string,
-      openingOutput: string,
-      dismissOutput: string,
-    ) => {
-      const cmd = startOverlayCommand(
-        overlay,
-        input,
-        openingOutput,
-        dismissOutput,
-      );
-      setActiveOverlay(overlay);
-      return cmd;
-    },
-    [startOverlayCommand],
-  );
-
-  // Combines consumeOverlayCommand + the UI-reset side of closeOverlay, but WITHOUT
-  // calling cmd.finish(dismissOutput). Use this when the overlay completed successfully
-  // and the caller will finish the command with a real result. Contrast with
-  // closeOverlay() (cancel path) which does finish with the dismiss message.
-  const completeOverlay = useCallback(
-    (overlay: NonNullable<ActiveOverlay>) => {
-      const cmd = consumeOverlayCommand(overlay);
-      setActiveOverlay(null);
-      setFeedbackPrefill("");
-      setSearchQuery("");
-      setModelSelectorOptions({});
-      setModelReasoningPrompt(null);
-      return cmd;
-    },
-    [consumeOverlayCommand],
-  );
-
-  useEffect(() => {
-    const pending = pendingOverlayCommandRef.current;
-    if (!pending || pending.overlay !== activeOverlay) {
-      return;
-    }
-    pending.command.update({
-      output: pending.openingOutput,
-      phase: "waiting",
-      dimOutput: true,
-    });
-  }, [activeOverlay]);
+  const {
+    consumeOverlayCommand,
+    openOverlay,
+    completeOverlay,
+    openTabsOverlay,
+  } = useOverlayCommands({
+    commandRunner,
+    pendingOverlayCommandRef,
+    activeOverlay,
+    setActiveOverlay,
+    setFeedbackPrefill,
+    setSearchQuery,
+    setModelSelectorOptions,
+    setModelReasoningPrompt,
+  });
 
   useEffect(() => {
     if (deferredCommitAt === null) return;
@@ -3685,6 +3617,10 @@ export function App({
     setStaticItems,
     setStaticRenderEpoch,
     setStreaming,
+    // The strip's `+N` marker opens the tab list (《38》§3.8). The face itself is
+    // mounted by `AppView`, which is why this is a callback rather than a state
+    // flag threaded through the switching hook.
+    openTabsOverlay,
     userCancelledRef,
   });
 
@@ -3777,6 +3713,7 @@ export function App({
     sessionStartFeedbackRef,
     sessionStatsRef,
     openOverlay,
+    tabStrip,
     setActiveOverlay,
     setAgentDescription,
     setAgentState,
@@ -4416,8 +4353,17 @@ export function App({
     trajectoryTokenDisplayRef.current,
   );
   const inputVisible = !showExitStats;
+  // A page in the main area takes the keyboard (`page` outranks `app`), so the
+  // composer must not also accept text: the raw layer still hands every key to
+  // Ink's text path after the router declines it, and that path only stops when
+  // the input is disabled. The page keeps the composer *drawn* (the frame's row
+  // budget assumes its line), which is why this is not `inputVisible`.
+  const pageOwnsMainArea = useActiveTabIsPage();
   const inputEnabled =
-    !showExitStats && pendingApprovals.length === 0 && !anySelectorOpen;
+    !showExitStats &&
+    pendingApprovals.length === 0 &&
+    !anySelectorOpen &&
+    !pageOwnsMainArea;
   const onEscapeCommandCancel = useCallback(() => {
     if (isActiveConnectOperationCancellable()) {
       cancelActiveConnectOperation();

@@ -50,13 +50,14 @@ import {
 /**
  * The one-line idle hint: what the current context's keys are.
  *
- * **It only names commands that exist.** Both the design's hint row (《38》§3.2) and
- * this one want `/tabs`, `/close` and `/settings` printed here, but those commands
- * are the `page` batch's (P2) — on a keyboard-only fallback a hint that resolves to
- * "unknown command" is worse than no hint, so the row says what the app can
- * actually do and P2 replaces the copy when the commands land. What it does *not*
- * leave out is the way back: with the mouse off and a page in the main area, the
- * leader's own mouse toggle is the only way out of it.
+ * **It only names commands that exist**, and as of P2 all three the design prints
+ * do: `/tabs` (the tab list), `/settings` (the Settings page) and `/close` (close
+ * this tab). The copy follows 《38》§3.2's frames; the one addition is `Esc 回会话`
+ * on a page, because a keyboard user who opens one has to be told how to leave it.
+ *
+ * With the mouse **off** the line leads with the toggle that turns it back on: a
+ * clickable strip whose pointer mode is off is a strip that looks broken, and the
+ * leader chord is the only way back — the same reason the page line repeats it.
  */
 export function contextHint(input: {
   pageActive: boolean;
@@ -64,15 +65,19 @@ export function contextHint(input: {
 }): string {
   const prefix = LEADER_KEY_CHORDS.activate.map(describeChord).join("/");
   const leader = `${prefix} ? 键位`;
-  const enableMouse = `${prefix} ${LEADER_KEY_CHORDS.toggleMouse[0].key} 打开鼠标`;
+  // Short on purpose: the row is one line at every width, and it is truncated
+  // rather than wrapped — so a label that grows past ~60 columns eats the leader
+  // hint itself, which is the only way to discover the other keys. `开鼠标` is the
+  // compromise between "打开鼠标上报" (accurate, too long) and `鼠标` (ambiguous).
+  const enableMouse = `${prefix} ${LEADER_KEY_CHORDS.toggleMouse[0].key} 开鼠标`;
   if (input.pageActive) {
     return input.mouseEnabled
-      ? `点标签切换 · ${leader}`
-      : `${enableMouse} · ${leader}`;
+      ? `点标签切换 · /tabs 标签 · Esc 回会话 · ${leader}`
+      : `${enableMouse} · /tabs 标签 · Esc 回会话 · ${leader}`;
   }
   return input.mouseEnabled
-    ? `Enter 发送 · Shift+Enter 换行 · 拖拽选中 · ${leader}`
-    : `Enter 发送 · Shift+Enter 换行 · ${leader}`;
+    ? `Enter 发送 · Shift+Enter 换行 · /tabs 标签 · ${leader}`
+    : `${enableMouse} · Enter 发送 · /tabs 标签 · /close 关 · ${leader}`;
 }
 
 /**

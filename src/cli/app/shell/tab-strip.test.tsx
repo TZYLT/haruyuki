@@ -1,11 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { clearAllSubagents } from "@/agent/subagent-state";
-import type { AppViewProps } from "@/cli/app/AppView";
-import { ChromeHeightContext } from "@/cli/app/chrome-height";
-import { PageShell } from "@/cli/app/shell/page-shell";
 import { TabStrip, tabStripColumns } from "@/cli/app/shell/tab-strip";
 import {
-  focusTab,
   openConversationTab,
   resetTabsForTests,
   setTabUnread,
@@ -27,12 +23,14 @@ function mountStrip(
   handlers: {
     onSelect?: (tabId: string) => void;
     onClose?: (tabId: string) => void;
+    onOverflow?: () => void;
   } = {},
 ) {
   return mountInkTty(
     <TabStrip
       onSelect={handlers.onSelect ?? (() => {})}
       onClose={handlers.onClose ?? (() => {})}
+      onOverflow={handlers.onOverflow ?? (() => {})}
     />,
     { columns, rows: 24 },
   );
@@ -70,27 +68,9 @@ function withQueriedColumns(
 }
 
 /**
- * A page's props, narrowed to what the panel below it reads.
- *
- * The page's own layout ignores the rest of `AppViewProps`; this is the same
- * narrowing `ViewportPanel`'s test makes, with the same fixture: an approval whose
- * tool call is not in any transcript.
+ * A page's props were pinned here until P2; the page frame's own frame tests
+ * (`app/pages/page-frame.test.tsx`) now judge them, beside the component.
  */
-const APPROVAL_PAGE_PROPS = {
-  currentApproval: {
-    toolCallId: "ap-1",
-    toolName: "MysteryTool",
-    toolArgs: JSON.stringify({ key: "value" }),
-  },
-  currentApprovalContext: undefined,
-  precomputedDiffsRef: { current: new Map() },
-  handleApproveCurrent: async () => {},
-  handleApproveAlways: async () => {},
-  handleDenyCurrent: async () => {},
-  handleCancelApprovals: () => {},
-  showApprovalPreview: true,
-} as unknown as AppViewProps;
-
 afterEach(() => {
   resetTabsForTests();
   resetInkTtyState();
@@ -180,26 +160,6 @@ describe("the tab strip frame", () => {
     }
   });
 
-  test("a page occupies the main area with the chrome's rows taken out", async () => {
-    openConversationTab("M6 shell", "M6 shell");
-    focusTab("settings");
-    const page = mountInkTty(
-      <ChromeHeightContext.Provider value={8}>
-        <PageShell {...({} as AppViewProps)} />
-      </ChromeHeightContext.Provider>,
-      { columns: 80, rows: 24 },
-    );
-    try {
-      const rows = await page.rows({ keepTrailingBlanks: true });
-      // 24 rows - 8 chrome - 2 for the strip's own rows.
-      expect(rows.length).toBe(14);
-      expect(rows[0]).toContain("Settings");
-      expect(rows.join("\n")).toContain("通用");
-    } finally {
-      page.stop();
-    }
-  });
-
   test("a console that reports a wider screen cannot push the row off the frame", async () => {
     // The first machine run: the console answered with the screen *buffer* width,
     // the strip laid the row out at that width, and the row wrapped by the
@@ -234,27 +194,5 @@ describe("the tab strip frame", () => {
     expect(tabStripColumns(100, 0)).toBe(100 - ROW_SAFETY_COLUMNS);
     // Nothing to lay out stays nothing.
     expect(tabStripColumns(1, 1)).toBe(0);
-  });
-
-  test("a page still shows the approval that is blocking the input", async () => {
-    // The approval surface lives under the transcript band, and a page replaces
-    // the band. Without the panel below it, a tool asking for permission while the
-    // user reads Settings would disable the input and draw nothing to answer — a
-    // session stuck on an invisible question.
-    openConversationTab("M6 shell", "M6 shell");
-    focusTab("settings");
-    const page = mountInkTty(
-      <ChromeHeightContext.Provider value={8}>
-        <PageShell {...APPROVAL_PAGE_PROPS} />
-      </ChromeHeightContext.Provider>,
-      { columns: 80, rows: 24 },
-    );
-    try {
-      const rows = await page.rows({ keepTrailingBlanks: true });
-      expect(rows[0]).toContain("Settings");
-      expect(rows.join("\n")).toContain("MysteryTool");
-    } finally {
-      page.stop();
-    }
   });
 });

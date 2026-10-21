@@ -148,6 +148,7 @@ function Shell({
         <TabStrip
           onSelect={() => {}}
           onClose={() => {}}
+          onOverflow={() => {}}
           frameColumns={TERMINAL_COLUMNS}
         />
         <Box flexDirection="column">

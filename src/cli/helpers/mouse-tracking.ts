@@ -39,9 +39,29 @@ export const MOUSE_TRACKING_ENABLE = "\u001B[?1000h\u001B[?1002h\u001B[?1006h";
 /** The same three modes, off, in reverse order. */
 export const MOUSE_TRACKING_DISABLE = "\u001B[?1006l\u001B[?1002l\u001B[?1000l";
 
+/**
+ * Any-motion reporting, which is what a *hover* needs (`1003`).
+ *
+ * It is a separate mode on purpose: `1002` reports motion only while a button is
+ * held (that is the drag), while `1003` reports every cell the pointer crosses.
+ * The ruling is that it is on **only while something can be hovered** — the slash
+ * popup, a page, a face (《38》§19.3 4) — because a terminal that streams motion at
+ * every mouse move is a terminal whose pointer is no longer cheap: the reports
+ * arrive continuously whether or not anyone moves, and every one of them is a
+ * keystroke's worth of work.
+ */
+export const MOUSE_HOVER_ENABLE = "\u001B[?1003h";
+
+/** Any-motion off. */
+export const MOUSE_HOVER_DISABLE = "\u001B[?1003l";
+
 let enabled = false;
 let currentStream: MouseTrackingStream | null = null;
 let exitHook: (() => void) | null = null;
+/** How many mounted surfaces want any-motion; the mode is on iff this is > 0. */
+let hoverClaims = 0;
+/** Whether `1003` is currently written, so a redundant write is not sent. */
+let hoverWritten = false;
 const listeners = new Set<() => void>();
 
 function write(stream: MouseTrackingStream, chunk: string): void {
@@ -106,6 +126,7 @@ export function enableMouseTracking(
     // reset — the hook covers the exits the app itself performs.
     process.once("exit", exitHook);
   }
+  syncHoverMode();
   publish();
   return true;
 }
@@ -114,12 +135,59 @@ export function enableMouseTracking(
 export function disableMouseTracking(): boolean {
   if (!enabled) return false;
   enabled = false;
+  const wasHover = hoverWritten;
+  hoverWritten = false;
   const stream = currentStream;
   currentStream = null;
-  if (stream) write(stream, MOUSE_TRACKING_DISABLE);
+  // `1003` goes only when it was actually asked for: a run that never hovered
+  // anything must hand back exactly the three modes it took, or every byte-level
+  // assertion of "the same modes, once" becomes a special case. When it *was* on it
+  // goes first, so the pointer stops being reported before the modes underneath it
+  // are released.
+  if (stream) {
+    write(
+      stream,
+      (wasHover ? MOUSE_HOVER_DISABLE : "") + MOUSE_TRACKING_DISABLE,
+    );
+  }
   debugWarn("mouse", "reporting off");
   publish();
   return true;
+}
+
+/**
+ * Ask for any-motion reporting while a hoverable surface is mounted.
+ *
+ * Reference-counted, because a page and its slash popup can both be open: the
+ * mode has to stay on until the last of them is gone. The returned function is
+ * idempotent so an effect cleanup that runs twice cannot underflow the count.
+ */
+export function acquireMouseHover(): () => void {
+  hoverClaims += 1;
+  syncHoverMode();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    hoverClaims = Math.max(0, hoverClaims - 1);
+    syncHoverMode();
+  };
+}
+
+/** Whether any-motion is on right now (diagnostics and tests). */
+export function isMouseHoverActive(): boolean {
+  return hoverWritten;
+}
+
+function syncHoverMode(): void {
+  // Any-motion without reporting is nothing: the mode only exists inside the
+  // window where the mouse is enabled, which is also what `Ctrl+X m` promises.
+  const want = enabled && hoverClaims > 0;
+  if (want === hoverWritten) return;
+  hoverWritten = want;
+  if (!currentStream) return;
+  write(currentStream, want ? MOUSE_HOVER_ENABLE : MOUSE_HOVER_DISABLE);
+  debugWarn("mouse", want ? "any-motion on" : "any-motion off");
 }
 
 /** Flip the mode and report the state it is in afterwards. */
@@ -138,6 +206,8 @@ export function toggleMouseTracking(
 export function resetMouseTrackingForTests(): void {
   enabled = false;
   currentStream = null;
+  hoverClaims = 0;
+  hoverWritten = false;
   if (exitHook) {
     process.off("exit", exitHook);
     exitHook = null;

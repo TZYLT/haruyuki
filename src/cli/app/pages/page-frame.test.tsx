@@ -1,0 +1,218 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { clearAllSubagents } from "@/agent/subagent-state";
+import type { AppViewProps } from "@/cli/app/AppView";
+import { ChromeHeightContext } from "@/cli/app/chrome-height";
+import { PageFrame } from "@/cli/app/pages/page-frame";
+import { PageHost } from "@/cli/app/pages/page-host";
+import type { PageBody } from "@/cli/app/pages/page-model";
+import {
+  focusTab,
+  getTabsState,
+  isPageTabId,
+  openConversationTab,
+  resetTabsForTests,
+} from "@/cli/app/tabs";
+import {
+  getViewportScrollRows,
+  resetViewportScroll,
+} from "@/cli/app/viewport-scroll";
+import { resetInputScopes } from "@/cli/helpers/focus-ledger";
+import { resetBindingOwners } from "@/cli/helpers/input-router";
+import { resetMouseHandlers } from "@/cli/helpers/mouse-router";
+import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
+import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
+
+/**
+ * The page frame, as it is painted.
+ *
+ * Three things can only be judged on the frame, and each of them has been wrong
+ * once already in this tree:
+ *
+ * 1. **A page still reserves the chrome's rows.** If it forgot them the composer
+ *    would be pushed off the bottom rather than the page being shortened.
+ * 2. **The approval the input is blocked on stays visible under it.** A page
+ *    replaces the band, not the panel; without the panel a permission request
+ *    arrives with the composer disabled and nothing to answer.
+ * 3. **A page that scrolls does not scroll the frame**: the body window is the
+ *    page's, the row count is constant.
+ */
+function mountPage(
+  pageId: "settings" | "usage",
+  chromeRows: number,
+  props: Partial<AppViewProps> = {},
+) {
+  // The panel under a page draws whatever subagents are *live*, and that module
+  // store outlives a test file: an agent left running by another suite would add
+  // rows under this page and the row count below would be about it instead.
+  clearAllSubagents();
+  openConversationTab("M6 shell", "M6 shell");
+  focusTab(pageId);
+  return mountInkTty(
+    <ChromeHeightContext.Provider value={chromeRows}>
+      <PageHost {...({ ...DEFAULT_PAGE_PROPS, ...props } as AppViewProps)} />
+    </ChromeHeightContext.Provider>,
+    { columns: 80, rows: 24 },
+  );
+}
+
+const DEFAULT_PAGE_PROPS = {
+  columns: 80,
+  conversationId: "M6 shell",
+} as unknown as AppViewProps;
+
+const APPROVAL_PAGE_PROPS = {
+  columns: 80,
+  conversationId: "M6 shell",
+  currentApproval: {
+    toolCallId: "ap-1",
+    toolName: "MysteryTool",
+    toolArgs: JSON.stringify({ key: "value" }),
+  },
+  currentApprovalContext: undefined,
+  precomputedDiffsRef: { current: new Map() },
+  handleApproveCurrent: async () => {},
+  handleApproveAlways: async () => {},
+  handleDenyCurrent: async () => {},
+  handleCancelApprovals: async () => {},
+  showApprovalPreview: true,
+} as unknown as AppViewProps;
+
+afterEach(() => {
+  resetTabsForTests();
+  resetInkTtyState();
+  clearAllSubagents();
+  resetMouseHandlers();
+  resetMouseTrackingForTests();
+  resetBindingOwners();
+  resetInputScopes();
+  resetViewportScroll();
+});
+
+describe("the page frame", () => {
+  test("a page occupies the main area with the chrome's rows taken out", async () => {
+    const page = mountPage("settings", 8);
+    try {
+      const rows = await page.rows({ keepTrailingBlanks: true });
+      // 24 rows - 8 chrome - 2 for the strip's own rows. The page's body is short
+      // enough to fit, so the band's height is visible as the frame's height.
+      expect(rows.length).toBe(14);
+      expect(rows[0]).toContain("Settings");
+      expect(rows.join("\n")).toContain("通用");
+    } finally {
+      page.stop();
+    }
+  });
+
+  test("the Usage tab shows the Usage page, not Settings", async () => {
+    const page = mountPage("usage", 8);
+    try {
+      const rows = await page.rows({ keepTrailingBlanks: true });
+      expect(rows[0]).toBe(" Usage");
+      expect(rows.join("\n")).toContain("概览");
+    } finally {
+      page.stop();
+    }
+  });
+
+  test("a page still shows the approval that is blocking the input", async () => {
+    // The approval surface lives under the transcript band, and a page replaces
+    // the band. Without the panel below it, a tool asking for permission while the
+    // user reads Settings would disable the input and draw nothing to answer — a
+    // session stuck on an invisible question.
+    const page = mountPage("settings", 8, APPROVAL_PAGE_PROPS);
+    try {
+      const rows = await page.rows({ keepTrailingBlanks: true });
+      expect(rows[0]).toContain("Settings");
+      expect(rows.join("\n")).toContain("MysteryTool");
+    } finally {
+      page.stop();
+    }
+  });
+
+  test("Escape goes back to the conversation", async () => {
+    const page = mountPage("settings", 8);
+    try {
+      await page.press("\u001B");
+      // The page tab is no longer the active one: the tab strip would draw the
+      // conversation again, which is the only visible consequence of the switch.
+      expect(isPageTabId(getTabsState().activeId)).toBe(false);
+      expect(getTabsState().activeId).toBe("M6 shell");
+    } finally {
+      page.stop();
+    }
+  });
+});
+
+/**
+ * A tall body, mounted directly rather than through `PageHost`: the two real pages
+ * are still placeholders, and the thing under test here is the frame's own
+ * scrolling — window, markers, and who owns the wheel.
+ */
+function mountTallBody() {
+  openConversationTab("M6 shell", "M6 shell");
+  const body: PageBody = {
+    title: "Scrolling",
+    rows: Array.from({ length: 40 }, (_, index) => ({
+      kind: "note" as const,
+      text: `row ${index}`,
+    })),
+  };
+  return mountInkTty(
+    <ChromeHeightContext.Provider value={8}>
+      <PageFrame
+        view={{ ...DEFAULT_PAGE_PROPS, conversationId: "M6 shell" }}
+        body={body}
+      />
+    </ChromeHeightContext.Provider>,
+    { columns: 80, rows: 24 },
+  );
+}
+
+describe("a page that overflows", () => {
+  test("it windows its body and says how many rows are hidden", async () => {
+    const page = mountTallBody();
+    try {
+      const rows = await page.rows({ keepTrailingBlanks: true });
+      // 24 - 8 chrome - 2 strip - 1 header = 13 body rows; two of them are the
+      // markers, so eleven body rows are drawn and the rest are counted.
+      expect(rows.filter((row) => row.includes("row ")).length).toBe(11);
+      expect(rows.join("\n")).toContain("↓ 29 more");
+      expect(rows.join("\n")).not.toContain("↑ ");
+    } finally {
+      page.stop();
+    }
+  });
+
+  test("the wheel scrolls the page, not the transcript behind it", async () => {
+    const page = mountTallBody();
+    try {
+      // A notch below the tab rows, inside the band. Code 65 is "wheel down"; 64
+      // is "wheel up", which would scroll a page already at its top.
+      await page.press(`${"\u001B"}[<65;10;6M`);
+      const rows = await page.rows({ keepTrailingBlanks: true });
+      expect(rows.join("\n")).toContain("↑ 3 more");
+      // The transcript's own offset never moved: the page claimed the notch on its
+      // own layer, which is consulted before the wheel's.
+      expect(getViewportScrollRows()).toBe(0);
+    } finally {
+      page.stop();
+    }
+  });
+
+  test("PgDn moves a screenful, and PgUp comes back", async () => {
+    const page = mountTallBody();
+    try {
+      await page.press("\u001B[6~");
+      const scrolled = (await page.rows({ keepTrailingBlanks: true })).join(
+        "\n",
+      );
+      expect(scrolled).toContain("↑ 12 more");
+
+      await page.press("\u001B[5~");
+      const back = (await page.rows({ keepTrailingBlanks: true })).join("\n");
+      expect(back).not.toContain("↑ ");
+    } finally {
+      page.stop();
+    }
+  });
+});

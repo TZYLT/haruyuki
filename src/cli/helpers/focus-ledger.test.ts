@@ -36,6 +36,27 @@ describe("focus ledger", () => {
     expect(owningInputScope()).toBe("app");
   });
 
+  test("a page sits between the overlay and the app", () => {
+    // 《38》§3.6: a page owns the main area, so `↑↓`/`PgUp`/`Esc` are its own and
+    // the composer behind it must not also act on them — but a confirm or a text
+    // editor popped *on* the page still takes the keyboard from it.
+    const releasePage = acquireInputScope("page");
+    expect(owningInputScope()).toBe("page");
+
+    const releaseOverlay = acquireInputScope("overlay");
+    expect(owningInputScope()).toBe("overlay");
+
+    const releaseModal = acquireInputScope("modal");
+    expect(owningInputScope()).toBe("modal");
+
+    releaseModal();
+    expect(owningInputScope()).toBe("overlay");
+    releaseOverlay();
+    expect(owningInputScope()).toBe("page");
+    releasePage();
+    expect(owningInputScope()).toBe("app");
+  });
+
   test("claims are ref-counted, so one release does not drop a shared scope", () => {
     const first = acquireInputScope("overlay");
     const second = acquireInputScope("overlay");

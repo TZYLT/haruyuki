@@ -57,6 +57,28 @@ function getCodexUserMessageBackground(): string {
 }
 
 /**
+ * The row a pointer is over (《38》§19.5).
+ *
+ * Lighter than `userMessage`'s tint on purpose: a pointer highlight is a
+ * *transient* "you are here", and at the user message's weight a bright row would
+ * read as selected. The mix follows the terminal's own background, so a light
+ * theme gets a darker tint rather than a white-on-white no-op — and a terminal
+ * that never answered the theme query (`getTerminalBackgroundColor` is `null`)
+ * still gets a usable value from the light/dark fallback.
+ */
+function getHoverBackground(): string {
+  const theme = getTerminalTheme();
+  const terminalBg =
+    getTerminalBackgroundColor() ??
+    (theme === "light" ? { r: 255, g: 255, b: 255 } : { r: 0, g: 0, b: 0 });
+  const overlay = isLightRgb(terminalBg)
+    ? { color: { r: 0, g: 0, b: 0 }, alpha: 0.06 }
+    : { color: { r: 255, g: 255, b: 255 }, alpha: 0.06 };
+
+  return rgbToHex(blendRgb(overlay.color, terminalBg, overlay.alpha));
+}
+
+/**
  * Convert a hex color (#RRGGBB) to an ANSI 24-bit background escape sequence.
  */
 export function hexToBgAnsi(hex: string): string {
@@ -295,6 +317,32 @@ export const colors = {
     return getTerminalTheme() === "light"
       ? _colors.shellSyntaxLight
       : _colors.shellSyntaxDark;
+  },
+
+  // Surface tints (rows the pointer is over, 《38》§19.5).
+  //
+  // A *second* background rather than a colour: the pointer only answers "which
+  // row", and a row that changed its foreground would look selected. Mixed from
+  // the terminal's own background so it holds on dark and light themes alike —
+  // the same construction `userMessage.background` uses. The ratio is the
+  // design's ~6% and P7's visual pass may retune it; no hex is written here.
+  get surface() {
+    return {
+      hoverBg: getHoverBackground(),
+    };
+  },
+
+  /**
+   * A group title inside a page (《38》§12.3bis 2).
+   *
+   * **One step closer to the background than body text, not a tint of it** —
+   * darker on a dark background, lighter on a light one. The ruling was explicit
+   * about that: a "near-inverse" light gray reads as a *selected* row on a dark
+   * terminal, and the cursor is never allowed on a header, so the two must not
+   * look alike.
+   */
+  get sectionHeader() {
+    return getTerminalTheme() === "light" ? "#9ca0b0" : "#6c7086";
   },
 
   // User messages (past prompts) - theme-aware background

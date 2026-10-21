@@ -201,7 +201,13 @@ export function installTerminalFrameCapture(stream: FrameStream): () => void {
     const result = originalWrite.call(this, chunk);
     // Our own highlight writes are decorations, not frames: reading them back
     // would make the selection copy its own inverse markers.
-    if (!painting) handleWrite(chunk);
+    //
+    // Only the **newest** captured stream is the screen. There is one terminal in
+    // production, but a test can mount a second tree without stopping the first,
+    // and an old tree that still repaints would otherwise overwrite the frame the
+    // live one is about to be read from — which is how a page test came to assert
+    // against a subagent panel that no longer existed.
+    if (!painting && capturedStream === stream) handleWrite(chunk);
     return result;
   };
 

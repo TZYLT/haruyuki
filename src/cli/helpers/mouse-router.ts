@@ -31,13 +31,21 @@ export type MouseHandler = (report: MouseReport) => boolean | void;
  * Which claim wins.
  *
  * `chrome` is the shell's own rows — the tab strip — which are drawn *outside*
- * the transcript band and are nobody else's business. `content` is everything
- * below: the wheel, the drag selection, and whatever a later milestone adds.
+ * the transcript band and are nobody else's business. `page` is a page holding
+ * the main area (Settings / Usage): its rows are not transcript rows, so a wheel
+ * notch or a click there is the page's, not the viewport's. `content` is
+ * everything below: the wheel, the drag selection, and whatever a later milestone
+ * adds.
+ *
+ * The three-tier order is the ruling in 《38》§19.4 — `chrome > page > content` —
+ * and it exists for the same reason the tab row is first: a page is drawn *over*
+ * the place the transcript would be, so the transcript must never act first on a
+ * report that landed inside the page.
  */
-export type MouseLayer = "chrome" | "content";
+export type MouseLayer = "chrome" | "page" | "content";
 
 /** Consultation order, highest first. Mirrors `INPUT_SCOPE_PRIORITY`. */
-const LAYER_ORDER: readonly MouseLayer[] = ["chrome", "content"];
+const LAYER_ORDER: readonly MouseLayer[] = ["chrome", "page", "content"];
 
 type Entry = { handler: MouseHandler; name: string };
 

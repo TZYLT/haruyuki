@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  acquireMouseHover,
   disableMouseTracking,
   enableMouseTracking,
+  isMouseHoverActive,
   isMouseTrackingEnabled,
+  MOUSE_HOVER_DISABLE,
+  MOUSE_HOVER_ENABLE,
   MOUSE_TRACKING_DISABLE,
   MOUSE_TRACKING_ENABLE,
   type MouseTrackingStream,
@@ -131,5 +135,71 @@ describe("mouse tracking", () => {
     resetMouseTrackingForTests();
     expect(process.listeners("exit").length).toBe(before);
     expect(isMouseTrackingEnabled()).toBe(false);
+  });
+});
+
+describe("any-motion for hovering", () => {
+  test("a hoverable surface asks for 1003, and gives it back", () => {
+    const stream = fakeStream();
+    enableMouseTracking(stream);
+
+    const release = acquireMouseHover();
+    expect(isMouseHoverActive()).toBe(true);
+    expect(stream.writes).toEqual([MOUSE_TRACKING_ENABLE, MOUSE_HOVER_ENABLE]);
+
+    release();
+    expect(isMouseHoverActive()).toBe(false);
+    expect(stream.writes).toEqual([
+      MOUSE_TRACKING_ENABLE,
+      MOUSE_HOVER_ENABLE,
+      MOUSE_HOVER_DISABLE,
+    ]);
+
+    // Idempotent: a cleanup that runs twice must not underflow the count and
+    // switch a second surface's mode off underneath it.
+    release();
+    expect(stream.writes.length).toBe(3);
+  });
+
+  test("two surfaces keep it on until the last one goes", () => {
+    const stream = fakeStream();
+    enableMouseTracking(stream);
+    const page = acquireMouseHover();
+    const popup = acquireMouseHover();
+    expect(stream.writes.filter((w) => w === MOUSE_HOVER_ENABLE).length).toBe(
+      1,
+    );
+
+    // The popup closes while the page is open: the mode stays.
+    popup();
+    expect(isMouseHoverActive()).toBe(true);
+    page();
+    expect(isMouseHoverActive()).toBe(false);
+  });
+
+  test("a claim made before the mouse is on writes nothing, then takes effect", () => {
+    const stream = fakeStream();
+    const release = acquireMouseHover();
+    expect(stream.writes).toEqual([]);
+
+    enableMouseTracking(stream);
+    expect(stream.writes).toEqual([MOUSE_TRACKING_ENABLE, MOUSE_HOVER_ENABLE]);
+    release();
+    disableMouseTracking();
+  });
+
+  test("Ctrl+X m off takes 1003 with it", () => {
+    const stream = fakeStream();
+    enableMouseTracking(stream);
+    acquireMouseHover();
+
+    disableMouseTracking();
+    expect(isMouseHoverActive()).toBe(false);
+    // The pointer stops being reported *before* the modes underneath are given
+    // back, and both are in the same write: a terminal left in 1003 after the app
+    // exits prints motion reports into the user's shell.
+    expect(stream.writes.at(-1)).toBe(
+      MOUSE_HOVER_DISABLE + MOUSE_TRACKING_DISABLE,
+    );
   });
 });

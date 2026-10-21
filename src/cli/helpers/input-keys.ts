@@ -12,13 +12,21 @@ import type { Key } from "ink";
  * listeners.
  *
  * Scopes are the priority chain from the design: an exclusive modal (an
- * approval, a mod dialog), an overlay (a selector or dialog route is open), the
- * app layer (composer plus transcript shortcuts), and a system layer that stays
- * available to everyone (suspend).
+ * approval, a mod dialog), an overlay (a selector or dialog route is open), a
+ * page (Settings / Usage, which own the main area), the app layer (composer plus
+ * transcript shortcuts), and a system layer that stays available to everyone
+ * (suspend).
+ *
+ * **`page` is above `app`, and that is the whole point of it** (《38》§3.6): while a
+ * page holds the main area its `↑↓`/`PgUp`/`Esc` are the page's, and the composer
+ * behind it must not also act on the same keys. It sits *below* `overlay` because
+ * a confirm or a text editor is popped on top of a page (《38》§12.3bis 6) and
+ * takes the keyboard from it.
  */
 export const INPUT_SCOPE_PRIORITY = [
   "modal",
   "overlay",
+  "page",
   "app",
   "system",
 ] as const;

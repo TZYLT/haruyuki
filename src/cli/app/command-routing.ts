@@ -31,6 +31,9 @@ const NON_STATE_COMMANDS = new Set([
   "/workflows", // read-only view of background workflow runs
   "/btw",
   "/usage",
+  "/tabs", // list open tabs: a view, not a state change
+  "/settings", // focus the Settings page: a view
+  "/close", // closes a *view*; the runtime refuses on its own while a turn runs
   "/help",
   "/hooks",
   "/search",

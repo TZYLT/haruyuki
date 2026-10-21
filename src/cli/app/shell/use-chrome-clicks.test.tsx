@@ -28,7 +28,7 @@ import { useChromeClicks } from "./use-chrome-clicks";
  * click and resolves to the rectangle the strip drew; a drag is not a click; and
  * the two blocking rules hold — an overlay that owns the keyboard also owns the
  * pointer, and a page's main area is not selectable text. The pure click window
- * is unit-tested in `chrome-click.test.ts`; what is left is the wiring, which is
+ * is unit-tested in `mouse-click.test.ts`; what is left is the wiring, which is
  * exactly the layer `src/cli/AGENTS.md` warns can be perfect and do nothing.
  */
 
@@ -48,14 +48,13 @@ const REGIONS: TabStripRegion[] = [
 type Harness = {
   selected: string[];
   closed: string[];
+  /** Times the collapsed `+N` asked for the tab list. */
+  overflow: number;
   /** Reports a later layer (the selection) would have seen. */
   late: string[];
 };
 
-function probe(
-  harness: Harness,
-  options: { overlay?: boolean; pageActive?: boolean } = {},
-) {
+function probe(harness: Harness, options: { overlay?: boolean } = {}) {
   return <Probe harness={harness} options={options} />;
 }
 
@@ -64,7 +63,7 @@ function Probe({
   options,
 }: {
   harness: Harness;
-  options: { overlay?: boolean; pageActive?: boolean };
+  options: { overlay?: boolean };
 }) {
   useInputRouter();
   useInputScopeClaim("overlay", options.overlay === true);
@@ -76,7 +75,9 @@ function Probe({
     onClose: (tabId) => {
       harness.closed.push(tabId);
     },
-    pageActive: options.pageActive === true,
+    onOverflow: () => {
+      harness.overflow += 1;
+    },
   });
   // A handler registered *after* the chrome layer, standing in for the selection:
   // it must not see the tail of a gesture the chrome layer already claimed.
@@ -95,8 +96,8 @@ function Probe({
   );
 }
 
-function mount(options: { overlay?: boolean; pageActive?: boolean } = {}) {
-  const harness: Harness = { selected: [], closed: [], late: [] };
+function mount(options: { overlay?: boolean } = {}) {
+  const harness: Harness = { selected: [], closed: [], late: [], overflow: 0 };
   const shell = mountInkTty(probe(harness, options), { columns: 80, rows: 24 });
   return { harness, shell };
 }
@@ -158,13 +159,17 @@ describe("a click on the tab row", () => {
     }
   });
 
-  test("a press in a page's main area starts no selection", async () => {
-    const { harness, shell } = mount({ pageActive: true });
+  test("a press below the tab row is left to the layer below", async () => {
+    // P2 moved a page's rows onto the `page` layer, right after this one, so the
+    // chrome must *decline* a press under its row instead of claiming the whole
+    // band (which is what P0 did when there was nothing else to claim it).
+    const { harness, shell } = mount();
     try {
-      beginSelection({ row: 5, column: 1 });
       await shell.press(press(4, 5), release(4, 5));
-      expect(hasSelection()).toBe(false);
       expect(harness.selected).toEqual([]);
+      expect(harness.late.filter((seen) => seen.startsWith("press"))).toEqual([
+        "press:5:4",
+      ]);
     } finally {
       shell.stop();
     }

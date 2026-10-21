@@ -39,6 +39,8 @@ type Harness = {
   switched: string[];
   /** Queued actions the deferral wrote. */
   queued: QueuedOverlayAction[];
+  /** Times the collapsed `+N` asked for the tab list. */
+  overflow: number;
   /** What `switchTo` answers next. */
   outcome: "switched" | "failed";
   busy: boolean;
@@ -49,6 +51,7 @@ function harness(conversationId: string): Harness {
     actions: undefined as unknown as ReturnType<typeof createTabStripActions>,
     switched: [],
     queued: [],
+    overflow: 0,
     outcome: "switched",
     busy: false,
   };
@@ -63,6 +66,9 @@ function harness(conversationId: string): Harness {
       return state.outcome === "switched"
         ? { status: "switched", message: `resumed ${target}` }
         : { status: "failed", message: `failed ${target}` };
+    },
+    openTabsOverlay: () => {
+      state.overflow += 1;
     },
   };
   state.actions = createTabStripActions(deps);

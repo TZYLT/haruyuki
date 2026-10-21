@@ -2,12 +2,8 @@
 
 import { Box, Text, useStdout } from "ink";
 import type { ReactNode } from "react";
-import {
-  allTabs,
-  type TabsState,
-  useActiveTabIsPage,
-  useTabsState,
-} from "@/cli/app/tabs";
+import { allTabs, type TabsState, useTabsState } from "@/cli/app/tabs";
+import type { TabStripProjection } from "@/cli/app/types";
 import { colors } from "@/cli/components/colors";
 import { ROW_SAFETY_COLUMNS } from "@/cli/display/statusline/formatting";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
@@ -24,7 +20,6 @@ import {
   type TabStripItem,
   type TabStripLayout,
 } from "./tab-strip-layout";
-import type { TabStripProjection } from "./types";
 import { useChromeClicks } from "./use-chrome-clicks";
 
 /**
@@ -163,6 +158,7 @@ function segmentsForText(layout: TabStripLayout): ReactNode {
 export function TabStrip({
   onSelect,
   onClose,
+  onOverflow,
   frameColumns,
 }: TabStripProjection & {
   /**
@@ -176,7 +172,6 @@ export function TabStrip({
   frameColumns?: number;
 }) {
   const state = useTabsState();
-  const pageActive = useActiveTabIsPage();
   const { stdout } = useStdout();
   const inkColumns =
     typeof stdout?.columns === "number" && stdout.columns > 0
@@ -213,7 +208,7 @@ export function TabStrip({
     regions: layout.regions,
     onSelect,
     onClose,
-    pageActive,
+    onOverflow,
   });
 
   return (

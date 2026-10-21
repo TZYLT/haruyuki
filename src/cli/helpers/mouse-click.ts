@@ -1,4 +1,4 @@
-// src/cli/app/shell/chrome-click.ts
+// src/cli/helpers/mouse-click.ts
 
 import type { MouseReport } from "@/cli/helpers/mouse-sequence";
 
@@ -8,11 +8,14 @@ import type { MouseReport } from "@/cli/helpers/mouse-sequence";
  * The mouse reports this app receives describe a *stream*: a press, then motion
  * while the button is held, then a release. A terminal has no click event, and the
  * selection layer already reads the same stream as a drag — so the rule that
- * separates them has to be one place, and it is here:
+ * separates them has to be one place. It lives here rather than next to the tab
+ * strip because two surfaces now aim with it: the shell's chrome rows and a
+ * surface's own rows (the slash popup, a page, a face — 《38》§19.2), and both must
+ * answer "was this a click?" the same way.
  *
- * - **The release lands on the same tab, give or take a cell.** `CLICK_SLOP_*` is
- *   the tolerance: a hand click is not a coordinate, and the terminal reports the
- *   pointer in cells while the user aims with pixels.
+ * - **The release lands on the same target, give or take a cell.** `CLICK_SLOP_*`
+ *   is the tolerance: a hand click is not a coordinate, and the terminal reports
+ *   the pointer in cells while the user aims with pixels.
  * - **Within `CLICK_MAX_MS`.** A slow press-and-release is a press the user
  *   changed their mind about; firing a tab switch on it would make the strip feel
  *   haunted.

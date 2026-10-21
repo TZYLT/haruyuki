@@ -2,7 +2,6 @@
 
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { showNotice } from "@/cli/helpers/notice";
-import type { TabStripProjection } from "./shell/types";
 import type { ConversationSwitchOutcome } from "./submit-navigation-commands";
 import { queueOrRefuseSwitch } from "./switch-policy";
 import {
@@ -11,7 +10,7 @@ import {
   isPageTabId,
   removeConversationTab,
 } from "./tabs";
-import type { QueuedOverlayAction } from "./types";
+import type { QueuedOverlayAction, TabStripProjection } from "./types";
 import { clearSelection } from "./viewport-selection";
 
 /**
@@ -54,6 +53,16 @@ export type TabStripActionDeps = {
   setQueuedOverlayAction: Dispatch<SetStateAction<QueuedOverlayAction>>;
   /** Load a conversation into the main area. */
   switchTo: (conversationId: string) => Promise<ConversationSwitchOutcome>;
+  /**
+   * Raise the `/tabs` face.
+   *
+   * The collapsed `+N` marker opens it (《38》§3.8) — the marker is the only thing
+   * on the row that stands for the tabs which are not drawn. It is a callback
+   * rather than something this module does itself: opening a face is the view's
+   * (it owns `activeOverlay`), and this module deliberately knows nothing about
+   * overlays.
+   */
+  openTabsOverlay: () => void;
 };
 
 export function createTabStripActions(
@@ -118,5 +127,5 @@ export function createTabStripActions(
     });
   }
 
-  return { onSelect, onClose };
+  return { onSelect, onClose, onOverflow: deps.openTabsOverlay };
 }

@@ -5,10 +5,7 @@ import {
   applySetMaxContext,
   formatSetMaxContextResult,
 } from "@/agent/max-context";
-import type { SessionStats } from "@/agent/stats";
 import { getAgentContextOverview } from "@/backend/api/agents";
-import { getBalanceMetadata } from "@/backend/api/metadata";
-import { formatUsageStats } from "@/cli/components/SessionStats";
 import {
   type ContextWindowOverview,
   renderContextUsage,
@@ -30,7 +27,6 @@ type DiagnosticsCommandContext = {
   currentModelId: string | null;
   effectiveContextWindowSize: number | undefined;
   llmConfigRef: MutableRefObject<LlmConfig | null>;
-  sessionStatsRef: MutableRefObject<SessionStats>;
   setAgentState: Dispatch<SetStateAction<AgentState | null | undefined>>;
   setCommandRunning: (value: boolean) => void;
   setConversationOverrideContextWindowLimit: Dispatch<
@@ -57,7 +53,6 @@ export async function handleDiagnosticsCommand(
     currentModelId,
     effectiveContextWindowSize,
     llmConfigRef,
-    sessionStatsRef,
     setAgentState,
     setCommandRunning,
     setConversationOverrideContextWindowLimit,
@@ -66,37 +61,10 @@ export async function handleDiagnosticsCommand(
     setLlmConfig,
   } = ctx;
 
-  if (trimmed === "/usage") {
-    const cmd = commandRunner.start(trimmed, "Fetching usage statistics...");
-
-    (async () => {
-      try {
-        const stats = sessionStatsRef.current.getSnapshot();
-        let balance:
-          | {
-              total_balance: number;
-              monthly_credit_balance: number;
-              purchased_credit_balance: number;
-              billing_tier: string;
-            }
-          | undefined;
-
-        try {
-          balance = await getBalanceMetadata();
-        } catch {
-          // Silently skip balance info if endpoint is not available.
-        }
-
-        cmd.finish(formatUsageStats({ stats, balance }), true, true);
-      } catch (error) {
-        cmd.fail(
-          `Error fetching usage: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    })();
-
-    return { submitted: true };
-  }
+  // `/usage` is no longer a diagnostic print: the M6 ruling moved it to the Usage
+  // page tab (`《38》§3.2`, "/usage 切到 Usage 页"), and `use-submit-handler` focuses
+  // the tab before this handler is reached. The balance/session-stat block that
+  // lived here is gone with it — it is P5's data, printed on a page.
 
   if (trimmed === "/context") {
     const contextWindow = effectiveContextWindowSize ?? 0;

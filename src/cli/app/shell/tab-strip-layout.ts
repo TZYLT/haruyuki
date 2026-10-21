@@ -89,18 +89,27 @@ export type TabStripSegment = {
   text: string;
   /** The tab this segment belongs to; absent for spacers and the `+N` marker. */
   id?: string;
-  /** Which part of the tab the segment is: its name, or its close hot zone. */
-  part?: "name" | "close";
+  /** Which part of the tab the segment is: its name, its close hot zone, or the `+N` marker. */
+  part?: "name" | "close" | "overflow";
   active?: boolean;
   unread?: boolean;
   /** Rendered with `dimColor` (inactive page tabs). */
   dim?: boolean;
 };
 
+/**
+ * The id the collapsed `+N` marker is clickable under.
+ *
+ * Not a tab id: the marker stands for the tabs that are *not* drawn, so there is
+ * no single id it could carry. The click handler treats this one value as "open
+ * the tab list" (《38》§3.8).
+ */
+export const TAB_OVERFLOW_ID = "tabs:overflow";
+
 /** A clickable rectangle: 1-based, inclusive, in screen columns. */
 export type TabStripRegion = {
   id: string;
-  part: "name" | "close";
+  part: "name" | "close" | "overflow";
   from: number;
   to: number;
 };
@@ -313,7 +322,12 @@ export function layoutTabStrip(
   });
   if (marker) {
     if (admitted.length > 0) segments.push({ text: " ".repeat(TAB_GAP) });
-    segments.push({ text: marker, dim: true });
+    segments.push({
+      text: marker,
+      id: TAB_OVERFLOW_ID,
+      part: "overflow",
+      dim: true,
+    });
   }
 
   const leftText = segments.map((segment) => segment.text).join("");

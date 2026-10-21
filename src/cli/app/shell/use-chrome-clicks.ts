@@ -1,10 +1,9 @@
 // src/cli/app/shell/use-chrome-clicks.ts
 
 import { useEffect, useRef } from "react";
-import { clearSelection } from "@/cli/app/viewport-selection";
 import { owningInputScope } from "@/cli/helpers/focus-ledger";
+import { createClickTracker } from "@/cli/helpers/mouse-click";
 import { registerMouseHandler } from "@/cli/helpers/mouse-router";
-import { createClickTracker } from "./chrome-click";
 import type { TabStripRegion } from "./tab-strip-layout";
 
 /**
@@ -21,15 +20,21 @@ import type { TabStripRegion } from "./tab-strip-layout";
  *
  * 1. **Chrome rows are claimed.** A press on the tab row is spent here — never
  *    offered to the selection, and never typed into the draft.
- * 2. **A click is decided by `chrome-click.ts`**, and only then does it resolve to
+ * 2. **A click is decided by `mouse-click.ts`**, and only then does it resolve to
  *    a region: the name switches, the `×` closes.
  * 3. **An open overlay or approval owns the pointer too.** The ruling is that the
  *    keyboard has one owner; a click that switched tabs out from under a selector
  *    would be the same defect through a different input, so a blocked scope is
  *    declined outright (2026-10-19 ruling).
- * 4. **While a page owns the main area, nothing there is text.** The transcript is
- *    not mounted, so a press in its place must not start a selection over whatever
- *    numbers the band last reported.
+ * 4. **A page's rows are not this layer's.** The transcript is not mounted while a
+ *    page owns the main area, so nothing there is text — but the page's *own*
+ *    clickable rows are claimed by the page (`use-mouse-rows.ts`) on the `page`
+ *    layer, which is consulted right after this one. Claiming the whole band here
+ *    (as P0 did, because there was nothing else to claim it) would swallow every
+ *    row the pages exist to offer. What keeps a press there from starting a
+ *    selection over numbers the band no longer draws is the selection layer
+ *    itself: it is switched off while a page is active (`use-terminal-selection`
+ *    `pageActive`).
  *
  * The handler is registered once and reads its inputs through a ref: the layout
  * changes on every title or resize, and re-registering a mouse handler mid-drag
@@ -45,8 +50,8 @@ export type ChromeClicksOptions = {
   onSelect: (tabId: string) => void;
   /** A click on a tab's `×`. */
   onClose: (tabId: string) => void;
-  /** Whether the main area is a page right now. */
-  pageActive: boolean;
+  /** A click on the collapsed `+N`: open the tab list. */
+  onOverflow: () => void;
 };
 
 /** The strip's label row. The rule under it is chrome that is not clickable. */
@@ -82,16 +87,12 @@ export function useChromeClicks(options: ChromeClicksOptions): void {
             tracker.current.press(report, Date.now());
             return true;
           }
-          if (latest.current.pageActive && report.row > TAB_ROW) {
-            clearSelection();
-            return true;
-          }
           return false;
         }
 
         if (report.kind === "move") {
           // A drag that began on the strip is not a click and not a selection: the
-          // whole gesture stays here, and `chrome-click.ts` decides at release
+          // whole gesture stays here, and `mouse-click.ts` decides at release
           // whether the pointer stayed close enough to count as a click.
           if (!tracker.current.isPending()) return false;
           tracker.current.move(report);
@@ -109,6 +110,7 @@ export function useChromeClicks(options: ChromeClicksOptions): void {
         const region = regionAt(latest.current.regions, point.column);
         if (!region) return true;
         if (region.part === "close") latest.current.onClose(region.id);
+        else if (region.part === "overflow") latest.current.onOverflow();
         else latest.current.onSelect(region.id);
         return true;
       },

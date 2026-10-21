@@ -126,6 +126,13 @@ type ConversationSwitchingContext = {
   setStaticItems: Dispatch<SetStateAction<StaticItem[]>>;
   setStaticRenderEpoch: Dispatch<SetStateAction<number>>;
   setStreaming: (value: boolean) => void;
+  /**
+   * Raise the `/tabs` face, for the strip's collapsed `+N` marker.
+   *
+   * Passed in rather than reached for: the face is the view's (it owns
+   * `activeOverlay`), and this hook only wires the strip's clicks.
+   */
+  openTabsOverlay: () => void;
   userCancelledRef: MutableRefObject<boolean>;
 };
 
@@ -178,6 +185,7 @@ export function useConversationSwitching(ctx: ConversationSwitchingContext) {
     setStaticRenderEpoch,
     setStreaming,
     userCancelledRef,
+    openTabsOverlay,
   } = ctx;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: conversation refs are stable objects; .current is read dynamically during the background turn.
@@ -884,6 +892,7 @@ export function useConversationSwitching(ctx: ConversationSwitchingContext) {
         conversationIdRef,
         isAgentBusy,
         setQueuedOverlayAction,
+        openTabsOverlay,
         switchTo: (conversationId) =>
           switchConversationDirect(
             {
@@ -914,6 +923,7 @@ export function useConversationSwitching(ctx: ConversationSwitchingContext) {
       agentState,
       isAgentBusy,
       setQueuedOverlayAction,
+      openTabsOverlay,
       conversationIdRef,
       buffersRef,
       contextTrackerRef,

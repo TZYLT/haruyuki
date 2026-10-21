@@ -77,6 +77,9 @@ function Shell({ earlySelection }: { earlySelection: boolean }) {
         onClose={(tabId) => {
           seen.push(`close:${tabId}`);
         }}
+        onOverflow={() => {
+          seen.push("overflow");
+        }}
       />
     </>
   );
