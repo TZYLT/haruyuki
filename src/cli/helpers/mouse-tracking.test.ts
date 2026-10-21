@@ -151,10 +151,15 @@ describe("any-motion for hovering", () => {
 
     release();
     expect(isMouseHoverActive()).toBe(false);
+    // The give-back re-states the three base modes in the same write: a terminal
+    // that keeps one mouse state behind the four VT modes (Windows Terminal does)
+    // drops to "off" on `?1003l`, so a bare disable leaves it reporting nothing while
+    // this process believes it is on. Reported from a real run: a page's hover
+    // release was followed by twelve seconds of silence.
     expect(stream.writes).toEqual([
       MOUSE_TRACKING_ENABLE,
       MOUSE_HOVER_ENABLE,
-      MOUSE_HOVER_DISABLE,
+      MOUSE_HOVER_DISABLE + MOUSE_TRACKING_ENABLE,
     ]);
 
     // Idempotent: a cleanup that runs twice must not underflow the count and

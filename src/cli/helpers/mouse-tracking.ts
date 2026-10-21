@@ -5,10 +5,10 @@ import { debugWarn } from "@/utils/debug";
  *
  * Ink 7 has no mouse support, so the modes are written straight to the terminal:
  *
- * - `1000` — button press and release;
- * - `1002` — the same, plus motion while a button is held: this is what makes a
+ * - `1000` ??button press and release;
+ * - `1002` ??the same, plus motion while a button is held: this is what makes a
  *   drag a drag instead of a single click;
- * - `1006` — SGR encoding, so coordinates past column 223 are expressible and
+ * - `1006` ??SGR encoding, so coordinates past column 223 are expressible and
  *   press/release are unambiguous.
  *
  * Two rules make this safe to switch on:
@@ -19,8 +19,7 @@ import { debugWarn } from "@/utils/debug";
  *    owning hook releases on unmount, and a `process` exit hook covers the exits
  *    that never unmount (double Ctrl+C, `/exit`).
  * 2. **Consent.** The mode is off unless someone asks for it, and `1002` steals
- *    the terminal's own text selection, so it is a *toggle* the user can flip —
- *    with the mouse off, shift-drag and the terminal's native selection work
+ *    the terminal's own text selection, so it is a *toggle* the user can flip ?? *    with the mouse off, shift-drag and the terminal's native selection work
  *    again. The toggle lives on the leader prefix.
  *
  * The module is a plain store (no React) for the same reason the input router
@@ -44,8 +43,8 @@ export const MOUSE_TRACKING_DISABLE = "\u001B[?1006l\u001B[?1002l\u001B[?1000l";
  *
  * It is a separate mode on purpose: `1002` reports motion only while a button is
  * held (that is the drag), while `1003` reports every cell the pointer crosses.
- * The ruling is that it is on **only while something can be hovered** — the slash
- * popup, a page, a face (《38》§19.3 4) — because a terminal that streams motion at
+ * The ruling is that it is on **only while something can be hovered** ??the slash
+ * popup, a page, a face (??8???9.3 4) ??because a terminal that streams motion at
  * every mouse move is a terminal whose pointer is no longer cheap: the reports
  * arrive continuously whether or not anyone moves, and every one of them is a
  * keystroke's worth of work.
@@ -115,8 +114,7 @@ export function enableMouseTracking(
   if (enabled) return false;
   // Not a TTY means no mode was written, and the caller cannot tell that apart
   // from "the user's terminal ignores mouse reports": every click then does
-  // nothing and there is no trace of why. One line in the session log names it —
-  // when a session log exists yet: the shell can mount before the session log is
+  // nothing and there is no trace of why. One line in the session log names it ??  // when a session log exists yet: the shell can mount before the session log is
   // initialised, in which case this line is dropped. The click trace in
   // `mouse-router.ts` is the one that is always there.
   if (stream.isTTY !== true) {
@@ -135,7 +133,7 @@ export function enableMouseTracking(
     // exit path in the app (the double Ctrl+C guard, `/exit`, Ink's own `exit()`)
     // reaches it. Signals that kill outright are out of its reach; the mode is
     // then restored by the next process that sets it, or by the user's terminal
-    // reset — the hook covers the exits the app itself performs.
+    // reset ??the hook covers the exits the app itself performs.
     process.once("exit", exitHook);
   }
   syncHoverMode();
@@ -177,8 +175,8 @@ export function disableMouseTracking(): boolean {
  * Reference-counted, for the same reason `acquireMouseHover` is: the app root is
  * keyed by `agentId:conversationId` (`index.ts`), so **every conversation switch
  * builds a new tree while the old one unmounts**. With a plain enable/disable pair
- * the two can interleave — the new shell asks while the old one has not released
- * yet, or the release lands after the new ask — and the last write wins. In the
+ * the two can interleave ??the new shell asks while the old one has not released
+ * yet, or the release lands after the new ask ??and the last write wins. In the
  * first case the terminal is left with the modes off while the live shell believes
  * it turned them on, which is exactly "the mouse dies after a tab operation, and
  * `Ctrl+X m` twice brings it back".
@@ -213,15 +211,15 @@ export function mouseTrackingOwners(): number {
  * Write the base modes again, if a shell still owns them.
  *
  * The terminal is a peer, not a variable: a full-screen redraw, an alt-screen
- * entry, a terminal-side reset — or any `1003` disable a surface writes on its way
- * out — can leave reporting off without this process ever deciding to. Re-asserting
+ * entry, a terminal-side reset ??or any `1003` disable a surface writes on its way
+ * out ??can leave reporting off without this process ever deciding to. Re-asserting
  * costs three short sequences and changes no state, so the shell does it at the two
  * moments a transition is visible to the user: a tab focus change, and a page
  * coming up or going away.
  *
  * If the module itself believes reporting is off while a shell still owns it and the
  * user still consents, that is the same divergence with the opposite sign, so it is
- * repaired here too — and logged, because it means some path disabled the mode
+ * repaired here too ??and logged, because it means some path disabled the mode
  * without releasing its claim.
  */
 export function syncMouseTracking(
@@ -292,7 +290,19 @@ function syncHoverMode(): void {
   if (want === hoverWritten) return;
   hoverWritten = want;
   if (!currentStream) return;
-  write(currentStream, want ? MOUSE_HOVER_ENABLE : MOUSE_HOVER_DISABLE);
+  // **Turning any-motion off is not "one mode less".** Windows Terminal keeps a
+  // *single* mouse state (`None` / `Click` / `Drag` / `Hover`) behind all four VT
+  // modes, so `?1003l` drops it to `None` ??the three modes underneath are gone
+  // with it, and the terminal goes back to its own selection while the app still
+  // believes it is reporting. A real run shows exactly that: a page's hover release
+  // writes `1003l`, and the next twelve seconds produce no press at all until the
+  // next tab switch re-asserts. ConPTY has the same shape. The base modes are
+  // therefore re-stated in the **same write**, so the last thing the terminal hears
+  // is still "reporting on" whenever it is.
+  write(
+    currentStream,
+    want ? MOUSE_HOVER_ENABLE : MOUSE_HOVER_DISABLE + MOUSE_TRACKING_ENABLE,
+  );
   debugWarn("mouse", want ? "any-motion on" : "any-motion off");
 }
 
