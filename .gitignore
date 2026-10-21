@@ -192,3 +192,6 @@ __pycache__/
 # Nix build outputs
 result
 result-*
+
+# Local agent scratch directories (not part of the repo)
+.commandcode/
