@@ -260,12 +260,26 @@ describe("ownership across a remount", () => {
     acquireMouseTracking(stream);
     const writes = stream.writes.length;
 
-    expect(syncMouseTracking()).toBe(true);
+    expect(syncMouseTracking(stream)).toBe(true);
     expect(stream.writes.slice(writes)).toEqual([MOUSE_TRACKING_ENABLE]);
     expect(isMouseTrackingEnabled()).toBe(true);
 
     // While the user has it off there is nothing to re-assert.
     toggleMouseTracking(stream);
-    expect(syncMouseTracking()).toBe(false);
+    expect(syncMouseTracking(stream)).toBe(false);
+  });
+
+  test("re-asserting repairs an off mode that still has an owner", () => {
+    const stream = fakeStream();
+    const release = acquireMouseTracking(stream);
+
+    // The divergence the real defect produced: the terminal (and the flag) are off
+    // while a mounted shell still wants reporting.
+    disableMouseTracking();
+    expect(isMouseTrackingEnabled()).toBe(false);
+
+    expect(syncMouseTracking(stream)).toBe(true);
+    expect(isMouseTrackingEnabled()).toBe(true);
+    release();
   });
 });

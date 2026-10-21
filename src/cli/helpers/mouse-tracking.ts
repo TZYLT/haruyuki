@@ -163,7 +163,10 @@ export function disableMouseTracking(): boolean {
       (wasHover ? MOUSE_HOVER_DISABLE : "") + MOUSE_TRACKING_DISABLE,
     );
   }
-  debugWarn("mouse", "reporting off");
+  debugWarn(
+    "mouse",
+    `reporting off${owners > 0 ? ` while ${owners} shell owner(s) still want it` : ""}`,
+  );
   publish();
   return true;
 }
@@ -207,15 +210,33 @@ export function mouseTrackingOwners(): number {
 }
 
 /**
- * Write the base modes again, if this process believes they are on.
+ * Write the base modes again, if a shell still owns them.
  *
  * The terminal is a peer, not a variable: a full-screen redraw, an alt-screen
- * entry or a terminal-side reset can clear reporting without telling us. Tab
- * operations are the moment that would show, so the shell re-asserts the modes
- * after each focus change — three short sequences, and no state change.
+ * entry, a terminal-side reset — or any `1003` disable a surface writes on its way
+ * out — can leave reporting off without this process ever deciding to. Re-asserting
+ * costs three short sequences and changes no state, so the shell does it at the two
+ * moments a transition is visible to the user: a tab focus change, and a page
+ * coming up or going away.
+ *
+ * If the module itself believes reporting is off while a shell still owns it and the
+ * user still consents, that is the same divergence with the opposite sign, so it is
+ * repaired here too — and logged, because it means some path disabled the mode
+ * without releasing its claim.
  */
-export function syncMouseTracking(): boolean {
-  if (!enabled || !currentStream) return false;
+export function syncMouseTracking(
+  stream: MouseTrackingStream = process.stdout,
+): boolean {
+  if (!consent || owners === 0) return false;
+  if (!enabled) {
+    debugWarn(
+      "mouse",
+      `reporting was off with ${owners} shell owner(s): re-enabling`,
+    );
+    enableMouseTracking(stream);
+    return true;
+  }
+  if (!currentStream) return false;
   write(currentStream, MOUSE_TRACKING_ENABLE);
   // Any-motion is a fourth mode and can be lost with the other three; a page that
   // is still up would otherwise stop hovering until it was remounted.

@@ -1,5 +1,9 @@
-import { useEffect } from "react";
-import { getTabsState, subscribeToTabs } from "@/cli/app/tabs";
+import { useEffect, useRef } from "react";
+import {
+  getTabsState,
+  subscribeToTabs,
+  useActiveTabIsPage,
+} from "@/cli/app/tabs";
 import { scrollTranscriptWheel } from "@/cli/app/viewport-scroll";
 import { LEADER_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { registerMouseHandler } from "@/cli/helpers/mouse-router";
@@ -51,9 +55,25 @@ export function useMouseInput(
       const activeId = getTabsState().activeId;
       if (activeId === lastActiveId) return;
       lastActiveId = activeId;
-      syncMouseTracking();
+      syncMouseTracking(stream);
     });
-  }, []);
+  }, [stream]);
+
+  // The other transition that can leave the terminal without reporting: a page
+  // coming up or going away. The page's own hover release writes `1003l` on its way
+  // out, and the frame it replaces is a very different one — reported from a real
+  // run as "the mouse dies when I open Usage or leave Settings". A parent's effect
+  // runs after the unmounted child's cleanup in the same commit, which is exactly
+  // the order needed: the re-assert is the last write. The first render is skipped:
+  // the acquire above already asked, and re-asserting there would write the modes
+  // twice on startup.
+  const pageIsActive = useActiveTabIsPage();
+  const previousPageActive = useRef(pageIsActive);
+  useEffect(() => {
+    if (previousPageActive.current === pageIsActive) return;
+    previousPageActive.current = pageIsActive;
+    syncMouseTracking(stream);
+  }, [pageIsActive, stream]);
 
   useEffect(() => {
     return registerMouseHandler(
