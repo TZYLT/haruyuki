@@ -168,6 +168,23 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
       (panelRows ?? 0) -
       reserveTopRows,
   );
+  // The band's height **as laid out**, not as asked for. `height` above comes from
+  // the chrome measured on the *previous* frame, so the frame that first draws a
+  // taller chrome (the composer's popup and its agent block appear in one keystroke)
+  // asks for more rows than are left, and the pinned frame makes Yoga take them back
+  // from the band. Everything inside the band — the clip rectangle, the rail's rows,
+  // and the window itself — has to follow the *laid-out* box, or it paints below the
+  // band's real bottom: the machine photographed a `/font-width` help line inside the
+  // input row, with the rail's divider running down the composer beside it.
+  //
+  // The measurement is a frame behind like the chrome's, but it **publishes**, so the
+  // correction is a frame that is scheduled by this state change rather than one
+  // waiting for the next keystroke — a stale frame is visible for as long as nothing
+  // else repaints, which is exactly how it was found. `Math.min` keeps a band that is
+  // taller than asked for (the chrome shrinking) from drawing rows the model did not
+  // count.
+  const { ref: bandRef, rows: measuredBandRows } = useMeasuredChromeHeight();
+  const bandHeight = Math.min(height, measuredBandRows ?? height);
 
   // Older history, paged in behind the resume window's cap. Subscribing to the rows
   // themselves — not to a version counter — is what re-renders this component when a
@@ -271,8 +288,8 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
     getViewportScrollVersion,
   );
   useEffect(() => {
-    setViewportRows(height);
-  }, [height]);
+    setViewportRows(bandHeight);
+  }, [bandHeight]);
 
   // Scroll keys belong to the transcript, so they are registered here: the
   // append-style shell has no viewport and therefore no scroll keys.
@@ -482,7 +499,7 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
         0,
         items.length - (olderBlockItems - olderPrefix),
       ),
-      height,
+      height: bandHeight,
       maxItems: MAX_VIEWPORT_ITEMS,
       scrollFromBottom: scrollRows,
       anchor: scrollAnchor,
@@ -515,7 +532,7 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
     return { ...fitted, debugRows };
   }, [
     items,
-    height,
+    bandHeight,
     layout,
     precomputedDiffs,
     currentApproval,
@@ -578,7 +595,7 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
     const top = props.reserveTopRows ?? 0;
     let blankTail = 0;
     if (frame) {
-      for (let row = top + height - 1; row > top; row -= 1) {
+      for (let row = top + bandHeight - 1; row > top; row -= 1) {
         if ((frame.lines[row] ?? "").trim().length > 0) break;
         blankTail += 1;
       }
@@ -592,10 +609,10 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
     const resident = window.resident;
     debugLog(
       "viewport",
-      `band=${height} blankTail=${blankTail} items=${items.length} prefix=${olderPrefix} pages=${olderBlocks.length} window=${window.start}..${window.end} offset=${window.contentOffset} fromBottom=${window.scrollFromBottom} anchor=${window.anchor.end}/${window.anchor.delta} resident=${resident === null ? "core" : `${resident.from}..${resident.to}`} rows=${window.debugRows?.join(",") ?? "-"}`,
+      `band=${bandHeight} blankTail=${blankTail} items=${items.length} prefix=${olderPrefix} pages=${olderBlocks.length} window=${window.start}..${window.end} offset=${window.contentOffset} fromBottom=${window.scrollFromBottom} anchor=${window.anchor.end}/${window.anchor.delta} resident=${resident === null ? "core" : `${resident.from}..${resident.to}`} rows=${window.debugRows?.join(",") ?? "-"}`,
     );
   }, [
-    height,
+    bandHeight,
     items.length,
     olderPrefix,
     olderBlocks.length,
@@ -720,6 +737,7 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
           the chrome, `ViewportPanel` — is `flexShrink={0}` for the same reason:
           a squeezed box reports a squeezed height. */}
       <Box
+        ref={bandRef}
         height={height}
         flexDirection={railWidth > 0 ? "row" : "column"}
         overflow="hidden"
@@ -743,7 +761,8 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
           flexDirection="column"
           flexShrink={0}
           width={railWidth > 0 ? bandColumns : undefined}
-          height={height}
+          height={bandHeight}
+          maxHeight="100%"
           overflow="hidden"
         >
           <Box
@@ -839,7 +858,11 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
             folded rail and a tall one are the same frame geometry, and the
             divider is the box's border rather than a glyph per line. */}
         {railWidth > 0 && (
-          <ContextSidebarSlot view={props} height={height} width={railWidth} />
+          <ContextSidebarSlot
+            view={props}
+            height={bandHeight}
+            width={railWidth}
+          />
         )}
       </Box>
 

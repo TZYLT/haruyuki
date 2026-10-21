@@ -132,9 +132,12 @@ function ChromeRows({ rows }: { rows: number }) {
 function Shell({
   chromeRows,
   items = [],
+  reportedChrome,
 }: {
   chromeRows: number;
   items?: StaticItem[];
+  /** Override the chrome height the band is told about (the frame it lags by). */
+  reportedChrome?: number;
 }) {
   const { ref, rows } = useMeasuredChromeHeight();
   const buffersRef = useRef(createBuffers());
@@ -148,7 +151,7 @@ function Shell({
           frameColumns={TERMINAL_COLUMNS}
         />
         <Box flexDirection="column">
-          <ChromeHeightContext.Provider value={rows}>
+          <ChromeHeightContext.Provider value={reportedChrome ?? rows}>
             <ViewportTranscript
               {...({
                 staticItems: items,
@@ -395,6 +398,94 @@ describe("the frame with the tab strip on it", () => {
         // rows are the same rows — the other half of what the machine showed.
         expect(frame[TAB_STRIP_ROWS]?.at(junction)).toBe("│");
         expect(frame.join("\n")).toContain("long ");
+      }
+    } finally {
+      unsubscribe();
+      instance.unmount();
+      instance.cleanup();
+      restore();
+    }
+  });
+
+  test("a band sized from a stale chrome is clipped at the band, not at the chrome", async () => {
+    // The machine's screenshot: the composer's popup and the agent-info block appear
+    // together (twelve rows at once) when the draft turns into a slash command, and a
+    // `/font-width` help line was painted *inside* the input row — only `> /` of the
+    // composer on top of it, while the two dividers cut the help lines above and below
+    // clean.
+    //
+    // The band is sized from the chrome measured on the **previous** frame
+    // (`chrome-height.ts`), so the frame that first draws the popup asks for a band
+    // twelve rows taller than the room left; the pinned frame makes Yoga take those
+    // rows back from the band. The band's clip box was `flexShrink={0}`, so it kept
+    // the taller rectangle and every transcript row below the squeezed band landed on
+    // the composer instead of being clipped — Ink clips against the innermost
+    // rectangle only (`output.js`: `clips.at(-1)`), so the box that gives way has to
+    // be the one holding the clip.
+    //
+    // `reportedChrome: 2` is that stale frame held still: the harness tells the band
+    // it has 26 rows while the chrome below it really takes 18.
+    openConversationTab("conv-1", "M6 shell");
+    const restore = resizeProcessStdout(TERMINAL_ROWS, TERMINAL_COLUMNS);
+    const stdout = new CaptureStream() as CaptureStream & NodeJS.WriteStream;
+    installTerminalFrameCapture(stdout);
+    const items: StaticItem[] = Array.from({ length: 3 }, (_, index) => ({
+      kind: "assistant",
+      id: `tall-${index}`,
+      // Indented past the chrome's own text. Ink writes only the cells a node
+      // covers — a row is a grid, not a string — so a transcript line that reaches
+      // further right than the composer's `> /` keeps its right-hand cells on the
+      // composer's row. That is the half-painted row the photograph shows.
+      text: Array.from(
+        { length: 12 },
+        (_, line) => `${" ".repeat(12)}tall ${index} line ${line}`,
+      ).join("\n"),
+      phase: "finished",
+    }));
+
+    const frames: string[][] = [];
+    const unsubscribe = subscribeToTerminalFrame(() => {
+      const frame = getTerminalFrame();
+      if (frame) frames.push([...frame.text]);
+    });
+
+    const grownChrome = 18;
+    const instance = render(
+      <Shell chromeRows={grownChrome} reportedChrome={2} items={items} />,
+      {
+        stdin: fakeStdin(),
+        stdout,
+        debug: false,
+        patchConsole: false,
+        exitOnCtrlC: false,
+        alternateScreen: true,
+      },
+    );
+
+    try {
+      await waitForRender();
+      await waitForRender();
+
+      expect(frames.length).toBeGreaterThan(0);
+      const chromeTop = TERMINAL_ROWS - grownChrome;
+      for (const frame of frames.slice(-3)) {
+        expect(frame.length).toBeLessThanOrEqual(TERMINAL_ROWS);
+        // The strip is still the first row: the frame is pinned to the terminal.
+        expect(frame[0]).toContain("Settings");
+        // And the chrome is on the frame at all — the band gives the rows up rather
+        // than pushing the composer past the bottom edge.
+        expect(frame.join("\n")).toContain(`chrome ${grownChrome - 1}`);
+        // And every chrome row belongs to the chrome. A transcript row below the
+        // band's last row is the defect the machine photographed.
+        expect(frame.slice(chromeTop).join("\n")).not.toContain("tall ");
+        // The rail is part of the band and has the same problem in the same frame:
+        // its rows are painted from the stale height, so the ledger line and the
+        // divider used to continue down over the composer as well.
+        expect(frame.slice(chromeTop).join("\n")).not.toContain("today");
+        // The band is not empty by accident: its own rows do carry the transcript.
+        expect(frame.slice(TAB_STRIP_ROWS, chromeTop).join("\n")).toContain(
+          "tall ",
+        );
       }
     } finally {
       unsubscribe();

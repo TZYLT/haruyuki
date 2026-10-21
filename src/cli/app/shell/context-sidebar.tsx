@@ -1,4 +1,4 @@
-﻿// src/cli/app/shell/context-sidebar.tsx
+// src/cli/app/shell/context-sidebar.tsx
 
 import { Box, Text } from "ink";
 import { useEffect, useState, useSyncExternalStore } from "react";
@@ -93,9 +93,15 @@ export function ContextSidebar({
     <Box
       width={blockWidth}
       height={rows}
+      // No clip of its own: the band that holds the rail is `overflow="hidden"` and
+      // is the rectangle the rail has to stay inside. Giving this box its own clip
+      // would make it the innermost one (`output.js`: `clips.at(-1)`) and then the
+      // rows painted from a *stale* band height — the frame the composer's popup
+      // appears on — would keep going down over the composer: the machine photographed
+      // the rail's divider running through the input row. The band's rectangle is the
+      // one that shrinks when the chrome grows, so it is the one that has to clip.
       flexDirection="column"
       flexShrink={0}
-      overflow="hidden"
     >
       {painted.map((row) => (
         <Text
