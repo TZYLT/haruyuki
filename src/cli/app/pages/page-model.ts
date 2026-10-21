@@ -29,11 +29,23 @@ export type PageRow =
       /** The key that acts on the row (`Space`, `←→`, `Enter`, `→`). */
       key?: string;
       /**
-       * A dim aside after the key — the settings page puts the row's scope here
-       * (`[G]`, `[agent]`, `[会话]`) or, when the row cannot be edited, the reason
-       * it cannot (《32》§5.3 requires the reason to be visible, not implied).
+       * A short aside in its own column — the settings page puts the row's scope
+       * here (`[Global]`, `[agent]`, `[conv]`).
+       *
+       * It is a column rather than the row's last cell because the first real run
+       * reported the marker as missing: a narrow terminal cut it, and a value
+       * pushed it to the edge.
        */
       hint?: string;
+      /**
+       * A dim-less aside after the value — painted in the command accent.
+       *
+       * The settings page puts "where to change this instead" here (`use /model`,
+       * `start or /reload`), separate from the value so a read-only row still says
+       * what its value is, and in the accent so it reads as an action rather than
+       * as part of the value.
+       */
+      note?: string;
       /** Rows that exist but cannot be acted on (disabled, or read-only). */
       disabled?: boolean;
     }

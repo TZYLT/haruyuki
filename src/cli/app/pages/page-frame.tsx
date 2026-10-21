@@ -468,7 +468,7 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
  * the header); the column still exists for pages that want one (`Usage` may).
  */
 const LABEL_COLUMN = 26;
-const SCOPE_COLUMN = 16;
+const SCOPE_COLUMN = 11;
 
 function PageRowLine({
   row,
@@ -503,16 +503,30 @@ function PageRowLine({
     ? truncateText(row.hint ?? "", SCOPE_COLUMN).padEnd(SCOPE_COLUMN)
     : "";
   const key = row.key === undefined ? "" : `  ${row.key}`;
-  const valueWidth = Math.max(
+  const available = Math.max(
     0,
     width - 2 - LABEL_COLUMN - terminalTextWidth(hint) - terminalTextWidth(key),
   );
+  // The aside ("use /model") is what tells a read-only row where to go instead, so
+  // it is reserved before the value rather than cut first; it never takes more than
+  // 60% of the row, and the value keeps at least a few cells.
+  const noteText = row.note ?? "";
+  const noteWidth = Math.min(
+    terminalTextWidth(noteText),
+    Math.max(0, Math.floor(available * 0.6)),
+  );
+  const valueWidth = Math.max(
+    0,
+    available - (noteWidth > 0 ? noteWidth + 2 : 0),
+  );
   const value = truncateText(row.value ?? "", valueWidth);
+  const note = noteWidth > 0 ? truncateText(noteText, noteWidth) : "";
   const used =
     2 +
     LABEL_COLUMN +
     terminalTextWidth(hint) +
     terminalTextWidth(value) +
+    (note === "" ? 0 : terminalTextWidth(note) + 2) +
     terminalTextWidth(key);
   const padding =
     background === undefined ? "" : " ".repeat(Math.max(0, width - used));
@@ -530,6 +544,11 @@ function PageRowLine({
       </Text>
       {hint !== "" && <Text dimColor>{hint}</Text>}
       {value !== "" && <Text>{value}</Text>}
+      {note !== "" && (
+        // The accent, not dim: this is "where you would go instead", and a dim
+        // sentence after a dim value was read as part of the value.
+        <Text color={colors.command.selected}>{`  ${note}`}</Text>
+      )}
       {key !== "" && <Text dimColor>{key}</Text>}
       {padding !== "" && <Text>{padding}</Text>}
     </Box>

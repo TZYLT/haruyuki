@@ -162,8 +162,10 @@ describe("the settings page", () => {
       const text = (await tty.rows()).join("\n");
       // The marker is what says where a value is written; it is a column now, so
       // it survives the width a value takes.
-      expect(text).toContain("[G]");
+      expect(text).toContain("[Global]");
       expect(text).toContain("[agent]");
+      // The longest marker is abbreviated rather than eating the value's cells.
+      expect(text).toContain("[conv]");
       expect(text).toContain("[agent]");
       // The header states the keys; the rows no longer repeat them.
       expect(text).toContain("↑↓ move");
@@ -281,7 +283,7 @@ describe("the settings page", () => {
       const screen = await tty.rows();
       expect(screen[0]).toContain("Settings / Permissions");
       expect(screen.join("\n")).toContain("Mode");
-      expect(screen.join("\n")).toMatch(/Write to\s+\[three-level\]\s+project/);
+      expect(screen.join("\n")).toMatch(/Write to\s+\[3-level\]\s+project/);
 
       await moveCursorTo(tty, "Allow");
       await tty.press(ENTER);

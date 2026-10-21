@@ -191,8 +191,8 @@ describe("rows", () => {
     const row = settingRow(item, CTX);
     if (row.kind !== "item") throw new Error("not an item row");
     expect(row.disabled).toBe(true);
-    expect(row.hint).toBe("[G]");
-    expect(row.value).toContain("start or /reload");
+    expect(row.hint).toBe("[Global]");
+    expect(row.note).toBe("start or /reload");
   });
 });
 
@@ -259,7 +259,7 @@ describe("values", () => {
     if (!agent || !session || !global) throw new Error("fixtures missing");
     expect(scopeMarker(agent)).toBe("[agent]");
     expect(scopeMarker(session)).toBe("[session]");
-    expect(scopeMarker(global)).toBe("[G]");
+    expect(scopeMarker(global)).toBe("[Global]");
   });
 });
 

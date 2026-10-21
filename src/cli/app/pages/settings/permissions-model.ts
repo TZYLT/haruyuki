@@ -149,7 +149,7 @@ export function permissionRows(input: {
       id: `${PERMISSION_ROW_PREFIX}scope`,
       label: "Write to",
       value: input.writeScope,
-      hint: "[three-level]",
+      hint: "[3-level]",
     },
     {
       kind: "note",

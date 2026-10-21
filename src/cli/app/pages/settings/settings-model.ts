@@ -146,23 +146,24 @@ export const PERMISSION_ROW_PREFIX = "perm:";
  *
  * 《38》§12.5 asks for `[G]`／`[P]`／`[L]`／`[env]`／`[session]`, and forbids pretending
  * every setting has three levels: an agent-scoped setting is written to the agent,
- * not to a file of the project's. The column has a fixed width because the marker
- * used to be the row's last cell — which is the first thing a narrow terminal cut,
- * so it was reported as missing.
+ * not to a file of the project's. The first real run asked for the abbreviations to
+ * be spelled out (`[G]` → `[Global]`) and for the longest one to be shortened
+ * (`[conversation]` → `[conv]`): the column is fixed width, so a label that needs 14
+ * cells either starves the value or gets cut.
  */
 export function scopeMarker(item: SettingsItem): string {
   if (item.persistence === "session") return "[session]";
   switch (item.scope) {
     case "global":
-      return "[G]";
+      return "[Global]";
     case "project":
-      return "[P]";
+      return "[Project]";
     case "local":
-      return "[L]";
+      return "[Local]";
     case "agent":
       return "[agent]";
     case "conversation":
-      return "[conversation]";
+      return "[conv]";
     case "model":
       return "[model]";
     case "session":
@@ -263,21 +264,23 @@ export function itemsOfGroup(
 }
 
 /**
- * One row for a scalar: the scope in its own column, then the value.
+ * One row for a scalar: the scope in its own column, the value, then the aside.
  *
- * A read-only row puts the *reason* where the value is, after what the value is, so
- * the row answers both questions a user has about a dimmed line ("what is it now?"
- * and "why can't I change it?") in one place — the scope column stays the scope.
+ * A read-only row puts *why* in `note` — `use /model`, `start or /reload` — which
+ * the frame paints in the command accent so the pointer or the eye can tell "this is
+ * where you would go instead" from "this is the value". Keeping it out of the value
+ * means the value stays a value; keeping it out of the scope column means a narrow
+ * terminal cannot cut it into illegibility.
  */
 export function settingRow(item: SettingsItem, ctx: SettingsContext): PageRow {
-  const raw = item.read(ctx);
-  const value = displayValue(item, raw);
   return {
     kind: "item",
     id: item.id,
     label: item.label,
-    value: item.editable ? value : `${value} · ${item.reason ?? ""}`.trim(),
+    value: displayValue(item, item.read(ctx)),
     hint: scopeMarker(item),
+    // The schema's `reason` already says where to go instead ("use /model").
+    note: item.editable ? undefined : (item.reason ?? "read-only"),
     disabled: !item.editable,
   };
 }
