@@ -1,5 +1,6 @@
 import type { EventEmitter } from "node:events";
 import { debugLog } from "@/utils/debug";
+import { claimAmbiguousWidthReply } from "./ambiguous-width-probe";
 import { consultedInputScopes } from "./focus-ledger";
 import type { KeyBinding, KeyBindingTable, KeyEvent } from "./input-keys";
 import { describeChord, matchingBindings } from "./input-keys";
@@ -305,6 +306,12 @@ export function installInputRouter(
       payload = filterRawInput(raw, platform);
       // A dropped payload is the terminal echoing a keystroke already delivered.
       if (payload === null) return true;
+      // The cursor-position report the width probe asks for (`ambiguous-width-
+      // probe.ts`). Same rule as the mouse reports below, and the same failure if it
+      // is missed: Ink has no parser for it, so `[1;3R` is *typed* into the draft.
+      // Claiming the shape is unconditional — a reply to a query this app no longer
+      // remembers is still not text.
+      if (claimAmbiguousWidthReply(payload)) return true;
       // Mouse reports are read here, before the key path, and are spent here
       // whether or not anything acts on them. Ink has no mouse API: an unread
       // report is not ignored, it is *typed* — a wheel notch or a click lands in

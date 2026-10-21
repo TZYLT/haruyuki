@@ -15,6 +15,7 @@
         "@shikijs/langs": "4.0.2",
         "cron-parser": "^5.6.1",
         "cross-spawn": "^7.0.6",
+        "get-east-asian-width": "^1.7.0",
         "glob": "^13.0.0",
         "ink": "7.1.1",
         "ink-link": "^5.0.0",

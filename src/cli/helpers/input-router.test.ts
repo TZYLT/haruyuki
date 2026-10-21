@@ -705,4 +705,18 @@ describe("mouse reports in the router", () => {
     expect(legacy).toEqual([]);
     uninstall();
   });
+
+  test("the width probe's cursor report is spent, not typed", () => {
+    // The other sequence this app asks a terminal a question with
+    // (`ambiguous-width-probe.ts`): a reply Ink has no parser for reaches this
+    // router as input, and an unclaimed `[1;3R` would be typed into the draft
+    // exactly like an unread mouse report.
+    const { emitter, legacy, uninstall } = harness(shells(() => true));
+    registerMouseHandler(() => true);
+
+    emitter.emit("input", `${ESC}[1;3R`);
+
+    expect(legacy).toEqual([]);
+    uninstall();
+  });
 });
