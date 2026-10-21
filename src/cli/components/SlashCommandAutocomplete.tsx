@@ -1,6 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { Box, type DOMElement } from "ink";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { commands } from "@/cli/commands/registry";
+import { useRowHovered } from "@/cli/helpers/hover-store";
 import { truncateText } from "@/cli/helpers/truncate-text";
+import { useMouseRows } from "@/cli/helpers/use-mouse-rows";
 import { useAutocompleteNavigation } from "@/cli/hooks/use-autocomplete-navigation";
 import {
   useTerminalRows,
@@ -235,7 +238,7 @@ export function SlashCommandAutocomplete({
     };
   }, [queryInfo, allCommands]);
 
-  const { selectedIndex } = useAutocompleteNavigation({
+  const { selectedIndex, setSelectedIndex } = useAutocompleteNavigation({
     matches,
     onSelect: onSelect ? (item) => onSelect(item.cmd) : undefined,
     onAutocomplete: onAutocomplete
@@ -292,30 +295,26 @@ export function SlashCommandAutocomplete({
   );
   const showScrollDown = startIndex + visibleCommandCount < totalMatches;
 
+  // A click is that row's `Enter` (《38》§19.2): it moves the cursor onto the row
+  // it landed on and then runs the *same* callback the `return` binding runs, with
+  // the row as the argument — never through the cursor state, which the next
+  // render would still be showing on the previous row.
+  const acceptCommand = (index: number): void => {
+    const item = matches[index];
+    if (!item) return;
+    setSelectedIndex(index);
+    onSelect?.(item.cmd);
+  };
+
   return (
     <AutocompleteBox>
-      {visibleMatches.map((item, idx) => {
-        const actualIndex = startIndex + idx;
-
-        // Keep the footer height stable while navigating by forcing a single-line
-        // representation for each row.
-        const displayCmd = truncateText(item.cmd, CMD_COL_WIDTH).padEnd(
-          CMD_COL_WIDTH,
-        );
-        // 2-char gutter comes from <AutocompleteItem />.
-        const maxDescWidth = Math.max(0, columns - 2 - CMD_COL_WIDTH - 1);
-        const displayDesc = truncateText(item.desc, maxDescWidth);
-
-        return (
-          <AutocompleteItem
-            key={item.cmd}
-            selected={actualIndex === selectedIndex}
-          >
-            {displayCmd}{" "}
-            <Text dimColor={actualIndex !== selectedIndex}>{displayDesc}</Text>
-          </AutocompleteItem>
-        );
-      })}
+      <CommandRows
+        items={visibleMatches}
+        startIndex={startIndex}
+        selectedIndex={selectedIndex}
+        columns={columns}
+        onActivate={acceptCommand}
+      />
       {showScrollDown ? (
         <Text dimColor>
           {"  "}↓ {totalMatches - startIndex - visibleCommandCount} more below
@@ -324,5 +323,100 @@ export function SlashCommandAutocomplete({
         <Text> </Text>
       ) : null}
     </AutocompleteBox>
+  );
+}
+
+/** The popup's rows area in the hover store (`use-mouse-rows.ts`). */
+const AUTOCOMPLETE_AREA = "autocomplete";
+
+/**
+ * The rows the pointer can aim at, and nothing else.
+ *
+ * A block of its own rather than the whole `AutocompleteBox`: the "↓ N more below"
+ * footer is drawn under the rows and is not a command, so a click there must not
+ * run the last row. The geometry is measured from this box at event time
+ * (`use-mouse-rows.ts`), which is also why the window offset is applied here — the
+ * box's row 0 is list row `startIndex`, not row 0.
+ *
+ * `chrome` layer: the popup is drawn in the bottom chrome, and a press here must
+ * not be offered to the transcript's selection underneath it.
+ */
+function CommandRows({
+  items,
+  startIndex,
+  selectedIndex,
+  columns,
+  onActivate,
+}: {
+  items: readonly CommandMatch[];
+  startIndex: number;
+  selectedIndex: number;
+  columns: number;
+  onActivate: (index: number) => void;
+}) {
+  const rowsRef = useRef<DOMElement | null>(null);
+  useMouseRows({
+    area: AUTOCOMPLETE_AREA,
+    ref: rowsRef,
+    rowCount: items.length,
+    activate: (index) => onActivate(startIndex + index),
+    layer: "chrome",
+  });
+
+  return (
+    <Box ref={rowsRef} flexDirection="column">
+      {items.map((item, idx) => (
+        <CommandRow
+          key={item.cmd}
+          item={item}
+          index={idx}
+          columns={columns}
+          selected={startIndex + idx === selectedIndex}
+        />
+      ))}
+    </Box>
+  );
+}
+
+/**
+ * One row, with its own hover subscription: a pointer moving across the list
+ * re-renders the two rows involved, not the popup (《38》§19.3.5).
+ *
+ * The one-line geometry lives here because the hover background has to reach the
+ * end of the row to read as a row: the description is padded to the width the row
+ * has left, and only while hovered (the padding is invisible otherwise, and a
+ * frame would see trailing spaces where no row used to have any).
+ */
+function CommandRow({
+  item,
+  index,
+  columns,
+  selected,
+}: {
+  item: CommandMatch;
+  index: number;
+  columns: number;
+  selected: boolean;
+}) {
+  const hovered = useRowHovered(AUTOCOMPLETE_AREA, index);
+
+  // Keep the footer height stable while navigating by forcing a single-line
+  // representation for each row.
+  const displayCmd = truncateText(item.cmd, CMD_COL_WIDTH).padEnd(
+    CMD_COL_WIDTH,
+  );
+  // 2-char gutter comes from <AutocompleteItem />.
+  const maxDescWidth = Math.max(0, columns - 2 - CMD_COL_WIDTH - 1);
+  const displayDesc = truncateText(item.desc, maxDescWidth);
+  const pad =
+    hovered && !selected
+      ? " ".repeat(Math.max(0, maxDescWidth - displayDesc.length))
+      : "";
+
+  return (
+    <AutocompleteItem selected={selected} hovered={hovered}>
+      {displayCmd} <Text dimColor={!selected}>{displayDesc}</Text>
+      {pad}
+    </AutocompleteItem>
   );
 }

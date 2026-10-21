@@ -170,7 +170,9 @@ function TabLine({
   return (
     <Box
       flexDirection="row"
-      backgroundColor={hovered ? colors.surface.hoverBg : undefined}
+      // Selection wins (《38》§19.3.2): the cursor row keeps its `> ` + colour and
+      // does not also take the hover background, so the two signals never stack.
+      backgroundColor={hovered && !cursor ? colors.surface.hoverBg : undefined}
     >
       <Text color={cursor ? colors.selector.itemHighlighted : undefined}>
         {cursor ? "> " : "  "}

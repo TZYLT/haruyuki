@@ -22,6 +22,16 @@ interface UseAutocompleteNavigationOptions<T> {
 interface UseAutocompleteNavigationResult {
   /** Currently selected index */
   selectedIndex: number;
+  /**
+   * Put the cursor on an index without running anything.
+   *
+   * The pointer needs this: a click moves the cursor to the row it landed on and
+   * *then* runs that row's `Enter` (《38》§19.2), and it must not wait for the next
+   * render to do so. The accepting half stays the caller's `onSelect` — this hook
+   * owns no execution path of its own, and the click calls the same callback the
+   * `return` binding below calls.
+   */
+  setSelectedIndex: (index: number) => void;
 }
 
 /**
@@ -142,5 +152,5 @@ export function useAutocompleteNavigation<T>({
 
   useKeyBindings("autocomplete-navigation", [{ scope: "app", bindings }]);
 
-  return { selectedIndex };
+  return { selectedIndex, setSelectedIndex };
 }

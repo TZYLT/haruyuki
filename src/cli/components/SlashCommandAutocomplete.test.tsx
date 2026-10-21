@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { getHoverTarget, resetHoverForTests } from "@/cli/helpers/hover-store";
+import { resetBindingOwners } from "@/cli/helpers/input-router";
+import { resetMouseHandlers } from "@/cli/helpers/mouse-router";
+import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
 import {
   type InkTty,
   mountInkTty,
@@ -89,7 +93,116 @@ async function frame(
   }
 }
 
-afterEach(resetInkTtyState);
+afterEach(() => {
+  resetInkTtyState();
+  resetMouseHandlers();
+  resetHoverForTests();
+  resetMouseTrackingForTests();
+  resetBindingOwners();
+});
+
+describe("the popup's pointer", () => {
+  /**
+   * The mouse half of the popup (《38》§19.1, the P2 row): a click *is* that row's
+   * `Enter`, and hover is the row under the pointer.
+   *
+   * Judged on the frame for the geometry and on the callback for the action: the
+   * popup sits in the bottom chrome, so its rows are screen rows and the test's
+   * coordinates are the ones the terminal would report. What the frame cannot see
+   * is the hover *colour* (the test process has no colour), so the store is read —
+   * which is the half a move writes.
+   */
+  const ESC = "\u001B";
+  const pressAt = (column: number, row: number) =>
+    `${ESC}[<0;${column};${row}M`;
+  const releaseAt = (column: number, row: number) =>
+    `${ESC}[<0;${column};${row}m`;
+  const moveTo = (column: number, row: number) =>
+    `${ESC}[<35;${column};${row}M`;
+
+  function mountPointer(
+    input: string,
+    modCommands: Record<string, ModCommandAutocompleteItem>,
+  ): { selected: string[]; tty: InkTty } {
+    const selected: string[] = [];
+    const tty = mountInkTty(
+      <SlashCommandAutocomplete
+        currentInput={input}
+        cursorPosition={input.length}
+        onSelect={(command) => {
+          selected.push(command);
+        }}
+        onAutocomplete={() => {}}
+        modCommands={modCommands}
+      />,
+      { columns: 100, rows: 40 },
+    );
+    return { selected, tty };
+  }
+
+  test("a click on a row runs that row's Enter", async () => {
+    const { selected, tty } = mountPointer("/zmod", MANY);
+    try {
+      await settle();
+      // Screen row 2 is the second row of the popup, whose first row is row 1.
+      await tty.press(pressAt(4, 2), releaseAt(4, 2));
+      expect(selected).toEqual(["/zmod-02"]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a click lands on the row the window is showing, not on its screen number", async () => {
+    const { selected, tty } = mountPointer("/zmod", MANY);
+    try {
+      await settle();
+      // Eight steps put the cursor on the fifth fixture and slide the window to
+      // `zmod-05`…, which is what the frame already pins. The first screen row is
+      // therefore list row 4, and clicking it must run *that* command.
+      for (let step = 0; step < 8; step += 1) {
+        await tty.press(DOWN);
+        await settle(40);
+      }
+      const rows = await tty.rows();
+      expect(rows[0]).toStartWith("  /zmod-05");
+
+      await tty.press(pressAt(4, 1), releaseAt(4, 1));
+      expect(selected).toEqual(["/zmod-05"]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the footer and the space around the rows are not rows", async () => {
+    const { selected, tty } = mountPointer("/zmod", MANY);
+    try {
+      await settle();
+      // Row 9 is `↓ 4 more below`, which is not a command.
+      await tty.press(pressAt(4, 9), releaseAt(4, 9));
+      expect(selected).toEqual([]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("hover follows the pointer and clears when it leaves the rows", async () => {
+    const { tty } = mountPointer("/zmod", MANY);
+    try {
+      await settle();
+      await tty.press(moveTo(4, 2));
+      expect(getHoverTarget()).toEqual({ area: "autocomplete", index: 1 });
+
+      await tty.press(moveTo(4, 3));
+      expect(getHoverTarget()).toEqual({ area: "autocomplete", index: 2 });
+
+      // Off the rows, onto the footer: nothing is lit.
+      await tty.press(moveTo(4, 9));
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      tty.stop();
+    }
+  });
+});
 
 describe("SlashCommandAutocomplete on the frame", () => {
   test("a row is the gutter, the padded command and one space before the description", async () => {
