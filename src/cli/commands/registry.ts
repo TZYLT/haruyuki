@@ -545,6 +545,54 @@ export const commands: Record<string, Command> = {
       return `Installed Shift+Enter keybinding for ${terminalName}\nLocation: ${keybindingsPath}`;
     },
   },
+  "/font-width": {
+    desc: "How wide this terminal draws ambiguous characters (auto probes it)",
+    args: "auto|narrow|wide",
+    order: 38,
+    handler: async (args: string[]) => {
+      const requested = (args[0] ?? "").toLowerCase();
+      if (
+        requested !== "auto" &&
+        requested !== "narrow" &&
+        requested !== "wide"
+      ) {
+        return [
+          "/font-width auto | narrow | wide",
+          "",
+          "Unicode calls `— … ≥ → · “ ”` *ambiguous*: a Western monospace font draws",
+          "them one column, a CJK font (or a CJK fallback) draws them two. The app",
+          "asks the terminal at startup and after each resize; this command pins the",
+          "answer for a terminal that is wrong or will not reply.",
+          "",
+          "  auto    — ask the terminal (the default)",
+          "  narrow  — one column, e.g. Consolas",
+          "  wide    — two columns, e.g. 等宽楷体",
+        ].join("\n");
+      }
+      const { setAmbiguousWidthMode, getAmbiguousWidth } = await import(
+        "@/cli/helpers/char-width"
+      );
+      const { startAmbiguousWidthProbe } = await import(
+        "@/cli/helpers/ambiguous-width-probe"
+      );
+      setAmbiguousWidthMode(requested);
+      try {
+        // The same writer `/terminal` uses: read-merge-write of
+        // `~/.haruyuki/settings.json`, so keys this module does not model survive.
+        const { updateSettings } = await import("@/settings");
+        await updateSettings({ ambiguousCharWidth: requested });
+      } catch {
+        // An unreadable settings file still leaves the session value in force.
+      }
+      if (requested === "auto") {
+        const started = startAmbiguousWidthProbe();
+        return started.kind === "armed"
+          ? "Probing the terminal… (rows and selections follow its answer)"
+          : "No terminal to ask; keeping the width table's answer (narrow).";
+      }
+      return `Ambiguous characters are ${getAmbiguousWidth()} column(s) wide; saved to settings.`;
+    },
+  },
   "/install-github-app": {
     desc: "Setup Haruyuki GitHub Action in this repo",
     order: 38,

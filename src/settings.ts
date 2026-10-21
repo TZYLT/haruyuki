@@ -11,6 +11,17 @@ export interface Settings {
   lastAgent: string | null;
   tokenStreaming: boolean;
   globalSharedBlockIds: Record<string, string>; // label -> blockId mapping (persona, human; style moved to project settings)
+  /**
+   * How wide this terminal draws Unicode's ambiguous characters (`— … ≥ → ·`).
+   *
+   * `auto` (the default) asks the terminal at startup and after each resize;
+   * `narrow`/`wide` pin the answer. It is a property of the *machine* and the font
+   * it draws with, so it lives here and not in project settings — `/font-width`
+   * writes it (`cli/helpers/char-width.ts`). Declared in this module rather than
+   * `settings-manager.ts` because that file is at its size ratchet, and both
+   * modules read the same JSON file.
+   */
+  ambiguousCharWidth?: "auto" | "narrow" | "wide";
   permissions?: PermissionRules;
   env?: Record<string, string>;
   // Shift+Enter keybinding state (for VS Code/Cursor/Windsurf)

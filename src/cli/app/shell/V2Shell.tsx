@@ -8,6 +8,7 @@ import { sidebarGeometry } from "@/cli/app/shell/sidebar-sections";
 import { TabStrip } from "@/cli/app/shell/tab-strip";
 import { TAB_STRIP_ROWS } from "@/cli/app/shell/tab-strip-layout";
 import type { AppShellProps } from "@/cli/app/shell/types";
+import { useAmbiguousWidthProbe } from "@/cli/app/shell/use-ambiguous-width";
 import { useExitSummaryAfterTeardown } from "@/cli/app/shell/use-exit-summary";
 import { useMouseInput } from "@/cli/app/shell/use-mouse-input";
 import { useSwitchPolicy } from "@/cli/app/shell/use-switch-policy";
@@ -79,6 +80,10 @@ export function V2Shell(props: AppShellProps) {
   // deferred: the ruled answer for the full-screen shell (《38》§5).
   useSwitchPolicy("refuse");
   useExitSummaryAfterTeardown(props);
+  // Which columns Unicode's ambiguous characters take on this terminal's font
+  // (`char-width.ts`): the probe is the reason a row can be laid out exactly, and it
+  // is re-armed on resize, which is what a font change produces.
+  useAmbiguousWidthProbe();
   // Mouse reporting, wheel scrolling and the mouse escape hatch: the viewport is
   // the reason this shell wants the mouse at all.
   useMouseInput();

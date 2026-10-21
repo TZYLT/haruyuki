@@ -286,6 +286,8 @@ review. The runner also refuses to report success when it selected nothing.
 | `HARUYUKI_HOME` | Overrides the harness root outright, in place of `~/.haruyuki` (every path that resolves through `src/utils/app-paths.ts`) |
 | `HARUYUKI_PREFIX_PROBE_DIR` | Dump each local provider request payload to `payload-<conversationId>-<seq>.json` for the prefix-freeze probe (default off) |
 | `HARUYUKI_TEST_PARALLEL` | Worker count for `node scripts/run-unit-tests.cjs` (default 16, capped at the core count). `0` restores the old chunked, single-process serial run |
+| `HARUYUKI_AMBIGUOUS_WIDTH` | `auto\|narrow\|wide`: how many columns this terminal draws Unicode's *ambiguous* characters (`— … ≥ → ·`). `auto` (default) asks the terminal; see `src/cli/helpers/char-width.ts`. A pinned value beats the settings file, which beats the probe |
+| `HARUYUKI_AMBIGUOUS_WIDTH_PROBE=0` | Skip the startup probe and keep the width table's own answer (narrow) |
 
 **Eight names still carry the `LETTA_` prefix, deliberately.** The env prefix
 was renamed to `HARUYUKI_`, but `@letta-ai/letta-agent-sdk` — loaded at runtime
