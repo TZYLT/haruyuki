@@ -24,8 +24,11 @@ describe("interactive reflection transcript wiring", () => {
     const endTurnIndex = loopSource.indexOf(
       'if (stopReasonToHandle === "end_turn")',
     );
+    // The append itself lives in `transcript-delta.ts` (extracted when the
+    // ledger needed room); the loop's contract is that it happens inside the
+    // end_turn branch, before reflection is evaluated.
     const appendIndex = loopSource.indexOf(
-      "appendTranscriptDeltaJsonl(",
+      "await appendTurnTranscriptDelta({",
       endTurnIndex,
     );
     const reflectionIndex = loopSource.indexOf(
@@ -108,8 +111,12 @@ describe("interactive reflection transcript wiring", () => {
     const conversationLoopPath = fileURLToPath(
       new URL("./use-conversation-loop.ts", import.meta.url),
     );
+    const transcriptDeltaPath = fileURLToPath(
+      new URL("./transcript-delta.ts", import.meta.url),
+    );
     const submitSource = readFileSync(submitHandlerPath, "utf-8");
     const loopSource = readFileSync(conversationLoopPath, "utf-8");
+    const deltaSource = readFileSync(transcriptDeltaPath, "utf-8");
 
     expect(submitSource).toContain(
       "const transcriptStartLineIndex = userTextForInput",
@@ -117,11 +124,13 @@ describe("interactive reflection transcript wiring", () => {
     expect(submitSource).toContain("transcriptStartLineIndex,");
     expect(loopSource).toContain("const transcriptTurnStartLineIndex =");
     expect(loopSource).toContain('if (stopReasonToHandle === "end_turn")');
-    expect(loopSource).toContain("toLines(buffersRef.current).slice(");
-    expect(loopSource).toContain("appendTranscriptDeltaJsonl(");
+    expect(loopSource).toContain("await appendTurnTranscriptDelta({");
+    // The slice and the JSONL writer are the extracted module's job now.
+    expect(deltaSource).toContain("toLines(input.buffers).slice(");
+    expect(deltaSource).toContain("input.write ?? appendTranscriptDeltaJsonl");
 
     expect(
       loopSource.indexOf('if (stopReasonToHandle === "end_turn")'),
-    ).toBeLessThan(loopSource.indexOf("appendTranscriptDeltaJsonl("));
+    ).toBeLessThan(loopSource.indexOf("await appendTurnTranscriptDelta({"));
   });
 });
