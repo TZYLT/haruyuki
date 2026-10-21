@@ -1,7 +1,5 @@
 // src/cli/app/pages/page-model.ts
 
-import type { PageTabId } from "@/cli/app/tabs";
-
 /**
  * What a page in the main area is made of.
  *
@@ -49,7 +47,24 @@ export type PageRow =
       /** Rows that exist but cannot be acted on (disabled, or read-only). */
       disabled?: boolean;
     }
-  | { kind: "note"; text: string };
+  | { kind: "note"; text: string }
+  /**
+   * A pre-composed line the page drew itself: block art, a heatmap row, a table
+   * row. Drawn verbatim (the page already clipped it to the width it was given),
+   * never truncated by the frame, never selectable by the cursor or the pointer.
+   *
+   * This is what lets the Usage screens keep the frame — header, scrolling, mouse
+   * band — without expressing themselves as label/value rows.
+   */
+  | { kind: "text"; text: string };
+
+/** The room a page body has, handed to a body that lays itself out. */
+export type PageBodyGeometry = {
+  /** Usable columns inside the frame's padding. */
+  width: number;
+  /** Rows the body may draw (markers included when it overflows). */
+  height: number;
+};
 
 export type PageBody = {
   /** The page's own name, drawn in the frame's header row. */
@@ -68,7 +83,16 @@ export type PageBody = {
    * edit needs).
    */
   screen?: string;
-  rows: readonly PageRow[];
+  /**
+   * Rows to draw, or a function that builds them from the room available.
+   *
+   * A function because the Usage screens lay themselves out to the terminal
+   * (docs/38 §14.6's three tiers are width and height conditions); the frame
+   * owns the geometry, so it is the frame that has to hand it over.
+   */
+  rows:
+    | readonly PageRow[]
+    | ((geometry: PageBodyGeometry) => readonly PageRow[]);
 };
 
 /** Where the body's window sits in a longer row list. */
@@ -182,36 +206,4 @@ export function clampSelectableRow(
   if (selectable.includes(index)) return index;
   const after = selectable.find((row) => row > index);
   return after ?? selectable.at(-1) ?? 0;
-}
-
-/**
- * What the two pages hold **at P2**.
- *
- * Honest placeholders, not fake settings: the settings page (P3) and the usage
- * screens (P5) replace these rows with real values, and until then the page says
- * what is coming rather than showing a number nobody measured — `《38》§6.4`'s
- * "占位是显式的" applies to a whole page as much as to one rail line.
- */
-export function pageBodyFor(pageId: PageTabId): PageBody {
-  if (pageId === "usage") {
-    return {
-      title: "Usage",
-      rows: [
-        { kind: "header", text: "Usage" },
-        { kind: "note", text: "概览：用量与成本 · 明细：上下文拆分" },
-        { kind: "note", text: "用量台账在 P4 落盘，两屏在 P5 接线。" },
-      ],
-    };
-  }
-  return {
-    title: "Settings",
-    rows: [
-      { kind: "header", text: "Settings" },
-      { kind: "note", text: "通用 · 模型 · 权限 · 连接" },
-      {
-        kind: "note",
-        text: "设置页在 P3 接线：单页缩进树，读生效值，写复用各自命令。",
-      },
-    ],
-  };
 }

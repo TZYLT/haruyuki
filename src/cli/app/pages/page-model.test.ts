@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   maxPageOffset,
   type PageRow,
-  pageBodyFor,
   pageWindow,
   scrollPageOffset,
   selectableRows,
@@ -104,19 +103,25 @@ describe("the page cursor", () => {
   });
 });
 
-describe("the two pages", () => {
-  test("each page names itself, and neither invents a measurement", () => {
-    for (const id of ["settings", "usage"] as const) {
-      const body = pageBodyFor(id);
-      expect(body.title.length).toBeGreaterThan(0);
-      expect(body.rows.length).toBeGreaterThan(0);
-      // P2 shows what is coming, not a number nobody measured: no row may carry a
-      // value, which is the thing the real pages will add (《38》§6.4).
-      for (const row of body.rows) {
-        if (row.kind === "item") expect(row.value).toBeUndefined();
-      }
-    }
-    expect(pageBodyFor("settings").title).toBe("Settings");
-    expect(pageBodyFor("usage").title).toBe("Usage");
+describe("a body that composes its own lines", () => {
+  test("text rows are not selectable and do not move the cursor", () => {
+    const body: PageRow[] = [
+      { kind: "text", text: "  ██  " },
+      { kind: "item", id: "only", label: "唯一一行" },
+      { kind: "text", text: "  ░░  " },
+    ];
+    expect(selectableRows(body)).toEqual([1]);
+    expect(stepSelectableRow(body, 1, 1)).toBe(1);
+  });
+
+  test("text rows still count toward the window", () => {
+    const body: PageRow[] = [
+      { kind: "text", text: "one" },
+      { kind: "text", text: "two" },
+      { kind: "text", text: "three" },
+    ];
+    const window = pageWindow({ count: body.length, height: 2, offset: 0 });
+    expect(window.reserved).toBe(true);
+    // Both marker rows are reserved, so only one body row fits.\r\n    expect(window.end - window.start).toBe(1);
   });
 });

@@ -132,25 +132,57 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
   // One row is the page's own header (title or breadcrumb); the rest is the body.
   const bodyHeight = Math.max(1, bandHeight - 1);
 
+  // `min(console, ink)` for the rail's columns — the same pair the strip, the
+  // band and the rule resolve, so the divider lands in one column on every row.
+  // Computed before the body is built because a page that lays itself out
+  // (Usage) needs the same width the frame will draw it in.
+  const { stdout } = useStdout();
+  const inkColumns =
+    typeof stdout?.columns === "number" && stdout.columns > 0
+      ? stdout.columns
+      : undefined;
+  const frameColumns =
+    inkColumns === undefined
+      ? view.columns
+      : Math.min(view.columns, inkColumns);
+  const geometry = useHasContextSidebar()
+    ? sidebarGeometry(frameColumns, terminalRows)
+    : { railWidth: 0, bandColumns: frameColumns, junctionColumn: 0 };
+  const railWidth = geometry.railWidth;
+  const bandColumns = geometry.bandColumns;
+
+  // The rows are drawn inside `paddingX={1}`, so their usable width is two cells
+  // narrower than the band. The row renderer needs it for two things: where a value
+  // may be cut, and how far a hover background has to reach to read as a row; a
+  // self-laying page needs it for everything.
+  const rowWidth = Math.max(
+    1,
+    (railWidth > 0 ? bandColumns : frameColumns) - 2,
+  );
+  const rows =
+    typeof body.rows === "function"
+      ? body.rows({ width: rowWidth, height: bodyHeight })
+      : body.rows;
+
   const [offset, setOffset] = useState(0);
-  const [cursorRow, setCursorRow] = useState(() => firstSelectable(body.rows));
+  const [cursorRow, setCursorRow] = useState(() => firstSelectable(rows));
   // A body whose rows changed under the cursor (a rule deleted, a value row gone)
   // must not leave the cursor past the end: `clampSelectableRow` moves it to the
   // nearest row the user could have meant.
-  const cursor = clampSelectableRow(body.rows, cursorRow);
+  const cursor = clampSelectableRow(rows, cursorRow);
   const window = pageWindow({
-    count: body.rows.length,
+    count: rows.length,
     height: bodyHeight,
     offset,
   });
-  const visible = body.rows.slice(window.start, window.end);
+  const visible = rows.slice(window.start, window.end);
 
   // A new screen (a settings group) starts at its own top with its own cursor:
   // row 4 of one screen has nothing to do with row 4 of the next. The rows are read
   // through a ref, so values moving under a *fixed* cursor — the normal state of a
   // page that writes settings — do not re-seat it.
-  const latestRows = useRef(body.rows);
-  latestRows.current = body.rows;
+  const latestRows = useRef<readonly PageRow[]>(rows);
+  latestRows.current = rows;
   const screen = body.screen;
   useEffect(() => {
     // `screen` is the trigger, not data: the rows come through the ref.
@@ -162,7 +194,7 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
   const scroll = (delta: number): void => {
     setOffset((current) =>
       scrollPageOffset({
-        count: body.rows.length,
+        count: rows.length,
         height: bodyHeight,
         offset: current,
         delta,
@@ -172,10 +204,10 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
 
   const moveCursor = (direction: 1 | -1): void => {
     setCursorRow((current) => {
-      const next = stepSelectableRow(body.rows, current, direction);
+      const next = stepSelectableRow(rows, current, direction);
       setOffset((currentOffset) =>
         offsetForCursor({
-          rows: body.rows,
+          rows,
           height: bodyHeight,
           offset: currentOffset,
           cursor: next,
@@ -192,7 +224,7 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
     actions?.activate?.(row);
   };
 
-  const cursorRowValue = (): PageRow | undefined => body.rows[cursor];
+  const cursorRowValue = (): PageRow | undefined => rows[cursor];
 
   const back = (): void => {
     // A sub-screen leaves first; the page only leaves when it is at its root.
@@ -347,7 +379,7 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
   const rowsRef = useRef<DOMElement | null>(null);
   const activateAt = (index: number): void => {
     const rowIndex = window.start + index;
-    const row = body.rows[rowIndex];
+    const row = rows[rowIndex];
     if (!row || row.kind !== "item" || row.disabled) return;
     setCursorRow(rowIndex);
     activateRow(row);
@@ -404,35 +436,10 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
     );
   }, [bandRef]);
 
-  // `min(console, ink)` for the rail's columns — the same pair the strip, the
-  // band and the rule resolve, so the divider lands in one column on every row.
-  const { stdout } = useStdout();
-  const inkColumns =
-    typeof stdout?.columns === "number" && stdout.columns > 0
-      ? stdout.columns
-      : undefined;
-  const frameColumns =
-    inkColumns === undefined
-      ? view.columns
-      : Math.min(view.columns, inkColumns);
-  const geometry = useHasContextSidebar()
-    ? sidebarGeometry(frameColumns, terminalRows)
-    : { railWidth: 0, bandColumns: frameColumns, junctionColumn: 0 };
-  const railWidth = geometry.railWidth;
-  const bandColumns = geometry.bandColumns;
-
   const header =
     body.breadcrumb && body.breadcrumb.length > 0
       ? body.breadcrumb.join(" / ")
       : body.title;
-
-  // The rows are drawn inside `paddingX={1}`, so their usable width is two cells
-  // narrower than the band. The row renderer needs it for two things: where a value
-  // may be cut, and how far a hover background has to reach to read as a row.
-  const rowWidth = Math.max(
-    1,
-    (railWidth > 0 ? bandColumns : frameColumns) - 2,
-  );
 
   return (
     <>
@@ -532,6 +539,11 @@ function PageRowLine({
   }
   if (row.kind === "note") {
     return <Text dimColor>{row.text}</Text>;
+  }
+  if (row.kind === "text") {
+    // The page composed this line itself (block art, a heatmap row, a table row)
+    // and already clipped it to the width it was handed: draw it verbatim.
+    return <Text>{row.text}</Text>;
   }
 
   const label = truncateText(row.label, LABEL_COLUMN - 1).padEnd(LABEL_COLUMN);

@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { clearAllSubagents } from "@/agent/subagent-state";
 import type { AppViewProps } from "@/cli/app/AppView";
 import { ChromeHeightContext } from "@/cli/app/chrome-height";
@@ -110,13 +113,24 @@ describe("the page frame", () => {
   });
 
   test("the Usage tab shows the Usage page, not Settings", async () => {
+    // The page reads the real ledger, so point the harness home at a temp dir:
+    // this assertion is about which page is mounted, not about the numbers.
+    const originalHome = process.env.HARUYUKI_HOME;
+    const home = await mkdtemp(join(tmpdir(), "haruyuki-frame-usage-"));
+    process.env.HARUYUKI_HOME = home;
     const page = mountPage("usage", 8);
     try {
       const rows = await page.rows({ keepTrailingBlanks: true });
-      expect(rows[0]).toBe(" Usage");
-      expect(rows.join("\n")).toContain("概览");
+      expect(rows[0]).toContain("Usage / 概览");
+      expect(rows.join("\n")).toContain("Tab 明细");
     } finally {
       page.stop();
+      if (originalHome === undefined) {
+        delete process.env.HARUYUKI_HOME;
+      } else {
+        process.env.HARUYUKI_HOME = originalHome;
+      }
+      await rm(home, { recursive: true, force: true });
     }
   });
 

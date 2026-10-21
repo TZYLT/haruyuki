@@ -2,9 +2,8 @@
 
 import type { AppViewProps } from "@/cli/app/AppView";
 import { isPageTabId, type PageTabId, useTabsState } from "@/cli/app/tabs";
-import { PageFrame } from "./page-frame";
-import { pageBodyFor } from "./page-model";
 import { SettingsPage } from "./settings/settings-page";
+import { UsagePage } from "./usage/usage-page";
 
 /**
  * Which page the main area shows, and nothing else.
@@ -13,9 +12,6 @@ import { SettingsPage } from "./settings/settings-page";
  * says *which* one. Keeping the choice here means the shell never learns what a
  * Settings page is, and a page added later is one entry in this switch rather than
  * a new branch in the shell.
- *
- * Settings has its own component because it has several screens and an editor;
- * Usage still draws the frame's placeholder until P5 fills it.
  */
 export function PageHost(view: AppViewProps) {
   const state = useTabsState();
@@ -23,5 +19,5 @@ export function PageHost(view: AppViewProps) {
     ? state.activeId
     : "settings";
   if (pageId === "settings") return <SettingsPage {...view} />;
-  return <PageFrame view={view} body={pageBodyFor(pageId)} />;
+  return <UsagePage {...view} />;
 }
