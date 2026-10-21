@@ -60,6 +60,8 @@ export const APP_SUBDIRS = {
   plans: "plans",
   skills: "skills",
   transcripts: "transcripts",
+  /** Per-turn usage ledger (`usage/ledger.jsonl`). Numbers only, no content. */
+  usage: "usage",
   viewers: "viewers",
   workflows: "workflows",
   worktrees: "worktrees",

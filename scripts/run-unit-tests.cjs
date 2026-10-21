@@ -98,6 +98,7 @@ const dirs = [
   "src/test-utils",
   "src/tools",
   "src/types",
+  "src/usage",
   "src/utils",
   "src/web",
   "src/websocket",
@@ -403,7 +404,10 @@ if (parallelWorkers > 0) {
       extraArgs.push(`--path-ignore-patterns=${toIgnoreGlob(testPath)}`);
     }
   }
-  if (parallelBatchFiles.length > 0 || (wholeSuite && runIsolatedPaths.size === 0)) {
+  if (
+    parallelBatchFiles.length > 0 ||
+    (wholeSuite && runIsolatedPaths.size === 0)
+  ) {
     // The manifest's longest registered timeout (30s), so a batch is never
     // stricter than the per-entry timeouts it replaces — matching the behaviour
     // of the chunked serial path, which also ran every shared-process file with

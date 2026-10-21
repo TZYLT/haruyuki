@@ -8,6 +8,7 @@
  *   providers/          must not import from  agent/  or  cli/
  *   websocket/listener/ must not import from  backend/api/client  or  backend/api/conversations
  *   telemetry/          must not import from  cli/  agent/  websocket/  or  tools/
+ *   usage/              must not import from  cli/  or  websocket/
  *
  * Plus one whitelist-style rule (batch ⑧): production code must not import the
  * modules that exist only to reach Letta Cloud. Unlike the rules above, that one
@@ -84,6 +85,12 @@ const RULES = [
     ],
     description:
       "sandbox/ is a pure leaf — it generates sandbox argv/profiles from plain paths. It must not import from any domain layer; callers resolve paths and pass them in",
+  },
+  {
+    layer: "usage",
+    forbidden: ["cli", "websocket"],
+    description:
+      "usage/ persists numbers and aggregates them — it must not import cli/ or websocket/, so the ledger stays readable from the app-server and from tests without a TUI",
   },
 ];
 

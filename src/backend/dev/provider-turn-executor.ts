@@ -341,6 +341,10 @@ function createUsageStatisticsChunk(
   const cachedInputTokens = usage?.cacheRead;
   const cacheWriteTokens = usage?.cacheWrite;
   const reasoningTokens = usage?.reasoning;
+  // pi-ai priced this request as it finished it. The four buckets are the ones
+  // providers bill separately, so they are forwarded rather than collapsed:
+  // the usage ledger stores them, and the Usage detail screen shows the split.
+  const cost = usage?.cost;
   if (
     promptTokens === undefined &&
     completionTokens === undefined &&
@@ -348,7 +352,8 @@ function createUsageStatisticsChunk(
     cachedInputTokens === undefined &&
     cacheWriteTokens === undefined &&
     reasoningTokens === undefined &&
-    contextTokens === undefined
+    contextTokens === undefined &&
+    cost === undefined
   ) {
     return undefined;
   }
@@ -369,6 +374,15 @@ function createUsageStatisticsChunk(
       ? { reasoning_tokens: reasoningTokens }
       : {}),
     ...(contextTokens !== undefined ? { context_tokens: contextTokens } : {}),
+    ...(cost !== undefined
+      ? {
+          cost_usd: cost.total,
+          cost_input_usd: cost.input,
+          cost_output_usd: cost.output,
+          cost_cache_read_usd: cost.cacheRead,
+          cost_cache_write_usd: cost.cacheWrite,
+        }
+      : {}),
   } as unknown as LettaStreamingResponse;
 }
 

@@ -51,7 +51,6 @@ import {
   markIncompleteToolsAsCancelled,
   onChunk,
   setToolCallsRunning,
-  toLines,
 } from "@/cli/helpers/accumulator";
 import { classifyApprovals } from "@/cli/helpers/approval-classification";
 import type { ContextTracker } from "@/cli/helpers/context-tracker";
@@ -74,7 +73,6 @@ import {
 } from "@/cli/helpers/local-no-model-response";
 import type { ExecutionPhase } from "@/cli/helpers/phase-visuals";
 import { getQueuedNotificationSummaries } from "@/cli/helpers/queued-message-parts";
-import { appendTranscriptDeltaJsonl } from "@/cli/helpers/reflection-transcript";
 import { safeJsonParseOr } from "@/cli/helpers/safe-json-parse";
 import {
   type ApprovalRequest,
@@ -129,7 +127,13 @@ import {
 import { sendDesktopNotification } from "./notifications";
 import { isRetriableError } from "./retry";
 import { stripSystemReminders } from "./system-reminders";
+import { appendTurnTranscriptDelta } from "./transcript-delta";
 import { prepareTuiQueuedTurn } from "./turn-input";
+import {
+  liveTrajectoryElapsedMs,
+  tokenCountDelta,
+  trajectorySummary,
+} from "./turn-metrics";
 import type {
   AppendError,
   ApprovalDecision,
@@ -138,6 +142,7 @@ import type {
   AutoHandledToolResult,
   QueueApprovalResults,
 } from "./types";
+import { appendTurnUsageRecord } from "./usage-record";
 
 type NetworkPhase = "error" | "upload" | "download" | null;
 
@@ -1313,6 +1318,8 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
             approval,
             approvals,
             apiDurationMs,
+            usageCost,
+            usageSteps,
             lastRunId,
             lastSeqId,
             fallbackError,
@@ -1335,13 +1342,12 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
           const usageDelta = sessionStatsRef.current.updateUsageFromBuffers(
             buffersRef.current,
           );
-          const tokenDelta = Math.max(
-            0,
-            buffersRef.current.tokenCount - runTokenStart,
-          );
+          const tokenDelta = tokenCountDelta(buffersRef.current, runTokenStart);
           sessionStatsRef.current.accumulateTrajectory({
             apiDurationMs,
             usageDelta,
+            usageCost,
+            usageSteps,
             tokenDelta,
           });
           syncTrajectoryTokenBase();
@@ -1403,15 +1409,10 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
           if (stopReasonToHandle === "end_turn") {
             clearApprovalToolContext();
             setStreaming(false);
-            const liveElapsedMs = (() => {
-              const snapshot = sessionStatsRef.current.getTrajectorySnapshot();
-              const base = snapshot?.wallMs ?? 0;
-              const segmentStart = trajectorySegmentStartRef.current;
-              if (segmentStart === null) {
-                return base;
-              }
-              return base + (performance.now() - segmentStart);
-            })();
+            const liveElapsedMs = liveTrajectoryElapsedMs(
+              sessionStatsRef.current,
+              trajectorySegmentStartRef.current,
+            );
             closeTrajectorySegment();
             llmApiErrorRetriesRef.current = 0; // Reset retry counter on success
             emptyResponseRetriesRef.current = 0;
@@ -1420,27 +1421,12 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
             lastSentInputRef.current = null; // Clear - no recovery needed
             pendingInterruptRecoveryConversationIdRef.current = null;
 
-            if (transcriptTurnStartLineIndex !== null) {
-              try {
-                const transcriptLines = toLines(buffersRef.current).slice(
-                  transcriptTurnStartLineIndex,
-                );
-                await appendTranscriptDeltaJsonl(
-                  agentIdRef.current,
-                  conversationIdRef.current,
-                  transcriptLines,
-                );
-              } catch (transcriptError) {
-                debugWarn(
-                  "memory",
-                  `Failed to append transcript delta: ${
-                    transcriptError instanceof Error
-                      ? transcriptError.message
-                      : String(transcriptError)
-                  }`,
-                );
-              }
-            }
+            await appendTurnTranscriptDelta({
+              buffers: buffersRef.current,
+              agentId: agentIdRef.current,
+              conversationId: conversationIdRef.current,
+              startLineIndex: transcriptTurnStartLineIndex,
+            });
             pendingTranscriptStartLineIndexRef.current = null;
 
             // Evaluate reflection triggers now that the turn's transcript
@@ -1624,14 +1610,17 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
             trajectoryRunTokenStartRef.current = 0;
             trajectoryTokenDisplayRef.current = 0;
             if (trajectorySnapshot) {
-              const summaryWallMs = Math.max(
+              // One ledger record per completed turn. Cancelled turns are not
+              // recorded: they stop before this branch (see docs/33 P4).
+              void appendTurnUsageRecord(trajectorySnapshot, {
+                agentId: agentIdRef.current,
+                model: llmConfigRef.current?.model ?? null,
+              });
+              const { wallMs: summaryWallMs, shouldShow } = trajectorySummary(
+                trajectorySnapshot,
                 liveElapsedMs,
-                trajectorySnapshot.wallMs,
               );
-              const shouldShowSummary =
-                (trajectorySnapshot.stepCount > 3 && summaryWallMs > 10000) ||
-                summaryWallMs > 60000;
-              if (shouldShowSummary) {
+              if (shouldShow) {
                 const summaryId = uid("trajectory-summary");
                 buffersRef.current.byId.set(summaryId, {
                   kind: "trajectory_summary",

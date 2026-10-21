@@ -148,6 +148,7 @@ package entrypoints may still re-export their intentional API surface.
 ```
 cli/           ← Ink UI, commands, overlays
 websocket/     ← WS listener, session management
+usage/         ← per-turn usage ledger (numbers only) + aggregation
 agent/         ← domain: conversation, approval, context
 tools/         ← tool implementations
 backend/       ← API/storage abstraction
@@ -165,6 +166,7 @@ utils/         ← bottom: no domain deps
 - `providers/` cannot import from `agent/` or `cli/`
 - `websocket/listener/` cannot import `backend/api/client` or `backend/api/conversations` directly
 - `cli/app/` cannot import `backend/api/conversations` directly
+- `usage/` cannot import `cli/` or `websocket/`
 
 **When adding a new file:** put it in the lowest layer whose dependencies it needs. If you find yourself importing from a higher layer, extract the shared logic into a lower one instead.
 
@@ -221,6 +223,7 @@ generic instincts. Read the local guide before changing code there:
 | Hook used in App | `src/cli/app/` or `src/cli/hooks/` |
 | WS listener logic | `src/websocket/listener/` |
 | Agent/conversation domain logic | `src/agent/` |
+| Per-turn usage ledger / aggregation | `src/usage/` |
 | Tool implementation | `src/tools/impl/` |
 | Backend abstraction | `src/backend/` |
 | LLM provider adapter | `src/providers/` |

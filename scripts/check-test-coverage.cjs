@@ -43,9 +43,7 @@ const allTestFiles = findTestFiles("src");
 const FORBIDDEN_DIRS = ["src/tests"];
 
 const forbiddenFiles = allTestFiles.filter((f) =>
-  FORBIDDEN_DIRS.some(
-    (prefix) => f === prefix || f.startsWith(prefix + "/"),
-  ),
+  FORBIDDEN_DIRS.some((prefix) => f === prefix || f.startsWith(prefix + "/")),
 );
 
 if (forbiddenFiles.length > 0) {
@@ -87,6 +85,7 @@ const ciDirs = [
   "src/test-utils",
   "src/tools",
   "src/types",
+  "src/usage",
   "src/utils",
   "src/web",
   "src/websocket",

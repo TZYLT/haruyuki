@@ -588,6 +588,53 @@ describe("ProviderTurnExecutor", () => {
     ).toBe("end_turn");
   });
 
+  test("forwards the provider's cost buckets to the usage chunk", async () => {
+    const finalMessage = assistantMessage({
+      ...emptyLocalUsage(),
+      input: 100,
+      output: 40,
+      cacheRead: 20,
+      cacheWrite: 5,
+      totalTokens: 165,
+      cost: {
+        input: 0.01,
+        output: 0.02,
+        cacheRead: 0.003,
+        cacheWrite: 0.004,
+        total: 0.037,
+      },
+    });
+    const adapter: ProviderStreamAdapter = {
+      async *stream() {
+        yield providerStreamPart(
+          part({ type: "done", reason: "stop", message: finalMessage }),
+        );
+      },
+    };
+
+    const chunks = await collect(
+      await new ProviderTurnExecutor(adapter).execute(input()),
+    );
+    const usage = chunks.find(
+      (chunk) => chunk.message_type === "usage_statistics",
+    ) as
+      | {
+          cost_usd?: number;
+          cost_input_usd?: number;
+          cost_output_usd?: number;
+          cost_cache_read_usd?: number;
+          cost_cache_write_usd?: number;
+        }
+      | undefined;
+    // pi-ai priced this request; the four buckets must survive the hop so the
+    // usage ledger can store the money split instead of a single number.
+    expect(usage?.cost_usd).toBeCloseTo(0.037);
+    expect(usage?.cost_input_usd).toBeCloseTo(0.01);
+    expect(usage?.cost_output_usd).toBeCloseTo(0.02);
+    expect(usage?.cost_cache_read_usd).toBeCloseTo(0.003);
+    expect(usage?.cost_cache_write_usd).toBeCloseTo(0.004);
+  });
+
   test("includes provider reasoning tokens in usage statistics", async () => {
     const finalMessage = assistantMessage({
       ...emptyLocalUsage(),
