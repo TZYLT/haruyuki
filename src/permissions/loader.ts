@@ -401,6 +401,80 @@ export async function savePermissionRule(
 }
 
 /**
+ * Remove a permission rule from a specific scope.
+ *
+ * The counterpart of `savePermissionRule`, and it exists for the same reason: the
+ * settings page can add and drop rules in place (《38》§12.6), and hand-editing
+ * JSON from a UI would need every structural rule this file already holds — which
+ * key, which scope file, invalidating the cache, and keeping
+ * `.haruyuki/settings.local.json` out of git for the local scope.
+ *
+ * Returns `true` only when a rule was actually removed: a merged list shows rules
+ * from other scopes too, so the caller has to be able to tell "deleted here" from
+ * "this scope never had it" and say which scope it searched. Canonicalized
+ * comparison means a rule that was typed differently when saved still matches.
+ */
+export async function removePermissionRule(
+  rule: string,
+  ruleType: PermissionRuleType,
+  scope: "project" | "local" | "user",
+  workingDirectory: string = process.cwd(),
+): Promise<boolean> {
+  const normalizedWorkingDirectory = resolve(workingDirectory);
+  let settingsPath: string;
+  switch (scope) {
+    case "user":
+      settingsPath = getUserSettingsPaths().canonical;
+      break;
+    case "project":
+      settingsPath = projectAppHomePath(
+        normalizedWorkingDirectory,
+        APP_SUBDIRS.settingsFile,
+      );
+      break;
+    case "local":
+      settingsPath = projectAppHomePath(
+        normalizedWorkingDirectory,
+        APP_SUBDIRS.localSettingsFile,
+      );
+      break;
+  }
+
+  let settings: SettingsFile = {};
+  try {
+    if (exists(settingsPath)) {
+      const content = await readFile(settingsPath);
+      settings = JSON.parse(content) as SettingsFile;
+    }
+  } catch (_error) {
+    return false;
+  }
+
+  const rules = settings.permissions?.[ruleType];
+  if (!Array.isArray(rules) || rules.length === 0) return false;
+
+  const target = normalizePermissionRule(rule);
+  const remaining = rules.filter(
+    (existing) => !permissionRulesEquivalent(existing, target),
+  );
+  if (remaining.length === rules.length) return false;
+
+  if (remaining.length === 0) {
+    delete settings.permissions?.[ruleType];
+  } else if (settings.permissions) {
+    settings.permissions[ruleType] = remaining;
+  }
+
+  await writeFile(settingsPath, JSON.stringify(settings, null, 2));
+  invalidatePermissionSource(settingsPath);
+
+  if (scope === "local") {
+    await ensureLocalSettingsIgnored(normalizedWorkingDirectory);
+  }
+  return true;
+}
+
+/**
  * Ensure .haruyuki/settings.local.json is in .gitignore
  */
 async function ensureLocalSettingsIgnored(

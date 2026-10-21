@@ -6,6 +6,7 @@ import {
   getUserSettingsPaths,
   loadPermissionMode,
   loadPermissions,
+  removePermissionRule,
   resetPermissionLoaderCacheForTests,
   savePermissionRule,
 } from "@/permissions/loader";
@@ -620,4 +621,57 @@ test("Save permission dedupes slash variants for file patterns", async () => {
       (r: string) => r === "Edit(.skills/skilled-mcp/**)",
     ),
   ).toHaveLength(1);
+});
+
+test("Remove permission rule deletes it from the scope that holds it", async () => {
+  const projectDir = join(testDir, "project-remove");
+  await savePermissionRule("Bash(ls:*)", "allow", "project", projectDir);
+  await savePermissionRule("Read(.env)", "deny", "project", projectDir);
+
+  const removed = await removePermissionRule(
+    "Bash(ls:*)",
+    "allow",
+    "project",
+    projectDir,
+  );
+
+  const settings = await Bun.file(
+    join(projectDir, ".haruyuki", "settings.json"),
+  ).json();
+  expect(removed).toBe(true);
+  expect(settings.permissions.allow ?? []).not.toContain("Bash(ls:*)");
+  // The other bucket and the other rule are untouched: a removal is one entry.
+  expect(settings.permissions.deny).toContain("Read(.env)");
+});
+
+test("Remove permission rule reports a miss instead of writing", async () => {
+  const projectDir = join(testDir, "project-miss");
+  await savePermissionRule("Bash(ls:*)", "allow", "project", projectDir);
+
+  // Canonicalized comparison: a differently spelled variant of a rule that is not
+  // there must not be invented, and a miss must be distinguishable from a hit —
+  // the settings page tells the user which scope it searched.
+  expect(
+    await removePermissionRule("Bash(rm:*)", "allow", "project", projectDir),
+  ).toBe(false);
+  // Nothing was written at all.
+  expect(
+    await removePermissionRule("Bash(pwd:*)", "allow", "project", projectDir),
+  ).toBe(false);
+  const settings = await Bun.file(
+    join(projectDir, ".haruyuki", "settings.json"),
+  ).json();
+  expect(settings.permissions.allow).toEqual(["Bash(ls:*)"]);
+});
+
+test("Removing the last rule of a bucket drops the bucket, not an empty array", async () => {
+  const projectDir = join(testDir, "project-empty-bucket");
+  await savePermissionRule("Bash(ls:*)", "ask", "project", projectDir);
+
+  await removePermissionRule("Bash(ls:*)", "ask", "project", projectDir);
+
+  const settings = await Bun.file(
+    join(projectDir, ".haruyuki", "settings.json"),
+  ).json();
+  expect(settings.permissions.ask).toBeUndefined();
 });
