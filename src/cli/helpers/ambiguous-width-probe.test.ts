@@ -143,6 +143,32 @@ describe("the probe", () => {
     expect(getAmbiguousWidthSource()).toBe("probe");
   });
 
+  test("a re-probe that answers narrower keeps the wider answer", () => {
+    // The session log for 2026-10-21 shows the probe answering `column 3 -> 2` at
+    // launch and `column 2 -> 1` on a later resize of the same terminal, with no font
+    // change in between. The two failure directions are not equal: one column too
+    // narrow makes the terminal wrap a row (a lost physical line, and the top row of
+    // the alternate screen with it), one column too wide is a column of margin. So a
+    // lone "narrower" reply is logged and ignored; `/font-width narrow` is how a
+    // narrower terminal is declared.
+    arm(fakeStdout());
+    expect(claimAmbiguousWidthReply("\u001B[1;3R")).toBe(true);
+    expect(getAmbiguousWidth()).toBe(2);
+    arm(fakeStdout());
+    expect(claimAmbiguousWidthReply("\u001B[1;2R")).toBe(true);
+    expect(getAmbiguousWidth()).toBe(2);
+    expect(getAmbiguousWidthSource()).toBe("probe");
+  });
+
+  test("a re-probe that answers wider is taken", () => {
+    arm(fakeStdout());
+    expect(claimAmbiguousWidthReply("\u001B[1;2R")).toBe(true);
+    expect(getAmbiguousWidth()).toBe(1);
+    arm(fakeStdout());
+    expect(claimAmbiguousWidthReply("\u001B[1;3R")).toBe(true);
+    expect(getAmbiguousWidth()).toBe(2);
+  });
+
   test("no terminal, no probe", () => {
     expect(
       startAmbiguousWidthProbe({

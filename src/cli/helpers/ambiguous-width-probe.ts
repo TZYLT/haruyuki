@@ -3,6 +3,9 @@
 import { debugLog } from "@/utils/debug";
 import {
   type AmbiguousWidth,
+  getAmbiguousWidth,
+  getAmbiguousWidthMode,
+  getAmbiguousWidthSource,
   repaintForAmbiguousWidth,
   setAmbiguousWidth,
 } from "./char-width";
@@ -174,6 +177,25 @@ export function claimAmbiguousWidthReply(payload: string): boolean {
       `probe reply unreadable: ${JSON.stringify(payload)}; keeping the current answer`,
     );
     repaintForAmbiguousWidth();
+    return true;
+  }
+  // **A re-probe may widen, never narrow.** The two mistakes are not equal: a row
+  // laid out one column too wide is a column of right margin, while one laid out a
+  // column too narrow is a row the terminal wraps — which costs a physical line and
+  // scrolls the top of the alternate screen (the tab strip) away for good. The
+  // session log shows the answer flipping `3 -> 2 -> 1` across resizes on a terminal
+  // whose font nobody changed (2026-10-21), so a lone "narrower" reply is not
+  // evidence worth that risk. `narrow` stays reachable: `/font-width narrow` pins it.
+  if (
+    width < getAmbiguousWidth() &&
+    getAmbiguousWidthSource() === "probe" &&
+    getAmbiguousWidthMode() === "auto"
+  ) {
+    repaintForAmbiguousWidth();
+    debugLog(
+      "char-width",
+      `probe: cursor column ${column} -> ${width} column(s), but ${getAmbiguousWidth()} is in force; keeping the wider answer (pin it with /font-width narrow)`,
+    );
     return true;
   }
   setAmbiguousWidth(width);

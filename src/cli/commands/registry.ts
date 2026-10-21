@@ -551,12 +551,31 @@ export const commands: Record<string, Command> = {
     order: 38,
     handler: async (args: string[]) => {
       const requested = (args[0] ?? "").toLowerCase();
+      const {
+        getAmbiguousWidth,
+        getAmbiguousWidthMode,
+        getAmbiguousWidthSource,
+        setAmbiguousWidthMode,
+      } = await import("@/cli/helpers/char-width");
+      // Every answer starts with what is in force. The machine's report was
+      // "changing the font width has no visible effect": a one-column difference in a
+      // dozen rows of prose is not something an eye can confirm, so the command has to
+      // say the number rather than let the frame be the evidence.
+      const source =
+        getAmbiguousWidthSource() === "probe"
+          ? "the terminal's own answer"
+          : getAmbiguousWidthSource() === "mode"
+            ? "pinned by this command"
+            : "the width table's default";
+      const inForce = `In force: ${getAmbiguousWidth()} column(s) — ${source}${getAmbiguousWidthMode() === "auto" ? " (auto)" : ` (${getAmbiguousWidthMode()})`}.`;
       if (
         requested !== "auto" &&
         requested !== "narrow" &&
         requested !== "wide"
       ) {
         return [
+          inForce,
+          "",
           "/font-width auto | narrow | wide",
           "",
           "Unicode calls `— … ≥ → · “ ”` *ambiguous*: a Western monospace font draws",
@@ -569,12 +588,10 @@ export const commands: Record<string, Command> = {
           "  wide    — two columns, e.g. 等宽楷体",
         ].join("\n");
       }
-      const { setAmbiguousWidthMode, getAmbiguousWidth } = await import(
-        "@/cli/helpers/char-width"
-      );
       const { startAmbiguousWidthProbe } = await import(
         "@/cli/helpers/ambiguous-width-probe"
       );
+      const previous = getAmbiguousWidth();
       setAmbiguousWidthMode(requested);
       try {
         // The same writer `/terminal` uses: read-merge-write of
@@ -587,10 +604,15 @@ export const commands: Record<string, Command> = {
       if (requested === "auto") {
         const started = startAmbiguousWidthProbe();
         return started.kind === "armed"
-          ? "Probing the terminal… (rows and selections follow its answer)"
-          : "No terminal to ask; keeping the width table's answer (narrow).";
+          ? `${inForce}\nProbing the terminal… (rows and selections follow its answer)`
+          : `${inForce}\nNo terminal to ask; keeping the width table's answer.`;
       }
-      return `Ambiguous characters are ${getAmbiguousWidth()} column(s) wide; saved to settings.`;
+      const now = getAmbiguousWidth();
+      const change =
+        now === previous
+          ? "unchanged"
+          : `was ${previous}, so every row is being laid out again`;
+      return `${inForce}\n${requested}: ${now} column(s) — ${change}; saved to settings.`;
     },
   },
   "/install-github-app": {
