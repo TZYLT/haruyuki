@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   beginSelection,
   hasSelection,
@@ -78,6 +78,22 @@ function harness(conversationId: string): Harness {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 afterEach(() => {
+  resetTabsForTests();
+  resetSwitchPolicyForTests();
+  resetNoticeForTests();
+  resetViewportSelectionForTests();
+});
+
+/**
+ * Reset *before* each test as well, not only after it.
+ *
+ * These cases assert the tab list absolutely (`["conv-1", "conv-2"]`), and the tab
+ * store is module state that outlives a file: a test elsewhere that mounts the real
+ * TUI and leaves a conversation open (`conv-fake-headless-1` is the one that did)
+ * makes the list open with a stranger in it. `afterEach` alone cannot help — the
+ * leak is already there when the first case starts.
+ */
+beforeEach(() => {
   resetTabsForTests();
   resetSwitchPolicyForTests();
   resetNoticeForTests();
