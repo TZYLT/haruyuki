@@ -775,31 +775,35 @@ Commands marked hidden still work but are kept out of autocomplete.
 | `/mcp` | — | Manage MCP servers (add, connect with OAuth) | `src/cli/commands/registry.ts:364` |
 | `/secret` | `<set\|list\|unset> [key] [value]` | Manage secrets for shell commands | `src/cli/commands/registry.ts:372` |
 | `/memory-repository` | `<set\|unset\|status\|push> [url]` | Push this agent's memory repo to an additional git remote | `src/cli/commands/registry.ts:378` |
-| `/usage` | — | Show session usage statistics and balance | `src/cli/commands/registry.ts:387` |
-| `/context` | — | Show context window usage | `src/cli/commands/registry.ts:396` |
-| `/recompile` | — | Recompile current agent + conversation (warning: this will evict the cache and increase costs) | `src/cli/commands/registry.ts:405` |
-| `/context-pending` | `[full]` | Show prefix changes registered but not yet applied (memory, system, skills, tools, model) | `src/cli/commands/registry.ts:414` |
-| `/feedback` | — | Save a feedback report to the local log (file bugs at github.com/TZYLT/haruyuki/issues) | `src/cli/commands/registry.ts:423` |
-| `/help` | — | Show available commands (hidden) | `src/cli/commands/registry.ts:431` |
-| `/hooks` | — | Manage hooks configuration | `src/cli/commands/registry.ts:441` |
-| `/statusline` | `[request]` | Customize the bottom statusline | `src/cli/commands/registry.ts:450` |
-| `/title` | — | Configure terminal window title | `src/cli/commands/registry.ts:459` |
-| `/reasoning-tab` | `[on\|off\|status]` | Toggle Tab shortcut for reasoning tiers (/reasoning-tab on\|off\|status) | `src/cli/commands/registry.ts:468` |
-| `/system-reminders` | `[on\|off\|status]` | Show or hide system reminders | `src/cli/commands/registry.ts:477` |
-| `/terminal` | — | Setup terminal shortcuts [--revert] | `src/cli/commands/registry.ts:483` |
-| `/install-github-app` | — | Setup Haruyuki GitHub Action in this repo | `src/cli/commands/registry.ts:548` |
-| `/bg` | — | Show background shell processes | `src/cli/commands/registry.ts:559` |
-| `/workflows` | — | Show workflow runs, their agents, and token usage | `src/cli/commands/registry.ts:568` |
-| `/exit` | — | Exit this session | `src/cli/commands/registry.ts:580` |
-| `/logout` | — | Clear saved credentials and exit | `src/cli/commands/registry.ts:589` |
-| `/stream` | — | Toggle token streaming on/off (hidden) | `src/cli/commands/registry.ts:600` |
-| `/compact` | `[n\|help]` | Trim older context at a topic boundary you pick | `src/cli/commands/registry.ts:609` |
-| `/topic` | `<title> [summary]` | Mark a topic boundary in this conversation | `src/cli/commands/registry.ts:617` |
-| `/topics` | `[--all]` | List the topic blocks of the current context | `src/cli/commands/registry.ts:622` |
-| `/recall` | `[setting] [value]` | Configure passive recall of earlier conversations and memory | `src/cli/commands/registry.ts:627` |
-| `/set-max-context` | `[tokens] [--override]` | Alias for /context-limit (hidden) | `src/cli/commands/registry.ts:632` |
-| `/link` | — | Attach all Haruyuki tools to agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:641` |
-| `/unlink` | — | Remove all Haruyuki tools from agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:650` |
-| `/resume` | `[conversation_id]` | Resume a previous conversation | `src/cli/commands/registry.ts:659` |
-| `/pinned` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:668` |
-| `/profiles` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:676` |
+| `/usage` | — | Open the Usage page (overview + breakdown) | `src/cli/commands/registry.ts:387` |
+| `/tabs` | — | List open tabs (switch with Enter, close with D) | `src/cli/commands/registry.ts:396` |
+| `/close` | — | Close the current tab | `src/cli/commands/registry.ts:405` |
+| `/settings` | — | Open the Settings page | `src/cli/commands/registry.ts:416` |
+| `/context` | — | Show context window usage | `src/cli/commands/registry.ts:425` |
+| `/recompile` | — | Recompile current agent + conversation (warning: this will evict the cache and increase costs) | `src/cli/commands/registry.ts:434` |
+| `/context-pending` | `[full]` | Show prefix changes registered but not yet applied (memory, system, skills, tools, model) | `src/cli/commands/registry.ts:443` |
+| `/feedback` | — | Save a feedback report to the local log (file bugs at github.com/TZYLT/haruyuki/issues) | `src/cli/commands/registry.ts:452` |
+| `/help` | — | Show available commands (hidden) | `src/cli/commands/registry.ts:460` |
+| `/hooks` | — | Manage hooks configuration | `src/cli/commands/registry.ts:470` |
+| `/statusline` | `[request]` | Customize the bottom statusline | `src/cli/commands/registry.ts:479` |
+| `/title` | — | Configure terminal window title | `src/cli/commands/registry.ts:488` |
+| `/reasoning-tab` | `[on\|off\|status]` | Toggle Tab shortcut for reasoning tiers (/reasoning-tab on\|off\|status) | `src/cli/commands/registry.ts:497` |
+| `/system-reminders` | `[on\|off\|status]` | Show or hide system reminders | `src/cli/commands/registry.ts:506` |
+| `/terminal` | — | Setup terminal shortcuts [--revert] | `src/cli/commands/registry.ts:512` |
+| `/font-width` | `auto\|narrow\|wide` | How wide this terminal draws ambiguous characters (auto probes it) | `src/cli/commands/registry.ts:577` |
+| `/install-github-app` | — | Setup Haruyuki GitHub Action in this repo | `src/cli/commands/registry.ts:647` |
+| `/bg` | — | Show background shell processes | `src/cli/commands/registry.ts:658` |
+| `/workflows` | — | Show workflow runs, their agents, and token usage | `src/cli/commands/registry.ts:667` |
+| `/exit` | — | Exit this session | `src/cli/commands/registry.ts:679` |
+| `/logout` | — | Clear saved credentials and exit | `src/cli/commands/registry.ts:688` |
+| `/stream` | — | Toggle token streaming on/off (hidden) | `src/cli/commands/registry.ts:699` |
+| `/compact` | `[n\|help]` | Trim older context at a topic boundary you pick | `src/cli/commands/registry.ts:708` |
+| `/topic` | `<title> [summary]` | Mark a topic boundary in this conversation | `src/cli/commands/registry.ts:716` |
+| `/topics` | `[--all]` | List the topic blocks of the current context | `src/cli/commands/registry.ts:721` |
+| `/recall` | `[setting] [value]` | Configure passive recall of earlier conversations and memory | `src/cli/commands/registry.ts:726` |
+| `/set-max-context` | `[tokens] [--override]` | Alias for /context-limit (hidden) | `src/cli/commands/registry.ts:731` |
+| `/link` | — | Attach all Haruyuki tools to agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:740` |
+| `/unlink` | — | Remove all Haruyuki tools from agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:749` |
+| `/resume` | `[conversation_id]` | Resume a previous conversation | `src/cli/commands/registry.ts:758` |
+| `/pinned` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:767` |
+| `/profiles` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:775` |
