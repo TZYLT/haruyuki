@@ -18,7 +18,10 @@ import {
 } from "@/cli/app/viewport-scroll";
 import { resetInputScopes } from "@/cli/helpers/focus-ledger";
 import { resetBindingOwners } from "@/cli/helpers/input-router";
-import { resetMouseHandlers } from "@/cli/helpers/mouse-router";
+import {
+  registerMouseHandler,
+  resetMouseHandlers,
+} from "@/cli/helpers/mouse-router";
 import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
 
@@ -170,6 +173,60 @@ function mountTallBody() {
     { columns: 80, rows: 24 },
   );
 }
+
+/**
+ * Who owns a report that lands inside a page.
+ *
+ * The page declines the rows it cannot act on — that is right, they are prose and
+ * `↑↓` skips them too — but "declined" has to stop at the page. There is no
+ * transcript underneath to offer the report to, and the selection layer is switched
+ * off while a page is up, so a report that was declined all the way down was claimed
+ * by **nobody**: on the Usage page, whose body is a header and two notes until P5
+ * fills it, that was every report. The modes were on, other pages answered, and this
+ * one looked dead.
+ */
+describe("a report that lands in a page", () => {
+  /** A probe on the layer below, recording what reaches it. */
+  function probeContent() {
+    const seen: string[] = [];
+    const off = registerMouseHandler(
+      (report) => {
+        seen.push(`${report.kind}@${report.row}`);
+        return true;
+      },
+      { layer: "content", name: "probe" },
+    );
+    return { seen, off };
+  }
+
+  test("is the page's, even on a row the page cannot act on", async () => {
+    const page = mountPage("usage", 8);
+    const { seen, off } = probeContent();
+    try {
+      // Row 5 is prose: nothing there can be clicked, and the press still belongs to
+      // the page rather than falling to a layer that draws nothing there.
+      await page.press("\u001B[<0;10;5M\u001B[<0;10;5m");
+      expect(seen).toEqual([]);
+    } finally {
+      off();
+      page.stop();
+    }
+  });
+
+  test("is nobody's below the band", async () => {
+    const page = mountPage("usage", 8);
+    const { seen, off } = probeContent();
+    try {
+      // The band is 14 rows (24 - 8 chrome - 2 strip), so row 20 is under the page:
+      // the claim is the band's rectangle, not the whole screen.
+      await page.press("\u001B[<0;10;20M\u001B[<0;10;20m");
+      expect(seen).toEqual(["press@20", "release@20"]);
+    } finally {
+      off();
+      page.stop();
+    }
+  });
+});
 
 describe("a page that overflows", () => {
   test("it windows its body and says how many rows are hidden", async () => {

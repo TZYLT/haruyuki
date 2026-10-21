@@ -100,8 +100,16 @@ export function useMouseRows(options: MouseRowsOptions): void {
 
   // A surface that goes away while hovered must not leave a row lit underneath
   // whatever replaces it.
+  //
+  // That includes the surface **unmounting**, which is the case this effect
+  // started out missing: the cleanup was attached only when `enabled` was false,
+  // so a page whose rows the pointer had lit went away without telling the store.
+  // The target then stayed behind — climbing back to the same page painted a row
+  // the pointer was nowhere near, until the next motion report cleared it. A live
+  // surface is unaffected: `enabled` does not toggle on a re-render, and an area
+  // clears only its own rows.
   useEffect(() => {
-    if (enabled) return undefined;
+    if (!enabled) return undefined;
     return () => {
       clearHoverIn(latest.current.area);
     };

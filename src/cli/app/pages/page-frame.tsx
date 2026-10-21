@@ -365,6 +365,45 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
     hoverable: visible.some((row) => row.kind === "item" && !row.disabled),
   });
 
+  // The page owns its **band**, not only the rows it can act on (《38》§19.4:
+  // `chrome > page > content`).
+  //
+  // The row block above claims the rows the page can do something with, and it
+  // deliberately declines the rest — a group title or a note is transparent to the
+  // pointer, exactly as it is to `↑↓`. But "declined" used to mean "offered to the
+  // layers underneath", and underneath a page there is nothing: the transcript is
+  // not mounted, and its selection layer is switched off by `pageActive`. So a
+  // report that landed on a page's prose reached the bottom of the chain and was
+  // claimed by nobody. On a page made only of prose — `Usage` until P5 fills it —
+  // that was **every** report: the pointer answered nothing at all, which reads as
+  // "the mouse died on this page" even though the modes were on. This is also the
+  // claim the selection layer already documents ("the page owns every press inside
+  // the band"), so registering it makes that comment true instead of lucky.
+  //
+  // Registered after the rows so it is consulted second inside the `page` layer,
+  // and it leaves wheels alone: the handler above scrolls them.
+  //
+  // The band's **first** row is left out on purpose: it is the page's header —
+  // the title, the settings breadcrumb, or the inline editor that stands in for
+  // it — and a page puts its own pointer targets there. Those register on this
+  // same layer but *later* than the frame (the hook lives in the page component,
+  // and a parent's effects run after its children's), so a band claim that took
+  // the header row would claim every breadcrumb click before it was offered.
+  useEffect(() => {
+    return registerMouseHandler(
+      (report) => {
+        if (report.wheel) return false;
+        const node = bandRef.current;
+        if (!node) return false;
+        const box = measureBox(node);
+        if (!box) return false;
+        if (report.row <= box.top || report.row > box.bottom) return false;
+        return true;
+      },
+      { layer: "page", name: "page-band" },
+    );
+  }, [bandRef]);
+
   // `min(console, ink)` for the rail's columns — the same pair the strip, the
   // band and the rule resolve, so the divider lands in one column on every row.
   const { stdout } = useStdout();

@@ -160,6 +160,20 @@ describe("a block of rows", () => {
     }
   });
 
+  test("a surface that unmounts while hovered does not leave the row lit", async () => {
+    // The store outlives the component: a target left behind is painted again the
+    // next time a surface with the same area name mounts — a row the pointer is
+    // nowhere near, lit until the next motion report.
+    const { tty } = mount();
+    try {
+      await tty.press(moveTo(2, 2));
+      expect(getHoverTarget()).toEqual({ area: "test", index: 1 });
+    } finally {
+      tty.stop();
+    }
+    expect(getHoverTarget()).toBeNull();
+  });
+
   test("a row the surface does not act on is transparent to the pointer", async () => {
     // The same rule `↑↓` follows: a group title or a disabled row cannot be the
     // cursor, so it cannot be clicked or lit either.
