@@ -1,7 +1,7 @@
 // src/cli/app/pages/page-frame.tsx
 
 import { Box, type DOMElement, measureElement, Text, useStdout } from "ink";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { AppViewProps } from "@/cli/app/AppView";
 import {
   CHROME_RESERVE_ROWS,
@@ -9,6 +9,7 @@ import {
   useMeasuredChromeHeight,
 } from "@/cli/app/chrome-height";
 import {
+  clampSelectableRow,
   type PageBody,
   type PageRow,
   pageWindow,
@@ -23,6 +24,7 @@ import { focusTab } from "@/cli/app/tabs";
 import { ViewportPanel } from "@/cli/app/ViewportPanel";
 import { colors } from "@/cli/components/colors";
 import { useRowHovered } from "@/cli/helpers/hover-store";
+import type { KeyBinding } from "@/cli/helpers/input-keys";
 import { registerMouseHandler } from "@/cli/helpers/mouse-router";
 import { useMouseRows } from "@/cli/helpers/use-mouse-rows";
 import {
@@ -62,6 +64,47 @@ import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
 export type PageFrameProps = {
   view: AppViewProps;
   body: PageBody;
+  /** What the page does with its own keys (a group enters, a leaf edits). */
+  actions?: PageActions;
+  /**
+   * What to draw instead of the page's title row.
+   *
+   * The band's height is owed to the frame, so a page cannot raise a second box
+   * above itself without moving every row under it. The settings page's inline
+   * editor therefore *is* the header row for as long as it is open — one row, the
+   * same one, and the page behind it stays exactly where it was.
+   */
+  headerSlot?: ReactNode;
+};
+
+/**
+ * What a page can do with the keys the frame owns.
+ *
+ * The frame keeps the keys that mean the same thing everywhere — `↑↓` move,
+ * `PgUp`/`PgDn`/`Home`/`End` scroll, `Esc` leaves — and asks the page what
+ * `Enter`, `Space` and `←→` mean, because those are the page's vocabulary: a
+ * settings leaf toggles, cycles or opens an editor; a group row enters a
+ * sub-screen. Adding a page means adding callbacks here, not a second frame.
+ */
+export type PageActions = {
+  /** `Enter` on a row the cursor is on (and on the row a click landed on). */
+  activate?: (row: PageRow) => void;
+  /** `Space` on the cursor row: the settings page's toggle. */
+  toggle?: (row: PageRow) => void;
+  /**
+   * `←` (`-1`) / `→` (`+1`) on the cursor row. Return `true` when the key meant
+   * something; `false` lets it fall through — `←` then returns from a sub-screen,
+   * the same key `Esc` is.
+   */
+  adjust?: (row: PageRow, direction: 1 | -1) => boolean;
+  /**
+   * Extra `page`-scope keys (the permission editor's `A` / `D`). A function of the
+   * cursor row, because those keys act on *that* row and a table built during a
+   * render would close over the cursor of a previous one.
+   */
+  bindings?: (cursor: PageRow | undefined) => readonly KeyBinding[];
+  /** `Esc` before leaving the page: return `true` to stay (leave a sub-screen). */
+  back?: () => boolean;
 };
 
 /** How many rows one wheel notch moves the page. */
@@ -70,7 +113,7 @@ export const PAGE_WHEEL_ROWS = 3;
 /** The rows area's name in the hover store. */
 const PAGE_AREA = "page";
 
-export function PageFrame({ view, body }: PageFrameProps) {
+export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
   const terminalRows = useTerminalRows();
   const chromeRows = useChromeHeight();
   const { ref: panelRef, rows: panelRows } = useMeasuredChromeHeight();
@@ -89,12 +132,30 @@ export function PageFrame({ view, body }: PageFrameProps) {
 
   const [offset, setOffset] = useState(0);
   const [cursorRow, setCursorRow] = useState(() => firstSelectable(body.rows));
+  // A body whose rows changed under the cursor (a rule deleted, a value row gone)
+  // must not leave the cursor past the end: `clampSelectableRow` moves it to the
+  // nearest row the user could have meant.
+  const cursor = clampSelectableRow(body.rows, cursorRow);
   const window = pageWindow({
     count: body.rows.length,
     height: bodyHeight,
     offset,
   });
   const visible = body.rows.slice(window.start, window.end);
+
+  // A new screen (a settings group) starts at its own top with its own cursor:
+  // row 4 of one screen has nothing to do with row 4 of the next. The rows are read
+  // through a ref, so values moving under a *fixed* cursor — the normal state of a
+  // page that writes settings — do not re-seat it.
+  const latestRows = useRef(body.rows);
+  latestRows.current = body.rows;
+  const screen = body.screen;
+  useEffect(() => {
+    // `screen` is the trigger, not data: the rows come through the ref.
+    void screen;
+    setCursorRow(firstSelectable(latestRows.current));
+    setOffset(0);
+  }, [screen]);
 
   const scroll = (delta: number): void => {
     setOffset((current) =>
@@ -126,10 +187,14 @@ export function PageFrame({ view, body }: PageFrameProps) {
     // A page that has nothing to activate still consumes the key: the row exists,
     // and falling through to the composer would type into a disabled input.
     if (!row || row.kind !== "item" || row.disabled) return;
-    // P3 attaches the row's write path here; until then an item row is display.
+    actions?.activate?.(row);
   };
 
+  const cursorRowValue = (): PageRow | undefined => body.rows[cursor];
+
   const back = (): void => {
+    // A sub-screen leaves first; the page only leaves when it is at its root.
+    if (actions?.back?.()) return;
     const conversation = view.conversationId;
     if (conversation) focusTab(conversation);
   };
@@ -201,10 +266,48 @@ export function PageFrame({ view, body }: PageFrameProps) {
           id: "page.enter",
           chords: [{ key: "return" }],
           run: () => {
-            activateRow(body.rows[cursorRow]);
+            activateRow(cursorRowValue());
             return "consumed";
           },
         },
+        {
+          id: "page.left",
+          chords: [{ key: "leftArrow" }],
+          run: () => {
+            // A leaf that adjusts (a select, a number) takes `←`; otherwise it means
+            // "back one screen", which is the same key `Esc` is.
+            const row = cursorRowValue();
+            if (row && actions?.adjust?.(row, -1)) return "consumed";
+            if (actions?.back?.()) return "consumed";
+            return "declined";
+          },
+        },
+        {
+          id: "page.right",
+          chords: [{ key: "rightArrow" }],
+          run: () => {
+            const row = cursorRowValue();
+            return row && actions?.adjust?.(row, 1) ? "consumed" : "declined";
+          },
+        },
+        {
+          id: "page.space",
+          chords: [{ key: "space" }],
+          run: () => {
+            const row = cursorRowValue();
+            if (
+              !actions?.toggle ||
+              !row ||
+              row.kind !== "item" ||
+              row.disabled
+            ) {
+              return "declined";
+            }
+            actions.toggle(row);
+            return "consumed";
+          },
+        },
+        ...(actions?.bindings?.(cursorRowValue()) ?? []),
       ],
     },
   ]);
@@ -300,7 +403,7 @@ export function PageFrame({ view, body }: PageFrameProps) {
           overflow="hidden"
           paddingX={1}
         >
-          <Text bold>{header}</Text>
+          {headerSlot ?? <Text bold>{header}</Text>}
           <Box ref={rowsRef} flexDirection="column" flexShrink={0}>
             {window.above > 0 && (
               <Text dimColor>{`↑ ${window.above} more`}</Text>
@@ -310,9 +413,7 @@ export function PageFrame({ view, body }: PageFrameProps) {
                 key={`${window.start + index}:${row.kind}`}
                 row={row}
                 index={index}
-                focused={
-                  row.kind === "item" && window.start + index === cursorRow
-                }
+                focused={row.kind === "item" && window.start + index === cursor}
               />
             ))}
             {window.below > 0 && (

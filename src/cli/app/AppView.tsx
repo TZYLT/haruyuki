@@ -81,6 +81,7 @@ import type {
   StaticItem,
   TabStripProjection,
 } from "./types";
+import type { PageRuntimeProps } from "./use-runtime-handlers";
 
 type ModelSelectorOptions = {
   filterProvider?: string;
@@ -103,7 +104,7 @@ type QueuedApprovalDecision = {
   reason?: string;
 };
 
-export type AppViewProps = {
+export type AppViewProps = PageRuntimeProps & {
   activeOverlay: ActiveOverlay;
   /**
    * The strip's behaviour, shared with the `/tabs` face. Drawn by the full-screen
@@ -443,7 +444,6 @@ export function AppView(props: AppViewRenderProps) {
 
   const Transcript = props.transcript;
 
-  // The chrome height drives how much room the full-screen viewport gets.
   const { ref: chromeRef, rows: chromeRows } = useMeasuredChromeHeight();
 
   return (

@@ -239,6 +239,7 @@ import {
 } from "./use-overlay-commands";
 import { useQueuedApprovalSubmit } from "./use-queued-approval-submit";
 import { useReasoningCycle } from "./use-reasoning-cycle";
+import { useRuntimeHandlers } from "./use-runtime-handlers";
 import { useSubmitHandler } from "./use-submit-handler";
 
 export function App({
@@ -4074,14 +4075,12 @@ export function App({
     }
   }, [lastShellToolCallId, handleToggleExpandedToolCall]);
 
-  // Handle permission mode changes from the Input component (e.g., shift+tab cycling)
-  const handlePermissionModeChange = useCallback(
-    (mode: PermissionMode) => {
-      // permissionMode.setMode() is called in InputRich.tsx before this callback
-      setUiPermissionMode(mode);
-    },
-    [setUiPermissionMode],
-  );
+  // The permission-mode callback plus the two runtime flags the settings page flips.
+  const pageRuntime = useRuntimeHandlers({
+    streaming: [tokenStreamingEnabled, setTokenStreamingEnabled],
+    reasoning: [reasoningTabCycleEnabled, _setReasoningTabCycleEnabled],
+    setUiPermissionMode,
+  });
 
   const { flushPendingReasoningEffort, handleCycleReasoningEffort } =
     useReasoningCycle({
@@ -4448,7 +4447,7 @@ export function App({
       handleInterrupt={handleInterrupt}
       handleModelSelect={handleModelSelect}
       handlePasteError={handlePasteError}
-      handlePermissionModeChange={handlePermissionModeChange}
+      {...pageRuntime}
       handlePersonalitySelect={handlePersonalitySelect}
       handleProfileEscapeCancel={handleProfileEscapeCancel}
       handleRecallOverlaySave={handleRecallOverlaySave}

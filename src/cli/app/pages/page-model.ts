@@ -28,6 +28,12 @@ export type PageRow =
       value?: string;
       /** The key that acts on the row (`Space`, `←→`, `Enter`, `→`). */
       key?: string;
+      /**
+       * A dim aside after the key — the settings page puts the row's scope here
+       * (`[G]`, `[agent]`, `[会话]`) or, when the row cannot be edited, the reason
+       * it cannot (《32》§5.3 requires the reason to be visible, not implied).
+       */
+      hint?: string;
       /** Rows that exist but cannot be acted on (disabled, or read-only). */
       disabled?: boolean;
     }
@@ -38,6 +44,18 @@ export type PageBody = {
   title: string;
   /** A path to show instead of the title (`Settings / 上下文管理 / compaction`). */
   breadcrumb?: readonly string[];
+  /**
+   * Which screen this body is, when one page has several (`Settings` does: the
+   * root, a group, a permission bucket).
+   *
+   * The cursor and the scroll offset belong to a *screen*, not to a page: moving
+   * to a sub-screen must put the cursor on that screen's first row instead of
+   * leaving it at the row number the previous screen happened to have. A page
+   * with one screen can omit it — the body then never changes identity, and the
+   * cursor simply stays put while values change under it (which is what a value
+   * edit needs).
+   */
+  screen?: string;
   rows: readonly PageRow[];
 };
 
@@ -133,6 +151,25 @@ export function stepSelectableRow(
   const next = current + direction;
   if (next < 0 || next >= selectable.length) return from;
   return selectable[next] ?? from;
+}
+
+/**
+ * The nearest selectable row to `index`, or 0 when there is none.
+ *
+ * A cursor outlives the rows it pointed at: deleting a permission rule, or
+ * collapsing a group, leaves it past the end. Clamping at the *nearest* selectable
+ * row (rather than at `rows.length - 1`, which may be a header) is what keeps the
+ * next `Enter` from acting on a row the user never saw.
+ */
+export function clampSelectableRow(
+  rows: readonly PageRow[],
+  index: number,
+): number {
+  const selectable = selectableRows(rows);
+  if (selectable.length === 0) return 0;
+  if (selectable.includes(index)) return index;
+  const after = selectable.find((row) => row > index);
+  return after ?? selectable.at(-1) ?? 0;
 }
 
 /**

@@ -97,7 +97,10 @@ describe("the page frame", () => {
       // enough to fit, so the band's height is visible as the frame's height.
       expect(rows.length).toBe(14);
       expect(rows[0]).toContain("Settings");
-      expect(rows.join("\n")).toContain("通用");
+      // The root screen is the sections with their second-level entries under them
+      // (P3), and the cursor is on the first row that can be acted on.
+      expect(rows.join("\n")).toContain("上下文管理");
+      expect(rows.join("\n")).toContain("话题");
     } finally {
       page.stop();
     }
