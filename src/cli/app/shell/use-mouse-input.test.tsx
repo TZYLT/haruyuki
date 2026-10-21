@@ -162,7 +162,7 @@ afterEach(() => {
 });
 
 describe("mouse input", () => {
-  test("asks for mouse reporting while mounted and gives it back on unmount", () => {
+  test("asks for mouse reporting while mounted and gives it back on unmount", async () => {
     const stream = fakeMouseStream();
     const shell = mountMouse(stream);
     try {
@@ -171,11 +171,33 @@ describe("mouse input", () => {
     } finally {
       shell.unmount();
     }
+    // The release is deferred by one tick so a remount can cancel it: the app is
+    // keyed by the conversation, so a switch mounts the next shell before the old
+    // one is gone, and a release that wrote immediately would be the last word.
+    expect(isMouseTrackingEnabled()).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 5));
     expect(isMouseTrackingEnabled()).toBe(false);
     expect(stream.writes).toEqual([
       MOUSE_TRACKING_ENABLE,
       MOUSE_TRACKING_DISABLE,
     ]);
+  });
+
+  test("a shell that replaces another in the same tick leaves the mode on and writes nothing", async () => {
+    const stream = fakeMouseStream();
+    const first = mountMouse(stream);
+    first.unmount();
+    // The next shell mounts in the same tick, as a conversation switch does.
+    const second = mountMouse(stream);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(isMouseTrackingEnabled()).toBe(true);
+      // One enable in total: the release was cancelled, so the terminal never
+      // saw the modes blink off and back on.
+      expect(stream.writes).toEqual([MOUSE_TRACKING_ENABLE]);
+    } finally {
+      second.unmount();
+    }
   });
 
   test("a real wheel report scrolls the transcript three rows", async () => {

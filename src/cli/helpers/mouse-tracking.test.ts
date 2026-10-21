@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   acquireMouseHover,
+  acquireMouseTracking,
   disableMouseTracking,
   enableMouseTracking,
   isMouseHoverActive,
@@ -12,6 +13,7 @@ import {
   type MouseTrackingStream,
   resetMouseTrackingForTests,
   subscribeToMouseTracking,
+  syncMouseTracking,
   toggleMouseTracking,
 } from "@/cli/helpers/mouse-tracking";
 
@@ -201,5 +203,69 @@ describe("any-motion for hovering", () => {
     expect(stream.writes.at(-1)).toBe(
       MOUSE_HOVER_DISABLE + MOUSE_TRACKING_DISABLE,
     );
+  });
+});
+
+describe("ownership across a remount", () => {
+  test("a second owner keeps the mode on while the first releases", async () => {
+    const stream = fakeStream();
+    const first = acquireMouseTracking(stream);
+    const second = acquireMouseTracking(stream);
+    expect(stream.writes).toEqual([MOUSE_TRACKING_ENABLE]);
+
+    // The old shell goes away while the new one is already mounted.
+    first();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(isMouseTrackingEnabled()).toBe(true);
+    expect(stream.writes).toEqual([MOUSE_TRACKING_ENABLE]);
+
+    second();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(isMouseTrackingEnabled()).toBe(false);
+    expect(stream.writes).toEqual([
+      MOUSE_TRACKING_ENABLE,
+      MOUSE_TRACKING_DISABLE,
+    ]);
+  });
+
+  test("a release followed by an acquire in the same tick never writes the disable", async () => {
+    const stream = fakeStream();
+    const first = acquireMouseTracking(stream);
+    // The keyed root replaces its shell in one commit: release, then acquire.
+    first();
+    const second = acquireMouseTracking(stream);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(isMouseTrackingEnabled()).toBe(true);
+    expect(stream.writes).toEqual([MOUSE_TRACKING_ENABLE]);
+    second();
+  });
+
+  test("a remount cannot undo the user's Ctrl+X m", async () => {
+    const stream = fakeStream();
+    const first = acquireMouseTracking(stream);
+    toggleMouseTracking(stream);
+    expect(isMouseTrackingEnabled()).toBe(false);
+    first();
+
+    // A page mounting does not turn reporting back on: consent is the user's.
+    const second = acquireMouseTracking(stream);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(isMouseTrackingEnabled()).toBe(false);
+    second();
+  });
+
+  test("re-asserting writes the three modes again without changing state", () => {
+    const stream = fakeStream();
+    acquireMouseTracking(stream);
+    const writes = stream.writes.length;
+
+    expect(syncMouseTracking()).toBe(true);
+    expect(stream.writes.slice(writes)).toEqual([MOUSE_TRACKING_ENABLE]);
+    expect(isMouseTrackingEnabled()).toBe(true);
+
+    // While the user has it off there is nothing to re-assert.
+    toggleMouseTracking(stream);
+    expect(syncMouseTracking()).toBe(false);
   });
 });

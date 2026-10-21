@@ -1,11 +1,12 @@
 import { useEffect } from "react";
+import { getTabsState, subscribeToTabs } from "@/cli/app/tabs";
 import { scrollTranscriptWheel } from "@/cli/app/viewport-scroll";
 import { LEADER_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { registerMouseHandler } from "@/cli/helpers/mouse-router";
 import {
-  disableMouseTracking,
-  enableMouseTracking,
+  acquireMouseTracking,
   type MouseTrackingStream,
+  syncMouseTracking,
   toggleMouseTracking,
 } from "@/cli/helpers/mouse-tracking";
 import { showNotice } from "@/cli/helpers/notice";
@@ -35,12 +36,24 @@ import { useKeyBindings } from "@/cli/hooks/use-input-router";
 export function useMouseInput(
   stream: MouseTrackingStream = process.stdout,
 ): void {
+  // Owned, not toggled: see `acquireMouseTracking`. The app root is keyed by the
+  // conversation, so a switch mounts a second shell before the first releases —
+  // a plain pair lets the last write be the disable.
+  useEffect(() => acquireMouseTracking(stream), [stream]);
+
+  // The terminal is a peer: a redraw, an alt-screen entry or a terminal-side reset
+  // can clear reporting without telling us, and the tab row is where that shows
+  // first (the pointer stops answering *after a tab operation*). Re-assert on each
+  // focus change; three short sequences, no state change.
   useEffect(() => {
-    enableMouseTracking(stream);
-    return () => {
-      disableMouseTracking();
-    };
-  }, [stream]);
+    let lastActiveId = getTabsState().activeId;
+    return subscribeToTabs(() => {
+      const activeId = getTabsState().activeId;
+      if (activeId === lastActiveId) return;
+      lastActiveId = activeId;
+      syncMouseTracking();
+    });
+  }, []);
 
   useEffect(() => {
     return registerMouseHandler(

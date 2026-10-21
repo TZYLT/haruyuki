@@ -62,6 +62,18 @@ let exitHook: (() => void) | null = null;
 let hoverClaims = 0;
 /** Whether `1003` is currently written, so a redundant write is not sent. */
 let hoverWritten = false;
+/**
+ * How many mounted shells own the base modes, and whether the user still consents.
+ *
+ * Both are needed, and neither alone is enough: the count is what makes a remount
+ * (the app is keyed by `agentId:conversationId`, so a conversation switch builds a
+ * new tree) leave the mode on instead of blinking it off and back on, and `consent`
+ * is what keeps a page opening from silently undoing a `Ctrl+X m`.
+ */
+let owners = 0;
+let consent = true;
+/** A release that has not been confirmed yet; a re-acquire in the same tick cancels it. */
+let pendingDisable: ReturnType<typeof setTimeout> | null = null;
 const listeners = new Set<() => void>();
 
 function write(stream: MouseTrackingStream, chunk: string): void {
@@ -133,6 +145,7 @@ export function enableMouseTracking(
 
 /** Turn mouse reporting off. Returns whether this call changed anything. */
 export function disableMouseTracking(): boolean {
+  cancelPendingDisable();
   if (!enabled) return false;
   enabled = false;
   const wasHover = hoverWritten;
@@ -153,6 +166,78 @@ export function disableMouseTracking(): boolean {
   debugWarn("mouse", "reporting off");
   publish();
   return true;
+}
+
+/**
+ * Ask for mouse reporting while a shell is mounted.
+ *
+ * Reference-counted, for the same reason `acquireMouseHover` is: the app root is
+ * keyed by `agentId:conversationId` (`index.ts`), so **every conversation switch
+ * builds a new tree while the old one unmounts**. With a plain enable/disable pair
+ * the two can interleave — the new shell asks while the old one has not released
+ * yet, or the release lands after the new ask — and the last write wins. In the
+ * first case the terminal is left with the modes off while the live shell believes
+ * it turned them on, which is exactly "the mouse dies after a tab operation, and
+ * `Ctrl+X m` twice brings it back".
+ *
+ * A release defers the disable by one tick: a re-acquire in the same tick cancels
+ * it, so a remount writes nothing at all instead of toggling the modes twice.
+ *
+ * `consent` is separate on purpose: a user who switched reporting off with
+ * `Ctrl+X m` must not get it back because a page mounted.
+ */
+export function acquireMouseTracking(
+  stream: MouseTrackingStream = process.stdout,
+): () => void {
+  owners += 1;
+  cancelPendingDisable();
+  if (consent && !enabled) enableMouseTracking(stream);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    owners = Math.max(0, owners - 1);
+    if (owners === 0) scheduleDisable();
+  };
+}
+
+/** How many shell owners are mounted (diagnostics and tests). */
+export function mouseTrackingOwners(): number {
+  return owners;
+}
+
+/**
+ * Write the base modes again, if this process believes they are on.
+ *
+ * The terminal is a peer, not a variable: a full-screen redraw, an alt-screen
+ * entry or a terminal-side reset can clear reporting without telling us. Tab
+ * operations are the moment that would show, so the shell re-asserts the modes
+ * after each focus change — three short sequences, and no state change.
+ */
+export function syncMouseTracking(): boolean {
+  if (!enabled || !currentStream) return false;
+  write(currentStream, MOUSE_TRACKING_ENABLE);
+  // Any-motion is a fourth mode and can be lost with the other three; a page that
+  // is still up would otherwise stop hovering until it was remounted.
+  if (hoverWritten) write(currentStream, MOUSE_HOVER_ENABLE);
+  debugWarn("mouse", "reporting re-asserted");
+  return true;
+}
+
+function cancelPendingDisable(): void {
+  if (pendingDisable === null) return;
+  clearTimeout(pendingDisable);
+  pendingDisable = null;
+}
+
+function scheduleDisable(): void {
+  cancelPendingDisable();
+  pendingDisable = setTimeout(() => {
+    pendingDisable = null;
+    if (owners === 0) disableMouseTracking();
+  }, 0);
+  // Never hold the process open for a teardown that will not be needed.
+  pendingDisable.unref?.();
 }
 
 /**
@@ -195,19 +280,26 @@ export function toggleMouseTracking(
   stream: MouseTrackingStream = process.stdout,
 ): boolean {
   if (enabled) {
+    // The user's own answer beats every mount: `acquireMouseTracking` reads this
+    // before turning the modes back on.
+    consent = false;
     disableMouseTracking();
     return false;
   }
+  consent = true;
   enableMouseTracking(stream);
   return enabled;
 }
 
 /** Test seam: forget the mode, the stream, the exit hook and the subscribers. */
 export function resetMouseTrackingForTests(): void {
+  cancelPendingDisable();
   enabled = false;
   currentStream = null;
   hoverClaims = 0;
   hoverWritten = false;
+  owners = 0;
+  consent = true;
   if (exitHook) {
     process.off("exit", exitHook);
     exitHook = null;
