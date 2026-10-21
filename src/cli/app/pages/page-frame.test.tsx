@@ -99,8 +99,8 @@ describe("the page frame", () => {
       expect(rows[0]).toContain("Settings");
       // The root screen is the sections with their second-level entries under them
       // (P3), and the cursor is on the first row that can be acted on.
-      expect(rows.join("\n")).toContain("上下文管理");
-      expect(rows.join("\n")).toContain("话题");
+      expect(rows.join("\n")).toContain("Context");
+      expect(rows.join("\n")).toContain("Topic");
     } finally {
       page.stop();
     }

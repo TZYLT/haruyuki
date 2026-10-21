@@ -28,7 +28,11 @@ import {
  * The schema is the part of P3 that can be wrong in ways the frame cannot show: an
  * entry that claims to be editable but has no writer, a group row for a group that
  * does not exist, two controls over one stored key. Those are asserted here; the
- * screens and the keys are asserted on the frame (`settings-page.test.tsx`).
+ * screens, the columns and the keys are asserted on the frame
+ * (`settings-page.test.tsx`).
+ *
+ * Copy is English throughout (reported from the first real run: a page half in
+ * Chinese and half in English reads as a debug screen).
  */
 const CTX: SettingsContext = {
   agentId: "agent-1",
@@ -78,7 +82,7 @@ describe("the schema", () => {
     }
   });
 
-  test("a select has options, and its current value is one of them", () => {
+  test("a select has options", () => {
     for (const item of SETTINGS_ITEMS) {
       if (item.kind !== "select") continue;
       expect(item.options?.length ?? 0).toBeGreaterThan(1);
@@ -88,9 +92,9 @@ describe("the schema", () => {
   test("one stored key has one control", () => {
     // `experimentManager.set("conversation_titles", …)` writes the same setting as
     // `autoConversationTitles`; the page deliberately keeps only the setting.
-    const labels = SETTINGS_ITEMS.map((item) => item.id);
-    expect(labels).toContain("autoConversationTitles");
-    expect(labels).not.toContain("experiment:conversation_titles");
+    const ids = SETTINGS_ITEMS.map((item) => item.id);
+    expect(ids).toContain("autoConversationTitles");
+    expect(ids).not.toContain("experiment:conversation_titles");
   });
 
   test("the inventory is pinned, so an addition is a decision", () => {
@@ -98,6 +102,16 @@ describe("the schema", () => {
     // number without a docs update is what this test is for.
     expect(SETTINGS_ITEMS.filter((item) => item.editable)).toHaveLength(32);
     expect(SETTINGS_ITEMS).toHaveLength(45);
+  });
+
+  test("the copy is English: no CJK left in a label or a reason", () => {
+    for (const item of SETTINGS_ITEMS) {
+      expect(item.label).not.toMatch(/[\u4e00-\u9fff]/);
+      expect(item.reason ?? "").not.toMatch(/[\u4e00-\u9fff]/);
+      for (const option of item.options ?? []) {
+        expect(option.label).not.toMatch(/[\u4e00-\u9fff]/);
+      }
+    }
   });
 });
 
@@ -110,7 +124,7 @@ describe("rows", () => {
       ctx: CTX,
     });
     const headers = body.filter((row) => row.kind === "header");
-    expect(headers.map((row) => row.text)).toContain("上下文管理");
+    expect(headers.map((row) => row.text)).toContain("Context");
     // A section that lost all its items would leave a stray title; the builder
     // checks first, so every drawn title has rows after it.
     for (const header of headers) {
@@ -129,7 +143,7 @@ describe("rows", () => {
     const group = body.find(
       (row) => row.kind === "item" && row.id === "group:recall",
     );
-    expect(group?.kind === "item" && group.value).toBe("10 项");
+    expect(group?.kind === "item" && group.value).toBe("10 items");
     // Its items are on the group's own screen, not under the row.
     expect(rows(body)).not.toContain("recallEnabled|");
     expect(rows(groupRows(SETTINGS_ITEMS, "recall", CTX))).toContain(
@@ -146,7 +160,7 @@ describe("rows", () => {
     expect(single).toHaveLength(0);
   });
 
-  test("the permission entry is a row of its own in 工具与权限", () => {
+  test("the permission entry is a row of its own under Tools & permissions", () => {
     const body = rootRows({
       sections: SETTINGS_SECTIONS,
       items: SETTINGS_ITEMS,
@@ -157,29 +171,28 @@ describe("rows", () => {
     const row = body.find(
       (entry) => entry.kind === "item" && entry.id === "perm:permission",
     );
-    expect(row?.kind === "item" && row.value).toBe("3 条");
+    expect(row?.kind === "item" && row.value).toBe("3 rules");
   });
 
-  test("a row carries its value, its key and its scope", () => {
-    const item = SETTINGS_ITEMS.find(
-      (entry) => entry.id === "systemRemindersVisible",
-    );
-    if (!item) throw new Error("systemRemindersVisible is missing");
-    const row = settingRow(item, CTX);
-    if (row.kind !== "item") throw new Error("not an item row");
-    expect(row.key).toBe("Space");
-    expect(row.hint).toBe("[会话]");
-    expect(row.disabled).toBe(false);
+  test("every row carries a scope marker in its own column", () => {
+    // The marker used to be the row's last cell and was the first thing a narrow
+    // terminal cut; keeping it out of the value is what the frame test then checks.
+    for (const item of SETTINGS_ITEMS) {
+      const row = settingRow(item, CTX);
+      if (row.kind !== "item") throw new Error(`${item.id} is not an item row`);
+      expect(row.hint).toMatch(/^\[[A-Za-z-]+\]$/);
+      expect(row.key).toBeUndefined();
+    }
   });
 
-  test("a read-only row is dimmed with the reason as its aside", () => {
+  test("a read-only row is dimmed and carries its reason with the value", () => {
     const item = SETTINGS_ITEMS.find((entry) => entry.id === "showCompactions");
     if (!item) throw new Error("showCompactions is missing");
     const row = settingRow(item, CTX);
     if (row.kind !== "item") throw new Error("not an item row");
     expect(row.disabled).toBe(true);
-    expect(row.key).toBeUndefined();
-    expect(row.hint).toContain("reload");
+    expect(row.hint).toBe("[G]");
+    expect(row.value).toContain("start or /reload");
   });
 });
 
@@ -204,7 +217,7 @@ describe("values", () => {
 
   test("an unreadable value says so instead of pretending", () => {
     if (!toggle) throw new Error("toggle fixture missing");
-    expect(displayValue(toggle, null)).toBe("（读不到）");
+    expect(displayValue(toggle, null)).toBe("(unreadable)");
   });
 
   test("toggles flip, selects wrap, numbers step and clamp", () => {
@@ -233,8 +246,8 @@ describe("values", () => {
   test("a typed number outside its bounds is refused, not clamped", () => {
     if (!number) throw new Error("number fixture missing");
     expect(validateValue(number, "12")).toBeNull();
-    expect(validateValue(number, "abc")).toBe("需要数字");
-    expect(validateValue(number, "-1")).toBe("不能小于 0");
+    expect(validateValue(number, "abc")).toBe("needs a number");
+    expect(validateValue(number, "-1")).toBe("must be at least 0");
   });
 
   test("the scope marker never pretends a setting has three levels", () => {
@@ -245,7 +258,7 @@ describe("values", () => {
     const global = SETTINGS_ITEMS.find((item) => item.id === "tokenStreaming");
     if (!agent || !session || !global) throw new Error("fixtures missing");
     expect(scopeMarker(agent)).toBe("[agent]");
-    expect(scopeMarker(session)).toBe("[会话]");
+    expect(scopeMarker(session)).toBe("[session]");
     expect(scopeMarker(global)).toBe("[G]");
   });
 });
@@ -270,12 +283,14 @@ describe("permission rows", () => {
         row.kind === "item" ? `${row.label} ${row.value ?? ""}` : row.text,
       )
       .join("\n");
-    expect(text).toContain("模式 standard");
-    expect(text).toContain("允许 1 条");
-    expect(text).toContain("询问 0 条");
-    expect(text).toContain("附加目录 1 条");
+    expect(text).toContain("Mode standard");
+    expect(text).toContain("Allow 1 rule");
+    expect(text).toContain("Ask 0 rules");
+    expect(text).toContain(
+      "Extra directories 1 rule · No write path (edit settings.json)",
+    );
     // The write scope is permanent on this screen, as §12.6 1 requires.
-    expect(text).toContain("写入 project");
+    expect(text).toContain("Write to project");
   });
 
   test("the read-only bucket is disabled and says why", () => {
@@ -289,7 +304,8 @@ describe("permission rows", () => {
     );
     if (!row || row.kind !== "item") throw new Error("bucket row missing");
     expect(row.disabled).toBe(true);
-    expect(row.hint).toContain("settings.json");
+    // The reason rides with the value now: a 16-cell column would cut it.
+    expect(row.value).toContain("settings.json");
     expect(PERMISSION_BUCKETS.filter((bucket) => bucket.writable)).toHaveLength(
       4,
     );

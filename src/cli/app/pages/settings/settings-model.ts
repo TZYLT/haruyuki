@@ -126,13 +126,13 @@ export type SettingsSection = {
 };
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
-  { id: "context", label: "上下文管理" },
-  { id: "model", label: "模型与推理" },
-  { id: "memory", label: "记忆与反思" },
-  { id: "display", label: "界面与显示" },
-  { id: "session", label: "会话" },
-  { id: "tools", label: "工具与权限" },
-  { id: "integrations", label: "集成与实验" },
+  { id: "context", label: "Context" },
+  { id: "model", label: "Model & reasoning" },
+  { id: "memory", label: "Memory & reflection" },
+  { id: "display", label: "Display" },
+  { id: "session", label: "Session" },
+  { id: "tools", label: "Tools & permissions" },
+  { id: "integrations", label: "Integrations & experiments" },
 ];
 
 /** The row id prefix a group row uses; `Enter` on it opens the group's screen. */
@@ -142,14 +142,16 @@ export const GROUP_ROW_PREFIX = "group:";
 export const PERMISSION_ROW_PREFIX = "perm:";
 
 /**
- * The scope marker the page prints at the end of a row.
+ * The scope marker the page prints in its own column.
  *
- * 《38》§12.5 asks for `[G]`／`[P]`／`[L]`／`[env]`／`[会话]`, and forbids pretending
- * every setting has three levels: an agent-scoped setting is written to the
- * agent, not to a file of the project's.
+ * 《38》§12.5 asks for `[G]`／`[P]`／`[L]`／`[env]`／`[session]`, and forbids pretending
+ * every setting has three levels: an agent-scoped setting is written to the agent,
+ * not to a file of the project's. The column has a fixed width because the marker
+ * used to be the row's last cell — which is the first thing a narrow terminal cut,
+ * so it was reported as missing.
  */
 export function scopeMarker(item: SettingsItem): string {
-  if (item.persistence === "session") return "[会话]";
+  if (item.persistence === "session") return "[session]";
   switch (item.scope) {
     case "global":
       return "[G]";
@@ -164,21 +166,7 @@ export function scopeMarker(item: SettingsItem): string {
     case "model":
       return "[model]";
     case "session":
-      return "[会话]";
-  }
-}
-
-/** The key that acts on a row, as 《38》§12.3bis 5 spells it. */
-export function actionHint(item: SettingsItem): string {
-  if (!item.editable) return "";
-  switch (item.kind) {
-    case "toggle":
-      return "Space";
-    case "select":
-    case "number":
-      return "←→";
-    case "text":
-      return "⏎";
+      return "[session]";
   }
 }
 
@@ -197,7 +185,7 @@ export function isTruthy(raw: string): boolean {
  * unreadable setting is not "Off".
  */
 export function displayValue(item: SettingsItem, raw: string | null): string {
-  if (raw === null) return "（读不到）";
+  if (raw === null) return "(unreadable)";
   if (item.kind === "toggle") return isTruthy(raw) ? "On" : "Off";
   if (item.kind === "select") {
     const option = item.options?.find((candidate) => candidate.value === raw);
@@ -251,16 +239,16 @@ export function cycleValue(input: {
 export function validateValue(item: SettingsItem, raw: string): string | null {
   if (item.kind === "number") {
     const value = Number(raw);
-    if (!Number.isFinite(value)) return "需要数字";
+    if (!Number.isFinite(value)) return "needs a number";
     if (item.min !== undefined && value < item.min)
-      return `不能小于 ${item.min}`;
+      return `must be at least ${item.min}`;
     if (item.max !== undefined && value > item.max)
-      return `不能大于 ${item.max}`;
+      return `must be at most ${item.max}`;
   }
   if (item.kind === "select") {
     const options = item.options ?? [];
     if (!options.some((option) => option.value === raw)) {
-      return "不在可选值里";
+      return "not one of the options";
     }
   }
   return null;
@@ -274,18 +262,22 @@ export function itemsOfGroup(
   return items.filter((item) => item.group === group);
 }
 
-/** One row for a scalar, with its value, scope and the key that changes it. */
+/**
+ * One row for a scalar: the scope in its own column, then the value.
+ *
+ * A read-only row puts the *reason* where the value is, after what the value is, so
+ * the row answers both questions a user has about a dimmed line ("what is it now?"
+ * and "why can't I change it?") in one place — the scope column stays the scope.
+ */
 export function settingRow(item: SettingsItem, ctx: SettingsContext): PageRow {
   const raw = item.read(ctx);
+  const value = displayValue(item, raw);
   return {
     kind: "item",
     id: item.id,
     label: item.label,
-    value: displayValue(item, raw),
-    key: item.editable ? actionHint(item) : undefined,
-    hint: item.editable
-      ? scopeMarker(item)
-      : (item.reason ?? scopeMarker(item)),
+    value: item.editable ? value : `${value} · ${item.reason ?? ""}`.trim(),
+    hint: scopeMarker(item),
     disabled: !item.editable,
   };
 }
@@ -303,7 +295,7 @@ export function rootRows(input: {
   items: readonly SettingsItem[];
   groups: readonly SettingsGroup[];
   ctx: SettingsContext;
-  /** How many permission rules are in force, for the `权限` row's count. */
+  /** How many permission rules are in force, for the `Permissions` row's count. */
   permissionRuleCount?: number;
 }): PageRow[] {
   const rows: PageRow[] = [];
@@ -330,7 +322,7 @@ export function rootRows(input: {
         kind: "item",
         id: `${GROUP_ROW_PREFIX}${group.id}`,
         label: group.label,
-        value: `${members.length} 项`,
+        value: `${members.length} items`,
         key: "▸",
       });
     }
@@ -344,11 +336,11 @@ export function rootRows(input: {
       rows.push({
         kind: "item",
         id: `${PERMISSION_ROW_PREFIX}permission`,
-        label: "权限",
+        label: "Permissions",
         value:
           input.permissionRuleCount === undefined
             ? undefined
-            : `${input.permissionRuleCount} 条`,
+            : `${input.permissionRuleCount} rules`,
         key: "▸",
       });
     }

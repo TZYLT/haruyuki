@@ -24,7 +24,6 @@ import {
   SETTINGS_SECTIONS,
   type SettingsContext,
   type SettingsItem,
-  type SettingsSectionId,
   validateValue,
 } from "@/cli/app/pages/settings/settings-model";
 import {
@@ -32,6 +31,8 @@ import {
   SETTINGS_ITEMS,
   settingItemById,
 } from "@/cli/app/pages/settings/settings-schema";
+import type { Crumb } from "@/cli/app/pages/settings/use-crumb-clicks";
+import { focusTab } from "@/cli/app/tabs";
 import type { KeyBinding } from "@/cli/helpers/input-keys";
 import {
   loadPermissions,
@@ -85,9 +86,15 @@ export type SettingsPageState = {
   editor: SettingsEditorState | null;
   /** The transient feedback line, drawn beside the title by the page. */
   note: string | null;
+  /** The path, one segment per level that exists as a screen. */
+  crumbs: readonly Crumb[];
+  /** The keys that work on this screen, in English, drawn beside the crumbs. */
+  hint: string;
   setDraft: (draft: string) => void;
   submitEditor: () => void;
   cancelEditor: () => void;
+  /** A click on a breadcrumb segment. */
+  selectCrumb: (crumb: Crumb) => void;
 };
 
 /** How long a transient note stays on the page. */
@@ -160,9 +167,9 @@ export function useSettingsPage(view: AppViewProps): SettingsPageState {
     try {
       await operation();
       refresh();
-      setNote(`${label} 已更新`);
+      setNote(`${label} updated`);
     } catch (error) {
-      setNote(`${label} 失败：${messageOf(error)}`);
+      setNote(`${label} failed: ${messageOf(error)}`);
     }
   };
 
@@ -201,13 +208,13 @@ export function useSettingsPage(view: AppViewProps): SettingsPageState {
     }
 
     if (draft === "") {
-      setEditor({ ...current, error: "规则不能为空" });
+      setEditor({ ...current, error: "A rule cannot be empty" });
       return;
     }
     const { bucket, index } = current.target;
     const previous = index >= 0 ? (rulesFor(rules, bucket)[index] ?? "") : "";
     setEditor(null);
-    void run("权限规则", async () => {
+    void run("Permission rule", async () => {
       if (previous !== "") await removeFromAnyScope(bucket, previous);
       await savePermissionRule(
         draft,
@@ -253,7 +260,7 @@ export function useSettingsPage(view: AppViewProps): SettingsPageState {
     // The composer's own handler: it also syncs the singleton the permission
     // checks read, which is what `Shift+Tab` goes through (§12.6 2).
     view.handlePermissionModeChange(next.value);
-    setNote(`权限模式 → ${next.value}`);
+    setNote(`PermissionsMode → ${next.value}`);
   };
 
   const cycleWriteScope = (direction: 1 | -1): void => {
@@ -266,7 +273,7 @@ export function useSettingsPage(view: AppViewProps): SettingsPageState {
       ];
     if (!next) return;
     setWriteScope(next);
-    setNote(`权限规则写入 → ${next}`);
+    setNote(`Permission rules write to → ${next}`);
   };
 
   const openRuleEditor = (row: PageRow): void => {
@@ -406,28 +413,28 @@ export function useSettingsPage(view: AppViewProps): SettingsPageState {
       {
         id: "settings.rule.add",
         chords: [{ key: "a" }],
-        label: "新增规则",
+        label: "Add rule",
         run: () => {
-          openEditor({ kind: "rule", bucket, index: -1 }, `${bucket} 新增`, "");
+          openEditor({ kind: "rule", bucket, index: -1 }, `${bucket} new`, "");
           return "consumed";
         },
       },
       {
         id: "settings.rule.delete",
         chords: [{ key: "d" }],
-        label: "删除规则",
+        label: "Delete rule",
         run: () => {
           if (!cursorRow || cursorRow.kind !== "item") return "declined";
           if (armed.current !== cursorRow.id) {
             armed.current = cursorRow.id;
-            setNote(`再按 D 删除：${cursorRow.label}`);
+            setNote(`Press D again to delete: ${cursorRow.label}`);
             return "consumed";
           }
           armed.current = null;
           const rule = cursorRow.label;
-          void run("权限规则", async () => {
+          void run("Permission rule", async () => {
             const removed = await removeFromAnyScope(bucket, rule);
-            if (!removed) throw new Error("没找到这条规则");
+            if (!removed) throw new Error("Rule not found");
           });
           return "consumed";
         },
@@ -435,50 +442,78 @@ export function useSettingsPage(view: AppViewProps): SettingsPageState {
     ];
   };
 
+  const selectCrumb = (crumb: Crumb): void => {
+    if (crumb.target === "root") {
+      setScreen({ kind: "root" });
+      return;
+    }
+    if (crumb.target === "permissions") {
+      setScreen({ kind: "permissions" });
+      return;
+    }
+    if (crumb.target === "leave" && view.conversationId) {
+      // The root's own crumb is the pointer's exit, which `Esc` already is: a page
+      // that only the keyboard could leave was the reported defect.
+      armed.current = null;
+      focusTab(view.conversationId);
+    }
+  };
+
+  const built = buildBody({
+    screen,
+    ctx,
+    rules,
+    writeScope,
+    permissionModeLabel: view.uiPermissionMode,
+  });
+
   return {
-    body: buildBody({
-      screen,
-      ctx,
-      rules,
-      writeScope,
-      permissionModeLabel: view.uiPermissionMode,
-    }),
+    body: built.body,
     actions: { activate, toggle, adjust, back: goBack, bindings },
     editor,
     note,
+    crumbs: built.crumbs,
+    hint: built.hint,
     setDraft,
     submitEditor,
     cancelEditor,
+    selectCrumb,
   };
 }
 
-/** Everything the frame draws, from the current screen and values. */
+/** Everything the frame draws, plus the header's path and keys. */
 function buildBody(input: {
   screen: SettingsScreen;
   ctx: SettingsContext;
   rules: PermissionRules | null;
   writeScope: PermissionScope;
   permissionModeLabel: string;
-}): PageBody {
+}): { body: PageBody; crumbs: readonly Crumb[]; hint: string } {
   const { screen, ctx } = input;
 
   let body: PageBody;
+  let crumbs: readonly Crumb[];
+  let hint: string;
   if (screen.kind === "group") {
     const group = SETTINGS_GROUPS.find((entry) => entry.id === screen.group);
+    const groupLabel = group?.label ?? screen.group;
+    // Only screens are crumbs. The section title is context, not a level: it has no
+    // screen of its own, and a segment that does nothing when clicked is a dead
+    // target on a row whose whole point is being clickable.
+    crumbs = [{ label: "Settings", target: "root" }, { label: groupLabel }];
+    hint = "Space toggle · ←→ change · ⏎ edit · Esc back";
     body = {
       title: "Settings",
-      breadcrumb: [
-        "Settings",
-        sectionLabelOf(group?.section),
-        group?.label ?? screen.group,
-      ],
+      breadcrumb: crumbs.map((crumb) => crumb.label),
       screen: `group:${screen.group}`,
       rows: groupRows(SETTINGS_ITEMS, screen.group, ctx),
     };
   } else if (screen.kind === "permissions") {
+    crumbs = [{ label: "Settings", target: "root" }, { label: "Permissions" }];
+    hint = "←→ mode/scope · Enter open · Esc back";
     body = {
       title: "Settings",
-      breadcrumb: ["Settings", "工具与权限", "权限"],
+      breadcrumb: crumbs.map((crumb) => crumb.label),
       screen: "permissions",
       rows: permissionRows({
         rules: input.rules,
@@ -490,18 +525,22 @@ function buildBody(input: {
     const bucket = PERMISSION_BUCKETS.find(
       (entry) => entry.id === screen.bucket,
     );
+    const bucketLabel = bucket?.label ?? screen.bucket;
+    crumbs = [
+      { label: "Settings", target: "root" },
+      { label: "Permissions", target: "permissions" },
+      { label: bucketLabel },
+    ];
+    hint = "A add · Enter edit · D delete · Esc back";
     body = {
       title: "Settings",
-      breadcrumb: [
-        "Settings",
-        "工具与权限",
-        "权限",
-        bucket?.label ?? screen.bucket,
-      ],
+      breadcrumb: crumbs.map((crumb) => crumb.label),
       screen: `bucket:${screen.bucket}`,
       rows: bucketRows({ rules: input.rules, bucket: screen.bucket }),
     };
   } else {
+    crumbs = [{ label: "Settings", target: "leave" }];
+    hint = "↑↓ move · Enter open · Esc back";
     body = {
       title: "Settings",
       screen: "root",
@@ -515,17 +554,10 @@ function buildBody(input: {
     };
   }
 
-  return body;
+  return { body, crumbs, hint };
 }
 
-function sectionLabelOf(section: SettingsSectionId | undefined): string {
-  if (section === undefined) return "Settings";
-  return (
-    SETTINGS_SECTIONS.find((entry) => entry.id === section)?.label ?? "Settings"
-  );
-}
-
-/** How many rules the merged permission set carries, for the root's `权限` row. */
+/** How many rules the merged permission set carries, for the root's `Permissions` row. */
 function permissionRuleCount(
   rules: PermissionRules | null,
 ): number | undefined {

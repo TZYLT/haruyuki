@@ -65,6 +65,11 @@ function getCodexUserMessageBackground(): string {
  * theme gets a darker tint rather than a white-on-white no-op — and a terminal
  * that never answered the theme query (`getTerminalBackgroundColor` is `null`)
  * still gets a usable value from the light/dark fallback.
+ *
+ * **6% was invisible on the first real run.** The row is painted behind text only
+ * (Ink has no cell background of its own), so at that weight it read as "nothing
+ * happened". 10% is still a *background*, not a selection, and it is the value P7's
+ * visual pass should start from.
  */
 function getHoverBackground(): string {
   const theme = getTerminalTheme();
@@ -72,8 +77,8 @@ function getHoverBackground(): string {
     getTerminalBackgroundColor() ??
     (theme === "light" ? { r: 255, g: 255, b: 255 } : { r: 0, g: 0, b: 0 });
   const overlay = isLightRgb(terminalBg)
-    ? { color: { r: 0, g: 0, b: 0 }, alpha: 0.06 }
-    : { color: { r: 255, g: 255, b: 255 }, alpha: 0.06 };
+    ? { color: { r: 0, g: 0, b: 0 }, alpha: 0.1 }
+    : { color: { r: 255, g: 255, b: 255 }, alpha: 0.1 };
 
   return rgbToHex(blendRgb(overlay.color, terminalBg, overlay.alpha));
 }

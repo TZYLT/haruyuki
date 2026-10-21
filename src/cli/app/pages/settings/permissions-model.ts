@@ -45,23 +45,23 @@ export type BucketDefinition = {
  * could open for editing but could never save would be a lie.
  */
 export const PERMISSION_BUCKETS: readonly BucketDefinition[] = [
-  { id: "allow", label: "允许", writable: true },
-  { id: "deny", label: "拒绝", writable: true },
-  { id: "ask", label: "询问", writable: true },
-  { id: "alwaysAsk", label: "总是询问", writable: true },
+  { id: "allow", label: "Allow", writable: true },
+  { id: "deny", label: "Deny", writable: true },
+  { id: "ask", label: "Ask", writable: true },
+  { id: "alwaysAsk", label: "Always ask", writable: true },
   {
     id: "additionalDirectories",
-    label: "附加目录",
+    label: "Extra directories",
     writable: false,
-    reason: "无写入路径（改 settings.json）",
+    reason: "No write path (edit settings.json)",
   },
 ];
 
 export const PERMISSION_MODE_OPTIONS = [
-  { value: "unrestricted", label: "unrestricted（全放行）" },
-  { value: "standard", label: "standard（按规则）" },
-  { value: "acceptEdits", label: "acceptEdits（编辑放行）" },
-  { value: "strict", label: "strict（全部询问）" },
+  { value: "unrestricted", label: "unrestricted (allow all)" },
+  { value: "standard", label: "standard (by rules)" },
+  { value: "acceptEdits", label: "acceptEdits (edits allowed)" },
+  { value: "strict", label: "strict (ask for all)" },
 ] as const;
 
 /** The scopes a rule can be written to, in the order `←→` cycles them. */
@@ -102,9 +102,9 @@ export function isRuleBucket(
 }
 
 /**
- * `Settings / 工具与权限 / 权限`: the mode, the buckets and the write scope.
+ * `Settings / Tools & permissions / Permissions`: the mode, the buckets and the write scope.
  *
- * `mode` carries `[会话]` because it is session state: `permissionMode.setMode`
+ * `mode` carries `[Session]` because it is session state: `permissionMode.setMode`
  * changes the running process and nothing on disk (§12.6 2 — the same value
  * `Shift+Tab` cycles). The write scope row is the page's only three-level write
  * and it is drawn permanently, as the spec demands.
@@ -118,24 +118,27 @@ export function permissionRows(input: {
     {
       kind: "item",
       id: `${PERMISSION_ROW_PREFIX}mode`,
-      label: "模式",
+      label: "Mode",
       value:
         PERMISSION_MODE_OPTIONS.find((option) => option.value === input.mode)
           ?.label ?? input.mode,
-      key: "←→",
-      hint: "[会话]",
+      hint: "[session]",
     },
   ];
 
   for (const bucket of PERMISSION_BUCKETS) {
     const count = rulesFor(input.rules, bucket.id).length;
+    const countLabel = `${count} ${count === 1 ? "rule" : "rules"}`;
     rows.push({
       kind: "item",
       id: `${PERMISSION_BUCKET_PREFIX}${bucket.id}`,
       label: bucket.label,
-      value: `${count} 条`,
+      // A bucket with no writer carries its reason where the value is, the same
+      // shape a read-only scalar uses, instead of hiding it in a 16-cell column.
+      value: bucket.writable
+        ? countLabel
+        : `${countLabel} · ${bucket.reason ?? ""}`,
       key: bucket.writable ? "▸" : undefined,
-      hint: bucket.writable ? undefined : bucket.reason,
       disabled: !bucket.writable,
     });
   }
@@ -144,14 +147,13 @@ export function permissionRows(input: {
     {
       kind: "item",
       id: `${PERMISSION_ROW_PREFIX}scope`,
-      label: "写入",
+      label: "Write to",
       value: input.writeScope,
-      key: "←→",
-      hint: "[三级]",
+      hint: "[three-level]",
     },
     {
       kind: "note",
-      text: "A 新增 · Enter 编辑 · D 删除（再按一次确认）· Esc 返回",
+      text: "A add · Enter edit · D delete (again confirms) · Esc back",
     },
   );
   return rows;
@@ -172,7 +174,7 @@ export function bucketRows(input: {
     return [
       {
         kind: "note",
-        text: "（空）A 新增一条 · Esc 返回",
+        text: "(empty) A to add · Esc back",
       },
     ];
   }

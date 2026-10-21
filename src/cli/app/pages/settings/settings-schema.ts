@@ -54,7 +54,7 @@ import type {
  *
  * The one thing deliberately absent is the compaction pair (`mode`, `percentage`):
  * both need the agent's backend record and an `updateAgent` round trip, and a
- * read-only pair of "（读不到）" rows would be worse than the `/compaction` face that
+ * read-only pair of "(unreadable)" rows would be worse than the `/compaction` face that
  * already owns them.
  */
 
@@ -117,9 +117,9 @@ const REFLECTION_MERGE = [
 ] as const;
 
 const WIDTH_MODES = [
-  { value: "auto", label: "auto（探测终端）" },
-  { value: "narrow", label: "narrow（1 列）" },
-  { value: "wide", label: "wide（2 列）" },
+  { value: "auto", label: "auto (probe terminal)" },
+  { value: "narrow", label: "narrow (1 column)" },
+  { value: "wide", label: "wide (2 columns)" },
 ] as const;
 
 const EXPERIMENT_LABELS: Record<string, string> = {
@@ -149,18 +149,18 @@ const EXPERIMENT_IDS: readonly ExperimentId[] = [
 ];
 
 export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
-  { id: "topic", section: "context", label: "话题与压力" },
-  { id: "recall", section: "memory", label: "被动召回" },
-  { id: "reflection", section: "memory", label: "反思" },
-  { id: "experiments", section: "integrations", label: "实验项" },
+  { id: "topic", section: "context", label: "Topic & pressure" },
+  { id: "recall", section: "memory", label: "Passive recall" },
+  { id: "reflection", section: "memory", label: "Reflection" },
+  { id: "experiments", section: "integrations", label: "Experiments" },
 ];
 
 export const SETTINGS_ITEMS: readonly SettingsItem[] = [
-  // ---------------------------------------------------------------- 上下文管理
+  // ---------------------------------------------------------------- Context
   {
     id: "topicMarkingEnabled",
     section: "context",
-    label: "话题标记",
+    label: "Topic marking",
     kind: "toggle",
     scope: "global",
     editable: true,
@@ -177,7 +177,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "topicMarkerWarnTurns",
     section: "context",
     group: "topic",
-    label: "标记警告阈值",
+    label: "Marker warn turns",
     kind: "number",
     min: 0,
     scope: "global",
@@ -191,7 +191,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "topicMarkerRejectTurns",
     section: "context",
     group: "topic",
-    label: "标记拒绝阈值",
+    label: "Marker reject turns",
     kind: "number",
     min: 0,
     scope: "global",
@@ -205,7 +205,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "topicNudgeTurns",
     section: "context",
     group: "topic",
-    label: "无标记提醒阈值",
+    label: "No-marker nudge turns",
     kind: "number",
     min: 0,
     scope: "global",
@@ -219,7 +219,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "topicSoftPressureRatio",
     section: "context",
     group: "topic",
-    label: "软压力比例",
+    label: "Soft pressure ratio",
     kind: "number",
     min: 0,
     max: 1,
@@ -237,7 +237,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "topicBoundaryRewindTurns",
     section: "context",
     group: "topic",
-    label: "边界回退回合",
+    label: "Boundary rewind turns",
     kind: "number",
     min: 0,
     max: 3,
@@ -251,31 +251,31 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     },
   },
 
-  // ---------------------------------------------------------------- 模型与推理
+  // ---------------------------------------------------------------- Model & reasoning
   {
     id: "currentModel",
     section: "model",
-    label: "当前模型",
+    label: "Current model",
     kind: "text",
     scope: "conversation",
     editable: false,
-    reason: "用 /model 改",
+    reason: "use /model",
     read: (ctx) => ctx.modelLabel ?? null,
   },
   {
     id: "currentReasoningEffort",
     section: "model",
-    label: "推理档",
+    label: "Reasoning effort",
     kind: "text",
     scope: "conversation",
     editable: false,
-    reason: "Shift+Tab 循环 / /model",
+    reason: "shift+tab or /model",
     read: (ctx) => ctx.reasoningEffort ?? null,
   },
   {
     id: "reasoningTabCycleEnabled",
     section: "model",
-    label: "Tab 循环推理档",
+    label: "Tab cycles reasoning",
     kind: "toggle",
     scope: "global",
     editable: true,
@@ -298,12 +298,12 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     },
   },
 
-  // ---------------------------------------------------------------- 记忆与反思
+  // ---------------------------------------------------------------- Memory & reflection
   {
     id: "recallEnabled",
     section: "memory",
     group: "recall",
-    label: "被动召回",
+    label: "Passive recall",
     kind: "toggle",
     scope: "global",
     editable: true,
@@ -316,7 +316,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "recallTimeoutMs",
     section: "memory",
     group: "recall",
-    label: "召回超时 (ms)",
+    label: "Recall timeout (ms)",
     kind: "number",
     min: 0,
     step: 100,
@@ -331,7 +331,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "recallDedupTurns",
     section: "memory",
     group: "recall",
-    label: "去重窗口 (回合)",
+    label: "Dedup window (turns)",
     kind: "number",
     min: 0,
     scope: "global",
@@ -345,7 +345,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "recallLimit",
     section: "memory",
     group: "recall",
-    label: "每回合片段数",
+    label: "Snippets per turn",
     kind: "number",
     min: 0,
     scope: "global",
@@ -359,7 +359,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "recallExcerptCharacters",
     section: "memory",
     group: "recall",
-    label: "单片段字数",
+    label: "Chars per snippet",
     kind: "number",
     min: 0,
     step: 50,
@@ -374,7 +374,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "recallTotalCharacters",
     section: "memory",
     group: "recall",
-    label: "总字数预算",
+    label: "Total char budget",
     kind: "number",
     min: 0,
     step: 100,
@@ -389,7 +389,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "recallMinScoreRatio",
     section: "memory",
     group: "recall",
-    label: "分数下限",
+    label: "Minimum score",
     kind: "number",
     min: 0,
     max: 1,
@@ -405,7 +405,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "recallDiversity",
     section: "memory",
     group: "recall",
-    label: "槽位分配",
+    label: "Slot allocation",
     kind: "select",
     options: RECALL_DIVERSITY,
     scope: "global",
@@ -419,7 +419,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "recallExcerptLines",
     section: "memory",
     group: "recall",
-    label: "命中行上下文",
+    label: "Context lines",
     kind: "number",
     min: 0,
     scope: "global",
@@ -433,7 +433,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "recallDisplay",
     section: "memory",
     group: "recall",
-    label: "召回块显示",
+    label: "Recall block display",
     kind: "select",
     options: RECALL_DISPLAY,
     scope: "global",
@@ -447,7 +447,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "reflectionTrigger",
     section: "memory",
     group: "reflection",
-    label: "反思触发",
+    label: "Reflection trigger",
     kind: "select",
     options: REFLECTION_TRIGGER,
     scope: "agent",
@@ -466,7 +466,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "reflectionStepCount",
     section: "memory",
     group: "reflection",
-    label: "反思步数",
+    label: "Reflection steps",
     kind: "number",
     min: 1,
     scope: "agent",
@@ -485,7 +485,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "reflectionMerge",
     section: "memory",
     group: "reflection",
-    label: "合入方式",
+    label: "Merge mode",
     kind: "select",
     options: REFLECTION_MERGE,
     scope: "agent",
@@ -502,7 +502,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     id: "reflectionMergeInstructions",
     section: "memory",
     group: "reflection",
-    label: "评审指令",
+    label: "Merge instructions",
     kind: "text",
     scope: "agent",
     editable: true,
@@ -519,22 +519,22 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   {
     id: "memfs",
     section: "memory",
-    label: "记忆文件系统",
+    label: "Memory filesystem",
     kind: "toggle",
     scope: "agent",
     editable: false,
-    reason: "用 /memfs 改（本机后端只开）",
+    reason: "use /memfs",
     read: (ctx) =>
       booleanOrNull(
         readSetting(() => settingsManager.isMemfsEnabled(ctx.agentId)),
       ),
   },
 
-  // ---------------------------------------------------------------- 界面与显示
+  // ---------------------------------------------------------------- Display
   {
     id: "tokenStreaming",
     section: "display",
-    label: "令牌流式",
+    label: "Token streaming",
     kind: "toggle",
     scope: "global",
     editable: true,
@@ -552,7 +552,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   {
     id: "systemRemindersVisible",
     section: "display",
-    label: "系统提醒可见",
+    label: "System reminders",
     kind: "toggle",
     scope: "session",
     persistence: "session",
@@ -565,7 +565,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   {
     id: "ambiguousCharWidth",
     section: "display",
-    label: "宽字符宽度",
+    label: "Ambiguous width",
     kind: "select",
     options: WIDTH_MODES,
     scope: "global",
@@ -584,12 +584,12 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   {
     id: "showCompactions",
     section: "display",
-    label: "显示压缩记录",
+    label: "Show compactions",
     kind: "toggle",
     scope: "global",
     editable: false,
     requiresRestart: true,
-    reason: "启动或 /reload 后才重读",
+    reason: "start or /reload",
     read: () =>
       booleanOrNull(
         readSetting(() => settingsManager.getSetting("showCompactions")),
@@ -598,25 +598,25 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   {
     id: "windowTitle",
     section: "display",
-    label: "终端标题字段",
+    label: "Terminal title fields",
     kind: "text",
     scope: "global",
     editable: false,
-    reason: "用 /title（22 字段有序）",
+    reason: "use /title",
     read: () =>
       readSetting(() => {
         const items = settingsManager.getSettings().windowTitle?.items;
         return items && items.length > 0
           ? items.join(" ")
-          : "（默认 activity agent-name）";
+          : "(default: activity agent-name)";
       }),
   },
 
-  // ---------------------------------------------------------------------- 会话
+  // ---------------------------------------------------------------------- Session
   {
     id: "autoConversationTitles",
     section: "session",
-    label: "自动会话标题",
+    label: "Auto conversation titles",
     kind: "toggle",
     scope: "global",
     editable: true,
@@ -628,11 +628,11 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   {
     id: "sessionContextEnabled",
     section: "session",
-    label: "会话上下文注入",
+    label: "Session context",
     kind: "toggle",
     scope: "global",
     editable: false,
-    reason: "无写入路径（只读）",
+    reason: "read-only",
     read: () =>
       booleanOrNull(
         readSetting(() => settingsManager.getSetting("sessionContextEnabled")),
@@ -641,11 +641,11 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   {
     id: "conversationSwitchAlertEnabled",
     section: "session",
-    label: "切换提醒",
+    label: "Switch alert",
     kind: "toggle",
     scope: "global",
     editable: false,
-    reason: "无写入路径（只读）",
+    reason: "read-only",
     read: () =>
       booleanOrNull(
         readSetting(() =>
@@ -656,12 +656,12 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   {
     id: "createDefaultAgents",
     section: "session",
-    label: "创建默认 agent",
+    label: "Create default agents",
     kind: "toggle",
     scope: "global",
     editable: false,
     requiresRestart: true,
-    reason: "启动期读取（只读）",
+    reason: "read at startup",
     read: () =>
       booleanOrNull(
         readSetting(
@@ -670,15 +670,15 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
       ),
   },
 
-  // ---------------------------------------------------------------- 工具与权限
+  // ---------------------------------------------------------------- Tools & permissions
   {
     id: "toolset",
     section: "tools",
-    label: "工具集",
+    label: "Toolset",
     kind: "text",
     scope: "conversation",
     editable: false,
-    reason: "用 /toolset 改",
+    reason: "use /toolset",
     read: (ctx) =>
       readSetting(() =>
         settingsManager.getToolsetPreference(ctx.agentId, ctx.conversationId),
@@ -687,21 +687,20 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   {
     id: "systemPromptPreset",
     section: "tools",
-    label: "系统提示词预设",
+    label: "System prompt preset",
     kind: "text",
     scope: "agent",
     editable: false,
-    reason: "用 /system 改",
+    reason: "use /system",
     read: (ctx) =>
       readSetting(
-        () =>
-          settingsManager.getSystemPromptPreset(ctx.agentId) ?? "（未设置）",
+        () => settingsManager.getSystemPromptPreset(ctx.agentId) ?? "(unset)",
       ),
   },
   {
     id: "pinned",
     section: "tools",
-    label: "固定 agent",
+    label: "Pinned agent",
     kind: "toggle",
     scope: "agent",
     editable: true,
@@ -717,19 +716,19 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   {
     id: "includeWorktreeTool",
     section: "tools",
-    label: "worktree 工具",
+    label: "Worktree tool",
     kind: "toggle",
     scope: "global",
     editable: false,
     requiresRestart: true,
-    reason: "工具声明，需 /recompile（只读）",
+    reason: "needs /recompile",
     read: () =>
       booleanOrNull(
         readSetting(() => settingsManager.getSetting("includeWorktreeTool")),
       ),
   },
 
-  // ------------------------------------------------------------- 集成与实验
+  // ------------------------------------------------------------- Integrations & experiments
   ...EXPERIMENT_IDS.map((id): SettingsItem => {
     const definition = experimentManager
       .list()
@@ -745,7 +744,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
       requiresRestart: id === "ui_v2",
       reason:
         definition?.source === "env"
-          ? `由 ${definition.envVar} 决定（只读）`
+          ? `from ${definition.envVar} (read-only)`
           : undefined,
       read: () => isOn(experimentManager.isEnabled(id)),
       write: (_ctx, value) => {
@@ -756,12 +755,12 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   {
     id: "channelCredentialsStore",
     section: "integrations",
-    label: "通道凭据存储",
+    label: "Channel credentials store",
     kind: "text",
     scope: "global",
     editable: false,
     requiresRestart: true,
-    reason: "env 优先，需重启（只读）",
+    reason: "env wins; restart",
     read: () =>
       readSetting(
         () => settingsManager.getSetting("channelCredentialsStore") ?? "auto",
@@ -770,16 +769,15 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   {
     id: "preferredBackendMode",
     section: "integrations",
-    label: "启动后端偏好",
+    label: "Startup backend",
     kind: "text",
     scope: "global",
     editable: false,
     requiresRestart: true,
-    reason: "启动期读取，本 fork 只有 local（只读）",
+    reason: "startup-only",
     read: () =>
       readSetting(
-        () =>
-          settingsManager.getSetting("preferredBackendMode") ?? "（未设置）",
+        () => settingsManager.getSetting("preferredBackendMode") ?? "(unset)",
       ),
   },
 ];

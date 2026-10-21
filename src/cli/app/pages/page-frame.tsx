@@ -23,9 +23,11 @@ import { TAB_STRIP_ROWS } from "@/cli/app/shell/tab-strip-layout";
 import { focusTab } from "@/cli/app/tabs";
 import { ViewportPanel } from "@/cli/app/ViewportPanel";
 import { colors } from "@/cli/components/colors";
+import { terminalTextWidth } from "@/cli/helpers/char-width";
 import { useRowHovered } from "@/cli/helpers/hover-store";
 import type { KeyBinding } from "@/cli/helpers/input-keys";
 import { registerMouseHandler } from "@/cli/helpers/mouse-router";
+import { truncateText } from "@/cli/helpers/truncate-text";
 import { useMouseRows } from "@/cli/helpers/use-mouse-rows";
 import {
   useInputScopeClaim,
@@ -208,7 +210,7 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
         {
           id: "page.back",
           chords: [{ key: "escape" }],
-          label: "回会话",
+          label: "Back to conversation",
           run: () => {
             back();
             return "consumed";
@@ -385,6 +387,14 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
       ? body.breadcrumb.join(" / ")
       : body.title;
 
+  // The rows are drawn inside `paddingX={1}`, so their usable width is two cells
+  // narrower than the band. The row renderer needs it for two things: where a value
+  // may be cut, and how far a hover background has to reach to read as a row.
+  const rowWidth = Math.max(
+    1,
+    (railWidth > 0 ? bandColumns : frameColumns) - 2,
+  );
+
   return (
     <>
       <Box
@@ -414,6 +424,7 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
                 row={row}
                 index={index}
                 focused={row.kind === "item" && window.start + index === cursor}
+                width={rowWidth}
               />
             ))}
             {window.below > 0 && (
@@ -438,15 +449,37 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
   );
 }
 
-/** One body row: a group title, a selectable item, or a note. */
+/**
+ * One body row: a group title, a selectable item, or a note.
+ *
+ * An item is laid out in columns — mark, label, scope, value — for two reasons the
+ * first real run made concrete:
+ *
+ * - **The scope marker has to survive.** It used to be the row's last cell, so on a
+ *   narrow terminal it was the first thing cut: `[G]`/`[agent]`/`[session]` were
+ *   reported as "not there to look at". A fixed label column puts it in a place a
+ *   value can never push off screen.
+ * - **A hover background has to look like a row.** Ink paints a background only
+ *   behind cells that exist, so a short text row lights up two words. When the
+ *   pointer is on a row the remainder is filled with spaces, which is also why the
+ *   padding is conditional: an unhovered frame writes what it always wrote.
+ *
+ * The per-row action key is gone from the settings rows (the page states its keys in
+ * the header); the column still exists for pages that want one (`Usage` may).
+ */
+const LABEL_COLUMN = 26;
+const SCOPE_COLUMN = 16;
+
 function PageRowLine({
   row,
   index,
   focused,
+  width,
 }: {
   row: PageRow;
   index: number;
   focused: boolean;
+  width: number;
 }) {
   const hovered = useRowHovered(PAGE_AREA, index);
   const background = hovered && !focused ? colors.surface.hoverBg : undefined;
@@ -461,6 +494,29 @@ function PageRowLine({
   if (row.kind === "note") {
     return <Text dimColor>{row.text}</Text>;
   }
+
+  const label = truncateText(row.label, LABEL_COLUMN - 1).padEnd(LABEL_COLUMN);
+  // The scope column is reserved whenever the row has a value, so values line up
+  // across item rows and the group rows that point at a screen.
+  const reserveScope = row.hint !== undefined || row.value !== undefined;
+  const hint = reserveScope
+    ? truncateText(row.hint ?? "", SCOPE_COLUMN).padEnd(SCOPE_COLUMN)
+    : "";
+  const key = row.key === undefined ? "" : `  ${row.key}`;
+  const valueWidth = Math.max(
+    0,
+    width - 2 - LABEL_COLUMN - terminalTextWidth(hint) - terminalTextWidth(key),
+  );
+  const value = truncateText(row.value ?? "", valueWidth);
+  const used =
+    2 +
+    LABEL_COLUMN +
+    terminalTextWidth(hint) +
+    terminalTextWidth(value) +
+    terminalTextWidth(key);
+  const padding =
+    background === undefined ? "" : " ".repeat(Math.max(0, width - used));
+
   return (
     <Box flexDirection="row" backgroundColor={background}>
       <Text color={focused ? colors.selector.itemHighlighted : undefined}>
@@ -470,10 +526,12 @@ function PageRowLine({
         bold={focused}
         color={focused ? colors.selector.itemHighlighted : undefined}
       >
-        {row.label}
+        {label}
       </Text>
-      {row.value !== undefined && <Text>{`  ${row.value}`}</Text>}
-      {row.key !== undefined && <Text dimColor>{`  ${row.key}`}</Text>}
+      {hint !== "" && <Text dimColor>{hint}</Text>}
+      {value !== "" && <Text>{value}</Text>}
+      {key !== "" && <Text dimColor>{key}</Text>}
+      {padding !== "" && <Text>{padding}</Text>}
     </Box>
   );
 }
