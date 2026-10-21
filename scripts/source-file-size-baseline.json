@@ -10,7 +10,7 @@
   "src/cli/app/use-approval-flow.ts": 1063,
   "src/cli/app/use-configuration-handlers.ts": 1365,
   "src/cli/app/use-conversation-loop.ts": 2783,
-  "src/cli/app/use-submit-handler.ts": 3159,
+  "src/cli/app/use-submit-handler.ts": 3139,
   "src/cli/components/InputRich.tsx": 1995,
   "src/cli/components/ModelSelector.tsx": 1208,
   "src/cli/components/ProviderSelector.tsx": 1518,

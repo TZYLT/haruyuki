@@ -9,6 +9,7 @@ import {
   useTerminalRows,
   useTerminalWidth,
 } from "@/cli/hooks/use-terminal-width";
+import { resolveUiV2Once } from "@/experiments/ui-v2";
 import { settingsManager } from "@/settings-manager";
 import { AutocompleteBox, AutocompleteItem } from "./Autocomplete";
 import { Text } from "./Text";
@@ -27,6 +28,25 @@ const BUILTIN_SKILL_ALIASES = new Set([
   "initializing-memory",
   "migrating-memory",
   "syncing-memory-filesystem",
+]);
+
+/**
+ * The commands that only mean something in the full-screen shell.
+ *
+ * `/tabs`, `/close`, `/settings` and `/usage` name the tab strip and the two fixed
+ * pages. The append shell draws neither, so in legacy they are not offered at all —
+ * typing one still works (the registry answers with one honest line), but a list
+ * that offers a command the shell cannot perform is a list that lies.
+ *
+ * Read at render time, never at module load: `resolveUiV2Once` resolves the
+ * experiment through the settings cache, and at import time that cache may not be
+ * populated yet — a wrong answer there is cached for the whole process.
+ */
+const FULL_SCREEN_ONLY_COMMANDS = new Set([
+  "/tabs",
+  "/close",
+  "/settings",
+  "/usage",
 ]);
 
 // Compute filtered command list (excluding hidden commands), sorted by order
@@ -168,9 +188,12 @@ export function SlashCommandAutocomplete({
 
     const customCommandNames = new Set(customCommands.map((cmd) => cmd.cmd));
     const modCommandNames = new Set(modCommandMatches.map((cmd) => cmd.cmd));
+    const fullScreen = resolveUiV2Once();
     const visibleBuiltins = builtins.filter(
       (cmd) =>
-        !customCommandNames.has(cmd.cmd) && !modCommandNames.has(cmd.cmd),
+        !customCommandNames.has(cmd.cmd) &&
+        !modCommandNames.has(cmd.cmd) &&
+        (fullScreen || !FULL_SCREEN_ONLY_COMMANDS.has(cmd.cmd)),
     );
     const visibleModCommands = modCommandMatches.filter(
       (cmd) => !customCommandNames.has(cmd.cmd),

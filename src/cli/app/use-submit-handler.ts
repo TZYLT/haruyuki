@@ -122,6 +122,7 @@ import {
   uid,
 } from "./ids";
 import { prepareSessionExit } from "./session";
+import { runShellCommand } from "./shell-commands";
 import {
   handleCompactCommand,
   isCompactCommand,
@@ -132,7 +133,6 @@ import { handleDiagnosticsCommand } from "./submit-diagnostics-commands";
 import type { SubmitHandlerContext } from "./submit-handler-context";
 import { handleNavigationCommand } from "./submit-navigation-commands";
 import { handleProfileCommand } from "./submit-profile-commands";
-import { focusTab, getTabsState } from "./tabs";
 import { bindTuiClientPreferences, buildTuiTurnInput } from "./turn-input";
 
 async function findCustomCommandByName(
@@ -1137,35 +1137,15 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           return { submitted: true };
         }
 
-        // The top bar's own commands (M6-P2).
-        //
-        // The strip is operated by the mouse, and the hint row has been printing
-        // `/tabs` since P0 while the command did not exist (`《39》§2 #8`): a
-        // keyboard-only user could not change tabs at all. These four are that
-        // path, and each answers with the *same* action a click on the strip has —
-        // switching and closing are the core's decisions, not a second version of
-        // them written inside a command handler.
-        if (trimmed === "/tabs") {
-          openOverlay("tabs", "/tabs", "标签列表", "标签列表已关闭");
-          return { submitted: true };
-        }
-
-        if (trimmed === "/close") {
-          tabStrip.onClose(getTabsState().activeId);
-          return { submitted: true };
-        }
-
-        // `/usage` and `/settings` are the two fixed page tabs: the command is the
-        // keyboard's way to focus them (《38》§3.2 — "/usage 切到 Usage 页", no
-        // longer printed into the transcript). The page itself is the answer, so
-        // there is no command row to finish.
-        if (trimmed === "/usage") {
-          focusTab("usage");
-          return { submitted: true };
-        }
-
-        if (trimmed === "/settings") {
-          focusTab("settings");
+        // The top bar's own commands (M6-P2), which exist only in the full-screen
+        // shell — see `shell-commands.ts` for why `/close` must not act in legacy.
+        if (
+          runShellCommand(trimmed, {
+            openTabs: () =>
+              openOverlay("tabs", "/tabs", "标签列表", "标签列表已关闭"),
+            tabStrip,
+          })
+        ) {
           return { submitted: true };
         }
 

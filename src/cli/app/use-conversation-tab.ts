@@ -44,7 +44,16 @@ export function useConversationTab(input: ConversationTabInput): void {
   const { conversationId, summary, streaming } = input;
   const recordedRef = useRef<string | null>(null);
 
+  // The process entry renders `<App agentId="loading" conversationId="loading">`
+  // while it resolves the session (`index.ts`). That placeholder is not a
+  // conversation and must never become a tab: it is titled "loading", a click or a
+  // `/close` on it switches the runtime to it, and `persistSession` then writes
+  // `conversationId: "loading"` — which is the session that fails to resume with
+  // "Conversation loading not found" on the next start.
+  const isPlaceholder = conversationId === "" || conversationId === "loading";
+
   useEffect(() => {
+    if (isPlaceholder) return;
     const title = tabTitleFor(conversationId, summary);
     if (recordedRef.current === conversationId) {
       setTabTitle(conversationId, title);
@@ -52,9 +61,10 @@ export function useConversationTab(input: ConversationTabInput): void {
     }
     recordedRef.current = conversationId;
     openConversationTab(conversationId, title);
-  }, [conversationId, summary]);
+  }, [conversationId, summary, isPlaceholder]);
 
   useEffect(() => {
+    if (isPlaceholder) return;
     if (streaming) focusTab(conversationId);
-  }, [streaming, conversationId]);
+  }, [streaming, conversationId, isPlaceholder]);
 }

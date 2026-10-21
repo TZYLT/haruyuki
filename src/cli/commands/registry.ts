@@ -6,6 +6,7 @@ import {
   requestCloudReflectionRun,
 } from "@/agent/reflection-runs";
 import { renderWorkflowTree } from "@/cli/helpers/workflow-display";
+import { resolveUiV2Once } from "@/experiments/ui-v2";
 import { listWorkflowExecutions } from "@/tools/workflow/execution-registry";
 import { handleMemoryRepositoryCommand } from "./memory-repository";
 import { handleRecallCommand } from "./recall";
@@ -13,6 +14,22 @@ import { handleSecretCommand } from "./secret";
 import { handleSystemRemindersCommand } from "./system-reminders";
 import { handleTopicCommand } from "./topic";
 import { handleTopicsCommand } from "./topics";
+
+/**
+ * The receipt for a page command, in the shell that has pages.
+ *
+ * `/usage`, `/tabs`, `/close` and `/settings` name the full-screen shell's chrome
+ * (the two fixed pages and the tab strip). The append shell draws neither, so
+ * typing one there can only be answered with a line: the submit handler declines
+ * to act (`shell-commands.ts`), and this is what the user sees. Read at *call*
+ * time — resolving the experiment at import time would freeze whatever the
+ * settings cache happened to hold before it was loaded.
+ */
+function pageCommandAnswer(openingOutput: string): string {
+  return resolveUiV2Once()
+    ? openingOutput
+    : "Pages need the full-screen shell (HARUYUKI_UI_V2=1 or /experiments ui_v2, then restart).";
+}
 
 type CommandHandlerResult =
   | string
@@ -388,39 +405,25 @@ export const commands: Record<string, Command> = {
     desc: "Open the Usage page (overview + breakdown)",
     order: 33,
     noArgs: true,
-    handler: () => {
-      // Handled specially in App.tsx: it switches the main area to the Usage tab.
-      return "Opening usage...";
-    },
+    handler: () => pageCommandAnswer("Opening usage..."),
   },
   "/tabs": {
     desc: "List open tabs (switch with Enter, close with D)",
     order: 32.9,
     noArgs: true,
-    handler: () => {
-      // Handled specially in App.tsx: it raises the /tabs face.
-      return "Opening tabs...";
-    },
+    handler: () => pageCommandAnswer("Opening tabs..."),
   },
   "/close": {
     desc: "Close the current tab",
     order: 32.8,
     noArgs: true,
-    handler: () => {
-      // Handled specially in App.tsx: closing a tab is a view decision with a
-      // ruling behind it (busy / last tab), so it goes through the strip's own
-      // action rather than a second implementation.
-      return "Closing tab...";
-    },
+    handler: () => pageCommandAnswer("Closing tab..."),
   },
   "/settings": {
     desc: "Open the Settings page",
     order: 32.7,
     noArgs: true,
-    handler: () => {
-      // Handled specially in App.tsx: it switches the main area to the Settings tab.
-      return "Opening settings...";
-    },
+    handler: () => pageCommandAnswer("Opening settings..."),
   },
   "/context": {
     desc: "Show context window usage",
