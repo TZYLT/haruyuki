@@ -23,7 +23,7 @@ export function truncateStatuslineText(
  * row that wraps on it — and a wrapped row costs a whole line, which (because the
  * frame is pinned to the screen's height) scrolls the alternate screen and takes
  * the top row with it. The 2026-10-20 reports were that twice over: the status line
- * (`⚡︎` plus `·`) and a markdown table row, both of which "fit" by the table and
+ * (`U+26A1` plus `·`) and a markdown table row, both of which "fit" by the table and
  * did not fit on the screen.
  *
  * `helpers/char-width.ts` now resolves the one class that caused this — Unicode's

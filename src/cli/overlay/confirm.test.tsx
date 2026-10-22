@@ -9,7 +9,7 @@ import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
  * Three delete confirmations in this tree each carried their own copy of this
  * markup, and two of them were styled differently on purpose (M4's ruling: both
  * were already shipping). P7 unified them on the list row's shape — ASCII `> `,
- * accent, bold — because `❯ ` is missing from some fonts and the marker is the
+ * accent, bold — because U+276F is missing from some fonts and the marker is the
  * only thing telling the user which row Enter fires on (《38》§11.8 ④).
  *
  * What is pinned here is that shape and the alignment it produces: the unselected

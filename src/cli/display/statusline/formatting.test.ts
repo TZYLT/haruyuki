@@ -23,7 +23,7 @@ import {
  * will give the text.
  *
  * The second lesson of the same day is that the arithmetic cannot be trusted to the
- * last column for *any* glyph: `⚡︎` and `·` were drawn wider than `string-width`
+ * last column for *any* glyph: `U+26A1` and `·` were drawn wider than `string-width`
  * said, and Ink does not clip an over-wide row (a `width` + `overflow="hidden"`
  * box wraps it, verified on Ink 7.1). So a row that assembles segments ends
  * `ROW_SAFETY_COLUMNS` short of the edge, and that margin is what these tests pin.

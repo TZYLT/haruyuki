@@ -14,9 +14,9 @@ import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
  *
  * **One shape, since P7.** Until then this component carried the tree's one
  * *deliberate* inconsistency: `/mcp` drew `> ` and bolded the whole selected row,
- * `/hooks` drew `❯ ` and bolded nothing, and the difference was an M4 ruling
+ * `/hooks` drew U+276F and bolded nothing, and the difference was an M4 ruling
  * ("both were already shipping"). 《38》§11.8 ④ overrode it, for a reason that is
- * not aesthetic: `❯` (U+276F) is missing from some fonts, and the one glyph a
+ * not aesthetic: U+276F is missing from some fonts, and the one glyph a
  * confirmation cannot lose is the one that says which row Enter fires on. So the
  * shape is §11.4's: an ASCII `> ` marker, the accent foreground, bold — the same
  * three things a list row already uses. The `marker` / `selectedColor` /

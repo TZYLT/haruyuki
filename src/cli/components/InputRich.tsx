@@ -100,7 +100,7 @@ const EMPTY_COMPOSER_PROMPT_HINTS = [
  * What the transient permission-mode hint says: the mode's name, no marker glyph.
  *
  * The markers this used to draw are font dependent — on the machine this is
- * developed on they paint as empty boxes, and `⚡︎` alone is enough to make the
+ * developed on they paint as empty boxes, and `U+26A1` alone is enough to make the
  * status row wider than the terminal, wrap it, and scroll the tab row off the frame
  * (reported 2026-10-20).
  */

@@ -50,6 +50,7 @@ import {
   writeRendererRowCount,
 } from "@/cli/helpers/diff-rows";
 import { parsePatchOperations } from "@/cli/helpers/format-args-display";
+import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import type { ApprovalRequest } from "@/cli/helpers/stream";
 import { countTextRows } from "@/cli/helpers/text-metrics";
 import {
@@ -184,7 +185,7 @@ export function pendingApprovalStubRows(
     ? `${input.decision.type === "approve" ? "✓" : "✕"} Decision queued: ${
         input.decision.type === "approve" ? "approve" : "deny"
       } (${input.toolName})`
-    : `⧗ Awaiting approval: ${input.toolName}${
+    : `${CLI_GLYPHS.pendingApproval} Awaiting approval: ${input.toolName}${
         input.description ? ` (${input.description})` : ""
       }`;
   return countTextRows(text, Math.max(1, columns));

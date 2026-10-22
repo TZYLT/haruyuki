@@ -46,8 +46,9 @@ export function estimateTokens(text: string): number {
  * A permission mode's label: the mode's name, and a marker only when one is asked
  * for.
  *
- * The markers this used to default to (`⏵⏵`, `⚡︎`, `🔒`) are font-dependent: on the
- * machine this is developed on they render as empty boxes, and each one occupies
+ * The markers this used to default to (`U+23F5` twice, `U+26A1`, `U+1F512`) are
+ * font-dependent: on the machine this is developed on they render as empty boxes,
+ * and each one occupies
  * a column count `string-width` does not predict — which is enough to make the
  * status row one column too wide, wrap it, and (with the frame pinned to the
  * screen's height) scroll the tab row away (2026-10-20). The mode's own name is

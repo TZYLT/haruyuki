@@ -1,5 +1,6 @@
 import { Box } from "ink";
 import { memo } from "react";
+import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { Text } from "./Text";
 
 type Props = {
@@ -19,7 +20,7 @@ type Props = {
  * Others display as this minimal stub to avoid cluttering the transcript.
  *
  * Two modes:
- * - Pending (no decision): "⧗ Awaiting approval: <tool>"
+ * - Pending (no decision): "! Awaiting approval: <tool>"
  * - Queued (decision made): "✓ Decision queued: approve" or "✕ Decision queued: deny"
  */
 export const PendingApprovalStub = memo(
@@ -45,7 +46,7 @@ export const PendingApprovalStub = memo(
     return (
       <Box>
         <Text dimColor>
-          <Text color="yellow">⧗</Text>
+          <Text color="yellow">{CLI_GLYPHS.pendingApproval}</Text>
           {" Awaiting approval: "}
           <Text>{toolName}</Text>
           {description && <Text dimColor> ({description})</Text>}
