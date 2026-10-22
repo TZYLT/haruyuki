@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranscriptColumns } from "@/cli/hooks/transcript-columns";
 import { debugWarn } from "@/utils/debug";
 
 const getStdout = () => {
@@ -171,8 +172,17 @@ const removeResizeHandlerIfIdle = () => {
  * The value is re-read here rather than taken from state: state only exists to
  * schedule the re-render (the 'resize' event), and a cached number can outlive
  * the terminal it described.
+ *
+ * **Inside the full-screen transcript band this is the band's width, not the
+ * terminal's** (`transcript-columns.ts`). The band is what the item is laid out
+ * in — it sits beside the context rail and keeps two columns of right margin — so
+ * a renderer that used the terminal's width would draw rows wider than the box
+ * that clips them and disagree with the row model that measured the same item.
+ * Outside a band (the append shell, and every overlay and dialog) nothing
+ * provides the scope and the terminal's own width is returned unchanged.
  */
 export function useTerminalWidth(): number {
+  const bandColumns = useTranscriptColumns();
   const [, setColumns] = useState(trackedColumns);
 
   useEffect(() => {
@@ -188,7 +198,7 @@ export function useTerminalWidth(): number {
     };
   }, []);
 
-  return getTerminalWidth();
+  return bandColumns ?? getTerminalWidth();
 }
 
 /**

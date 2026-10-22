@@ -170,29 +170,40 @@ function MiniHistoryViewport() {
       overflow="hidden"
       flexShrink={0}
     >
+      {/* Production's shape: bottom-aligned, with the shift as a `marginBottom`
+          (`ViewportTranscript`), so the band's bottom edge carries the newest
+          visible row. */}
       <Box
         flexDirection="column"
         flexShrink={0}
-        marginTop={window.contentOffset}
+        justifyContent="flex-end"
+        height={VIEWPORT_ROWS}
+        overflow="hidden"
       >
-        {visible.map((id, offset) => {
-          const index = window.start + offset;
-          const rows = ROWS_BY_ID[id] ?? 1;
-          return (
-            <Box
-              key={id}
-              flexDirection="column"
-              flexShrink={0}
-              marginTop={index > 0 ? 1 : 0}
-            >
-              {Array.from({ length: rows }, (_, row) => `${id} ${row}`).map(
-                (label) => (
-                  <Text key={label}>{label}</Text>
-                ),
-              )}
-            </Box>
-          );
-        })}
+        <Box
+          flexDirection="column"
+          flexShrink={0}
+          marginBottom={-window.anchor.delta}
+        >
+          {visible.map((id, offset) => {
+            const index = window.start + offset;
+            const rows = ROWS_BY_ID[id] ?? 1;
+            return (
+              <Box
+                key={id}
+                flexDirection="column"
+                flexShrink={0}
+                marginTop={index > 0 ? 1 : 0}
+              >
+                {Array.from({ length: rows }, (_, row) => `${id} ${row}`).map(
+                  (label) => (
+                    <Text key={label}>{label}</Text>
+                  ),
+                )}
+              </Box>
+            );
+          })}
+        </Box>
       </Box>
     </Box>
   );

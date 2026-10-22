@@ -70,7 +70,18 @@ class Capture extends Writable {
 const VIEWPORT_ROWS = 12;
 
 /** A viewport that renders the window the store asks for, like the real one. */
-function MiniViewport({ rows }: { rows: readonly number[] }) {
+function MiniViewport({
+  rows,
+  modelBias = 0,
+}: {
+  rows: readonly number[];
+  /**
+   * Rows the *model* adds to every item, so the window it fits is taller than the
+   * rows that reach the screen. Production's estimate can be out by a row per item;
+   * this is that error, made deliberate.
+   */
+  modelBias?: number;
+}) {
   useSyncExternalStore(subscribeToViewportScroll, getViewportScrollVersion);
   const request = getViewportScrollRequest();
   const scrollRows = request.kind === "rows" ? request.rows : 0;
@@ -83,7 +94,7 @@ function MiniViewport({ rows }: { rows: readonly number[] }) {
     // Mirrors the production measure: the row model counts each item's own
     // leading gap (one row per item after the first), and the item draws exactly
     // that. The wrapper here carries no margin, like the viewport's plain branch.
-    (index) => (rows[index] ?? 0) + (index > 0 ? 1 : 0),
+    (index) => (rows[index] ?? 0) + (index > 0 ? 1 : 0) + modelBias,
     anchor,
   );
   useEffect(() => {
@@ -108,30 +119,41 @@ function MiniViewport({ rows }: { rows: readonly number[] }) {
       overflow="hidden"
       flexShrink={0}
     >
+      {/* Production's shape: the box is bottom-aligned and the shift is a
+          `marginBottom`, so the band's bottom edge carries the newest visible row
+          whatever the model believed (`ViewportTranscript`). */}
       <Box
         flexDirection="column"
         flexShrink={0}
-        marginTop={window.contentOffset}
+        justifyContent="flex-end"
+        height={VIEWPORT_ROWS}
+        overflow="hidden"
       >
-        {visible.map((index) => (
-          // Production shape: the wrapper carries no margin and the item draws its
-          // own leading gap — that is what `TranscriptItemView` does, and counting
-          // it a second time in the measure is what left the band's bottom blank.
-          <Box key={index} flexDirection="column" flexShrink={0}>
-            <Box
-              flexDirection="column"
-              flexShrink={0}
-              marginTop={index > 0 ? 1 : 0}
-            >
-              {Array.from(
-                { length: rows[index] ?? 0 },
-                (_, line) => `item ${index} row ${line}`,
-              ).map((text) => (
-                <Text key={text}>{text}</Text>
-              ))}
+        <Box
+          flexDirection="column"
+          flexShrink={0}
+          marginBottom={-window.anchor.delta}
+        >
+          {visible.map((index) => (
+            // Production shape: the wrapper carries no margin and the item draws its
+            // own leading gap — that is what `TranscriptItemView` does, and counting
+            // it a second time in the measure is what left the band's bottom blank.
+            <Box key={index} flexDirection="column" flexShrink={0}>
+              <Box
+                flexDirection="column"
+                flexShrink={0}
+                marginTop={index > 0 ? 1 : 0}
+              >
+                {Array.from(
+                  { length: rows[index] ?? 0 },
+                  (_, line) => `item ${index} row ${line}`,
+                ).map((text) => (
+                  <Text key={text}>{text}</Text>
+                ))}
+              </Box>
             </Box>
-          </Box>
-        ))}
+          ))}
+        </Box>
       </Box>
     </Box>
   );
@@ -148,21 +170,27 @@ function fakeStdin(): NodeJS.ReadStream {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function mountViewport(rows: readonly number[]): Promise<{
+async function mountViewport(
+  rows: readonly number[],
+  options: { modelBias?: number } = {},
+): Promise<{
   stdout: Capture;
   stop: () => void;
 }> {
   const stdout = new Capture();
   // Installed before Ink's first write, exactly as the process entry does it.
   installTerminalFrameCapture(stdout);
-  const instance = render(<MiniViewport rows={rows} />, {
-    stdin: fakeStdin(),
-    stdout: stdout as unknown as NodeJS.WriteStream,
-    debug: false,
-    patchConsole: false,
-    exitOnCtrlC: false,
-    alternateScreen: true,
-  });
+  const instance = render(
+    <MiniViewport rows={rows} modelBias={options.modelBias} />,
+    {
+      stdin: fakeStdin(),
+      stdout: stdout as unknown as NodeJS.WriteStream,
+      debug: false,
+      patchConsole: false,
+      exitOnCtrlC: false,
+      alternateScreen: true,
+    },
+  );
   await sleep(150);
   return {
     stdout,
@@ -328,6 +356,30 @@ describe("wheel scrolling on a real frame", () => {
       const frame = getTerminalFrame();
       expect(frame?.text.at(-1)).toBe("item 5 row 3");
       expect(frame?.lines.length).toBe(VIEWPORT_ROWS);
+    } finally {
+      stop();
+    }
+  });
+
+  test("a window the model over-counted still fills the band's bottom", async () => {
+    // The row model is an estimate: a documented approximation may be a row out,
+    // and the renderers and the model can disagree about a wrap. The window is
+    // fitted from those numbers, so an over-counted window is *shorter* on screen
+    // than the band — and the defect the machine reported twice was the transcript
+    // stopping short of the input, with the newest rows floating above a block of
+    // blank ones. The band's bottom is therefore anchored to the window's own
+    // bottom (`marginBottom`), not to a top offset derived from the model: the
+    // newest visible row lands on the band's last row whatever the model believed,
+    // and the rows it over-counted clip at the top instead.
+    const rows = Array.from({ length: 6 }, () => 4);
+    const { stop } = await mountViewport(rows, { modelBias: 3 });
+    try {
+      await sleep(150);
+      const frame = getTerminalFrame();
+      expect(frame?.text.at(-1)).toBe("item 5 row 3");
+      // The content is shorter than the band, so the gap is at the top — where the
+      // reader is not looking for the newest line — not above the input.
+      expect(frame?.text[0]).toBe("");
     } finally {
       stop();
     }

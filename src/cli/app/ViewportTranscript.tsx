@@ -13,6 +13,7 @@ import { WelcomeScreen } from "@/cli/components/WelcomeScreen";
 import { ROW_SAFETY_COLUMNS } from "@/cli/display/statusline/formatting";
 import { APP_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { getTerminalFrame } from "@/cli/helpers/terminal-frame";
+import { TranscriptColumnsScope } from "@/cli/hooks/transcript-columns";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
 import { debugLog, isDebugLogFileReady } from "@/utils/debug";
@@ -558,39 +559,35 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
    * The machine reported "big blocks of text vanish while scrolling" (2026-10-20):
    * the band painted content at its top and left the rest empty. Two different
    * causes produce exactly that picture — the row model over-measuring the visible
-   * items (the content box is then shorter than the band and the offset lifts it off
-   * the bottom), or the window not being filled (a page that has not been
-   * materialized contributes an estimate, an anchor that outlived its item, a fit
-   * that clamps at the end of history).
+   * items (the content box is then shorter than the band, and the model's offset
+   * lifted it off the bottom), or the window not being filled (a page that has not
+   * been materialized contributes an estimate, an anchor that outlived its item, a
+   * fit that clamps at the end of history).
    *
-   * `blankTail` separates them: it counts the empty rows at the band's bottom **in
-   * the frame that was just written**, so one line carries both what the model
-   * believed (`window`, `offset`, `fromBottom`, `anchor`, `resident`) and what the
-   * screen got.
+   * `blankTail` names both: it counts the empty rows at the band's bottom **in the
+   * frame that was just written**, so one line carries what the model believed
+   * (`window`, `offset`, `fromBottom`, `anchor`, `resident`) beside what the screen
+   * got. A window that is clipped at the top (`start > 0`) has more rows above it,
+   * so its content *should* reach the band's bottom: a blank tail there is the row
+   * model over-counting, which is the one anomaly this line exists for. A window
+   * that starts at 0 is the whole history and is allowed to stop short.
    *
    * Three guards, because the first version of this log was a mistake worth
    * recording: it wrote a line **per render**, and the session log can be initialised
    * *after* the shell draws, so those lines went to the console, Ink repainted for
    * each one, and the repaint wrote another line — a self-feeding loop that made the
    * UI unusable ("tens of thousands of frames of log", 2026-10-20). So: only when
-   * something is actually wrong (`blankTail > 0`), only when the session log exists
-   * (a line that cannot be persisted is a line that would be printed), and at most
-   * once per second up to a hard cap.
+   * something is actually wrong, only when the session log exists (a line that
+   * cannot be persisted is a line that would be printed), and at most once per
+   * second up to a hard cap.
+   *
+   * `HARUYUKI_DEBUG_VIEWPORT=1` also logs the frames where nothing is wrong, which
+   * is what a report about "it looked fine a moment ago" needs; the rate limit and
+   * the cap bound that too.
    */
   const logged = useRef({ at: 0, count: 0 });
   useEffect(() => {
-    const wantBlankTail = process.env.HARUYUKI_DEBUG_VIEWPORT === "1";
-    // A **negative** offset is logged in every debug session, because it is the
-    // state that cost the machine a shell: the window's top then sits above the
-    // band's, the rows above the band edge are dropped (`overflow` on the band's
-    // fixed clip box), and — before that box was fixed — they were painted over the
-    // tab row and the rule. It also means the row model measured more rows than the
-    // band can show while only a few of them have ink, which is what "the band is
-    // mostly empty" looks like. One line per second, capped, is enough to tell the
-    // two apart on the next report.
-    const offsetDropped = window.contentOffset < 0;
-    if (!offsetDropped && !wantBlankTail) return;
-    if (!isDebugLogFileReady()) return;
+    const everyFrame = process.env.HARUYUKI_DEBUG_VIEWPORT === "1";
     const frame = getTerminalFrame();
     const top = props.reserveTopRows ?? 0;
     let blankTail = 0;
@@ -600,7 +597,9 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
         blankTail += 1;
       }
     }
-    if (!offsetDropped && blankTail <= 0) return;
+    const shortOfTheBand = blankTail > 0 && window.start > 0;
+    if (!shortOfTheBand && !everyFrame) return;
+    if (!isDebugLogFileReady()) return;
     const now = Date.now();
     if (now - logged.current.at < 1_000) return;
     if (logged.current.count >= VIEWPORT_LOG_LIMIT) return;
@@ -756,7 +755,21 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
             Fixed outer box: the band's own rectangle, in the band's own place.
             Shifted inner box: no `overflow`, so the clip that reaches the items is
             the outer box's, and the rows the shift pushes past its top edge are
-            dropped instead of drawn over the shell's chrome. */}
+            dropped instead of drawn over the shell's chrome.
+
+            **The shift is measured from the box's bottom, not its top.** The
+            window's row count comes from the row model, which is an estimate: a
+            documented approximation may be one row out, and the renderers and the
+            model can disagree about a wrap. An offset computed from the top
+            (`bandHeight - modelRows + delta`) spends that disagreement as blank
+            rows at the band's bottom — the newest rows of the transcript stop
+            short of the input, which is what the machine reported twice (2026-10-20,
+            2026-10-22). `marginBottom` on a bottom-aligned box instead names the one
+            thing the scroll position actually is: `delta` rows of the window's
+            bottom item sit below the band. The box's real height then decides where
+            its top lands, so the band's bottom edge always carries the newest
+            visible row, whatever the model believed — and a row the model
+            over-counted simply clips at the top. */}
         <Box
           flexDirection="column"
           flexShrink={0}
@@ -764,94 +777,104 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
           height={bandHeight}
           maxHeight="100%"
           overflow="hidden"
+          justifyContent="flex-end"
         >
-          <Box
-            flexDirection="column"
-            flexShrink={0}
-            marginTop={window.contentOffset}
-          >
-            {visible.map((item, offset) => {
-              const index = window.start + offset;
-              const marginTop = index > 0 ? 1 : 0;
-              const toolCallId =
-                item.kind === "tool_call" ? item.toolCallId : undefined;
-              const itemName =
-                item.kind === "tool_call" ? item.name : undefined;
-              const isCurrentApproval =
-                toolCallId !== undefined &&
-                toolCallId === currentApproval?.toolCallId;
+          {/* The band's own width, for every renderer inside it. The items are
+              measured at `contentColumns`, so they have to be *laid out* at it
+              too: a renderer that reads the terminal's width instead draws rows
+              the band clips at its right edge, and reports a height the row model
+              disagrees with — which the viewport turns into blank rows at the
+              band's bottom (`transcript-columns.ts`). The rail beside this box is
+              not a transcript item and keeps the terminal's width. */}
+          <TranscriptColumnsScope.Provider value={contentColumns}>
+            <Box
+              flexDirection="column"
+              flexShrink={0}
+              marginBottom={-window.anchor.delta}
+            >
+              {visible.map((item, offset) => {
+                const index = window.start + offset;
+                const marginTop = index > 0 ? 1 : 0;
+                const toolCallId =
+                  item.kind === "tool_call" ? item.toolCallId : undefined;
+                const itemName =
+                  item.kind === "tool_call" ? item.name : undefined;
+                const isCurrentApproval =
+                  toolCallId !== undefined &&
+                  toolCallId === currentApproval?.toolCallId;
 
-              if (isCurrentApproval && currentApproval) {
+                if (isCurrentApproval && currentApproval) {
+                  return (
+                    <Box
+                      key={item.id}
+                      flexDirection="column"
+                      marginTop={marginTop}
+                      {...shrinkProof}
+                    >
+                      <FocusedApproval
+                        view={props}
+                        precomputedDiff={
+                          toolCallId
+                            ? precomputedDiffsRef.current.get(toolCallId)
+                            : undefined
+                        }
+                      />
+                    </Box>
+                  );
+                }
+
+                const isQueued =
+                  toolCallId !== undefined && queuedIds.has(toolCallId);
+                const isPending =
+                  toolCallId !== undefined && pendingIds.has(toolCallId);
+                if (isQueued || isPending) {
+                  return (
+                    <Box
+                      key={item.id}
+                      flexDirection="column"
+                      marginTop={marginTop}
+                      {...shrinkProof}
+                    >
+                      <PendingApprovalStub
+                        toolName={
+                          (toolCallId
+                            ? approvalMap.get(toolCallId)?.toolName
+                            : null) ||
+                          itemName ||
+                          "Unknown"
+                        }
+                        description={
+                          toolCallId
+                            ? stubDescriptions.get(toolCallId)
+                            : undefined
+                        }
+                        decision={
+                          isQueued && toolCallId
+                            ? queuedDecisions.get(toolCallId)
+                            : undefined
+                        }
+                      />
+                    </Box>
+                  );
+                }
+
                 return (
-                  <Box
-                    key={item.id}
-                    flexDirection="column"
-                    marginTop={marginTop}
-                    {...shrinkProof}
-                  >
-                    <FocusedApproval
-                      view={props}
-                      precomputedDiff={
-                        toolCallId
-                          ? precomputedDiffsRef.current.get(toolCallId)
-                          : undefined
-                      }
+                  <Box key={item.id} flexDirection="column" {...shrinkProof}>
+                    <TranscriptItemView
+                      item={item}
+                      index={index}
+                      columns={contentColumns}
+                      statusLinePrompt={statusLinePrompt}
+                      showCompactionsEnabled={showCompactionsEnabled}
+                      precomputedDiffs={precomputedDiffsRef.current}
+                      hiddenToolCallId={expandedToolCallId ?? undefined}
+                      lastShellToolCallId={lastShellToolCallId ?? undefined}
                     />
                   </Box>
                 );
-              }
-
-              const isQueued =
-                toolCallId !== undefined && queuedIds.has(toolCallId);
-              const isPending =
-                toolCallId !== undefined && pendingIds.has(toolCallId);
-              if (isQueued || isPending) {
-                return (
-                  <Box
-                    key={item.id}
-                    flexDirection="column"
-                    marginTop={marginTop}
-                    {...shrinkProof}
-                  >
-                    <PendingApprovalStub
-                      toolName={
-                        (toolCallId
-                          ? approvalMap.get(toolCallId)?.toolName
-                          : null) ||
-                        itemName ||
-                        "Unknown"
-                      }
-                      description={
-                        toolCallId
-                          ? stubDescriptions.get(toolCallId)
-                          : undefined
-                      }
-                      decision={
-                        isQueued && toolCallId
-                          ? queuedDecisions.get(toolCallId)
-                          : undefined
-                      }
-                    />
-                  </Box>
-                );
-              }
-
-              return (
-                <Box key={item.id} flexDirection="column" {...shrinkProof}>
-                  <TranscriptItemView
-                    item={item}
-                    index={index}
-                    columns={contentColumns}
-                    statusLinePrompt={statusLinePrompt}
-                    showCompactionsEnabled={showCompactionsEnabled}
-                    precomputedDiffs={precomputedDiffsRef.current}
-                    hiddenToolCallId={expandedToolCallId ?? undefined}
-                    lastShellToolCallId={lastShellToolCallId ?? undefined}
-                  />
-                </Box>
-              );
-            })}
-          </Box>
+              })}
+            </Box>
+          </TranscriptColumnsScope.Provider>
         </Box>
 
         {/* The rail, inside the band's row: it gets the band's own height, so a
