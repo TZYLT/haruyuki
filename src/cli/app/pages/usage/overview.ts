@@ -35,6 +35,7 @@ import type { UsageSummary } from "@/usage/summary";
 import { blockText, blockTextWidth, blockWordmark } from "./font";
 import {
   buildHeatmap,
+  gridWidth,
   HEATMAP_WEEKS,
   heatmapLines,
   padToWidth,
@@ -44,14 +45,24 @@ import {
 /** The two tiers this screen really has (see the note above). */
 export type OverviewTier = "block" | "line";
 
-/** Columns the block tier needs; below it the hero is one line. */
-export const OVERVIEW_BLOCK_MIN_WIDTH = 46;
 /**
- * Rows the block tier needs: wordmark (5) + gap + hero (5) + unit + the
- * two-column block (6). It is exactly what the block draws — a taller minimum
- * only says "there is unused room below"; a shorter one would scroll the block.
+ * Columns the block tier needs.
+ *
+ * The widest row is not the art (31 columns) but the `today … · today hit … ·
+ * streak …` line under the grid: 49 columns for a four-digit compact number, and
+ * it must never be cut, so the minimum is that plus a column of air. Narrower
+ * than this the hero drops to one line instead of printing a truncated summary.
  */
-export const OVERVIEW_BLOCK_MIN_HEIGHT = 18;
+export const OVERVIEW_BLOCK_MIN_WIDTH = 50;
+/**
+ * Rows the block tier needs, exactly what it draws: a blank under the page's
+ * header, the wordmark (5), a blank, the hero (5), the unit, a blank, the
+ * two-column block (6), a blank, and the today/streak line.
+ *
+ * The two blanks are the ones the M6.5 pass asked for ("多隔一个空行"): the art
+ * used to start on the header's row and the grid used to start on the unit's.
+ */
+export const OVERVIEW_BLOCK_MIN_HEIGHT = 22;
 
 /** The unit under the hero number. */
 const HERO_UNIT = "tokens";
@@ -72,7 +83,7 @@ export function overviewTier(geometry: {
 
 /** Center one line in `width`. */
 export function centerLine(text: string, width: number): string {
-  const pad = Math.max(0, Math.floor((width - terminalTextWidth(text)) / 2));
+  const pad = Math.max(0, Math.floor((width - gridWidth(text)) / 2));
   return `${" ".repeat(pad)}${text}`;
 }
 
@@ -84,10 +95,7 @@ export function centerLine(text: string, width: number): string {
  * than centred. A shared margin keeps the block's own columns intact.
  */
 export function centerBlock(lines: readonly string[], width: number): string[] {
-  const widest = lines.reduce(
-    (max, line) => Math.max(max, terminalTextWidth(line)),
-    0,
-  );
+  const widest = lines.reduce((max, line) => Math.max(max, gridWidth(line)), 0);
   const pad = " ".repeat(Math.max(0, Math.floor((width - widest) / 2)));
   return lines.map((line) => `${pad}${line}`);
 }
@@ -107,7 +115,7 @@ export function twoColumnBlock(
   gap = 2,
 ): string[] {
   const rightWidth = right.reduce(
-    (max, line) => Math.max(max, terminalTextWidth(line)),
+    (max, line) => Math.max(max, gridWidth(line)),
     0,
   );
   const width = gutter + gap + rightWidth;
@@ -130,18 +138,41 @@ export function streakLabel(days: number): string {
   return days === 1 ? "1 day" : `${days} days`;
 }
 
-/** The right-hand numbers beside the grid. */
+/**
+ * The right-hand numbers beside the grid.
+ *
+ * Totals first, then today's — the same order the M6.5 report drew it in. The
+ * three figures that *are* today (tokens, hit rate, streak) are not repeated here:
+ * they read better as one line under the grid, where each of them can carry its
+ * own label without a 14-column column around it.
+ */
 function dataLines(summary: UsageSummary): string[] {
   const row = (label: string, value: string) =>
     `${label.padEnd(DATA_LABEL_WIDTH)}${value}`;
   return [
-    row("cost (est.)", formatCost(summary.totals.cost)),
+    row("total cost", formatCost(summary.totals.cost)),
+    row("total tokens", formatCompact(summary.totals.tokens)),
     row("total turns", `${summary.totals.turns}`),
-    row("today tokens", formatCompact(summary.today.tokens)),
     row("today cost", formatCost(summary.today.cost)),
-    row("today hit", formatRate(summary.today.cacheHitRate)),
-    row("streak", streakLabel(summary.streakDays)),
+    row("today turns", `${summary.today.turns}`),
   ];
+}
+
+/**
+ * The one line under the grid: today's three figures.
+ *
+ * Which ones live here rather than in the column is the M6.5 ruling — today's
+ * consumption, the cache hit rate and the streak are the "how is it going right
+ * now" trio, and reading them left to right on one line is faster than scanning a
+ * six-row column. Its width (49 at four digits) is what sets
+ * `OVERVIEW_BLOCK_MIN_WIDTH`.
+ */
+export function todaySummaryLine(summary: UsageSummary): string {
+  return [
+    `today ${formatCompact(summary.today.tokens)} tok`,
+    `today hit ${formatRate(summary.today.cacheHitRate)}`,
+    `streak ${streakLabel(summary.streakDays)}`,
+  ].join(" · ");
 }
 
 /**
@@ -217,8 +248,11 @@ export function buildOverviewRows(input: {
   const heatmapBlock = [heatmap.title, heatmap.header, ...heatmap.rows];
 
   if (overviewTier({ width, height }) === "block") {
-    // Wordmark, a blank row, the number, its unit, then the grid beside the
-    // numbers. Centred per block, all on the same axis.
+    // A blank under the page's header, the wordmark, a blank, the number, its
+    // unit, a blank, the grid beside the numbers, a blank, and today's line.
+    // Every block is centred on the same axis (M6.5: the art used to start on the
+    // header's own row and the grid on the unit's).
+    rows.push(textRow("", width));
     for (const line of blockWordmark()) {
       rows.push(textRow(centerLine(line, width), width, true));
     }
@@ -227,6 +261,7 @@ export function buildOverviewRows(input: {
       rows.push(textRow(centerLine(line, width), width));
     }
     rows.push(textRow(centerLine(HERO_UNIT, width), width, true));
+    rows.push(textRow("", width));
     const parallel = twoColumnBlock(
       heatmapBlock,
       dataLines(summary),
@@ -238,6 +273,8 @@ export function buildOverviewRows(input: {
     for (const line of centerBlock(parallel, width)) {
       rows.push(textRow(line, width));
     }
+    rows.push(textRow("", width));
+    rows.push(textRow(centerLine(todaySummaryLine(summary), width), width));
     return rows;
   }
 

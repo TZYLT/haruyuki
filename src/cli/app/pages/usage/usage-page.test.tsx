@@ -86,8 +86,10 @@ function props(columns: number): AppViewProps {
 
 /**
  * The page at `columns`, in a terminal tall enough for the block tier: the band
- * is `rows - chrome - strip`, so 32 rows leaves a 22-row band and an 18-row body
- * — exactly the overview's block height.
+ * is `rows - chrome - strip`, so 37 rows leaves a 27-row band and a 26-row body —
+ * the overview's block is 22 rows and needs the room (it is 22 because M6.5 put a
+ * blank row above the art, a blank row above the grid, and the today/streak line
+ * under it).
  */
 function mount(columns: number): InkTty {
   clearAllSubagents();
@@ -97,7 +99,7 @@ function mount(columns: number): InkTty {
     <ChromeHeightContext.Provider value={8}>
       <UsagePage {...props(columns)} />
     </ChromeHeightContext.Provider>,
-    { columns, rows: 32 },
+    { columns, rows: 37 },
   );
 }
 
@@ -133,22 +135,27 @@ describe("the usage page", () => {
     expect(frame).toContain("███");
     expect(frame).toContain("tokens");
     expect(frame).toContain("Last 4 weeks");
-    expect(frame).toContain("cost (est.)");
+    expect(frame).toContain("total cost");
+    // M6.5: today's trio closes the block on one line under the grid.
+    expect(frame).toContain("today 960k tok");
+    expect(frame).toContain("streak 1 day");
   });
 
-  test("the blank row between the two block texts is really painted", async () => {
-    // Ink collapses an empty <Text> to zero height, so a page could compose the
-    // blank row the design asks for and paint nothing (2026-10-22).
+  test("the blank rows above the art and above the grid are really painted", async () => {
+    // Ink collapses an empty <Text> to zero height, so a page could compose a
+    // blank row and paint nothing (2026-10-22). M6.5 then asked for two more of
+    // them: one under the header, one between the unit and the grid.
     await homeWithLedger();
     const tty = mount(100);
     await settle();
     const rows = await tty.rows();
     const header = rows.findIndex((row) => row.includes("Usage / Overview"));
     expect(header).toBeGreaterThanOrEqual(0);
-    expect(rows[header + 1]).toContain("█"); // wordmark
-    // The gap row paints the page's accent rail and nothing else.
-    expect(rows[header + 6]?.trim()).toBe("┃"); // the gap
-    expect(rows[header + 7]).toContain("█"); // hero number
+    expect(rows[header + 1]?.trim()).toBe(""); // the blank under the header
+    expect(rows[header + 2]).toContain("█"); // wordmark
+    // The gap row between the two block texts paints nothing (there is no rail).
+    expect(rows[header + 7]?.trim()).toBe("");
+    expect(rows[header + 8]).toContain("█"); // hero number
   });
 
   test("a narrow terminal falls back to one line", async () => {

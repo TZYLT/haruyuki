@@ -156,15 +156,15 @@ describe("the page frame", () => {
     );
     try {
       const rows = await page.rows({ keepTrailingBlanks: true });
-      // Column 1 is the page's accent rail (the box's own left border), so the
-      // body starts at column 2 — the same column `paddingX` used to give it.
-      const body = rows.map((row) => row.replace(/^┃/, ""));
-      expect(body[0]).toContain("Blanks");
-      expect(body[1]?.trim()).toBe("above");
-      // The blank row is a *painted* row: the rail is there, the text is not.
-      expect(body[2]?.trim()).toBe("");
-      expect(rows[2]?.trim()).toBe("┃");
-      expect(body[3]?.trim()).toBe("below");
+      // No accent rail: `《38》§11.9` ② put one on the page's left edge and the
+      // M6.5 pass rejected it on the machine ("整条去掉"), so the body starts one
+      // padding column in and no row begins with `┃`.
+      expect(rows.some((row) => row.includes("┃"))).toBe(false);
+      expect(rows[0]).toContain("Blanks");
+      expect(rows[1]?.trim()).toBe("above");
+      // The blank row is a *painted* row: everything is empty, but it exists.
+      expect(rows[2]?.trim()).toBe("");
+      expect(rows[3]?.trim()).toBe("below");
     } finally {
       page.stop();
     }

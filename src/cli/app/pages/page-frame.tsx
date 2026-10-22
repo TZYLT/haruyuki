@@ -457,20 +457,16 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
           height={bandHeight}
           maxHeight="100%"
           overflow="hidden"
-          // The page's left edge (`《38》§11.9` ②): the container accent bar.
+          // No left accent bar. `《38》§11.9` ② put one here (the page's own
+          // `borderLeft`), and the M6.5 pass on the machine **rejected it**: with
+          // the band's text inset by two columns the bar read as a stray vertical
+          // line down the middle of empty space, not as an edge of a container —
+          // on `Settings` and `Usage` both, and the ruling was "整条去掉". The
+          // other two landings (the current tab, the user-message block) stand.
           //
-          // It is the box's **own border**, not a `┃` painted into every row, for
-          // the reason the sidebar documents: a per-row glyph stops at the last
-          // row of content, and this bar is the page's edge, not the text's. The
-          // column comes out of the left padding the frame already had — border 1
-          // plus `paddingRight` 1 is the same two columns `paddingX` used — so
-          // `rowWidth` and every row's arithmetic are untouched.
-          borderStyle="bold"
-          borderTop={false}
-          borderRight={false}
-          borderBottom={false}
-          borderColor={colors.focus.rail}
-          paddingRight={1}
+          // `paddingX` is what it was before that pass: one column each side, so
+          // `rowWidth` (the band less two) is still exactly what the rows get.
+          paddingX={1}
         >
           {headerSlot ?? <Text bold>{header}</Text>}
           <Box ref={rowsRef} flexDirection="column" flexShrink={0}>

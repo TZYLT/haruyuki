@@ -13,7 +13,6 @@
  * still reads when the terminal has no colour.
  */
 
-import { terminalTextWidth } from "@/cli/helpers/char-width";
 import type { UsageRecord } from "@/usage/ledger";
 import { aggregateUsageByDay, usageDayKey } from "@/usage/ledger";
 
@@ -121,9 +120,30 @@ export function weekLabel(indexFromNewest: number): string {
   return indexFromNewest === 0 ? "now" : `-${indexFromNewest}w`;
 }
 
-/** Pad with spaces to a terminal-column width (CJK counts as two). */
+/**
+ * Columns a **composed** line occupies: one per code point.
+ *
+ * These lines are cell grids, not prose. Every glyph the Usage page draws into
+ * one — block art, the heatmap ladder (`·░▒▓█`), digits, the `┃`-free rules — is
+ * exactly one terminal cell by construction, so the column count is the character
+ * count. `terminalTextWidth` answers a different question ("how wide will this
+ * terminal draw this text"), and it applies the session's ambiguous-width policy:
+ * on a terminal that resolved `—` as two columns, `█`/`·`/`░` are counted twice
+ * while the terminal draws them once. Measured 2026-10-22: that sheared the
+ * wordmark one row at a time (each art row has a different number of `█`) and
+ * pushed every block off the centre line, which is what the M6.5 report saw as
+ *
+ *     the big text is wrong / the page is not centred.
+ *
+ * So: prose is measured with `terminalTextWidth`, composed grids with this.
+ */
+export function gridWidth(text: string): number {
+  return [...text].length;
+}
+
+/** Pad with spaces to a grid width (see `gridWidth`: composed lines are cells). */
 export function padToWidth(text: string, width: number): string {
-  const current = terminalTextWidth(text);
+  const current = gridWidth(text);
   return current >= width ? text : text + " ".repeat(width - current);
 }
 

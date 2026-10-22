@@ -81,8 +81,8 @@ describe("overviewTier", () => {
   });
 
   test("the height minimum is exactly what the block draws", () => {
-    // Five rows of wordmark, a blank, five of hero, the unit, and the
-    // two-column block's six. Anything less would scroll the block.
+    // A blank, five rows of wordmark, a blank, five of hero, the unit, a blank,
+    // the two-column block's six, a blank, and today's line: twenty-two.
     const rows = buildOverviewRows({
       summary: summaryOf([record("2026-10-22T09")]),
       records: [record("2026-10-22T09")],
@@ -101,41 +101,61 @@ describe("buildOverviewRows (block tier)", () => {
     buildOverviewRows({ summary, records, now: NOW, width: 60, height: 22 }),
   );
 
-  test("the two block texts are separated by a blank row", () => {
-    // The wordmark is the first five rows, then one empty row, then the hero.
-    // This is the row Ink used to swallow (an empty <Text> is zero height).
-    expect(rows[4]).toContain("█");
-    expect(rows[5]).toBe("");
-    expect(rows[6]).toContain("█");
+  test("a blank row opens the block, then the wordmark, a blank, the hero", () => {
+    // M6.5: the art must not start on the page header's own row, and Ink used to
+    // swallow an empty <Text> (zero height), so both blanks are rows the frame
+    // paints on purpose.
+    expect(rows[0]).toBe("");
+    expect(rows[1]).toContain("█");
+    expect(rows[5]).toContain("█");
+    expect(rows[6]).toBe("");
+    expect(rows[7]).toContain("█");
   });
 
   test("the wordmark, the number and its unit are centred", () => {
     const wordmark = blockWordmark();
     for (const [index, line] of wordmark.entries()) {
-      expect(rows[index]).toBe(centerLine(line, 60));
+      expect(rows[1 + index]).toBe(centerLine(line, 60));
     }
     const hero = blockText("920k");
     for (const [index, line] of hero.entries()) {
-      expect(rows[6 + index]).toBe(centerLine(line, 60));
+      expect(rows[7 + index]).toBe(centerLine(line, 60));
     }
-    expect(rows[11]).toBe(centerLine("tokens", 60));
+    expect(rows[12]).toBe(centerLine("tokens", 60));
+  });
+
+  test("a blank row separates the unit from the grid", () => {
+    expect(rows[13]).toBe("");
+    expect(rows[14]).toContain("Last 4 weeks");
   });
 
   test("the grid and the numbers are centred as one rectangle", () => {
-    const start = lead(rows[12] ?? "");
+    const start = lead(rows[14] ?? "");
     // One left margin for the whole block; the weekday header is indented inside
     // it by the label column, which is why it is not in this list.
-    for (const index of [12, 14, 15, 16, 17]) {
+    for (const index of [14, 16, 17, 18, 19]) {
       expect(lead(rows[index] ?? "")).toBe(start);
     }
-    const widest = Math.max(...rows.slice(12).map((row) => drawnWidth(row)));
+    const widest = Math.max(
+      ...rows.slice(14, 20).map((row) => drawnWidth(row)),
+    );
     expect(start).toBe(Math.floor((60 - widest) / 2));
   });
 
   test("the grid and the numbers share one two-column block", () => {
-    expect(rows[12]).toContain("Last 4 weeks");
-    expect(rows[12]).toContain("cost (est.)");
-    expect(rows[17]).toContain("-3w");
+    expect(rows[14]).toContain("Last 4 weeks");
+    expect(rows[14]).toContain("total cost");
+    expect(rows[19]).toContain("-3w");
+  });
+
+  test("today's three figures close the block on one line", () => {
+    // M6.5 moved today's tokens, the hit rate and the streak out of the column
+    // and onto one line under the grid, after a blank row.
+    expect(rows[20]).toBe("");
+    const line = rows[21] ?? "";
+    expect(line).toContain("today 460k tok");
+    expect(line).toContain("today hit 75.00%");
+    expect(line).toContain("streak 2 days");
   });
 
   test("the unit and the captions are dim, the numbers are not", () => {
@@ -146,18 +166,20 @@ describe("buildOverviewRows (block tier)", () => {
       width: 60,
       height: 22,
     }).map((row) => (row.kind === "text" ? row.dim === true : false));
-    expect(dimmed[0]).toBe(true); // wordmark
-    expect(dimmed[6]).toBe(false); // hero
-    expect(dimmed[11]).toBe(true); // "tokens"
-    expect(dimmed[12]).toBe(false); // grid and numbers
+    expect(dimmed[1]).toBe(true); // wordmark
+    expect(dimmed[7]).toBe(false); // hero
+    expect(dimmed[12]).toBe(true); // "tokens"
+    expect(dimmed[14]).toBe(false); // grid and numbers
   });
 
   test("the numbers the page is for are on screen", () => {
     const joined = rows.join("\n");
     expect(joined).toContain("Last 4 weeks");
-    expect(joined).toContain("cost (est.)");
+    expect(joined).toContain("total cost");
+    expect(joined).toContain("total tokens");
     expect(joined).toContain("total turns");
-    expect(joined).toContain("today hit");
+    expect(joined).toContain("today cost");
+    expect(joined).toContain("today turns");
     expect(joined).toContain("75.00%");
     expect(joined).toContain("2 days");
     expect(joined).toContain("tokens");
