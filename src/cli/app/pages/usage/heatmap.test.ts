@@ -49,7 +49,7 @@ describe("buildHeatmap", () => {
 
   test("puts a day's tokens in its own weekday cell", () => {
     const grid = buildHeatmap([record("2026-10-21T14")], NOW);
-    const currentWeek = grid.weeks[3]!;
+    const currentWeek = grid.weeks[3] ?? [];
     // Wednesday is column 2 (Monday = 0).
     expect(currentWeek[2]?.dayKey).toBe("2026-10-21");
     expect(currentWeek[2]?.tokens).toBe(1000);
@@ -66,7 +66,7 @@ describe("buildHeatmap", () => {
       ],
       NOW,
     );
-    const week = grid.weeks[3]!;
+    const week = grid.weeks[3] ?? [];
     expect(week[0]?.level).toBe(4);
     expect(week[1]?.level).toBe(2);
     expect(week[2]?.level).toBe(1);
