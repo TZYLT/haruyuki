@@ -190,10 +190,18 @@ export function LeaderHint() {
   const entries = leaderEntries();
 
   if (!helpOpen) {
+    // One row, like the idle hint, and **one Text**: the shell's row budget counts
+    // this line, and an armed prefix that wraps to a second row takes that row from
+    // the band (which shifts every row under it). Two sibling `<Text>`s in a row box
+    // do not do it — Yoga gives the second one its content width, so `wrap="truncate"`
+    // has nothing to cut and the terminal wraps the physical line instead. `?` is the
+    // door to the full list, so truncating here loses nothing a key press cannot
+    // recover.
     return (
       <Box>
-        <Text dimColor>{prefix} … </Text>
-        <Text dimColor>{summarise(entries)}</Text>
+        <Text dimColor wrap="truncate">
+          {`${prefix} … ${summarise(entries)}`}
+        </Text>
       </Box>
     );
   }
