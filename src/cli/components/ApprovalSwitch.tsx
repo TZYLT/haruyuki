@@ -27,6 +27,13 @@ type Props = {
   // External data for FileEdit approvals
   precomputedDiff?: AdvancedDiffSuccess;
   allDiffs?: Map<string, AdvancedDiffSuccess>;
+  /**
+   * `O`: open the pending file edit's diff in the full-screen face.
+   *
+   * Only the file-edit surface offers it, because only that surface has a diff to
+   * expand; the face is read-only and the approval stays the thing that answers.
+   */
+  onOpenDiffFace?: (diffs: Map<string, AdvancedDiffSuccess>) => void;
 };
 
 /**
@@ -53,6 +60,7 @@ export const ApprovalSwitch = memo(
     allDiffs,
     showPreview = true,
     defaultScope = "project",
+    onOpenDiffFace,
   }: Props) => {
     const toolName = approval.toolName;
     // The dispatch and the args parsing are the row model's too: one call decides
@@ -75,6 +83,7 @@ export const ApprovalSwitch = memo(
           allowPersistence={allowPersistence}
           defaultScope={defaultScope}
           showPreview={showPreview}
+          onOpenDiffFace={onOpenDiffFace}
         />
       );
     }

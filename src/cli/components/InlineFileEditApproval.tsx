@@ -33,6 +33,8 @@ type Props = {
   defaultScope?: "project" | "session";
   /** Override the auto-generated header text (e.g. "Edit memory system/persona/soul?") */
   headerOverride?: string;
+  /** `O`: hand this approval's diff to the full-screen diff face. */
+  onOpenDiffFace?: (diffs: Map<string, AdvancedDiffSuccess>) => void;
 };
 
 /**
@@ -59,6 +61,7 @@ export const InlineFileEditApproval = memo(
     showPreview = true,
     defaultScope = "project",
     headerOverride,
+    onOpenDiffFace,
   }: Props) => {
     useProgressIndicator();
 
@@ -170,6 +173,11 @@ export const InlineFileEditApproval = memo(
           onApproveAlways={() => onApproveAlways(defaultScope, diffsPayload)}
           onCancel={onCancel}
           onDeny={onDeny}
+          onOpenDiffFace={
+            onOpenDiffFace && diffsPayload
+              ? () => onOpenDiffFace(diffsPayload)
+              : undefined
+          }
         />
       </Box>
     );

@@ -19,6 +19,13 @@ const APPROVAL: FocusedApprovalView = {
   handleDenyCurrent: async () => {},
   handleCancelApprovals: () => {},
   showApprovalPreview: true,
+  openOverlay: () => ({
+    id: "cmd-test",
+    input: "/test",
+    update: () => {},
+    finish: () => {},
+    fail: () => {},
+  }),
 };
 
 class CaptureStream extends Writable {

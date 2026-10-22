@@ -115,6 +115,7 @@ import {
   shouldSlashCommandBypassQueue,
 } from "./command-routing";
 import { buildTextParts } from "./content-parts";
+import { openWorktreeDiffFace } from "./faces/open-worktree-diff";
 import {
   appendOptimisticUserLine,
   appendRecallLine,
@@ -785,31 +786,10 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
             return { submitted: true };
           }
 
-          const cmd = commandRunner.start(
-            "/experiments",
-            "Opening worktree diff...",
-          );
-          const { generateAndOpenDiffViewer } = await import(
-            "@/web/generate-diff-viewer"
-          );
-          generateAndOpenDiffViewer(args[0])
-            .then((result) => {
-              const fileSummary = `${result.fileCount} file${result.fileCount === 1 ? "" : "s"}`;
-              if (result.opened) {
-                cmd.finish(`Opened worktree diff (${fileSummary})`, true);
-              } else {
-                cmd.finish(
-                  `Open manually: ${result.filePath} (${fileSummary})`,
-                  true,
-                );
-              }
-            })
-            .catch((err: unknown) => {
-              cmd.finish(
-                `Failed to open diff: ${err instanceof Error ? err.message : String(err)}`,
-                false,
-              );
-            });
+          // The explicit path is the same door as the selector's answer: the
+          // in-app face, not the browser viewer (`docs/38` §16.2). The face's own
+          // command row carries what the read is doing.
+          void openWorktreeDiffFace(args[0], { openOverlay, commandRunner });
           return { submitted: true };
         }
 

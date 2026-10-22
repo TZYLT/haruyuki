@@ -1,7 +1,11 @@
 import { Box, useStdout } from "ink";
 import { type ReactNode, useCallback } from "react";
 import type { AppViewProps } from "@/cli/app/AppView";
+import { DiffFaceHost } from "@/cli/app/faces/diff-face";
+import { diffFaceTotals } from "@/cli/app/faces/diff-face-model";
+import { setDiffFaceSource } from "@/cli/app/faces/diff-face-store";
 import { PageHost } from "@/cli/app/pages/page-host";
+import { DiffFaceScope } from "@/cli/app/shell/diff-face-scope";
 import { ShellFrame } from "@/cli/app/shell/ShellFrame";
 import { ContextSidebarScope } from "@/cli/app/shell/sidebar-scope";
 import { sidebarGeometry } from "@/cli/app/shell/sidebar-sections";
@@ -9,6 +13,7 @@ import { TabStrip } from "@/cli/app/shell/tab-strip";
 import { TAB_STRIP_ROWS } from "@/cli/app/shell/tab-strip-layout";
 import type { AppShellProps } from "@/cli/app/shell/types";
 import { useAmbiguousWidthProbe } from "@/cli/app/shell/use-ambiguous-width";
+import { useDiffFace } from "@/cli/app/shell/use-diff-face";
 import { useExitSummaryAfterTeardown } from "@/cli/app/shell/use-exit-summary";
 import { useMessageHistory } from "@/cli/app/shell/use-message-history";
 import { useMouseInput } from "@/cli/app/shell/use-mouse-input";
@@ -17,6 +22,7 @@ import { useTerminalSelection } from "@/cli/app/shell/use-terminal-selection";
 import { useActiveTabIsPage } from "@/cli/app/tabs";
 import { ViewportTranscript } from "@/cli/app/ViewportTranscript";
 import { Toasts } from "@/cli/components/Toasts";
+import type { DiffPatchFile } from "@/cli/helpers/diff-patch";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
 
 /**
@@ -108,6 +114,11 @@ export function V2Shell(props: AppShellProps) {
   const geometry = sidebarGeometry(frameColumns, terminalRows);
   // The tab row replaces the main area with a page when one is focused.
   const pageIsActive = useActiveTabIsPage();
+  // The diff face takes the band for as long as its overlay route is open. It is
+  // not a tab: it is raised over the conversation, owns the keyboard, and leaves
+  // nothing behind (`docs/38` §13.2), so it is chosen here — where the band's
+  // content is chosen — and closed by the same `closeOverlay` every face uses.
+  const diffFaceIsActive = props.activeOverlay === "diff";
   // The message history face's chord. Registered here, in the shell that has the
   // band reporting into it — the append shell registers nothing and stays frozen.
   const { setActiveOverlay } = props;
@@ -115,6 +126,26 @@ export function V2Shell(props: AppShellProps) {
     setActiveOverlay("message-history");
   }, [setActiveOverlay]);
   useMessageHistory(openMessageHistory);
+  // The diff face's chord (`Ctrl+X d`): the newest diff the transcript can draw.
+  const openDiffFace = useCallback(
+    (files: DiffPatchFile[]) => {
+      const totals = diffFaceTotals(files);
+      const first = files[0];
+      setDiffFaceSource({
+        label:
+          files.length === 1 && first
+            ? first.path
+            : `${files.length} files · +${totals.additions} −${totals.deletions}`,
+        files,
+      });
+      setActiveOverlay("diff");
+    },
+    [setActiveOverlay],
+  );
+  useDiffFace({
+    precomputedDiffsRef: props.precomputedDiffsRef,
+    open: openDiffFace,
+  });
   // The selection stands down while a page holds the band: there is no transcript
   // text under the pointer, and it is the page's rows that answer a press now.
   useTerminalSelection({
@@ -131,14 +162,24 @@ export function V2Shell(props: AppShellProps) {
           branch of its own. */}
       <ContextSidebarScope.Provider value>
         <TabStrip {...props.tabStrip} frameColumns={frameColumns} />
-        <ShellFrame
-          {...props}
-          transcript={pageIsActive ? PageHost : V2Transcript}
-          // The toast band lives in this shell's row budget (`docs/38` §2.1),
-          // between the transcript and the input — the append shell has neither
-          // the budget nor the band, and passes nothing.
-          aboveInput={Toasts}
-        />
+        {/* The diff face exists only in this shell; the append shell provides no
+            scope, so an approval's `O` is not a key there (`diff-face-scope.ts`). */}
+        <DiffFaceScope.Provider value>
+          <ShellFrame
+            {...props}
+            transcript={
+              diffFaceIsActive
+                ? DiffFaceHost
+                : pageIsActive
+                  ? PageHost
+                  : V2Transcript
+            }
+            // The toast band lives in this shell's row budget (`docs/38` §2.1),
+            // between the transcript and the input — the append shell has neither
+            // the budget nor the band, and passes nothing.
+            aboveInput={Toasts}
+          />
+        </DiffFaceScope.Provider>
       </ContextSidebarScope.Provider>
     </FullScreenFrame>
   );

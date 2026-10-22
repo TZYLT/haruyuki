@@ -70,6 +70,7 @@ import type { ToolsetName, ToolsetPreference } from "@/tools/toolset";
 import type { QueuedMessage } from "@/utils/message-queue-bridge";
 import { ChromeHeightContext, useMeasuredChromeHeight } from "./chrome-height";
 import { LiveExitStats } from "./ExitStats";
+import { openWorktreeDiffFace } from "./faces/open-worktree-diff";
 import { uid } from "./ids";
 import { SimpleOverlayRoutes } from "./simple-overlay-routes";
 import { queueOrRefuseSwitch } from "./switch-policy";
@@ -689,36 +690,15 @@ export function AppView(props: AppViewRenderProps) {
                   onSelect={(path) => {
                     setWorktreeDiffSelectorPending(null);
                     const overlayCommand = completeOverlay("worktree-diff");
-                    const cmd =
-                      overlayCommand ??
-                      commandRunner.start(
-                        "/experiments",
-                        "Opening worktree diff...",
-                      );
-                    void import("@/web/generate-diff-viewer")
-                      .then(({ generateAndOpenDiffViewer }) =>
-                        generateAndOpenDiffViewer(path),
-                      )
-                      .then((result) => {
-                        const fileSummary = `${result.fileCount} file${result.fileCount === 1 ? "" : "s"}`;
-                        if (result.opened) {
-                          cmd.finish(
-                            `Opened worktree diff (${fileSummary})`,
-                            true,
-                          );
-                        } else {
-                          cmd.finish(
-                            `Open manually: ${result.filePath} (${fileSummary})`,
-                            true,
-                          );
-                        }
-                      })
-                      .catch((err: unknown) => {
-                        cmd.finish(
-                          `Failed to open diff: ${err instanceof Error ? err.message : String(err)}`,
-                          false,
-                        );
-                      });
+                    overlayCommand?.finish("Worktree chosen", true);
+                    // The face, not the browser: `/experiments diffs` is the diff
+                    // face's first door (`docs/38` §16.2). The HTML viewer is still
+                    // reachable from inside it (`O`), which is the one place that
+                    // knows the worktree path.
+                    void openWorktreeDiffFace(path, {
+                      openOverlay,
+                      commandRunner,
+                    });
                   }}
                   onCancel={() => {
                     setWorktreeDiffSelectorPending(null);

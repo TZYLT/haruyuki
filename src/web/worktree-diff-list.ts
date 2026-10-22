@@ -179,3 +179,44 @@ export async function listWorktreeDiffOptions(
   const worktrees = parseWorktreeList(output, currentPath);
   return Promise.all(worktrees.map((worktree) => summarizeWorktree(worktree)));
 }
+
+/**
+ * The worktree's whole diff, as a patch.
+ *
+ * This is what the in-app diff face reads (`src/cli/app/faces/`): the browser
+ * viewer builds the same patch in `generate-diff-viewer.ts`, and the two must agree
+ * about the base — both diff against the merge base of the upstream (or the
+ * default branch), with untracked files included, so the face shows the same
+ * changes the HTML viewer would.
+ */
+export async function readWorktreeDiffPatch(
+  worktreePath: string = process.cwd(),
+): Promise<string> {
+  const repoRoot = (
+    await runGit(worktreePath, ["rev-parse", "--show-toplevel"])
+  ).trim();
+  const diffBase = await getDiffBase(repoRoot);
+  const untracked = await runGitOptional(repoRoot, [
+    "ls-files",
+    "--others",
+    "--exclude-standard",
+  ]);
+  const patches = await Promise.all([
+    runGitOptional(repoRoot, ["diff", "--binary", diffBase]),
+    ...untracked
+      .split("\n")
+      .map((file) => file.trim())
+      .filter(Boolean)
+      .map((file) =>
+        runGitOptional(repoRoot, [
+          "diff",
+          "--binary",
+          "--no-index",
+          "--",
+          "/dev/null",
+          file,
+        ]),
+      ),
+  ]);
+  return patches.filter(Boolean).join("\n");
+}

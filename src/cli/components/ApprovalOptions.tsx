@@ -41,6 +41,7 @@ export const ApprovalOptions = memo(
     onApproveAlways,
     onDeny,
     onCancel,
+    onOpenDiffFace,
   }: {
     /** Whether the "always" option is offered at all. */
     allowPersistence: boolean;
@@ -53,6 +54,16 @@ export const ApprovalOptions = memo(
     onApproveAlways: () => void;
     onDeny: (reason: string) => void;
     onCancel?: () => void;
+    /**
+     * `O`: open the diff in the full-screen face (`docs/38` §16.2's third entry).
+     *
+     * Handled here rather than as a router binding because this list's custom-denial
+     * row is a live text editor: `o` is a letter in a denial reason, and a modal
+     * binding would open a full-screen face while the user was typing "no". The key
+     * is therefore offered only where this component can see that the editor is not
+     * the current row.
+     */
+    onOpenDiffFace?: () => void;
   }) => {
     const [selectedOption, setSelectedOption] = useState(0);
     const {
@@ -129,6 +140,17 @@ export const ApprovalOptions = memo(
         }
         if (input === "2" && allowPersistence) {
           onApproveAlways();
+          return;
+        }
+
+        // `O` opens the diff in the full-screen face. Only from the fixed options:
+        // on the custom row every printable key belongs to the editor.
+        if (
+          onOpenDiffFace &&
+          (input === "o" || input === "O") &&
+          !isOnCustomOption
+        ) {
+          onOpenDiffFace();
           return;
         }
       },

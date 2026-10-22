@@ -31,7 +31,11 @@ const ESC = "\u001b";
 const CTRL_C = "\u0003";
 
 async function mountApprovalOptions(
-  overrides: { allowPersistence?: boolean; isFocused?: boolean } = {},
+  overrides: {
+    allowPersistence?: boolean;
+    isFocused?: boolean;
+    onOpenDiffFace?: () => void;
+  } = {},
 ) {
   const actions: string[] = [];
   const shell = mountInkTty(
@@ -44,6 +48,7 @@ async function mountApprovalOptions(
       onApproveAlways={() => actions.push("always")}
       onCancel={() => actions.push("cancel")}
       onDeny={(reason) => actions.push(`deny:${reason}`)}
+      onOpenDiffFace={overrides.onOpenDiffFace}
     />,
     { columns: 60, rows: 12 },
   );
@@ -151,6 +156,29 @@ describe("ApprovalOptions keys", () => {
       expect(actions).toEqual([]);
     } finally {
       shell.stop();
+    }
+  });
+
+  test("O opens the diff face, and without one the key is not offered", async () => {
+    const opened: string[] = [];
+    const withFace = await mountApprovalOptions({
+      onOpenDiffFace: () => opened.push("diff"),
+    });
+    try {
+      await pressKeys(withFace.shell, ["o"]);
+      expect(opened).toEqual(["diff"]);
+      // The key is not an answer to the approval: nothing was approved or denied.
+      expect(withFace.actions).toEqual([]);
+    } finally {
+      withFace.shell.stop();
+    }
+
+    const withoutFace = await mountApprovalOptions();
+    try {
+      await pressKeys(withoutFace.shell, ["o"]);
+      expect(withoutFace.actions).toEqual([]);
+    } finally {
+      withoutFace.shell.stop();
     }
   });
 });

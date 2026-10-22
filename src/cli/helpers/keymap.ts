@@ -189,6 +189,14 @@ export const LEADER_KEY_CHORDS = {
    * needs explaining: shell history is a different thing with its own keys.
    */
   messageHistory: [{ key: "h" }],
+  /**
+   * The full-screen diff face (`docs/38` §16.2).
+   *
+   * `d` for diff. The spec's second entry was "`Enter` on the tool result row",
+   * which needs a transcript row cursor M6 does not have; this chord opens the
+   * newest diff in the session instead (`shell/use-diff-face.ts` records why).
+   */
+  diff: [{ key: "d" }],
 } as const satisfies Record<string, KeyChordList>;
 
 /** Reserved by later milestones so no M3 binding can claim them by accident. */
