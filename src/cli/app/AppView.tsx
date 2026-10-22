@@ -690,14 +690,14 @@ export function AppView(props: AppViewRenderProps) {
                   onSelect={(path) => {
                     setWorktreeDiffSelectorPending(null);
                     const overlayCommand = completeOverlay("worktree-diff");
-                    overlayCommand?.finish("Worktree chosen", true);
                     // The face, not the browser: `/experiments diffs` is the diff
-                    // face's first door (`docs/38` §16.2). The HTML viewer is still
-                    // reachable from inside it (`O`), which is the one place that
-                    // knows the worktree path.
+                    // face's first door (`docs/38` §16.2), and the HTML viewer is
+                    // still reachable from inside it (`O`). The selector's own row is
+                    // handed over so one command stays one line in either shell.
                     void openWorktreeDiffFace(path, {
                       openOverlay,
                       commandRunner,
+                      existingCommand: overlayCommand ?? undefined,
                     });
                   }}
                   onCancel={() => {

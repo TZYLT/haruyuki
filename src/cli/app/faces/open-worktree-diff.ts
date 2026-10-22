@@ -34,16 +34,26 @@ export async function openWorktreeDiffFace(
       dismissOutput: string,
     ) => CommandHandle;
     commandRunner: { start: (input: string, output: string) => CommandHandle };
+    /**
+     * The row the caller already started for this request, if any.
+     *
+     * The worktree selector's own row (`/experiments diffs`) is the one that must
+     * carry the result in both shells: starting a second row would print two lines
+     * for one command, which the compatibility mode must not do (《33》§12: legacy
+     * stays frozen).
+     */
+    existingCommand?: CommandHandle;
   },
 ): Promise<void> {
   const path = worktreePath ?? process.cwd();
   const label = basename(path) || path;
 
   if (!resolveUiV2Once()) {
-    await openInBrowserViewer(path, deps.commandRunner);
+    await openInBrowserViewer(path, deps);
     return;
   }
 
+  deps.existingCommand?.finish("Worktree chosen", true);
   setDiffFaceSource(null);
   const command = deps.openOverlay(
     "diff",
@@ -82,12 +92,14 @@ export async function openWorktreeDiffFace(
 /** The pre-M6-P8 behaviour, unchanged: render the viewer and hand it to the OS. */
 async function openInBrowserViewer(
   path: string,
-  commandRunner: { start: (input: string, output: string) => CommandHandle },
+  deps: {
+    commandRunner: { start: (input: string, output: string) => CommandHandle };
+    existingCommand?: CommandHandle;
+  },
 ): Promise<void> {
-  const command = commandRunner.start(
-    "/experiments",
-    "Opening worktree diff...",
-  );
+  const command =
+    deps.existingCommand ??
+    deps.commandRunner.start("/experiments", "Opening worktree diff...");
   try {
     const { generateAndOpenDiffViewer } = await import(
       "@/web/generate-diff-viewer"
