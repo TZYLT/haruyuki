@@ -146,7 +146,8 @@ describe("the usage page", () => {
     const header = rows.findIndex((row) => row.includes("Usage / Overview"));
     expect(header).toBeGreaterThanOrEqual(0);
     expect(rows[header + 1]).toContain("█"); // wordmark
-    expect(rows[header + 6]?.trim()).toBe(""); // the gap
+    // The gap row paints the page's accent rail and nothing else.
+    expect(rows[header + 6]?.trim()).toBe("┃"); // the gap
     expect(rows[header + 7]).toContain("█"); // hero number
   });
 

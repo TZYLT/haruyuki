@@ -457,7 +457,20 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
           height={bandHeight}
           maxHeight="100%"
           overflow="hidden"
-          paddingX={1}
+          // The page's left edge (`《38》§11.9` ②): the container accent bar.
+          //
+          // It is the box's **own border**, not a `┃` painted into every row, for
+          // the reason the sidebar documents: a per-row glyph stops at the last
+          // row of content, and this bar is the page's edge, not the text's. The
+          // column comes out of the left padding the frame already had — border 1
+          // plus `paddingRight` 1 is the same two columns `paddingX` used — so
+          // `rowWidth` and every row's arithmetic are untouched.
+          borderStyle="bold"
+          borderTop={false}
+          borderRight={false}
+          borderBottom={false}
+          borderColor={colors.focus.rail}
+          paddingRight={1}
         >
           {headerSlot ?? <Text bold>{header}</Text>}
           <Box ref={rowsRef} flexDirection="column" flexShrink={0}>

@@ -56,9 +56,20 @@ export const TAB_TITLE_COLUMNS = 12;
 /** Spaces between two tabs, and between the conversation tabs and the pages. */
 export const TAB_GAP = 2;
 
-/** Marker column every conversation cell reserves: `> ` for the current tab. */
+/**
+ * Marker column every conversation cell reserves: `> ` for the current tab.
+ *
+ * The rail is reserved on **every** cell beside it (`《38》§11.9`: the current tab
+ * carries the container's accent bar). Reserving rather than prefixing only the
+ * active tab is what keeps the names in one column as the current tab moves: a
+ * cell that is current is one column wider only if its neighbours are not.
+ */
 const MARKER = "> ";
 const MARKER_BLANK = "  ";
+
+/** The container accent bar that marks the current tab, and the blank standing in. */
+const RAIL = CLI_GLYPHS.accentRail;
+const RAIL_BLANK = " ";
 
 /** The close hot zone, glyph included. */
 const CLOSE = ` ${CLI_GLYPHS.close}`;
@@ -130,11 +141,12 @@ type Cell = {
 
 function cellFor(item: TabStripItem): Cell {
   const marker = item.active ? MARKER : MARKER_BLANK;
+  const rail = item.active ? RAIL : RAIL_BLANK;
   const title = truncateToWidth(item.title, TAB_TITLE_COLUMNS);
   const unread = item.unread ? TAB_UNREAD_MARK : "";
   return {
     item,
-    name: `${marker}${unread}${title}`,
+    name: `${rail}${marker}${unread}${title}`,
     close: item.closeable ? CLOSE : null,
   };
 }

@@ -393,7 +393,17 @@ function userLineRows(
 ): number {
   const columns = Math.max(1, options.columns);
   const prefix = options.userPromptPrefix ?? `${CLI_GLYPHS.prompt} `;
-  const contentWidth = Math.max(1, columns - inkStringWidth(prefix));
+  // `UserMessageRich` puts the block's accent rail (`《38》§11.9` ③) in front of the
+  // prompt prefix of a *highlighted* block, and wraps at what is left; a system
+  // reminder inside the same message has no rail. Both sides subtract the same
+  // glyph from the same block kind; a copy that forgot it would predict one row
+  // fewer for every wrapped line, which is the class of defect
+  // `row-model.fidelity.test.tsx` exists for.
+  const plainWidth = Math.max(1, columns - inkStringWidth(prefix));
+  const contentWidth = Math.max(
+    1,
+    plainWidth - inkStringWidth(CLI_GLYPHS.accentRail),
+  );
   const displayText = extractTaskNotificationsForDisplay(
     line.text,
   ).cleanedText.trim();
@@ -407,7 +417,10 @@ function userLineRows(
   // as zero rows — the separator is not a row. The two blank rows around a
   // highlighted block are real: they are `columns` spaces wide.
   const pushBlock = (text: string, highlighted: boolean): number => {
-    const bodyRows = renderedBlockRows(text, contentWidth);
+    const bodyRows = renderedBlockRows(
+      text,
+      highlighted ? contentWidth : plainWidth,
+    );
     return bodyRows + (highlighted ? 2 : 0);
   };
 

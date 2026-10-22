@@ -151,8 +151,9 @@ describe("the tab strip frame", () => {
       // No wrapping: the strip is a fixed two rows whatever it had to drop.
       expect(rows.length).toBe(2);
       expect(rows[1]).toBe("─".repeat(80 - ROW_SAFETY_COLUMNS));
-      // The current tab survives, and what did not fit is counted.
-      expect(rows[0]).toStartWith("> M6 shell");
+      // The current tab survives — accent rail first — and what did not fit is
+      // counted.
+      expect(rows[0]).toStartWith("┃> M6 shell");
       expect(rows[0]).toMatch(/\+\d+/);
       expect(rows[0]?.length).toBeLessThanOrEqual(80);
     } finally {

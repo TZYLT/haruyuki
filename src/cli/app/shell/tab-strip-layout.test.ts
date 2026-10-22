@@ -73,8 +73,8 @@ describe("the tab row", () => {
 
     const text = draw(layout);
     expect(visibleWidth(text)).toBe(100);
-    // The current tab is marked, the others are not.
-    expect(text).toStartWith("> M6 shell");
+    // The current tab is marked — accent rail, then `> ` — the others are not.
+    expect(text).toStartWith("┃> M6 shell");
     expect(text).toContain("Ledger");
     expect(text).toContain("Diff face");
     // Pages pinned right, `Usage` immediately left of `Settings`.
@@ -99,8 +99,8 @@ describe("the tab row", () => {
     );
     const name = layout.segments.find((segment) => segment.part === "name");
     expect(name).toBeDefined();
-    // `> ` plus one unread column of marker is not part of the title budget.
-    const title = (name?.text ?? "").replace(/^> /, "");
+    // The rail and `> ` marker are not part of the title budget.
+    const title = (name?.text ?? "").replace(/^┃> /, "");
     expect(visibleWidth(title)).toBeLessThanOrEqual(TAB_TITLE_COLUMNS);
     expect(title).toEndWith("…");
   });
@@ -125,7 +125,7 @@ describe("the tab row", () => {
     const dropped = Number(marker?.[1] ?? 0);
     expect(dropped).toBeGreaterThan(0);
     // The current tab is never the one dropped, and the pages stay pinned.
-    expect(text).toStartWith("> long name");
+    expect(text).toStartWith("┃> long name");
     expect(text).toEndWith("Settings");
     expect(text.indexOf("Usage")).toBeLessThan(text.indexOf("Settings"));
     // The count matches what is missing: every conversation tab is either drawn
@@ -197,10 +197,10 @@ describe("the tab row", () => {
       "usage",
       "settings",
     ]);
-    expect(covered(layout, names[0] as TabStripRegion)).toBe("> M6 shell");
-    expect(covered(layout, names[1] as TabStripRegion)).toBe("  • Ledger");
-    expect(covered(layout, names[2] as TabStripRegion)).toBe("  Usage");
-    expect(covered(layout, names[3] as TabStripRegion)).toBe("> Settings");
+    expect(covered(layout, names[0] as TabStripRegion)).toBe("┃> M6 shell");
+    expect(covered(layout, names[1] as TabStripRegion)).toBe("   • Ledger");
+    expect(covered(layout, names[2] as TabStripRegion)).toBe("   Usage");
+    expect(covered(layout, names[3] as TabStripRegion)).toBe("┃> Settings");
 
     // Regions do not overlap and stay inside the row.
     for (const region of layout.regions) {
@@ -243,12 +243,12 @@ describe("the tab row", () => {
   });
 
   test("a row that fills the terminal exactly is not pushed past it", () => {
-    // `> ` plus a six-column title is eight columns; at eight columns the row is
-    // the whole terminal, so there is no room for a padding column. Padding there
-    // anyway put the tab's last column outside the screen — painted clipped, and
-    // its click region unreachable.
+    // The rail, `> ` and a five-column title are eight columns; at eight columns
+    // the row is the whole terminal, so there is no room for a padding column.
+    // Padding there anyway put the tab's last column outside the screen — painted
+    // clipped, and its click region unreachable.
     const layout = layoutTabStrip(
-      [conversation("a", { title: "abcdef", active: true, closeable: false })],
+      [conversation("a", { title: "abcde", active: true, closeable: false })],
       8,
     );
     const text = draw(layout);

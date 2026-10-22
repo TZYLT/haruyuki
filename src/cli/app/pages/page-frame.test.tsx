@@ -156,10 +156,15 @@ describe("the page frame", () => {
     );
     try {
       const rows = await page.rows({ keepTrailingBlanks: true });
-      expect(rows[0]).toContain("Blanks");
-      expect(rows[1]?.trim()).toBe("above");
-      expect(rows[2]?.trim()).toBe("");
-      expect(rows[3]?.trim()).toBe("below");
+      // Column 1 is the page's accent rail (the box's own left border), so the
+      // body starts at column 2 — the same column `paddingX` used to give it.
+      const body = rows.map((row) => row.replace(/^┃/, ""));
+      expect(body[0]).toContain("Blanks");
+      expect(body[1]?.trim()).toBe("above");
+      // The blank row is a *painted* row: the rail is there, the text is not.
+      expect(body[2]?.trim()).toBe("");
+      expect(rows[2]?.trim()).toBe("┃");
+      expect(body[3]?.trim()).toBe("below");
     } finally {
       page.stop();
     }

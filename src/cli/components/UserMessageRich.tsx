@@ -211,7 +211,17 @@ export const UserMessage = memo(
     const promptPrefix = `${prompt || CLI_GLYPHS.prompt} `;
     const prefixWidth = inkStringWidth(promptPrefix);
     const continuationPrefix = " ".repeat(prefixWidth);
-    const contentWidth = Math.max(1, columns - prefixWidth);
+    // The block's left accent bar (`《38》§11.9` ③) sits **outside** the text's own
+    // budget: the wrapped width and the pad both come down by the bar's column, so
+    // the block still ends exactly at the terminal's edge. Only *highlighted*
+    // blocks carry the bar — a system reminder inside the same message has no edge
+    // to sit on — so the two widths differ by exactly that column.
+    // `row-model.ts` subtracts the same glyph from the same arithmetic; the two
+    // must agree or the model's row count stops matching what the viewport draws.
+    const railWidth = inkStringWidth(CLI_GLYPHS.accentRail);
+    const plainWidth = Math.max(1, columns - prefixWidth);
+    const contentWidth = Math.max(1, plainWidth - railWidth);
+    const lineColumns = Math.max(1, columns - railWidth);
     const cleanedText = extractTaskNotificationsForDisplay(
       line.text,
     ).cleanedText;
@@ -233,8 +243,8 @@ export const UserMessage = memo(
       allLines.push(
         ...renderBlock(
           text,
-          contentWidth,
-          columns,
+          highlighted ? contentWidth : plainWidth,
+          highlighted ? lineColumns : columns,
           highlighted,
           promptPrefix,
           continuationPrefix,
@@ -280,7 +290,14 @@ export const UserMessage = memo(
             color={line.highlighted ? textColor : undefined}
             wrap={line.highlighted ? "truncate-end" : "wrap"}
           >
-            {line.text}
+            {line.highlighted ? (
+              <>
+                <Text color={colors.focus.rail}>{CLI_GLYPHS.accentRail}</Text>
+                {line.text}
+              </>
+            ) : (
+              line.text
+            )}
           </Text>
         ))}
       </Box>

@@ -47,4 +47,18 @@ export const CLI_GLYPHS = {
    * confusable in place.
    */
   pendingApproval: "!",
+  /**
+   * The container accent bar: the left edge of the current tab, of a page, and of
+   * a user message block (`《38》§11.9`).
+   *
+   * U+2503 "heavy vertical" rather than U+258E (`▎`, which the design sketch used):
+   * the risk with a container glyph is not that it is non-ASCII, it is that it is
+   * *new* — U+258E appears nowhere in this tree, while `│` U+2502 is already the
+   * rail's divider on every band row. The user measured `┃` on this machine's
+   * terminal before the ruling; it is one column here.
+   *
+   * Decoration only: it never carries a meaning a keyboard user needs, so a font
+   * that draws it wide costs a column, not a feature.
+   */
+  accentRail: "┃",
 } as const;
