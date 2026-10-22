@@ -56,7 +56,16 @@ export type PageRow =
    * This is what lets the Usage screens keep the frame — header, scrolling, mouse
    * band — without expressing themselves as label/value rows.
    */
-  | { kind: "text"; text: string };
+  | {
+      kind: "text";
+      text: string;
+      /**
+       * Draw it dimmed: captions, units and the wordmark sit behind the numbers
+       * instead of competing with them. Text is the only row kind a page styles
+       * itself, so it is the only one that needs the flag.
+       */
+      dim?: boolean;
+    };
 
 /** The room a page body has, handed to a body that lays itself out. */
 export type PageBodyGeometry = {

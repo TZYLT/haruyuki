@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { PageRow } from "@/cli/app/pages/page-model";
 import type { UsageRecord } from "@/usage/ledger";
+import { summarizeUsage } from "@/usage/summary";
 import {
   bucketTokens,
   buildDetailRows,
   latestContextTokens,
   recentDays,
 } from "./detail";
-import { summarizeUsage } from "./ledger-view";
 
 function record(
   tsHour: string,
@@ -39,13 +39,14 @@ function texts(rows: readonly PageRow[]): string[] {
   );
 }
 
-function detailOf(records: UsageRecord[]): string[] {
+function detailOf(records: UsageRecord[], contextWindow?: number): string[] {
   return texts(
     buildDetailRows({
       summary: summarizeUsage(records, NOW),
       records,
       now: NOW,
       width: 80,
+      contextWindow,
     }),
   );
 }
@@ -93,104 +94,91 @@ describe("recentDays", () => {
 });
 
 describe("buildDetailRows", () => {
-  test("draws the four sections the spec names", () => {
+  test("draws the four sections the spec names, in English", () => {
     const rows = detailOf([record("2026-10-22T09")]);
     const joined = rows.join("\n");
-    expect(joined).toContain("成本（估算");
-    expect(joined).toContain("输入 miss");
-    expect(joined).toContain("输入 hit");
-    expect(joined).toContain("缓存写");
-    expect(joined).toContain("上下文");
-    expect(joined).toContain("按模型");
-    expect(joined).toContain("历史消耗（近 14 天）");
+    expect(joined).toContain("Cost (est.");
+    expect(joined).toContain("Input miss");
+    expect(joined).toContain("Input hit");
+    expect(joined).toContain("Cache write");
+    expect(joined).toContain("Output");
+    expect(joined).toContain("Context composition (latest request)");
+    expect(joined).toContain("By model");
+    expect(joined).toContain("History (last 14 days)");
   });
 
-  test("percentages are one decimal and share one denominator", () => {
+  test("percentages are two decimals and share one denominator", () => {
     const rows = detailOf([record("2026-10-22T09")]);
-    // 400 / 600 = 66.7%, 100 / 600 = 16.7%, 50 / 600 = 8.3% twice.
-    const buckets = rows.filter((row) => row.includes("¥"));
-    expect(buckets[0]).toContain("66.7%");
-    expect(buckets[1]).toContain("16.7%");
-    expect(buckets[2]).toContain("8.3%");
-    expect(buckets[3]).toContain("8.3%");
+    // 400 / 600 = 66.67%, 100 / 600 = 16.67%, 50 / 600 = 8.33% twice.
+    const buckets = rows.filter((row) =>
+      /Input (miss|hit)|Cache write|Output/.test(row),
+    );
+    expect(buckets).toHaveLength(4);
+    expect(buckets[0]).toContain("66.67%");
+    expect(buckets[1]).toContain("16.67%");
+    expect(buckets[2]).toContain("8.33%");
+    expect(buckets[3]).toContain("8.33%");
   });
 
   test("an unpriced ledger shows a dash for every cost", () => {
     const rows = detailOf([record("2026-10-22T09")]);
     const joined = rows.join("\n");
-    expect(joined).toContain("成本（估算 —）");
-    expect(joined).not.toContain("¥ 0.00");
+    expect(joined).toContain("Cost (est. —)");
+    expect(joined).not.toContain("$ 0.00");
   });
 
-  test("costs are printed when the records carry them", () => {
+  test("costs are printed with five decimals", () => {
+    // The whole point of the fifth decimal: a normal turn costs a fraction of a
+    // cent, and at two decimals every bucket on this screen reads `$ 0.00`.
     const cost = {
-      input: 0.1,
-      cacheRead: 0.2,
-      cacheWrite: 0.3,
-      output: 0.4,
-      total: 1,
+      input: 0.0001,
+      cacheRead: 0.0002,
+      cacheWrite: 0.0003,
+      output: 0.0004,
+      total: 0.001,
     };
     const rows = detailOf([record("2026-10-22T09", { cost })]);
     const joined = rows.join("\n");
-    expect(joined).toContain("成本（估算 ¥ 1.00）");
-    expect(joined).toContain("¥ 0.10");
-    expect(joined).toContain("¥ 0.40");
+    expect(joined).toContain("Cost (est. $ 0.00100)");
+    expect(joined).toContain("$ 0.00010");
+    expect(joined).toContain("$ 0.00040");
   });
 
-  test("the composition is drawn with one-decimal shares and the window", () => {
-    const rows = texts(
-      buildDetailRows({
-        summary: summarizeUsage(
-          [
-            record("2026-10-22T09", {
-              contextTokens: 84_000,
-              contextBreakdown: {
-                system: 8_000,
-                messages: 23_000,
-                tools: 31_000,
-              },
-            }),
-          ],
-          NOW,
-        ),
-        records: [
-          record("2026-10-22T09", {
-            contextTokens: 84_000,
-            contextBreakdown: {
-              system: 8_000,
-              messages: 23_000,
-              tools: 31_000,
-            },
-          }),
-        ],
-        now: NOW,
-        width: 80,
-        contextWindow: 128_000,
-      }),
-    );
+  test("the composition is drawn with two-decimal shares and the window", () => {
+    const withComposition = record("2026-10-22T09", {
+      contextTokens: 84_000,
+      contextBreakdown: {
+        system: 8_000,
+        messages: 23_000,
+        tools: 31_000,
+      },
+    });
+    const rows = detailOf([withComposition], 128_000);
     const joined = rows.join("\n");
-    expect(joined).toContain("上下文成分（最近一回合估计）");
     expect(joined).toContain("84k / 128k");
-    expect(joined).toContain("65.6%");
-    // 8k / 62k = 12.9%, 31k = 50.0%, 23k = 37.1%.
+    expect(joined).toContain("65.63%");
+    // 8k / 62k = 12.90%, 31k = 50.00%, 23k = 37.10%.
     expect(joined).toContain("system");
-    expect(joined).toContain("12.9%");
+    expect(joined).toContain("12.90%");
     expect(joined).toContain("tools");
-    expect(joined).toContain("50.0%");
+    expect(joined).toContain("50.00%");
     expect(joined).toContain("messages");
+    expect(joined).toContain("37.10%");
     // Memory cannot be separated locally; the screen must say so.
-    expect(joined).toContain("memory 本地并入 system");
+    expect(joined).toContain("memory is folded into the system prompt locally");
   });
 
   test("without a composition the section falls back to the occupancy", () => {
     const rows = detailOf([record("2026-10-22T09", { contextTokens: 84_000 })]);
     const joined = rows.join("\n");
-    expect(joined).toContain("84k tokens（本回合没有请求成分数据）");
-    expect(joined).not.toContain("memory 本地并入");
+    expect(joined).toContain(
+      "the latest turn used 84k tokens, with no composition",
+    );
+    expect(joined).not.toContain("memory is folded");
   });
 
   test("an empty ledger says so", () => {
-    expect(detailOf([])[0]).toBe("还没有用量记录。");
+    expect(detailOf([])[0]).toBe("No usage recorded yet.");
   });
 
   test("the history table carries one row per active day, with its cost", () => {
@@ -211,7 +199,18 @@ describe("buildDetailRows", () => {
     expect(history[0]).toContain("10-22");
     expect(history[1]).toContain("10-21");
     // 10-22 has a price, 10-21 does not.
-    expect(history[0]).toContain("¥ 1.00");
+    expect(history[0]).toContain("$ 1.00000");
     expect(history[1]).toContain("—");
+    // The bucket counts are still there, and they are columns.
+    expect(history[0]).toContain("400");
+    expect(history[0]).toContain("100");
+  });
+
+  test("the history columns are labelled once, above the rows", () => {
+    const rows = detailOf([record("2026-10-22T10"), record("2026-10-21T10")]);
+    const index = rows.findIndex((row) => row.startsWith("  day"));
+    expect(index).toBeGreaterThan(0);
+    expect(rows[index]).toContain("write");
+    expect(rows[index + 1]).toContain("10-22");
   });
 });

@@ -8,8 +8,8 @@ import type { PageRow } from "@/cli/app/pages/page-model";
 import { Text } from "@/cli/components/Text";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { readUsageLedger, type UsageRecord } from "@/usage/ledger";
+import { summarizeUsage } from "@/usage/summary";
 import { buildDetailRows } from "./detail";
-import { summarizeUsage } from "./ledger-view";
 import { buildOverviewRows, rangeLabel } from "./overview";
 
 export type UsageScreen = "overview" | "detail";
@@ -32,6 +32,9 @@ type LedgerState =
  * instant, and a turn finishing behind the page shows up after `Esc` and a
  * re-entry — reading it every second would cost a full file parse per tick for
  * a number nobody is watching.
+ *
+ * Everything on the panel is English, like the settings page and the rail: one
+ * panel in a second language reads as a different application (2026-10-22).
  */
 export function UsagePage(view: AppViewProps) {
   const [state, setState] = useState<LedgerState>({ status: "loading" });
@@ -78,10 +81,10 @@ export function UsagePage(view: AppViewProps) {
     screen,
     rows: (geometry: { width: number; height: number }): readonly PageRow[] => {
       if (state.status === "loading") {
-        return [{ kind: "note", text: "正在读取用量台账…" }];
+        return [{ kind: "note", text: "Reading the usage ledger…" }];
       }
       if (state.status === "error" || !summary) {
-        return [{ kind: "note", text: "读取用量台账失败。" }];
+        return [{ kind: "note", text: "Could not read the usage ledger." }];
       }
       return screen === "overview"
         ? buildOverviewRows({
@@ -96,6 +99,9 @@ export function UsagePage(view: AppViewProps) {
             records: state.records,
             now,
             width: geometry.width,
+            // The window is the current model's, and the composition line is
+            // the last request's: the same model, by construction.
+            contextWindow: view.contextWindowSize ?? null,
           });
     },
   };
@@ -116,12 +122,13 @@ function UsageHeader({
   screen: UsageScreen;
   range: string;
 }) {
-  const label = screen === "overview" ? "概览" : "明细";
+  const label = screen === "overview" ? "Overview" : "Detail";
+  const other = screen === "overview" ? "Tab detail" : "Tab overview";
   return (
     <Box flexDirection="row">
       <Text bold>{`Usage / ${label}`}</Text>
       <Text dimColor>{`   ${range}`}</Text>
-      <Text>{`    ${screen === "overview" ? "Tab 明细" : "Tab 概览"} · Esc 返回`}</Text>
+      <Text>{`   ${other} · Esc`}</Text>
     </Box>
   );
 }

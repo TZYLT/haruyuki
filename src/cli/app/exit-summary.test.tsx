@@ -28,6 +28,7 @@ const STATS: SessionStatsSnapshot = {
     reasoningTokens: 0,
     stepCount: 7,
   },
+  requestCount: 7,
 };
 
 function input(

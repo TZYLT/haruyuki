@@ -147,3 +147,49 @@ describe("the trajectory folds every segment of one turn", () => {
     expect(delta.completionTokens).toBe(20);
   });
 });
+
+describe("the session's own projections", () => {
+  test("requests are counted from the usage reports, since step_count is not sent", () => {
+    // The local backend never emits `step_count`, so `usage.stepCount` stays 0
+    // and every surface that reads it showed "0 steps". The reports do arrive.
+    const stats = new SessionStats();
+    expect(stats.getSnapshot().usage.stepCount).toBe(0);
+
+    stats.accumulateTrajectory({ usageSteps: 2 });
+    stats.accumulateTrajectory({ usageSteps: 1 });
+    const snapshot = stats.getSnapshot();
+    expect(snapshot.requestCount).toBe(3);
+    expect(snapshot.usage.stepCount).toBe(3);
+
+    stats.endTrajectory();
+    // Ending a turn does not forget the session's requests.
+    expect(stats.getSnapshot().usage.stepCount).toBe(3);
+  });
+
+  test("a backend that does report steps keeps its own, larger count", () => {
+    const stats = new SessionStats();
+    const buffers = createBuffers();
+    buffers.usage.stepCount = 9;
+    stats.updateUsageFromBuffers(buffers);
+    stats.accumulateTrajectory({ usageSteps: 1 });
+    expect(stats.getSnapshot().usage.stepCount).toBe(9);
+  });
+
+  test("the composition outlives the turn that reported it", () => {
+    const stats = new SessionStats();
+    stats.startTrajectory();
+    stats.accumulateTrajectory({
+      usageContext: { system: 8_000, messages: 23_000, tools: 31_000 },
+    });
+    stats.endTrajectory();
+    // The rail reads this between turns, so it cannot live in the trajectory.
+    expect(stats.getSnapshot().contextBreakdown).toEqual({
+      system: 8_000,
+      messages: 23_000,
+      tools: 31_000,
+    });
+    expect(stats.getSnapshot().contextBreakdown).not.toBe(
+      stats.getSnapshot().contextBreakdown,
+    );
+  });
+});

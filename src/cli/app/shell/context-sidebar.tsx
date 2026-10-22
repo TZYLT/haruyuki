@@ -9,6 +9,8 @@ import {
 import type { AppViewProps } from "@/cli/app/AppView";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { type MemfsStats, readMemfsStats } from "@/cli/helpers/memfs-stats";
+import { readUsageLedger } from "@/usage/ledger";
+import { summarizeUsage } from "@/usage/summary";
 import {
   buildSidebarSections,
   fitSidebarSections,
@@ -158,7 +160,13 @@ export function ContextSidebarSlot({
   // going false). Each read is a git call, so a per-frame read would be a
   // subprocess per repaint — the exact "1 s ticker on the whole tree" the rail
   // must not be.
+  //
+  // Today's usage is read on the same three events for the same reason, and it
+  // is read as **the ledger**, not as a second tally of the session: the rail's
+  // Usage section answers "what have I spent today", which spans conversations
+  // and does not restart with this process.
   const [memfs, setMemfs] = useState<MemfsStats | null>(null);
+  const [today, setToday] = useState<SidebarProjection["today"]>(null);
   useEffect(() => {
     // Triggers, not reads: a switch and a finished turn are *when* to re-read.
     void view.conversationId;
@@ -166,6 +174,18 @@ export function ContextSidebarSlot({
     let cancelled = false;
     void readMemfsStats(view.agentId).then((stats) => {
       if (!cancelled) setMemfs(stats);
+    });
+    void readUsageLedger().then((records) => {
+      if (cancelled) return;
+      const summary = summarizeUsage(records, new Date());
+      setToday({
+        tokens: summary.today.tokens,
+        turns: summary.today.turns,
+        cacheReadTokens: summary.today.cachedInput,
+        uncachedTokens: summary.today.prompt,
+        writeTokens: summary.today.cacheWrite,
+        costUsd: summary.today.cost,
+      });
     });
     return () => {
       cancelled = true;
@@ -177,6 +197,7 @@ export function ContextSidebarSlot({
   const projection: Omit<SidebarProjection, "width"> = {
     usedContextTokens: view.usedContextTokens ?? null,
     contextWindowSize: view.contextWindowSize ?? null,
+    contextBreakdown: stats.contextBreakdown ?? null,
     stepCount: stats.usage.stepCount,
     inputTokens: stats.usage.promptTokens,
     outputTokens: stats.usage.completionTokens,
@@ -189,9 +210,7 @@ export function ContextSidebarSlot({
           ? Math.max(0, now - agent.startedAtMs)
           : Math.max(0, agent.elapsedMs),
     })),
-    // Today's usage needs P4's ledger (`《33》§12`); until it lands the section
-    // says so instead of printing a zero that would read as a measurement.
-    today: null,
+    today,
     memfs,
   };
 

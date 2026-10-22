@@ -2,6 +2,8 @@
 
 import { truncateToWidth } from "@/cli/display/statusline/formatting";
 import { formatCompact } from "@/cli/helpers/format";
+import { formatCost } from "@/cli/helpers/usage-format";
+import type { UsageContextBreakdown } from "@/utils/usage-context";
 
 /**
  * The sidebar's geometry, and the rule that keeps it inside the band.
@@ -243,7 +245,9 @@ export type SidebarProjection = {
   width: number;
   usedContextTokens: number | null;
   contextWindowSize: number | null;
-  /** Assistant steps, the rail's "轮数". */
+  /** What the last request was made of; `null` before the first turn. */
+  contextBreakdown: UsageContextBreakdown | null;
+  /** Model requests this session, the rail's "steps". */
   stepCount: number;
   inputTokens: number;
   outputTokens: number;
@@ -251,12 +255,23 @@ export type SidebarProjection = {
   sessionWallMs: number;
   /** Running subagents, newest first; `null` (or empty) hides the section. */
   agents: readonly { type: string; durationMs: number }[] | null;
-  /** Today's ledger (`《33》§12` P4). Absent until the ledger lands. */
+  /**
+   * Today's ledger (`《33》§12` P4), straight from `summarizeUsage`.
+   *
+   * The rail does not sum the file itself: `src/usage/summary.ts` is the one
+   * definition of "today", and it is what the Usage page reads too. `null`
+   * means the read has not finished yet.
+   */
   today: {
+    tokens: number;
+    turns: number;
+    /** Input billed at the cache-read (hit) rate. */
     cacheReadTokens: number;
+    /** Input billed at the miss rate. */
     uncachedTokens: number;
     writeTokens: number;
-    costUsd: number;
+    /** Absent when nothing today carried a price. */
+    costUsd?: number;
   } | null;
   /** Memory activity. Absent until its reader lands. */
   memfs: {
@@ -316,15 +331,21 @@ function contextSection(projection: SidebarProjection) {
   const percent = hasUsage
     ? contextPercent(used as number, limit as number)
     : null;
+  // The split the section exists for: what stands in front of the conversation
+  // (system prompt and tool definitions) versus the transcript itself. It comes
+  // from the last request the backend assembled, so every part is a measurement
+  // of that request, not a subtraction of the live number.
+  const breakdown = projection.contextBreakdown;
   // Plain text, no bar: the rail's job is the numbers, and a glyph bar on a
   // 28-column line would spend a third of the width saying what `62%` says.
   return {
     detail: [
       `ctx ${percent === null ? "—" : `${percent}%`} · ${hasUsage ? formatCompact(used as number) : "—"} / ${limit === null ? "—" : formatCompact(limit)}`,
-      // "sys" is the one component the Usage page's breakdown will own; until it
-      // lands the rail refuses to guess it apart from the conversation.
-      `sys — · chat ${hasUsage ? formatCompact(used as number) : "—"}`,
-      `reasoning ${formatCompact(projection.reasoningTokens)} · ${projection.stepCount} turns`,
+      breakdown
+        ? `sys ${formatCompact(breakdown.system)} · tools ${formatCompact(breakdown.tools)}`
+        : "sys — · tools —",
+      `chat ${breakdown ? formatCompact(breakdown.messages) : "—"}`,
+      `reasoning ${formatCompact(projection.reasoningTokens)}`,
     ],
     summary: `ctx ${percent === null ? "—" : `${percent}%`}`,
   };
@@ -346,14 +367,18 @@ function usageSection(projection: SidebarProjection) {
   if (!today) {
     return { detail: ["today — (ledger pending)"], summary: "today —" };
   }
+  // The four lines are the four things the page's cost section is made of, in
+  // the same words: `miss`/`hit` are the two input prices, `write` the cache
+  // fill, and `cost` the day's total. A `—` cost is "nothing priced today",
+  // which is not the same statement as free.
   return {
     detail: [
-      `cache read ${formatCompact(today.cacheReadTokens)}`,
-      `uncached ${formatCompact(today.uncachedTokens)}`,
+      `today ${formatCompact(today.tokens)} tok`,
+      `miss ${formatCompact(today.uncachedTokens)} · hit ${formatCompact(today.cacheReadTokens)}`,
       `write ${formatCompact(today.writeTokens)}`,
-      `cost $${today.costUsd.toFixed(2)}`,
+      `cost ${formatCost(today.costUsd)}`,
     ],
-    summary: `today $${today.costUsd.toFixed(2)}`,
+    summary: `today ${formatCompact(today.tokens)} tok`,
   };
 }
 

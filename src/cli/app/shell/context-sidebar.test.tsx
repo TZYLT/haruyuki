@@ -20,6 +20,7 @@ function projection(
   return {
     usedContextTokens: 84_000,
     contextWindowSize: 128_000,
+    contextBreakdown: { system: 8_000, messages: 23_000, tools: 31_000 },
     stepCount: 12,
     inputTokens: 3_400,
     outputTokens: 1_200,
@@ -102,6 +103,38 @@ describe("ContextSidebar", () => {
     const frame = mount(20);
     try {
       expect(await frame.text()).not.toContain("Agents");
+    } finally {
+      frame.stop();
+    }
+  });
+
+  test("paints the composition the projection carries", async () => {
+    const frame = mount(24);
+    try {
+      const text = await frame.text();
+      expect(text).toContain("sys 8k · tools 31k");
+      expect(text).toContain("chat 23k");
+    } finally {
+      frame.stop();
+    }
+  });
+
+  test("paints today's ledger, not a pending placeholder", async () => {
+    const frame = mount(24, 30, {
+      today: {
+        tokens: 26_400,
+        turns: 1,
+        cacheReadTokens: 1_200,
+        uncachedTokens: 3_400,
+        writeTokens: 500,
+        costUsd: 0.12,
+      },
+    });
+    try {
+      const text = await frame.text();
+      expect(text).toContain("today 26k tok");
+      expect(text).toContain("cost $ 0.12");
+      expect(text).not.toContain("ledger pending");
     } finally {
       frame.stop();
     }

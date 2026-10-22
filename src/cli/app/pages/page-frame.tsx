@@ -543,7 +543,13 @@ function PageRowLine({
   if (row.kind === "text") {
     // The page composed this line itself (block art, a heatmap row, a table row)
     // and already clipped it to the width it was handed: draw it verbatim.
-    return <Text>{row.text}</Text>;
+    //
+    // An empty string is still **a row the page asked for**. Ink collapses
+    // `<Text>{""}</Text>` to zero height, so a design's blank line between two
+    // blocks silently vanished — the Usage overview's wordmark ran straight into
+    // the hero number on the machine while every test that counted rows passed.
+    // One space keeps the row's height without writing anything visible.
+    return <Text dimColor={row.dim}>{row.text === "" ? " " : row.text}</Text>;
   }
 
   const label = truncateText(row.label, LABEL_COLUMN - 1).padEnd(LABEL_COLUMN);

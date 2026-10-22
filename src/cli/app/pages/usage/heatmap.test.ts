@@ -103,17 +103,20 @@ describe("heatmapLines", () => {
 
   test("labels the newest week first", () => {
     expect(lines.rows).toHaveLength(4);
-    expect(lines.rows[0]?.startsWith("本周")).toBe(true);
+    expect(lines.rows[0]?.startsWith("now")).toBe(true);
     expect(lines.rows[3]?.startsWith("-3w")).toBe(true);
   });
 
   test("every row is the same width as the block", () => {
-    expect(lines.width).toBe(18);
-    // Terminal columns, not string length: the label is CJK and two cells wide.
+    expect(lines.width).toBe(17);
     for (const row of lines.rows) {
       expect(terminalTextWidth(row)).toBe(lines.width);
     }
     expect(terminalTextWidth(lines.header)).toBe(lines.width);
+  });
+
+  test("the caption is English, like the rest of the panel", () => {
+    expect(lines.title).toBe("Last 4 weeks");
   });
 
   test("draws the cell glyph for the day's level", () => {
@@ -122,7 +125,7 @@ describe("heatmapLines", () => {
   });
 
   test("week labels go back four weeks", () => {
-    expect(weekLabel(0)).toBe("本周");
+    expect(weekLabel(0)).toBe("now");
     expect(weekLabel(3)).toBe("-3w");
   });
 });

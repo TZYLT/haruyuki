@@ -1,6 +1,6 @@
 /**
  * The overview's four-week heatmap (docs/38 §14.6): **one row per week, seven
- * columns for the weekdays**, newest week on top, labelled `本周`/`-1w`/`-2w`/
+ * columns for the weekdays**, newest week on top, labelled `now`/`-1w`/`-2w`/
  * `-3w`.
  *
  * Why weeks by weekday rather than GitHub's weeks-across: the spec chose it, and
@@ -118,7 +118,7 @@ export function buildHeatmap(
 
 /** The label for week `index` counting back from the current one. */
 export function weekLabel(indexFromNewest: number): string {
-  return indexFromNewest === 0 ? "本周" : `-${indexFromNewest}w`;
+  return indexFromNewest === 0 ? "now" : `-${indexFromNewest}w`;
 }
 
 /** Pad with spaces to a terminal-column width (CJK counts as two). */
@@ -131,9 +131,13 @@ export function padToWidth(text: string, width: number): string {
  * The heatmap as drawable lines, newest week **first**.
  *
  * `title` is the block's caption, `header` aligns the weekday initials under the
- * label column, and `rows` are the four weeks. The block is 18 columns wide
- * (`本周 ` + seven cells separated by spaces), which is what the overview uses to
+ * label column, and `rows` are the four weeks. The block is 17 columns wide
+ * (`now ` + seven cells separated by spaces), which is what the overview uses to
  * place the data column beside it.
+ *
+ * The labels are English like the rest of the panel: `now`, `-1w`, `-2w`, `-3w`
+ * are three columns each, so one trailing space puts every week's first cell in
+ * the same column as the header's `M`.
  */
 export function heatmapLines(grid: HeatmapGrid): {
   title: string;
@@ -141,7 +145,7 @@ export function heatmapLines(grid: HeatmapGrid): {
   rows: string[];
   width: number;
 } {
-  const labelWidth = 5; // "本周 " — CJK labels are four columns, plus one space
+  const labelWidth = 4; // "now " — three columns of label plus one space
   const cells = HEATMAP_WEEKDAYS;
   const rows = [...grid.weeks].reverse().map((days, index) => {
     const cellsText = days
@@ -150,7 +154,7 @@ export function heatmapLines(grid: HeatmapGrid): {
     return `${padToWidth(weekLabel(index), labelWidth)}${cellsText}`;
   });
   return {
-    title: "近 4 周",
+    title: "Last 4 weeks",
     header: `${" ".repeat(labelWidth)}${[...WEEKDAY_INITIALS].join(" ")}`,
     rows,
     width: labelWidth + cells * 2 - 1,

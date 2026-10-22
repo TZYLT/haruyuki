@@ -37,6 +37,16 @@ export interface SessionStatsSnapshot {
   totalWallMs: number;
   totalApiMs: number;
   usage: UsageStats;
+  /**
+   * Model requests the session made, counted from `usage_statistics` reports.
+   *
+   * `usage.stepCount` only moves when a backend sends `step_count` chunks, and
+   * the local path never does — so the session's own count is the honest one,
+   * and `getSnapshot` folds it into `usage.stepCount` (see below).
+   */
+  requestCount: number;
+  /** Composition of the last request the session assembled, when known. */
+  contextBreakdown?: UsageContextBreakdown;
 }
 
 export interface TrajectoryStatsSnapshot {
@@ -79,6 +89,17 @@ export class SessionStats {
   private trajectoryUsageSteps: number;
   private trajectoryCost: UsageCost;
   private trajectoryContext: UsageContextBreakdown | undefined;
+  /** Requests the whole session made (`usage_statistics` reports). */
+  private requestCount: number;
+  /**
+   * The last request the session assembled, kept **outside** the trajectory.
+   *
+   * The trajectory is a per-turn accumulator that is reset at the end of every
+   * turn, and the rail reads this between turns: "what is my context made of"
+   * is a session question about the most recent request, so it has to outlive
+   * the turn that answered it.
+   */
+  private lastContext: UsageContextBreakdown | undefined;
 
   constructor() {
     this.sessionStartMs = performance.now();
@@ -95,6 +116,8 @@ export class SessionStats {
     this.trajectoryUsageSteps = 0;
     this.trajectoryCost = emptyUsageCost();
     this.trajectoryContext = undefined;
+    this.requestCount = 0;
+    this.lastContext = undefined;
   }
 
   endTurn(apiDurationMs: number): void {
@@ -181,12 +204,14 @@ export class SessionStats {
     }
     if (options.usageSteps) {
       this.trajectoryUsageSteps += options.usageSteps;
+      this.requestCount += options.usageSteps;
     }
     if (options.usageCost) {
       addUsageCost(this.trajectoryCost, options.usageCost);
     }
     if (options.usageContext) {
       this.trajectoryContext = { ...options.usageContext };
+      this.lastContext = { ...options.usageContext };
     }
     if (options.tokenDelta) {
       this.trajectoryTokens += options.tokenDelta;
@@ -230,6 +255,8 @@ export class SessionStats {
     this.trajectoryUsageSteps = 0;
     this.trajectoryCost = emptyUsageCost();
     this.trajectoryContext = undefined;
+    // `requestCount` and `lastContext` are **session** facts: ending a turn must
+    // not forget them, so they are cleared in `reset()`, not here.
   }
 
   getSnapshot(): SessionStatsSnapshot {
@@ -238,7 +265,17 @@ export class SessionStats {
       sessionStartMs: this.sessionStartMs,
       totalWallMs: now - this.sessionStartMs,
       totalApiMs: this.totalApiMs,
-      usage: { ...this.usage },
+      // `max`, not a replacement: a backend that *does* report `step_count` is
+      // the better source, and the buffers' count is then usually ahead of the
+      // reports (they arrive once per stream, the chunks once per step).
+      usage: {
+        ...this.usage,
+        stepCount: Math.max(this.usage.stepCount, this.requestCount),
+      },
+      requestCount: this.requestCount,
+      ...(this.lastContext
+        ? { contextBreakdown: { ...this.lastContext } }
+        : {}),
     };
   }
 
@@ -247,6 +284,8 @@ export class SessionStats {
     this.totalApiMs = 0;
     this.usage = emptyUsage();
     this.lastUsageSnapshot = { ...this.usage };
+    this.requestCount = 0;
+    this.lastContext = undefined;
     this.resetTrajectory();
   }
 }

@@ -121,8 +121,8 @@ describe("the page frame", () => {
     const page = mountPage("usage", 8);
     try {
       const rows = await page.rows({ keepTrailingBlanks: true });
-      expect(rows[0]).toContain("Usage / 概览");
-      expect(rows.join("\n")).toContain("Tab 明细");
+      expect(rows[0]).toContain("Usage / Overview");
+      expect(rows.join("\n")).toContain("Tab detail");
     } finally {
       page.stop();
       if (originalHome === undefined) {
@@ -131,6 +131,37 @@ describe("the page frame", () => {
         process.env.HARUYUKI_HOME = originalHome;
       }
       await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("an empty text row is painted as one blank line", async () => {
+    // Ink collapses `<Text>{""}</Text>` to zero height. Before this was handled,
+    // a page could compose the blank row a design asks for and paint nothing —
+    // the Usage overview's wordmark ran into its hero number while every test
+    // that counted rows still passed.
+    openConversationTab("M6 shell", "M6 shell");
+    const body: PageBody = {
+      title: "Blanks",
+      rows: [
+        { kind: "text", text: "above" },
+        { kind: "text", text: "" },
+        { kind: "text", text: "below" },
+      ],
+    };
+    const page = mountInkTty(
+      <ChromeHeightContext.Provider value={8}>
+        <PageFrame view={{ ...DEFAULT_PAGE_PROPS }} body={body} />
+      </ChromeHeightContext.Provider>,
+      { columns: 40, rows: 24 },
+    );
+    try {
+      const rows = await page.rows({ keepTrailingBlanks: true });
+      expect(rows[0]).toContain("Blanks");
+      expect(rows[1]?.trim()).toBe("above");
+      expect(rows[2]?.trim()).toBe("");
+      expect(rows[3]?.trim()).toBe("below");
+    } finally {
+      page.stop();
     }
   });
 

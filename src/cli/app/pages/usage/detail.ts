@@ -6,26 +6,41 @@
  * context number, the per-model split and the last fourteen days.
  *
  * The percentage column means **share of all tokens** in the same scope, on
- * every row and in the history table. §14.8 fixes that convention only for the
- * history table; using one meaning everywhere is what keeps the two sections
- * comparable, and it makes the four buckets add up to 100%.
+ * every row. §14.8 fixes that convention for the history table; using one
+ * meaning everywhere is what keeps the sections comparable, and it makes the
+ * four buckets add up to 100%.
+ *
+ * Two formatting decisions from the 2026-10-22 pass:
+ *
+ * - **cost is five decimals here** (`usage-format.ts`): at two, every bucket of
+ *   a normal turn is `$ 0.00` and the screen's whole job — which bucket costs
+ *   what — is invisible.
+ * - **the history row drops the per-bucket percentages** that §14.8's sketch
+ *   had. They cannot be shown at two decimals alongside the counts and the day's
+ *   cost inside the content width: the row came to ~75 columns against the ~65
+ *   the band gives. The counts and the cost survive, and the shares are one
+ *   screen up, aggregated over the same buckets. Recorded in §14.8.
  */
 
 import type { PageRow } from "@/cli/app/pages/page-model";
 import { formatCompact } from "@/cli/helpers/format";
 import { truncateText } from "@/cli/helpers/truncate-text";
 import {
+  DETAIL_COST_DECIMALS,
+  formatCost,
+  formatPercent,
+} from "@/cli/helpers/usage-format";
+import {
   aggregateUsageByDay,
   aggregateUsageByModel,
   type UsageRecord,
   usageDayKey,
 } from "@/usage/ledger";
+import type { UsageSummary } from "@/usage/summary";
 import {
   contextBreakdownTotal,
   type UsageContextBreakdown,
 } from "@/utils/usage-context";
-import { formatCost, formatCostAmount, formatPercent } from "./cost";
-import type { UsageSummary } from "./ledger-view";
 
 /** Days of history the screen shows (docs/38 §14.8). */
 export const DETAIL_HISTORY_DAYS = 14;
@@ -110,6 +125,11 @@ export function recentDays(
   return keys.filter((key) => byDay.has(key));
 }
 
+/** `$ 0.10000` right-aligned in the money column, `—` when unpriced. */
+function money(value: number | undefined): string {
+  return formatCost(value, DETAIL_COST_DECIMALS);
+}
+
 /** Build the detail screen's rows. */
 export function buildDetailRows(input: {
   summary: UsageSummary;
@@ -122,8 +142,8 @@ export function buildDetailRows(input: {
   const { summary, records, now, width, contextWindow } = input;
   const rows: PageRow[] = [];
   if (summary.recordCount === 0) {
-    rows.push(textRow("还没有用量记录。", width));
-    rows.push(textRow("跑完一轮对话后再回到这里。", width));
+    rows.push(textRow("No usage recorded yet.", width));
+    rows.push(textRow("A finished turn writes one line to the ledger.", width));
     return rows;
   }
 
@@ -131,38 +151,40 @@ export function buildDetailRows(input: {
   const breakdown = summary.totals.costBreakdown;
   // No record in scope carried a price: the buckets are unknown, not zero.
   const priced = summary.totals.cost !== undefined;
-  rows.push(headerRow(`成本（估算 ${formatCost(summary.totals.cost)}）`));
+  rows.push(headerRow(`Cost (est. ${money(summary.totals.cost)})`));
   const bucketRows: BucketRow[] = [
     {
-      label: "输入 miss",
+      label: "Input miss",
       tokens: tokens.miss,
       cost: priced ? breakdown.input : undefined,
     },
     {
-      label: "输入 hit",
+      label: "Input hit",
       tokens: tokens.hit,
       cost: priced ? breakdown.cacheRead : undefined,
     },
     {
-      label: "缓存写",
+      label: "Cache write",
       tokens: tokens.write,
       cost: priced ? breakdown.cacheWrite : undefined,
     },
     {
-      label: "输出",
+      label: "Output",
       tokens: tokens.output,
       cost: priced ? breakdown.output : undefined,
     },
   ];
   for (const bucket of bucketRows) {
+    // One row of columns: label, count, money, share. Every field is padded so
+    // the four rows read as a table rather than as four sentences.
     const label = bucket.label.padEnd(12);
     const count = formatCompact(bucket.tokens).padStart(7);
-    const money = `¥ ${formatCostAmount(bucket.cost)}`.padStart(9);
-    const share = formatPercent(bucket.tokens, tokens.total);
-    rows.push(textRow(`  ${label}${count}  ${money}  ${share}`, width));
+    const amount = money(bucket.cost).padStart(11);
+    const share = formatPercent(bucket.tokens, tokens.total).padStart(6);
+    rows.push(textRow(`  ${label}${count}  ${amount}  ${share}`, width));
   }
 
-  rows.push(headerRow("上下文成分（最近一回合估计）"));
+  rows.push(headerRow("Context composition (latest request)"));
   const contextTokens = latestContextTokens(records);
   const composition = latestContextBreakdown(records);
   if (composition) {
@@ -172,7 +194,7 @@ export function buildDetailRows(input: {
         ? `${formatCompact(contextTokens)} / ${formatCompact(contextWindow)} · ${formatPercent(contextTokens, contextWindow)}`
         : contextTokens !== undefined
           ? `${formatCompact(contextTokens)} tokens`
-          : `${formatCompact(total)} tokens（估计）`;
+          : `${formatCompact(total)} tokens (estimated)`;
     rows.push(textRow(`  ${occupancy}`, width));
     const parts: Array<{ label: string; tokens: number }> = [
       { label: "system", tokens: composition.system },
@@ -182,29 +204,31 @@ export function buildDetailRows(input: {
     for (const part of parts) {
       rows.push(
         textRow(
-          `  ${part.label.padEnd(9)}${formatCompact(part.tokens).padStart(7)}  ${formatPercent(part.tokens, total)}`,
+          `  ${part.label.padEnd(9)}${formatCompact(part.tokens).padStart(7)}  ${formatPercent(part.tokens, total).padStart(6)}`,
           width,
         ),
       );
     }
     // Memory is compiled into the system prompt locally, so a separate row
     // would be a guess. Say so instead of splitting it by eye.
-    rows.push(textRow("  memory 本地并入 system，无法单列", width));
+    rows.push(
+      textRow("  memory is folded into the system prompt locally", width),
+    );
   } else {
     rows.push(
       textRow(
         contextTokens === undefined
-          ? "  最近一回合没有报告占用量"
-          : `  最近一回合 ${formatCompact(contextTokens)} tokens（本回合没有请求成分数据）`,
+          ? "  the latest turn reported no occupancy"
+          : `  the latest turn used ${formatCompact(contextTokens)} tokens, with no composition`,
         width,
       ),
     );
   }
 
-  rows.push(headerRow("按模型"));
+  rows.push(headerRow("By model"));
   for (const [model, totals] of aggregateUsageByModel(records)) {
     const input = totals.prompt + totals.cachedInput + totals.cacheWrite;
-    const cost = totals.cost.total > 0 ? formatCost(totals.cost.total) : "—";
+    const cost = totals.cost.total > 0 ? money(totals.cost.total) : "—";
     rows.push(
       textRow(
         `  ${model}  in ${formatCompact(input)}  out ${formatCompact(totals.completion)}  ${cost}`,
@@ -213,29 +237,34 @@ export function buildDetailRows(input: {
     );
   }
 
-  rows.push(headerRow(`历史消耗（近 ${DETAIL_HISTORY_DAYS} 天）`));
+  rows.push(headerRow(`History (last ${DETAIL_HISTORY_DAYS} days)`));
   const byDay = aggregateUsageByDay(records);
   const days = recentDays(records, now);
   if (days.length === 0) {
-    rows.push(textRow(`  近 ${DETAIL_HISTORY_DAYS} 天没有记录`, width));
+    rows.push(
+      textRow(`  no records in the last ${DETAIL_HISTORY_DAYS} days`, width),
+    );
+  }
+  if (days.length > 0) {
+    rows.push(
+      textRow(
+        `  ${"day".padEnd(5)} ${"in".padStart(6)} ${"hit".padStart(6)} ${"write".padStart(6)} ${"out".padStart(6)} ${"cost".padStart(10)}`,
+        width,
+      ),
+    );
   }
   for (const day of days) {
     const totals = byDay.get(day);
     if (!totals) continue;
-    const dayTokens =
-      totals.prompt +
-      totals.cachedInput +
-      totals.cacheWrite +
-      totals.completion;
-    const parts = [
-      day.slice(5),
-      `读${formatCompact(totals.prompt)} ${formatPercent(totals.prompt, dayTokens)}`,
-      `缓${formatCompact(totals.cachedInput)} ${formatPercent(totals.cachedInput, dayTokens)}`,
-      `写${formatCompact(totals.cacheWrite)} ${formatPercent(totals.cacheWrite, dayTokens)}`,
-      `出${formatCompact(totals.completion)} ${formatPercent(totals.completion, dayTokens)}`,
-      formatCost(totals.cost.total > 0 ? totals.cost.total : undefined),
+    const cost = totals.cost.total > 0 ? money(totals.cost.total) : "—";
+    const columns = [
+      formatCompact(totals.prompt).padStart(6),
+      formatCompact(totals.cachedInput).padStart(6),
+      formatCompact(totals.cacheWrite).padStart(6),
+      formatCompact(totals.completion).padStart(6),
+      cost.padStart(10),
     ];
-    rows.push(textRow(`  ${parts.join(" ")}`, width));
+    rows.push(textRow(`  ${day.slice(5)} ${columns.join(" ")}`, width));
   }
 
   return rows;

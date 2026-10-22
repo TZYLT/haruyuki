@@ -84,6 +84,11 @@ function props(columns: number): AppViewProps {
   } as unknown as AppViewProps;
 }
 
+/**
+ * The page at `columns`, in a terminal tall enough for the block tier: the band
+ * is `rows - chrome - strip`, so 32 rows leaves a 22-row band and an 18-row body
+ * — exactly the overview's block height.
+ */
 function mount(columns: number): InkTty {
   clearAllSubagents();
   openConversationTab("M6 shell", "M6 shell");
@@ -92,7 +97,7 @@ function mount(columns: number): InkTty {
     <ChromeHeightContext.Provider value={8}>
       <UsagePage {...props(columns)} />
     </ChromeHeightContext.Provider>,
-    { columns, rows: 28 },
+    { columns, rows: 32 },
   );
 }
 
@@ -123,11 +128,26 @@ describe("the usage page", () => {
     await settle();
     const rows = await tty.rows();
     const frame = rows.join("\n");
-    expect(frame).toContain("Usage / 概览");
+    expect(frame).toContain("Usage / Overview");
     // The block tier is up: the hero is art, and the label under it says tokens.
+    expect(frame).toContain("███");
     expect(frame).toContain("tokens");
-    expect(frame).toContain("近 4 周");
-    expect(frame).toContain("总成本");
+    expect(frame).toContain("Last 4 weeks");
+    expect(frame).toContain("cost (est.)");
+  });
+
+  test("the blank row between the two block texts is really painted", async () => {
+    // Ink collapses an empty <Text> to zero height, so a page could compose the
+    // blank row the design asks for and paint nothing (2026-10-22).
+    await homeWithLedger();
+    const tty = mount(100);
+    await settle();
+    const rows = await tty.rows();
+    const header = rows.findIndex((row) => row.includes("Usage / Overview"));
+    expect(header).toBeGreaterThanOrEqual(0);
+    expect(rows[header + 1]).toContain("█"); // wordmark
+    expect(rows[header + 6]?.trim()).toBe(""); // the gap
+    expect(rows[header + 7]).toContain("█"); // hero number
   });
 
   test("a narrow terminal falls back to one line", async () => {
@@ -143,18 +163,18 @@ describe("the usage page", () => {
     await homeWithLedger();
     const tty = mount(100);
     await settle();
-    expect((await tty.rows()).join("\n")).toContain("Usage / 概览");
+    expect((await tty.rows()).join("\n")).toContain("Usage / Overview");
 
     await tty.press(TAB);
     await settle();
     const detail = (await tty.rows()).join("\n");
-    expect(detail).toContain("Usage / 明细");
-    expect(detail).toContain("成本（估算 ¥ 1.00）");
-    expect(detail).toContain("历史消耗（近 14 天）");
+    expect(detail).toContain("Usage / Detail");
+    expect(detail).toContain("Cost (est. $ 1.00000)");
+    expect(detail).toContain("History (last 14 days)");
 
     await tty.press(TAB);
     await settle();
-    expect((await tty.rows()).join("\n")).toContain("Usage / 概览");
+    expect((await tty.rows()).join("\n")).toContain("Usage / Overview");
   });
 
   test("Esc hands focus back to the conversation tab", async () => {

@@ -215,6 +215,7 @@ function projection(
     width: 28,
     usedContextTokens: 84_000,
     contextWindowSize: 128_000,
+    contextBreakdown: { system: 8_000, messages: 23_000, tools: 31_000 },
     stepCount: 12,
     inputTokens: 3_400,
     outputTokens: 1_200,
@@ -236,12 +237,22 @@ describe("buildSidebarSections", () => {
     expect(context?.detail[0]).toBe("ctx 66% · 84k / 128k");
   });
 
-  test("the context composition is a placeholder, not a guess", () => {
+  test("the context composition is read, not guessed", () => {
     const context = buildSidebarSections(projection()).find(
       (item) => item.id === "context",
     );
-    expect(context?.detail[1]).toBe("sys — · chat 84k");
-    expect(context?.detail[2]).toBe("reasoning 800 · 12 turns");
+    // Three parts, each a measurement of the last request.
+    expect(context?.detail[1]).toBe("sys 8k · tools 31k");
+    expect(context?.detail[2]).toBe("chat 23k");
+    expect(context?.detail[3]).toBe("reasoning 800");
+  });
+
+  test("before the first turn the composition is a dash, not a zero", () => {
+    const context = buildSidebarSections(
+      projection({ contextBreakdown: null }),
+    ).find((item) => item.id === "context");
+    expect(context?.detail[1]).toBe("sys — · tools —");
+    expect(context?.detail[2]).toBe("chat —");
   });
 
   test("the session section is titled Turn", () => {
@@ -276,7 +287,7 @@ describe("buildSidebarSections", () => {
     ]);
   });
 
-  test("today's usage says it is not wired, and shows the ledger when it is", () => {
+  test("today's usage comes from the ledger, and says so while it is absent", () => {
     const placeholder = buildSidebarSections(projection()).find(
       (item) => item.id === "usage",
     );
@@ -285,6 +296,8 @@ describe("buildSidebarSections", () => {
     const wired = buildSidebarSections(
       projection({
         today: {
+          tokens: 26_400,
+          turns: 1,
           cacheReadTokens: 1_200,
           uncachedTokens: 3_400,
           writeTokens: 500,
@@ -293,11 +306,43 @@ describe("buildSidebarSections", () => {
       }),
     ).find((item) => item.id === "usage");
     expect(wired?.detail).toEqual([
-      "cache read 1.2k",
-      "uncached 3.4k",
+      "today 26k tok",
+      "miss 3.4k · hit 1.2k",
       "write 500",
-      "cost $0.12",
+      "cost $ 0.12",
     ]);
+    expect(wired?.summary).toBe("today 26k tok");
+  });
+
+  test("an unpriced day shows a dash, not a free turn", () => {
+    const usage = buildSidebarSections(
+      projection({
+        today: {
+          tokens: 900,
+          turns: 2,
+          cacheReadTokens: 0,
+          uncachedTokens: 900,
+          writeTokens: 0,
+        },
+      }),
+    ).find((item) => item.id === "usage");
+    expect(usage?.detail[3]).toBe("cost —");
+  });
+
+  test("a sub-cent day is not rounded into a false free", () => {
+    const usage = buildSidebarSections(
+      projection({
+        today: {
+          tokens: 900,
+          turns: 1,
+          cacheReadTokens: 0,
+          uncachedTokens: 900,
+          writeTokens: 0,
+          costUsd: 0.0004,
+        },
+      }),
+    ).find((item) => item.id === "usage");
+    expect(usage?.detail[3]).toBe("cost $ <0.01");
   });
 
   test("memfs says what is missing, and counts bytes rather than megabytes", () => {
@@ -323,6 +368,8 @@ describe("buildSidebarSections", () => {
       width: 18,
       agents: [{ type: "Workflow", durationMs: 61_000 }],
       today: {
+        tokens: 787_776,
+        turns: 9,
         cacheReadTokens: 123_456,
         uncachedTokens: 654_321,
         writeTokens: 9_999,

@@ -1,10 +1,12 @@
 /**
- * What the Usage screens read out of the ledger.
+ * What the Usage screens and the rail read out of the ledger.
  *
- * The aggregation lives here rather than in the components for one reason: the
- * overview's numbers are the ones a person checks against their bill, and they
- * are much easier to trust when they are a pure function over records than when
- * they are spread through a render.
+ * The aggregation lives here, beside the ledger, rather than in the components
+ * for one reason: these numbers are the ones a person checks against their bill,
+ * and they are much easier to trust when they are a pure function over records
+ * than when they are spread through a render. It also keeps **one** definition
+ * of "today" — the rail and the page used to be able to tally it twice, which is
+ * the drift this whole layer exists to prevent (docs/38 §6.5).
  *
  * Definitions the screens must not re-invent:
  * - **tokens** is all four billed buckets added up (miss + hit + write + out);
@@ -24,9 +26,22 @@ import {
   type UsageCost,
 } from "@/utils/usage-cost";
 
+/**
+ * One scope's numbers, buckets kept apart.
+ *
+ * The four buckets are the ledger's own split and they are **mutually
+ * exclusive** (§14.8), so they add up: `tokens` is their sum and a page that
+ * shows a share per bucket can use one denominator. `prompt` is the *miss*
+ * count here, not all input — the rail says `miss`, the detail screen says
+ * `Input miss`, and neither means "input".
+ */
 export interface UsageTotalsView {
   tokens: number;
   turns: number;
+  prompt: number;
+  cachedInput: number;
+  cacheWrite: number;
+  completion: number;
   /** `undefined` when nothing in scope was priced. */
   cost?: number;
   costBreakdown: UsageCost;
@@ -73,6 +88,24 @@ function bucketTokens(bucket: Bucket): number {
   return TOKEN_FIELDS.reduce((total, field) => total + bucket[field], 0);
 }
 
+function totalsView(
+  bucket: Bucket,
+  turns: number,
+  cost: UsageCost,
+  priced: boolean,
+): UsageTotalsView {
+  return {
+    tokens: bucketTokens(bucket),
+    turns,
+    prompt: bucket.prompt,
+    cachedInput: bucket.cachedInput,
+    cacheWrite: bucket.cacheWrite,
+    completion: bucket.completion,
+    cost: priced ? cost.total : undefined,
+    costBreakdown: cost,
+  };
+}
+
 /** Fold records into the totals the screens show. */
 export function summarizeUsage(
   records: readonly UsageRecord[],
@@ -109,17 +142,9 @@ export function summarizeUsage(
 
   const todayInput = todayBucket.prompt + todayBucket.cachedInput;
   const summary: UsageSummary = {
-    totals: {
-      tokens: bucketTokens(all),
-      turns: allTurns,
-      cost: sawCost ? allCost.total : undefined,
-      costBreakdown: allCost,
-    },
+    totals: totalsView(all, allTurns, allCost, sawCost),
     today: {
-      tokens: bucketTokens(todayBucket),
-      turns: todayTurns,
-      cost: sawTodayCost ? todayCost.total : undefined,
-      costBreakdown: todayCost,
+      ...totalsView(todayBucket, todayTurns, todayCost, sawTodayCost),
       cacheHitRate:
         todayInput > 0 ? todayBucket.cachedInput / todayInput : undefined,
     },

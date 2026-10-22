@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { UsageRecord } from "@/usage/ledger";
-import { countStreak, summarizeUsage } from "./ledger-view";
+import { countStreak, summarizeUsage } from "./summary";
 
 function record(
   tsHour: string,
@@ -30,6 +30,23 @@ describe("summarizeUsage", () => {
     expect(summary.totals.tokens).toBe(460);
     expect(summary.totals.turns).toBe(1);
     expect(summary.recordCount).toBe(1);
+  });
+
+  test("keeps the buckets apart, so one denominator serves every share", () => {
+    const summary = summarizeUsage(
+      [record("2026-10-22T09"), record("2026-10-22T10")],
+      NOW,
+    );
+    expect(summary.today.prompt).toBe(200);
+    expect(summary.today.cachedInput).toBe(600);
+    expect(summary.today.cacheWrite).toBe(20);
+    expect(summary.today.completion).toBe(100);
+    expect(
+      summary.today.prompt +
+        summary.today.cachedInput +
+        summary.today.cacheWrite +
+        summary.today.completion,
+    ).toBe(summary.today.tokens);
   });
 
   test("cost is absent when nothing was priced, not zero", () => {

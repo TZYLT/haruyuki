@@ -21,6 +21,7 @@ const STATS: SessionStatsSnapshot = {
     reasoningTokens: 0,
     stepCount: 1,
   },
+  requestCount: 1,
 };
 
 class CaptureStream extends Writable {
