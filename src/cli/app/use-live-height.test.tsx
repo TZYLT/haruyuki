@@ -42,6 +42,7 @@ function input(overrides: Partial<LiveHeightInput> = {}): LiveHeightInput {
     diffs: EMPTY_DIFFS,
     expandedToolCallId: null,
     lastShellToolCallId: null,
+    showCompactionsEnabled: false,
     subagentCount: 0,
     ...overrides,
   };
@@ -57,6 +58,8 @@ function measured(
     systemRemindersVisible: false,
     systemRemindersExpanded: false,
     recallDisplay: RECALL_DISPLAY_DEFAULT,
+    // No `HARUYUKI_DEBUG` in the test process: the compaction body is hidden.
+    compactionSummaryVisible: false,
     ...overrides,
   };
 }

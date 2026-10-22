@@ -12,6 +12,7 @@
  */
 import { useMemo, useSyncExternalStore } from "react";
 import {
+  getCompactionSummaryVisible,
   getRecallDisplay,
   getSystemRemindersExpanded,
   getSystemRemindersVisible,
@@ -49,6 +50,14 @@ export interface LiveHeightOptions {
   systemRemindersExpanded: boolean;
   /** Recall tier the transcript renders recall blocks with. */
   recallDisplay: RecallDisplay;
+  /**
+   * Whether a finished compaction event paints its summary body. Same store the
+   * renderer and the row model read (`getCompactionSummaryVisible`): the live
+   * estimate must not count rows the transcript will not draw.
+   */
+  compactionSummaryVisible: boolean;
+  /** Whether compaction events are drawn at all (`showCompactionsEnabled`). */
+  showCompactionsEnabled: boolean;
   subagentCount: number;
 }
 
@@ -59,6 +68,7 @@ export type LiveHeightInput = Omit<
   | "systemRemindersVisible"
   | "systemRemindersExpanded"
   | "recallDisplay"
+  | "compactionSummaryVisible"
 >;
 
 export function estimateLiveHeight(options: LiveHeightOptions): number {
@@ -78,6 +88,8 @@ export function estimateLiveHeight(options: LiveHeightOptions): number {
       systemRemindersVisible: options.systemRemindersVisible,
       systemRemindersExpanded: options.systemRemindersExpanded,
       recallDisplay: options.recallDisplay,
+      compactionSummaryVisible: options.compactionSummaryVisible,
+      showCompactionsEnabled: options.showCompactionsEnabled,
     });
   });
 
@@ -109,6 +121,10 @@ export function useEstimatedLiveHeight(input: LiveHeightInput): number {
     getRecallDisplay,
   );
 
+  // Not a subscription: it is an environment fact, read here so the estimate and
+  // the renderer cannot disagree about whether a compaction body is drawn.
+  const compactionSummaryVisible = getCompactionSummaryVisible();
+
   const {
     items,
     columns,
@@ -116,6 +132,7 @@ export function useEstimatedLiveHeight(input: LiveHeightInput): number {
     diffs,
     expandedToolCallId,
     lastShellToolCallId,
+    showCompactionsEnabled,
     subagentCount,
   } = input;
 
@@ -132,6 +149,8 @@ export function useEstimatedLiveHeight(input: LiveHeightInput): number {
         systemRemindersVisible,
         systemRemindersExpanded,
         recallDisplay,
+        compactionSummaryVisible,
+        showCompactionsEnabled,
         subagentCount,
       }),
     [
@@ -141,11 +160,13 @@ export function useEstimatedLiveHeight(input: LiveHeightInput): number {
       diffs,
       expandedToolCallId,
       lastShellToolCallId,
+      showCompactionsEnabled,
       subagentCount,
       reasoningExpanded,
       systemRemindersVisible,
       systemRemindersExpanded,
       recallDisplay,
+      compactionSummaryVisible,
     ],
   );
 }

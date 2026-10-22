@@ -4157,9 +4157,8 @@ export function App({
     getSubagentSnapshot,
   );
 
-  // Estimate live area height for overflow detection: the row model the
-  // full-screen viewport measures with, plus the transcript display state
-  // (`use-live-height.ts` explains why that subscription lives there).
+  // Estimate live area height for overflow detection: the same row model the
+  // full-screen viewport measures with, plus the transcript display state.
   const estimatedLiveHeight = useEstimatedLiveHeight({
     items: liveItems,
     columns,
@@ -4167,6 +4166,7 @@ export function App({
     diffs: precomputedDiffsRef.current,
     expandedToolCallId,
     lastShellToolCallId,
+    showCompactionsEnabled,
     subagentCount: subagents.length,
   });
 

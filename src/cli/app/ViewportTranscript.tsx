@@ -2,6 +2,7 @@ import { Box, useStdout } from "ink";
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { PendingApprovalStub } from "@/cli/components/PendingApprovalStub";
 import {
+  getCompactionSummaryVisible,
   getRecallDisplay,
   getSystemRemindersExpanded,
   getSystemRemindersVisible,
@@ -278,6 +279,10 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
     subscribeToSystemReminderDisplay,
     getRecallDisplay,
   );
+  // Not a subscription: whether a compaction body is painted is an environment
+  // fact (`HARUYUKI_DEBUG`), and it must be the same answer `EventMessage` gets —
+  // a body nobody paints must not be measured (`《34》3.11`).
+  const compactionSummaryVisible = getCompactionSummaryVisible();
 
   // Scroll position. The subscription keeps this component re-rendering on scroll
   // — and only this component, which is the point of the module store. Its return
@@ -420,6 +425,10 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
       systemRemindersVisible,
       systemRemindersExpanded,
       recallDisplay,
+      // Environment, not composed state: an item's height must include the
+      // compaction body exactly when `EventMessage` paints it (`《34》3.11`).
+      compactionSummaryVisible,
+      showCompactionsEnabled,
       expandedToolCallId,
       lastShellToolCallId,
       diffCount: precomputedDiffs.size,
@@ -439,6 +448,8 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
       systemRemindersVisible,
       systemRemindersExpanded,
       recallDisplay,
+      compactionSummaryVisible,
+      showCompactionsEnabled,
       expandedToolCallId,
       lastShellToolCallId,
       precomputedDiffs,

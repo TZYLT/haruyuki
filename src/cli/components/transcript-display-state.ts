@@ -76,6 +76,29 @@ export function getThinkingExpanded(): boolean {
   return expanded.thinking;
 }
 
+/**
+ * Whether a finished compaction event paints its summary body.
+ *
+ * The publisher's rule is "hide the verbose summary, the row is one line"; it is
+ * still printed under `HARUYUKI_DEBUG=1`, which is the only place the maintainer
+ * can read what a compaction produced.
+ *
+ * It lives here rather than inline in `EventMessage` because the **row model has
+ * to ask the same question**. It used to count `1 + summaryRows` unconditionally,
+ * so a build without debug (every published run) reserved tens of rows for a body
+ * nobody painted; the viewport concluded the band was full and the transcript came
+ * up mostly blank. That is `《34》§19.3`'s family, and `《34》3.11` had already
+ * singled out this branch as the one needing a display-state input.
+ *
+ * Read at call time, not captured in a module constant: it is an environment
+ * fact, and freezing it at import is the same mistake `appHomeRoot()` documents.
+ */
+export function getCompactionSummaryVisible(): boolean {
+  return (
+    process.env.HARUYUKI_DEBUG === "1" || process.env.HARUYUKI_DEBUG === "true"
+  );
+}
+
 export function subscribeToSystemReminderDisplay(
   listener: () => void,
 ): () => void {

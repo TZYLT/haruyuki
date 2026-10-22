@@ -41,6 +41,7 @@ import {
   wrappedRowCount,
 } from "@/cli/helpers/text-metrics";
 import {
+  COMPACTION_SUMMARY_HEADER,
   INTERRUPTED_BY_USER,
   SYSTEM_ALERT_CLOSE,
   SYSTEM_ALERT_OPEN,
@@ -133,6 +134,26 @@ export interface RowMeasureOptions {
    * renders as a tool call (the append shell's measurement).
    */
   substitutions?: ApprovalSubstitutions;
+  /**
+   * Whether a finished compaction event paints its summary body
+   * (`getCompactionSummaryVisible`).
+   *
+   * The renderer hides it outside `HARUYUKI_DEBUG=1`, and this used to be counted
+   * unconditionally: a compacted conversation then reserved a hundred-odd rows for
+   * a body nobody painted, the viewport believed the band was full, and the
+   * transcript came up mostly blank (`《34》3.11` predicted this exact shape). The
+   * model and the renderer now ask the **same** store.
+   */
+  compactionSummaryVisible?: boolean;
+  /**
+   * Whether compaction events are drawn at all (`showCompactionsEnabled`).
+   *
+   * `TranscriptItemView` renders **nothing** for a compaction event while the
+   * setting is off — no row, not even the one-line header — so the model must not
+   * count one either. That phantom row was the second half of the same blank-band
+   * report.
+   */
+  showCompactionsEnabled?: boolean;
 }
 
 /**
@@ -184,6 +205,16 @@ export interface RowLayoutOptions {
    * than the tool call it stands in for).
    */
   substitutionsSignature: string;
+  /**
+   * Whether a finished compaction event paints its summary body.
+   *
+   * It is in the key because the height difference is *large* — the body of a
+   * compaction summary is dozens of rows — so a ledger entry recorded under the
+   * wrong value is not one row off, it is the whole band.
+   */
+  compactionSummaryVisible: boolean;
+  /** Whether compaction events are drawn at all (`showCompactionsEnabled`). */
+  showCompactionsEnabled: boolean;
 }
 
 /** The fields `rowLayoutKey` reads. Exhaustive by construction (see the type). */
@@ -199,6 +230,8 @@ export const LAYOUT_FIELDS: Record<keyof RowLayoutOptions, true> = {
   lastShellToolCallId: true,
   diffCount: true,
   substitutionsSignature: true,
+  compactionSummaryVisible: true,
+  showCompactionsEnabled: true,
 };
 
 /**
@@ -362,10 +395,29 @@ export function measureLineRows(
       return toolCallRows(line, options);
 
     case "event": {
-      const summaryRows = line.summary
-        ? markdownRowCount(line.summary, Math.max(1, columns))
-        : 0;
-      return 1 + summaryRows;
+      // `TranscriptItemView` draws **nothing** for a compaction event unless the
+      // setting that shows them is on, and `EventMessage` prints the summary body
+      // only under `HARUYUKI_DEBUG=1`. Counting either unconditionally reserved
+      // rows nobody paints: one event could claim the whole band and the
+      // transcript came up mostly blank (2026-10-23, `《34》3.11`'s family).
+      if (
+        line.eventType === "compaction" &&
+        options.showCompactionsEnabled !== true
+      ) {
+        return 0;
+      }
+      if (options.compactionSummaryVisible !== true || !line.summary) return 1;
+      // The painted body, mirrored from `EventMessage`: a `  └  ` gutter row with
+      // the summary header in a `columns - 5` box, one blank row, then the body in
+      // the same box.
+      const rightWidth = Math.max(1, columns - 2);
+      const bodyWidth = Math.max(1, rightWidth - 3);
+      return (
+        1 +
+        countTextRows(COMPACTION_SUMMARY_HEADER, bodyWidth) +
+        1 +
+        markdownRowCount(line.summary, bodyWidth)
+      );
     }
 
     default:

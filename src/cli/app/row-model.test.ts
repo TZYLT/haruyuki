@@ -521,6 +521,8 @@ describe("rowLayoutKey", () => {
     lastShellToolCallId: null,
     diffCount: 0,
     substitutionsSignature: "",
+    compactionSummaryVisible: false,
+    showCompactionsEnabled: false,
   };
 
   /** A value different from `value`, of the same kind where that matters. */

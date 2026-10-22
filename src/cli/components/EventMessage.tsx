@@ -7,6 +7,7 @@ import { BlinkDot } from "./BlinkDot.js";
 import { CompactingAnimation } from "./CompactingAnimation";
 import { colors } from "./colors.js";
 import { Text } from "./Text";
+import { getCompactionSummaryVisible } from "./transcript-display-state";
 
 type EventLine = {
   kind: "event";
@@ -90,37 +91,37 @@ export const EventMessage = memo(({ line }: { line: EventLine }) => {
 
       {/* Result section (only when finished and HARUYUKI_DEBUG is enabled) */}
       {/* By default, hide the verbose summary to avoid overwhelming users */}
-      {!isRunning &&
-        line.summary &&
-        (process.env.HARUYUKI_DEBUG === "1" ||
-          process.env.HARUYUKI_DEBUG === "true") && (
-          <>
-            {/* Header line with L-bracket */}
-            <Box flexDirection="row">
-              <Box width={5} flexShrink={0}>
-                <Text dimColor>{`  ${CLI_GLYPHS.result}  `}</Text>
-              </Box>
-              <Box flexGrow={1} width={Math.max(0, rightWidth - 3)}>
-                <Text dimColor>{COMPACTION_SUMMARY_HEADER}</Text>
-              </Box>
+      {/* The row model asks the same store before it counts these rows
+          (`getCompactionSummaryVisible`): a body that is not painted must not be
+          measured, or the viewport fills the band with a row that is not there. */}
+      {!isRunning && line.summary && getCompactionSummaryVisible() && (
+        <>
+          {/* Header line with L-bracket */}
+          <Box flexDirection="row">
+            <Box width={5} flexShrink={0}>
+              <Text dimColor>{`  ${CLI_GLYPHS.result}  `}</Text>
             </Box>
-            {/* Empty line for separation */}
-            <Box flexDirection="row">
-              <Text> </Text>
+            <Box flexGrow={1} width={Math.max(0, rightWidth - 3)}>
+              <Text dimColor>{COMPACTION_SUMMARY_HEADER}</Text>
             </Box>
-            {/* Summary text - indented with 5 spaces to align */}
-            <Box flexDirection="row">
-              <Box width={5} flexShrink={0}>
-                <Text>{"     "}</Text>
-              </Box>
-              <Box flexGrow={1} width={Math.max(0, rightWidth - 3)}>
-                <Text dimColor wrap="wrap">
-                  {line.summary}
-                </Text>
-              </Box>
+          </Box>
+          {/* Empty line for separation */}
+          <Box flexDirection="row">
+            <Text> </Text>
+          </Box>
+          {/* Summary text - indented with 5 spaces to align */}
+          <Box flexDirection="row">
+            <Box width={5} flexShrink={0}>
+              <Text>{"     "}</Text>
             </Box>
-          </>
-        )}
+            <Box flexGrow={1} width={Math.max(0, rightWidth - 3)}>
+              <Text dimColor wrap="wrap">
+                {line.summary}
+              </Text>
+            </Box>
+          </Box>
+        </>
+      )}
     </Box>
   );
 });
