@@ -101,6 +101,26 @@ describe("the trajectory folds every segment of one turn", () => {
     expect(stats.getSnapshot().usage.promptTokens).toBe(0);
   });
 
+  test("the request composition is a snapshot, so the last segment wins", () => {
+    const stats = new SessionStats();
+    stats.startTrajectory();
+    stats.accumulateTrajectory({
+      usageContext: { system: 8_000, messages: 20_000, tools: 30_000 },
+    });
+    stats.accumulateTrajectory({
+      usageContext: { system: 8_000, messages: 21_000, tools: 30_000 },
+    });
+    expect(stats.getTrajectorySnapshot()?.contextBreakdown).toEqual({
+      system: 8_000,
+      messages: 21_000,
+      tools: 30_000,
+    });
+    // A new turn starts without the previous composition.
+    stats.endTrajectory();
+    stats.startTrajectory();
+    expect(stats.getTrajectorySnapshot()?.contextBreakdown).toBeUndefined();
+  });
+
   test("a segment without usage still keeps its wall clock", () => {
     const stats = new SessionStats();
     stats.startTrajectory();

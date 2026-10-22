@@ -178,6 +178,49 @@ describe("appendUsageRecord", () => {
     expect(records.map((record) => record.prompt)).toEqual([1, 7]);
   });
 
+  test("a cancelled turn and its request composition survive the round trip", async () => {
+    const root = await makeTempRoot();
+    process.env.HARUYUKI_HOME = root;
+    const record = buildUsageRecord({
+      agentId: "agent-1",
+      model: "openai/gpt-5.5",
+      prompt: 10,
+      cachedInput: 0,
+      cacheWrite: 0,
+      completion: 5,
+      steps: 1,
+      wallMs: 100,
+      apiMs: 90,
+      contextBreakdown: { system: 8_000, messages: 23_000, tools: 31_000 },
+      cancelled: true,
+    });
+    expect(await appendUsageRecord(record)).toBe(true);
+
+    const [read] = await readUsageLedger();
+    expect(read?.cancelled).toBe(true);
+    expect(read?.contextBreakdown).toEqual({
+      system: 8_000,
+      messages: 23_000,
+      tools: 31_000,
+    });
+  });
+
+  test("a record without the optional fields stays clean", () => {
+    const record = buildUsageRecord({
+      agentId: "agent-1",
+      model: "openai/gpt-5.5",
+      prompt: 10,
+      cachedInput: 0,
+      cacheWrite: 0,
+      completion: 5,
+      steps: 1,
+      wallMs: 100,
+      apiMs: 90,
+    });
+    expect(record.cancelled).toBeUndefined();
+    expect(record.contextBreakdown).toBeUndefined();
+  });
+
   test("returns false instead of throwing when the ledger cannot be written", async () => {
     const root = await makeTempRoot();
     // A file where the directory should be: mkdir must fail.

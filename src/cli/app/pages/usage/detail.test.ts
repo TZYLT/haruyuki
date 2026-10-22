@@ -137,6 +137,58 @@ describe("buildDetailRows", () => {
     expect(joined).toContain("¥ 0.40");
   });
 
+  test("the composition is drawn with one-decimal shares and the window", () => {
+    const rows = texts(
+      buildDetailRows({
+        summary: summarizeUsage(
+          [
+            record("2026-10-22T09", {
+              contextTokens: 84_000,
+              contextBreakdown: {
+                system: 8_000,
+                messages: 23_000,
+                tools: 31_000,
+              },
+            }),
+          ],
+          NOW,
+        ),
+        records: [
+          record("2026-10-22T09", {
+            contextTokens: 84_000,
+            contextBreakdown: {
+              system: 8_000,
+              messages: 23_000,
+              tools: 31_000,
+            },
+          }),
+        ],
+        now: NOW,
+        width: 80,
+        contextWindow: 128_000,
+      }),
+    );
+    const joined = rows.join("\n");
+    expect(joined).toContain("上下文成分（最近一回合估计）");
+    expect(joined).toContain("84k / 128k");
+    expect(joined).toContain("65.6%");
+    // 8k / 62k = 12.9%, 31k = 50.0%, 23k = 37.1%.
+    expect(joined).toContain("system");
+    expect(joined).toContain("12.9%");
+    expect(joined).toContain("tools");
+    expect(joined).toContain("50.0%");
+    expect(joined).toContain("messages");
+    // Memory cannot be separated locally; the screen must say so.
+    expect(joined).toContain("memory 本地并入 system");
+  });
+
+  test("without a composition the section falls back to the occupancy", () => {
+    const rows = detailOf([record("2026-10-22T09", { contextTokens: 84_000 })]);
+    const joined = rows.join("\n");
+    expect(joined).toContain("84k tokens（本回合没有请求成分数据）");
+    expect(joined).not.toContain("memory 本地并入");
+  });
+
   test("an empty ledger says so", () => {
     expect(detailOf([])[0]).toBe("还没有用量记录。");
   });

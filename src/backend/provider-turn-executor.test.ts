@@ -635,6 +635,47 @@ describe("ProviderTurnExecutor", () => {
     expect(usage?.cost_cache_write_usd).toBeCloseTo(0.004);
   });
 
+  test("forwards the estimated request composition to the usage chunk", async () => {
+    const finalMessage = assistantMessage();
+    const adapter: ProviderStreamAdapter = {
+      async *stream() {
+        yield providerStreamPart(
+          part({ type: "done", reason: "stop", message: finalMessage }),
+        );
+      },
+    };
+    const turnInput = input();
+    turnInput.systemPrompt = "You are a local coding agent.";
+    turnInput.uiMessages = [
+      {
+        id: "local-user-1",
+        role: "user",
+        content: "Please inspect the repository and summarize the build.",
+        timestamp: Date.now(),
+      },
+    ];
+    turnInput.body = {
+      messages: [{ role: "user", content: "hello" }],
+      client_tools: [
+        {
+          name: "Read",
+          description: "Read a file",
+          parameters: { type: "object" },
+        },
+      ],
+    } as never;
+
+    const chunks = await collect(
+      await new ProviderTurnExecutor(adapter).execute(turnInput),
+    );
+    const usage = chunks.find(
+      (chunk) => chunk.message_type === "usage_statistics",
+    ) as Record<string, number | undefined> | undefined;
+    expect(usage?.context_system_tokens).toBeGreaterThan(0);
+    expect(usage?.context_messages_tokens).toBeGreaterThan(0);
+    expect(usage?.context_tools_tokens).toBeGreaterThan(0);
+  });
+
   test("includes provider reasoning tokens in usage statistics", async () => {
     const finalMessage = assistantMessage({
       ...emptyLocalUsage(),

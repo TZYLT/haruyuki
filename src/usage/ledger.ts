@@ -37,6 +37,7 @@ import {
   type AppHomePathOptions,
   appHomePath,
 } from "@/utils/app-paths";
+import type { UsageContextBreakdown } from "@/utils/usage-context";
 import {
   addUsageCost,
   emptyUsageCost,
@@ -73,6 +74,15 @@ export interface UsageRecord {
   /** Context occupancy at the end of the turn, when the provider reported it. */
   contextTokens?: number;
   /**
+   * What the request was made of, estimated where the request is assembled.
+   *
+   * `system` includes memory locally (core memory is compiled into the system
+   * prompt, so it cannot be separated afterwards); `messages` is the transcript
+   * and `tools` the tool definitions. Estimated at 4 bytes per token, which is
+   * the same heuristic the context floor uses.
+   */
+  contextBreakdown?: UsageContextBreakdown;
+  /**
    * Provider-reported cost split by pricing bucket (docs/38 §14.5 wrote
    * `cost?: number`; the four-bucket split is a superset — the detail screen
    * shows how the money splits, and a stored total alone cannot answer that).
@@ -88,6 +98,14 @@ export interface UsageRecord {
    * Output tokens are excluded, per the same decision.
    */
   cacheHitRate?: number;
+  /**
+   * The user stopped the turn before it finished.
+   *
+   * Such a turn is still recorded: it spent real tokens, and a ledger that
+   * silently drops them under-reports the bill. The flag keeps "turns" honest
+   * for anything that wants to separate finished work from interrupted work.
+   */
+  cancelled?: boolean;
 }
 
 export interface UsageRecordInput {
@@ -104,7 +122,9 @@ export interface UsageRecordInput {
   wallMs: number;
   apiMs: number;
   contextTokens?: number;
+  contextBreakdown?: UsageContextBreakdown;
   cost?: UsageCost;
+  cancelled?: boolean;
 }
 
 /** Local hour key, `YYYY-MM-DDTHH`. Sorts lexicographically = chronologically. */
@@ -151,6 +171,9 @@ export function buildUsageRecord(input: UsageRecordInput): UsageRecord {
   if (input.contextTokens !== undefined) {
     record.contextTokens = input.contextTokens;
   }
+  if (input.contextBreakdown) {
+    record.contextBreakdown = { ...input.contextBreakdown };
+  }
   // Rounded to four decimals: this is a display number, and full float tails
   // only bloat the file.
   if (totalInput > 0) {
@@ -159,6 +182,9 @@ export function buildUsageRecord(input: UsageRecordInput): UsageRecord {
   }
   if (input.cost && !isZeroUsageCost(input.cost)) {
     record.cost = { ...input.cost };
+  }
+  if (input.cancelled) {
+    record.cancelled = true;
   }
   return record;
 }
@@ -231,6 +257,24 @@ function parseUsageRecord(line: string): UsageRecord | null {
   }
   if (isFiniteNumber(value.cacheHitRate)) {
     record.cacheHitRate = value.cacheHitRate;
+  }
+  if (value.cancelled === true) {
+    record.cancelled = true;
+  }
+  const breakdown = value.contextBreakdown;
+  if (breakdown && typeof breakdown === "object") {
+    const parts = breakdown as Record<string, unknown>;
+    if (
+      isFiniteNumber(parts.system) &&
+      isFiniteNumber(parts.messages) &&
+      isFiniteNumber(parts.tools)
+    ) {
+      record.contextBreakdown = {
+        system: parts.system,
+        messages: parts.messages,
+        tools: parts.tools,
+      };
+    }
   }
   const cost = value.cost;
   if (cost && typeof cost === "object") {

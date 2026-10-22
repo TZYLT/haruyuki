@@ -24,12 +24,8 @@ import {
 } from "@/utils/stream-abort-relay";
 import { formatDuration, logTiming } from "@/utils/timing";
 import { recordTuiJsonPayload, recordTuiPerf } from "@/utils/tui-perf";
-import {
-  addUsageCost,
-  emptyUsageCost,
-  isZeroUsageCost,
-  type UsageCost,
-} from "@/utils/usage-cost";
+import type { UsageContextBreakdown } from "@/utils/usage-context";
+import { isZeroUsageCost, type UsageCost } from "@/utils/usage-cost";
 
 import {
   type createBuffers,
@@ -64,7 +60,11 @@ import {
 } from "./stream-resume";
 import { createStreamStallReconciler } from "./stream-stall-reconciler";
 import { createTerminalEofGuard } from "./stream-terminal-eof-guard";
-import { readReportedCost } from "./stream-usage";
+import {
+  addChunkUsage,
+  createStreamUsageState,
+  mergeDrainUsage,
+} from "./stream-usage";
 
 export { advanceStreamSequenceCursor };
 export type { ApprovalRequest, StreamSequenceCursor } from "./stream-processor";
@@ -114,6 +114,8 @@ export type DrainResult = {
   usageCost?: UsageCost;
   /** Model requests this drain saw reported (`usage_statistics` chunks). */
   usageSteps?: number;
+  /** What the last reported request was made of (a snapshot, not a sum). */
+  contextComposition?: UsageContextBreakdown;
   fallbackError?: string | null; // Error message for when we can't fetch details from server (no run_id)
   errorInfo?: ErrorInfo; // Structured stream error, including SDK-thrown SSE errors
   terminalEofGuardFired?: boolean; // HTTP body never ended after the terminal SSE sequence; guard aborted the read
@@ -146,11 +148,10 @@ export async function drainStream(
   // Track if we triggered abort via our listener (for eager cancellation)
   let abortedViaListener = false;
 
-  // Provider-reported cost and request count for this drain. Accumulated next
-  // to `onChunk`, i.e. after the dedupe decision, so a replayed chunk cannot
-  // bill twice — the same rule the token counters follow.
-  const usageCost = emptyUsageCost();
-  let usageSteps = 0;
+  // Provider-reported cost, request count and composition for this drain,
+  // accumulated next to `onChunk` — i.e. after the dedupe decision, so a
+  // replayed chunk cannot bill twice, the same rule the token counters follow.
+  const usage = createStreamUsageState();
 
   // Terminal-EOF guard: once the terminal SSE sequence has arrived, don't wait
   // forever for HTTP body EOF (see stream-terminal-eof-guard.ts).
@@ -313,10 +314,7 @@ export async function drainStream(
           chunk,
         );
         onChunk(buffers, chunk, contextTracker);
-        if (chunk.message_type === "usage_statistics") {
-          usageSteps += 1;
-          addUsageCost(usageCost, readReportedCost(chunk));
-        }
+        addChunkUsage(usage, chunk);
         queueMicrotask(refresh);
       }
 
@@ -544,8 +542,9 @@ export async function drainStream(
     lastRunId: streamProcessor.lastRunId,
     lastSeqId: streamProcessor.lastSeqId,
     apiDurationMs,
-    usageCost: isZeroUsageCost(usageCost) ? undefined : usageCost,
-    usageSteps,
+    usageCost: isZeroUsageCost(usage.cost) ? undefined : usage.cost,
+    usageSteps: usage.steps,
+    contextComposition: usage.composition,
     fallbackError,
     errorInfo: streamProcessor.lastErrorInfo,
     terminalEofGuardFired: terminalEofGuard.fired(),
@@ -855,12 +854,9 @@ export async function drainStreamWithResume(
       );
       // The resumed drain starts its own counters; the chunks already billed
       // before the drop must survive the swap.
-      const costBeforeResume = result.usageCost;
-      const stepsBeforeResume = result.usageSteps ?? 0;
+      const beforeResume = result;
       result = resumeResult;
-      result.usageCost ??= emptyUsageCost();
-      addUsageCost(result.usageCost, costBeforeResume);
-      result.usageSteps = (result.usageSteps ?? 0) + stepsBeforeResume;
+      mergeDrainUsage(result, beforeResume);
 
       // The resumed stream uses a fresh streamProcessor that won't have
       // approval_request_message chunks from before the disconnect (they

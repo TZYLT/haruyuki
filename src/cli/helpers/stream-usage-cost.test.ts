@@ -92,6 +92,58 @@ describe("drainStream usage cost", () => {
     expect(result.usageCost).toBeUndefined();
   });
 
+  test("carries the request composition, last report wins", async () => {
+    const chunks = [
+      {
+        message_type: "usage_statistics",
+        prompt_tokens: 1,
+        context_system_tokens: 8_000,
+        context_messages_tokens: 20_000,
+        context_tools_tokens: 30_000,
+      } as LettaStreamingResponse,
+      {
+        message_type: "usage_statistics",
+        prompt_tokens: 1,
+        context_system_tokens: 8_000,
+        context_messages_tokens: 21_000,
+        context_tools_tokens: 30_000,
+      } as LettaStreamingResponse,
+      {
+        message_type: "stop_reason",
+        stop_reason: "end_turn",
+      } as LettaStreamingResponse,
+    ];
+    const result = await drainStream(
+      streamOf(chunks),
+      createBuffers("agent-test"),
+      () => {},
+    );
+    // A snapshot, not a sum: 21k messages is the latest, not 41k.
+    expect(result.contextComposition).toEqual({
+      system: 8_000,
+      messages: 21_000,
+      tools: 30_000,
+    });
+  });
+
+  test("a chunk without composition leaves it unset", async () => {
+    const result = await drainStream(
+      streamOf([
+        {
+          message_type: "usage_statistics",
+          prompt_tokens: 1,
+        } as LettaStreamingResponse,
+        {
+          message_type: "stop_reason",
+          stop_reason: "end_turn",
+        } as LettaStreamingResponse,
+      ]),
+      createBuffers("agent-test"),
+      () => {},
+    );
+    expect(result.contextComposition).toBeUndefined();
+  });
+
   test("no usage chunks at all reports no steps", async () => {
     const result = await drainStream(
       streamOf([

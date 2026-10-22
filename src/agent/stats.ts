@@ -1,4 +1,5 @@
 import type { Buffers } from "@/cli/helpers/accumulator";
+import type { UsageContextBreakdown } from "@/utils/usage-context";
 import {
   addUsageCost,
   emptyUsageCost,
@@ -59,6 +60,8 @@ export interface TrajectoryStatsSnapshot {
   usageSteps: number;
   /** Provider-reported cost folded over the turn's segments. */
   cost: UsageCost;
+  /** What the last request of the turn was made of (a snapshot). */
+  contextBreakdown?: UsageContextBreakdown;
 }
 
 export class SessionStats {
@@ -75,6 +78,7 @@ export class SessionStats {
   private trajectoryUsage: UsageStats;
   private trajectoryUsageSteps: number;
   private trajectoryCost: UsageCost;
+  private trajectoryContext: UsageContextBreakdown | undefined;
 
   constructor() {
     this.sessionStartMs = performance.now();
@@ -90,6 +94,7 @@ export class SessionStats {
     this.trajectoryUsage = emptyUsage();
     this.trajectoryUsageSteps = 0;
     this.trajectoryCost = emptyUsageCost();
+    this.trajectoryContext = undefined;
   }
 
   endTurn(apiDurationMs: number): void {
@@ -144,6 +149,8 @@ export class SessionStats {
     usageDelta?: UsageStatsDelta;
     /** Provider-reported cost for this segment. */
     usageCost?: UsageCost;
+    /** Composition of this segment's request; the last report wins. */
+    usageContext?: UsageContextBreakdown;
     /** Model requests reported by this segment. */
     usageSteps?: number;
     tokenDelta?: number;
@@ -178,6 +185,9 @@ export class SessionStats {
     if (options.usageCost) {
       addUsageCost(this.trajectoryCost, options.usageCost);
     }
+    if (options.usageContext) {
+      this.trajectoryContext = { ...options.usageContext };
+    }
     if (options.tokenDelta) {
       this.trajectoryTokens += options.tokenDelta;
     }
@@ -197,6 +207,9 @@ export class SessionStats {
       usage: { ...this.trajectoryUsage },
       usageSteps: this.trajectoryUsageSteps,
       cost: { ...this.trajectoryCost },
+      ...(this.trajectoryContext
+        ? { contextBreakdown: { ...this.trajectoryContext } }
+        : {}),
     };
   }
 
@@ -216,6 +229,7 @@ export class SessionStats {
     this.trajectoryUsage = emptyUsage();
     this.trajectoryUsageSteps = 0;
     this.trajectoryCost = emptyUsageCost();
+    this.trajectoryContext = undefined;
   }
 
   getSnapshot(): SessionStatsSnapshot {

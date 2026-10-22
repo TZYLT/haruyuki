@@ -109,7 +109,7 @@ import { analyzeToolApproval, type ToolExecutionResult } from "@/tools/manager";
 import type { PreparedScopeToolContext } from "@/tools/toolset";
 import { debugLog, debugWarn, isDebugEnabled } from "@/utils/debug";
 import type { QueuedMessage } from "@/utils/message-queue-bridge";
-
+import { maybeAutoTitleConversation } from "./auto-title";
 import {
   CONVERSATION_BUSY_MAX_RETRIES,
   EAGER_CANCEL,
@@ -142,7 +142,7 @@ import type {
   AutoHandledToolResult,
   QueueApprovalResults,
 } from "./types";
-import { appendTurnUsageRecord } from "./usage-record";
+import { finishTurnTrajectory } from "./usage-record";
 
 type NetworkPhase = "error" | "upload" | "download" | null;
 
@@ -1320,6 +1320,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
             apiDurationMs,
             usageCost,
             usageSteps,
+            contextComposition,
             lastRunId,
             lastSeqId,
             fallbackError,
@@ -1348,6 +1349,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
             usageDelta,
             usageCost,
             usageSteps,
+            usageContext: contextComposition,
             tokenDelta,
           });
           syncTrajectoryTokenBase();
@@ -1550,49 +1552,35 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
 
             // Disable eager approval check after first successful message (LET-7101)
             // Any new approvals from here on are from our own turn, not orphaned
-            if (needsEagerApprovalCheck) {
-              setNeedsEagerApprovalCheck(false);
-            }
+            if (needsEagerApprovalCheck) setNeedsEagerApprovalCheck(false);
 
             // Derive an auto title client-side once the first assistant turn completes.
-            if (
-              shouldAutoGenerateConversationTitleRef.current &&
-              !isAutoConversationTitleInFlightRef.current &&
-              conversationIdRef.current !== "default"
-            ) {
-              isAutoConversationTitleInFlightRef.current = true;
-              const titleConversationId = conversationIdRef.current;
-              const conversationTitle = await generateConversationTitle();
-              if (!conversationTitle) {
-                isAutoConversationTitleInFlightRef.current = false;
-              } else if (
-                !shouldAutoGenerateConversationTitleRef.current ||
-                conversationIdRef.current !== titleConversationId
-              ) {
-                isAutoConversationTitleInFlightRef.current = false;
-              } else {
-                void getBackend()
-                  .updateConversation(titleConversationId, {
-                    summary: conversationTitle,
-                  })
-                  .then(() => {
-                    shouldAutoGenerateConversationTitleRef.current = false;
-                    setConversationSummary(conversationTitle);
-                  })
-                  .catch((err) => {
-                    // Silently ignore - not critical.
-                    if (isDebugEnabled()) {
-                      console.error(
-                        "[DEBUG] Failed to update conversation title:",
-                        err,
-                      );
-                    }
-                  })
-                  .finally(() => {
-                    isAutoConversationTitleInFlightRef.current = false;
-                  });
-              }
-            }
+            await maybeAutoTitleConversation({
+              shouldGenerate: shouldAutoGenerateConversationTitleRef.current,
+              inFlight: isAutoConversationTitleInFlightRef.current,
+              conversationId: conversationIdRef.current,
+              currentConversationId: () => conversationIdRef.current,
+              stillWanted: () => shouldAutoGenerateConversationTitleRef.current,
+              generate: generateConversationTitle,
+              update: (conversationId, summary) =>
+                getBackend().updateConversation(conversationId, { summary }),
+              onApplied: setConversationSummary,
+              onFailure: (err) => {
+                // Silently ignore - not critical.
+                if (isDebugEnabled()) {
+                  console.error(
+                    "[DEBUG] Failed to update conversation title:",
+                    err,
+                  );
+                }
+              },
+              setShouldGenerate: (value) => {
+                shouldAutoGenerateConversationTitleRef.current = value;
+              },
+              setInFlight: (value) => {
+                isAutoConversationTitleInFlightRef.current = value;
+              },
+            });
 
             if (
               contextTrackerRef.current
@@ -1604,18 +1592,18 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
               void generateConversationDescription();
             }
 
-            const trajectorySnapshot = sessionStatsRef.current.endTrajectory();
+            const trajectorySnapshot = finishTurnTrajectory(
+              sessionStatsRef.current,
+              {
+                agentId: agentIdRef.current,
+                model: llmConfigRef.current?.model ?? null,
+              },
+            ).snapshot;
             setTrajectoryTokenBase(0);
             setTrajectoryElapsedBaseMs(0);
             trajectoryRunTokenStartRef.current = 0;
             trajectoryTokenDisplayRef.current = 0;
             if (trajectorySnapshot) {
-              // One ledger record per completed turn. Cancelled turns are not
-              // recorded: they stop before this branch (see docs/33 P4).
-              void appendTurnUsageRecord(trajectorySnapshot, {
-                agentId: agentIdRef.current,
-                model: llmConfigRef.current?.model ?? null,
-              });
               const { wallMs: summaryWallMs, shouldShow } = trajectorySummary(
                 trajectorySnapshot,
                 liveElapsedMs,
@@ -1667,7 +1655,18 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
             pendingTranscriptStartLineIndexRef.current = null;
             setStreaming(false);
             closeTrajectorySegment();
-            syncTrajectoryElapsedBase();
+            // A cancelled turn still spent tokens, so it is recorded too — and
+            // its trajectory is *ended* here, or those tokens would land in the
+            // next turn's record.
+            const cancelled = finishTurnTrajectory(
+              sessionStatsRef.current,
+              {
+                agentId: agentIdRef.current,
+                model: llmConfigRef.current?.model ?? null,
+              },
+              { cancelled: true },
+            );
+            setTrajectoryElapsedBaseMs(cancelled.wallMs);
 
             // Check if this cancel was triggered by queue threshold
             if (waitingForQueueCancelRef.current) {

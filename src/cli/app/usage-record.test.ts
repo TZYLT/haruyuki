@@ -105,6 +105,27 @@ describe("appendTurnUsageRecord", () => {
     expect(records[0]?.model).toBe("unknown");
   });
 
+  test("a cancelled turn is marked, and keeps its request composition", async () => {
+    const root = await makeTempRoot();
+    process.env.HARUYUKI_HOME = root;
+
+    await appendTurnUsageRecord(
+      snapshotOf({
+        contextBreakdown: { system: 8_000, messages: 21_000, tools: 30_000 },
+      }),
+      { agentId: "agent-1", model: "m" },
+      { cancelled: true },
+    );
+
+    const [record] = await readUsageLedger();
+    expect(record?.cancelled).toBe(true);
+    expect(record?.contextBreakdown).toEqual({
+      system: 8_000,
+      messages: 21_000,
+      tools: 30_000,
+    });
+  });
+
   test("a second turn appends instead of replacing", async () => {
     const root = await makeTempRoot();
     process.env.HARUYUKI_HOME = root;

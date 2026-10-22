@@ -9,7 +9,7 @@
  * not worth delaying the next turn or surfacing an error for.
  */
 
-import type { TrajectoryStatsSnapshot } from "@/agent/stats";
+import type { SessionStats, TrajectoryStatsSnapshot } from "@/agent/stats";
 import { appendUsageRecord, buildUsageRecord } from "@/usage/ledger";
 
 export interface TurnUsageIdentity {
@@ -22,6 +22,7 @@ export interface TurnUsageIdentity {
 export function appendTurnUsageRecord(
   snapshot: TrajectoryStatsSnapshot,
   identity: TurnUsageIdentity,
+  options: { cancelled?: boolean } = {},
 ): Promise<boolean> {
   const usage = snapshot.usage;
   const record = buildUsageRecord({
@@ -36,7 +37,30 @@ export function appendTurnUsageRecord(
     wallMs: snapshot.wallMs,
     apiMs: snapshot.apiMs,
     contextTokens: usage.contextTokens,
+    contextBreakdown: snapshot.contextBreakdown,
     cost: snapshot.cost,
+    ...(options.cancelled ? { cancelled: true } : {}),
   });
   return appendUsageRecord(record);
+}
+
+/**
+ * End the turn's trajectory and record it, in that order and once.
+ *
+ * Both call sites (a completed turn, a cancelled one) need the same three
+ * steps: end the accumulator, write the ledger line, hand the snapshot back for
+ * whatever the caller still shows. Keeping it here is what stops the two paths
+ * from drifting in the details that matter (a cancelled turn must **end** the
+ * trajectory, not just read it, or its tokens land in the next turn's record).
+ */
+export function finishTurnTrajectory(
+  stats: SessionStats,
+  identity: TurnUsageIdentity,
+  options: { cancelled?: boolean } = {},
+): { snapshot: TrajectoryStatsSnapshot | null; wallMs: number } {
+  const snapshot = stats.endTrajectory();
+  if (snapshot) {
+    void appendTurnUsageRecord(snapshot, identity, options);
+  }
+  return { snapshot, wallMs: snapshot?.wallMs ?? 0 };
 }

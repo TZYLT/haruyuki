@@ -24,6 +24,7 @@ import {
   markLocalStateChunkOnly,
   type ProviderStreamPart,
 } from "@/backend/local/local-stream-chunks";
+import type { UsageContextBreakdown } from "@/utils/usage-context";
 import type {
   HeadlessTurnBody,
   HeadlessTurnExecutor,
@@ -186,6 +187,25 @@ function estimateSerializedTokens(value: unknown): number {
   }
 }
 
+/**
+ * The request's parts, in the same 4-bytes-per-token estimate the context floor
+ * uses: the compiled system prompt (memory is inside it locally), the
+ * transcript, and the tool definitions. The Usage detail screen shows this
+ * split; the backend is the only place that can answer it, because the
+ * serialized request exists nowhere else.
+ */
+export function estimateProviderContextComposition(
+  input: ProviderTurnInput,
+): UsageContextBreakdown | undefined {
+  const system = estimateSerializedTokens(
+    input.systemPrompt ?? input.agent.system,
+  );
+  const messages = estimateLocalContextTokens(input.uiMessages).tokens;
+  const tools = estimateSerializedTokens(input.clientTools);
+  if (system === 0 && messages === 0 && tools === 0) return undefined;
+  return { system, messages, tools };
+}
+
 export function estimateProviderContextTokens(
   input: ProviderTurnInput,
 ): number | undefined {
@@ -332,6 +352,7 @@ export function estimateProviderRequestBytes(
 function createUsageStatisticsChunk(
   usage: Usage | undefined,
   contextTokensEstimate?: number,
+  contextComposition?: UsageContextBreakdown,
 ): LettaStreamingResponse | undefined {
   const promptTokens = usage?.input;
   const completionTokens = usage?.output;
@@ -381,6 +402,16 @@ function createUsageStatisticsChunk(
           cost_output_usd: cost.output,
           cost_cache_read_usd: cost.cacheRead,
           cost_cache_write_usd: cost.cacheWrite,
+        }
+      : {}),
+    // What the request was made of. Only the backend can answer this: the
+    // serialized system prompt / transcript / tool list exists here and nowhere
+    // after the request is built.
+    ...(contextComposition
+      ? {
+          context_system_tokens: contextComposition.system,
+          context_messages_tokens: contextComposition.messages,
+          context_tools_tokens: contextComposition.tools,
         }
       : {}),
   } as unknown as LettaStreamingResponse;
@@ -470,6 +501,7 @@ function identityForContentSegment(
 function createProviderLettaStream(
   events: AsyncIterable<ProviderStreamEvent>,
   contextTokensEstimate?: number,
+  contextComposition?: UsageContextBreakdown,
 ): Stream<LettaStreamingResponse> {
   const controller = new AbortController();
   return {
@@ -554,6 +586,7 @@ function createProviderLettaStream(
               const usageChunk = createUsageStatisticsChunk(
                 part.message.usage,
                 contextTokensEstimate,
+                contextComposition,
               );
               if (usageChunk) {
                 sawUsageStatistics = true;
@@ -603,6 +636,7 @@ export class ProviderTurnExecutor implements HeadlessTurnExecutor {
     return createProviderLettaStream(
       events,
       estimateProviderContextTokens(providerInput),
+      estimateProviderContextComposition(providerInput),
     );
   }
 }

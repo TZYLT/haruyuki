@@ -20,6 +20,10 @@ import {
   type UsageRecord,
   usageDayKey,
 } from "@/usage/ledger";
+import {
+  contextBreakdownTotal,
+  type UsageContextBreakdown,
+} from "@/utils/usage-context";
 import { formatCost, formatCostAmount, formatPercent } from "./cost";
 import type { UsageSummary } from "./ledger-view";
 
@@ -61,6 +65,20 @@ export function bucketTokens(records: readonly UsageRecord[]): {
   return { miss, hit, write, output, total: miss + hit + write + output };
 }
 
+/** The latest request composition the ledger has, or `undefined`. */
+export function latestContextBreakdown(
+  records: readonly UsageRecord[],
+): UsageContextBreakdown | undefined {
+  let best: { hour: string; breakdown: UsageContextBreakdown } | undefined;
+  for (const record of records) {
+    if (!record.contextBreakdown) continue;
+    if (!best || record.tsHour >= best.hour) {
+      best = { hour: record.tsHour, breakdown: record.contextBreakdown };
+    }
+  }
+  return best?.breakdown;
+}
+
 /** The latest context occupancy the ledger has, or `undefined`. */
 export function latestContextTokens(
   records: readonly UsageRecord[],
@@ -98,8 +116,10 @@ export function buildDetailRows(input: {
   records: readonly UsageRecord[];
   now: Date;
   width: number;
+  /** The conversation's context window, for the occupancy line. */
+  contextWindow?: number | null;
 }): PageRow[] {
-  const { summary, records, now, width } = input;
+  const { summary, records, now, width, contextWindow } = input;
   const rows: PageRow[] = [];
   if (summary.recordCount === 0) {
     rows.push(textRow("还没有用量记录。", width));
@@ -142,16 +162,44 @@ export function buildDetailRows(input: {
     rows.push(textRow(`  ${label}${count}  ${money}  ${share}`, width));
   }
 
-  rows.push(headerRow("上下文"));
+  rows.push(headerRow("上下文成分（最近一回合估计）"));
   const contextTokens = latestContextTokens(records);
-  rows.push(
-    textRow(
-      contextTokens === undefined
-        ? "  最近一回合没有报告占用量"
-        : `  最近一回合 ${formatCompact(contextTokens)} tokens`,
-      width,
-    ),
-  );
+  const composition = latestContextBreakdown(records);
+  if (composition) {
+    const total = contextBreakdownTotal(composition);
+    const occupancy =
+      contextTokens !== undefined && contextWindow && contextWindow > 0
+        ? `${formatCompact(contextTokens)} / ${formatCompact(contextWindow)} · ${formatPercent(contextTokens, contextWindow)}`
+        : contextTokens !== undefined
+          ? `${formatCompact(contextTokens)} tokens`
+          : `${formatCompact(total)} tokens（估计）`;
+    rows.push(textRow(`  ${occupancy}`, width));
+    const parts: Array<{ label: string; tokens: number }> = [
+      { label: "system", tokens: composition.system },
+      { label: "tools", tokens: composition.tools },
+      { label: "messages", tokens: composition.messages },
+    ];
+    for (const part of parts) {
+      rows.push(
+        textRow(
+          `  ${part.label.padEnd(9)}${formatCompact(part.tokens).padStart(7)}  ${formatPercent(part.tokens, total)}`,
+          width,
+        ),
+      );
+    }
+    // Memory is compiled into the system prompt locally, so a separate row
+    // would be a guess. Say so instead of splitting it by eye.
+    rows.push(textRow("  memory 本地并入 system，无法单列", width));
+  } else {
+    rows.push(
+      textRow(
+        contextTokens === undefined
+          ? "  最近一回合没有报告占用量"
+          : `  最近一回合 ${formatCompact(contextTokens)} tokens（本回合没有请求成分数据）`,
+        width,
+      ),
+    );
+  }
 
   rows.push(headerRow("按模型"));
   for (const [model, totals] of aggregateUsageByModel(records)) {
