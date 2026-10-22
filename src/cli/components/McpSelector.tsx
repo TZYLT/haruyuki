@@ -285,9 +285,6 @@ export const McpSelector = memo(function McpSelector({
           <ConfirmOptions
             options={MCP_DELETE_OPTIONS}
             selectedIndex={deleteConfirmIndex}
-            marker="> "
-            selectedColor={colors.selector.itemHighlighted}
-            boldSelected
           />
         </Box>
       </OverlayFrame>

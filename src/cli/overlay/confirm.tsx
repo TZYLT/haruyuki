@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { colors } from "@/cli/components/colors";
 import { Text } from "@/cli/components/Text";
+import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 
 /**
  * The confirmation controls: one row per option.
@@ -11,13 +12,16 @@ import { Text } from "@/cli/components/Text";
  * emphasised row. The question, the warning and the footer do not: those are the
  * words of one particular deletion and stay with the face doing the confirming.
  *
- * The emphasis is a **parameter**, because the two confirmations in this tree
- * disagree and both were already shipping. `/mcp` bolds and colours the whole
- * selected row behind a `> ` marker; `/hooks` colours a `❯ ` and its label and
- * leaves the row upright. M5 keeps both looking exactly as they looked — a shared
- * renderer that picked one of them would be a visible change wearing the costume
- * of a deduplication. The unselected rows are derived from the marker's width, so
- * `> ` and `❯ ` each keep their own alignment.
+ * **One shape, since P7.** Until then this component carried the tree's one
+ * *deliberate* inconsistency: `/mcp` drew `> ` and bolded the whole selected row,
+ * `/hooks` drew `❯ ` and bolded nothing, and the difference was an M4 ruling
+ * ("both were already shipping"). 《38》§11.8 ④ overrode it, for a reason that is
+ * not aesthetic: `❯` (U+276F) is missing from some fonts, and the one glyph a
+ * confirmation cannot lose is the one that says which row Enter fires on. So the
+ * shape is §11.4's: an ASCII `> ` marker, the accent foreground, bold — the same
+ * three things a list row already uses. The `marker` / `selectedColor` /
+ * `boldSelected` parameters went with the second variant: a face that needs a
+ * different emphasis needs a different component, not another flag here.
  *
  * The **type-to-confirm** prompt used to live here too (`TypedConfirmPrompt`: the
  * value, or the placeholder while it was empty). It is gone: the one caller was
@@ -40,16 +44,10 @@ export interface ConfirmOption {
 export interface ConfirmOptionsProps {
   options: readonly ConfirmOption[];
   selectedIndex: number;
-  /**
-   * Drawn in front of the selected option, separator space included; the others
-   * get blanks of that width. `❯ ` is the tree's common shape.
-   */
-  marker?: string;
-  /** Colour of the selected option — marker and label together. */
-  selectedColor?: string;
-  /** Bold the whole selected row rather than only its marker and label. */
-  boldSelected?: boolean;
 }
+
+/** The marker and the blank that stands in for it, so the labels line up. */
+const MARKER = `${CLI_GLYPHS.selection} `;
 
 /**
  * The option rows of a confirmation.
@@ -61,18 +59,15 @@ export interface ConfirmOptionsProps {
 export function ConfirmOptions({
   options,
   selectedIndex,
-  marker = "❯ ",
-  selectedColor = colors.input.prompt,
-  boldSelected = false,
 }: ConfirmOptionsProps): ReactElement {
   return (
     <>
       {options.map((option, index) => {
         const isSelected = index === selectedIndex;
         return (
-          <Text key={option.key} bold={boldSelected && isSelected}>
-            <Text color={isSelected ? selectedColor : undefined}>
-              {isSelected ? marker : " ".repeat(marker.length)}
+          <Text key={option.key} bold={isSelected}>
+            <Text color={isSelected ? colors.focus.selected : undefined}>
+              {isSelected ? MARKER : " ".repeat(MARKER.length)}
               {option.label}
             </Text>
           </Text>

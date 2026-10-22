@@ -3,6 +3,7 @@
 
 import { Box } from "ink";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { ConfirmOptions } from "@/cli/overlay/confirm";
@@ -499,8 +500,13 @@ export const HooksManager = memo(function HooksManager({
             if (index === 0) {
               return (
                 <Text>
-                  <Text color={isCursor ? colors.input.prompt : undefined}>
-                    {isCursor ? "❯" : " "} 1.
+                  <Text
+                    bold={isCursor}
+                    color={
+                      isCursor ? colors.selector.itemHighlighted : undefined
+                    }
+                  >
+                    {isCursor ? CLI_GLYPHS.selection : " "} 1.
                   </Text>
                   <Text dimColor> {item.label}</Text>
                 </Text>
@@ -517,8 +523,12 @@ export const HooksManager = memo(function HooksManager({
 
             return (
               <Text>
-                <Text color={isCursor ? colors.input.prompt : undefined}>
-                  {isCursor ? "❯" : " "} {index + 1}. {item.label}
+                <Text
+                  bold={isCursor}
+                  color={isCursor ? colors.selector.itemHighlighted : undefined}
+                >
+                  {isCursor ? CLI_GLYPHS.selection : " "} {index + 1}.{" "}
+                  {item.label}
                 </Text>
                 <Text dimColor> - {item.description}</Text>
                 <Text color="yellow">{countStr}</Text>
@@ -576,8 +586,13 @@ export const HooksManager = memo(function HooksManager({
                 : "+ Add new hook...";
               return (
                 <Text>
-                  <Text color={isCursor ? colors.input.prompt : undefined}>
-                    {isCursor ? "❯" : " "} 1.{" "}
+                  <Text
+                    bold={isCursor}
+                    color={
+                      isCursor ? colors.selector.itemHighlighted : undefined
+                    }
+                  >
+                    {isCursor ? CLI_GLYPHS.selection : " "} 1.{" "}
                   </Text>
                   <Text color="green">{addLabel}</Text>
                 </Text>
@@ -602,8 +617,11 @@ export const HooksManager = memo(function HooksManager({
 
             return (
               <Text>
-                <Text color={isCursor ? colors.input.prompt : undefined}>
-                  {isCursor ? "❯" : " "} {index + 1}.{" "}
+                <Text
+                  bold={isCursor}
+                  color={isCursor ? colors.selector.itemHighlighted : undefined}
+                >
+                  {isCursor ? CLI_GLYPHS.selection : " "} {index + 1}.{" "}
                 </Text>
                 <Text color="cyan">{sourceLabel}</Text>
                 {matcherPattern !== null ? (
@@ -729,11 +747,14 @@ export const HooksManager = memo(function HooksManager({
 
         {SAVE_LOCATIONS.map((loc, index) => {
           const isSelected = index === selectedLocation;
-          const prefix = isSelected ? "❯" : " ";
+          const prefix = isSelected ? CLI_GLYPHS.selection : " ";
 
           return (
             <Text key={loc.location}>
-              <Text color={isSelected ? colors.input.prompt : undefined}>
+              <Text
+                bold={isSelected}
+                color={isSelected ? colors.selector.itemHighlighted : undefined}
+              >
                 {prefix} {index + 1}. {loc.label}
               </Text>
               <Text dimColor> {loc.path}</Text>

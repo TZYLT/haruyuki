@@ -18,6 +18,16 @@ export const CLI_GLYPHS = {
   /** Close affordance on a tab of the shell's top bar */
   close: "×",
   /**
+   * The selected-row marker.
+   *
+   * A-level by 《38》§11.5: the one glyph that must survive a font that is missing
+   * everything else, because without it there is no "which row does Enter act on".
+   * P7 unified every selected row on it — list rows already used it, the two
+   * confirmation controls and the approval options did not (`❯`, U+276F, which
+   * several fonts draw as a box).
+   */
+  selection: ">",
+  /**
    * The toast band's marker.
    *
    * Drawn in the warning colour, so the glyph itself only has to say "this is a

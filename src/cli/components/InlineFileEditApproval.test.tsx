@@ -56,7 +56,7 @@ describe("InlineFileEditApproval", () => {
       "2 + two",
       DOTTED,
       "",
-      "❯ 1. Yes",
+      "> 1. Yes",
       "  2. Yes, and don't ask again for this project",
       "  3. No, and tell Haruyuki what to do differently",
       "",
@@ -66,7 +66,7 @@ describe("InlineFileEditApproval", () => {
 
   test("hides only the preview once it is committed elsewhere", async () => {
     expect(await frame(WRITE, { showPreview: false })).toEqual([
-      "❯ 1. Yes",
+      "> 1. Yes",
       "  2. Yes, and don't ask again for this project",
       "  3. No, and tell Haruyuki what to do differently",
       "",

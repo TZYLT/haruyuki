@@ -5,6 +5,7 @@ import {
   approvalHintText,
   CUSTOM_DENIAL_LABEL,
 } from "@/cli/helpers/approval-layout";
+import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { useTextInputCursor } from "@/cli/hooks/use-text-input-cursor";
 import { colors } from "./colors";
@@ -170,11 +171,12 @@ export const ApprovalOptions = memo(
           <Box flexDirection="row">
             <Box width={APPROVAL_OPTION_GUTTER_WIDTH} flexShrink={0}>
               <Text
+                bold={selectedOption === 0}
                 color={
                   selectedOption === 0 ? colors.approval.header : undefined
                 }
               >
-                {selectedOption === 0 ? "❯" : " "} 1.
+                {selectedOption === 0 ? CLI_GLYPHS.selection : " "} 1.
               </Text>
             </Box>
             <Box
@@ -183,6 +185,7 @@ export const ApprovalOptions = memo(
             >
               <Text
                 wrap="wrap"
+                bold={selectedOption === 0}
                 color={
                   selectedOption === 0 ? colors.approval.header : undefined
                 }
@@ -197,11 +200,12 @@ export const ApprovalOptions = memo(
             <Box flexDirection="row">
               <Box width={APPROVAL_OPTION_GUTTER_WIDTH} flexShrink={0}>
                 <Text
+                  bold={selectedOption === 1}
                   color={
                     selectedOption === 1 ? colors.approval.header : undefined
                   }
                 >
-                  {selectedOption === 1 ? "❯" : " "} 2.
+                  {selectedOption === 1 ? CLI_GLYPHS.selection : " "} 2.
                 </Text>
               </Box>
               <Box
@@ -210,6 +214,7 @@ export const ApprovalOptions = memo(
               >
                 <Text
                   wrap="wrap"
+                  bold={selectedOption === 1}
                   color={
                     selectedOption === 1 ? colors.approval.header : undefined
                   }
@@ -224,9 +229,11 @@ export const ApprovalOptions = memo(
           <Box flexDirection="row">
             <Box width={APPROVAL_OPTION_GUTTER_WIDTH} flexShrink={0}>
               <Text
+                bold={isOnCustomOption}
                 color={isOnCustomOption ? colors.approval.header : undefined}
               >
-                {isOnCustomOption ? "❯" : " "} {customOptionIndex + 1}.
+                {isOnCustomOption ? CLI_GLYPHS.selection : " "}{" "}
+                {customOptionIndex + 1}.
               </Text>
             </Box>
             <Box

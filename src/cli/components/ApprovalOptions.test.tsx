@@ -75,7 +75,7 @@ describe("ApprovalOptions frame", () => {
     try {
       expect(await shell.rows()).toEqual([
         "",
-        "❯ 1. Yes",
+        "> 1. Yes",
         "  2. Always allow",
         "  3. No, and tell Haruyuki what to do differently",
         "",
@@ -91,7 +91,7 @@ describe("ApprovalOptions frame", () => {
     try {
       expect(await shell.rows()).toEqual([
         "",
-        "❯ 1. Yes",
+        "> 1. Yes",
         "  2. No, and tell Haruyuki what to do differently",
         "",
         "Enter to select · Esc to cancel",
@@ -107,7 +107,7 @@ describe("ApprovalOptions frame", () => {
       await pressKeys(shell, [DOWN, DOWN]);
       const rows = await shell.rows();
       expect(rows).toContain(
-        "❯ 3. No, and tell Haruyuki what to do differently█",
+        "> 3. No, and tell Haruyuki what to do differently█",
       );
       expect(rows).toContain("Type reason · Esc to cancel");
     } finally {

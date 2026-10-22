@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Box } from "ink";
-import { colors } from "@/cli/components/colors";
 import { ConfirmOptions } from "@/cli/overlay/confirm";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
 
@@ -8,17 +7,15 @@ import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
  * The shared confirmation rows.
  *
  * Three delete confirmations in this tree each carried their own copy of this
- * markup, two of them styled differently. What is pinned here is that the shared
- * renderer reproduces **both** of them: the `/mcp` shape (`> ` marker, bold and
- * coloured whole row) and the `/hooks` shape (`❯ ` marker, coloured marker and
- * label, upright row). The rows were proven identical to the checked-out
- * pre-batch markup — including the full overlay for the typed confirmation, see
- * `AgentSelectorViews.test.tsx` — before the copies were deleted.
+ * markup, and two of them were styled differently on purpose (M4's ruling: both
+ * were already shipping). P7 unified them on the list row's shape — ASCII `> `,
+ * accent, bold — because `❯ ` is missing from some fonts and the marker is the
+ * only thing telling the user which row Enter fires on (《38》§11.8 ④).
  *
- * The colours are not asserted, and cannot be: this test process paints with
- * colour disabled, so a frame carries no SGR at all. What is asserted is the
- * marker, its width on the unselected rows (which is what keeps the two variants'
- * alignment) and the labels.
+ * What is pinned here is that shape and the alignment it produces: the unselected
+ * rows are blanked to the marker's width, so the labels stack. The colours are not
+ * asserted, and cannot be: this test process paints with colour disabled, so a
+ * frame carries no SGR at all.
  */
 
 afterEach(resetInkTtyState);
@@ -45,39 +42,36 @@ async function optionsFrame(
 }
 
 describe("ConfirmOptions", () => {
-  test("paints the /mcp variant: `> ` marker, bold and coloured row", async () => {
+  test("paints the one shape: `> ` marker and aligned labels", async () => {
     expect(
       await optionsFrame(
         <Box marginTop={1} flexDirection="column">
-          <ConfirmOptions
-            options={MCP_OPTIONS}
-            selectedIndex={0}
-            marker="> "
-            selectedColor={colors.selector.itemHighlighted}
-            boldSelected
-          />
+          <ConfirmOptions options={MCP_OPTIONS} selectedIndex={0} />
         </Box>,
       ),
     ).toEqual(["", "> Yes, remove", "  No, cancel"]);
   });
 
-  test("paints the /hooks variant: `❯ ` marker, coloured marker and label", async () => {
+  test("a face gets no second variant to pass", async () => {
+    // The old API took `marker` / `selectedColor` / `boldSelected`. The shape is
+    // the component's now, so the same props list renders the same rows for every
+    // caller — the /hooks confirmation and the /mcp one included.
     expect(
       await optionsFrame(
         <ConfirmOptions options={HOOK_OPTIONS} selectedIndex={0} />,
       ),
-    ).toEqual(["❯ Yes, delete", "  No, cancel"]);
+    ).toEqual(["> Yes, delete", "  No, cancel"]);
   });
 
-  test("the marker follows the selected option in both variants", async () => {
+  test("the marker follows the selected option", async () => {
     expect(
       await optionsFrame(
         <ConfirmOptions options={HOOK_OPTIONS} selectedIndex={1} />,
       ),
-    ).toEqual(["  Yes, delete", "❯ No, cancel"]);
+    ).toEqual(["  Yes, delete", "> No, cancel"]);
     expect(
       await optionsFrame(
-        <ConfirmOptions options={MCP_OPTIONS} selectedIndex={1} marker="> " />,
+        <ConfirmOptions options={MCP_OPTIONS} selectedIndex={1} />,
       ),
     ).toEqual(["  Yes, remove", "> No, cancel"]);
   });
