@@ -87,8 +87,8 @@ function getSnapshot(): number {
 
 function logoCellColor(token: string, faceColor: string): string | undefined {
   if (token === "F") return faceColor;
-  if (token === "D") return "#7272E5";
-  if (token === "S") return "#5454B8";
+  if (token === "D") return colors.logo.dot;
+  if (token === "S") return colors.logo.shadow;
   return undefined;
 }
 

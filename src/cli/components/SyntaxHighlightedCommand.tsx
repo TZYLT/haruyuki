@@ -246,10 +246,10 @@ export function highlightCode(
     if (!ensureLanguageLoaded(language)) return undefined;
     const result = highlighter.codeToTokens(code, {
       lang: language,
-      theme:
-        colors.shellSyntax === colors.shellSyntaxLight
-          ? "catppuccin-latte"
-          : "catppuccin-mocha",
+      // The theme, not an identity comparison between two palettes: that trick
+      // broke silently the moment `colors.shellSyntax` stopped being one of two
+      // frozen objects and started resolving per read (P7).
+      theme: colors.theme === "light" ? "catppuccin-latte" : "catppuccin-mocha",
     });
     return result.tokens.map((line) =>
       line.map((token) => ({

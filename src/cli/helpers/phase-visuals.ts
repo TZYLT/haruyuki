@@ -37,69 +37,89 @@ export type PhaseVisual = {
 const DEFAULT_SIN_PULSE_OVERLAY_PERIOD_MS = 2000;
 const DEFAULT_TWO_SIDED_OVERLAY_PERIOD_MS = 3000;
 
-const REQUESTING: PhaseVisual = {
-  tickMs: 50,
-  direction: "ltr",
-  baseColor: colors.status.processing,
-  shimmerColor: colors.status.processingShimmer,
-  overlay: null,
-};
+/**
+ * The phase table is built **per call, not at module load**.
+ *
+ * It was five module-level constants, which read `colors.*` once at import time —
+ * before the async theme probe lands. On a light terminal the thinking breath then
+ * kept blending toward the dark theme's near-white anchor, i.e. toward the colour
+ * of the background, and the row disappeared for half its cycle. Reading the
+ * tokens inside the function means the palette that answers is the one the
+ * terminal has now (P7, 《38》§11.11).
+ */
+function requestingVisual(): PhaseVisual {
+  return {
+    tickMs: 50,
+    direction: "ltr",
+    baseColor: colors.status.processing,
+    shimmerColor: colors.status.processingShimmer,
+    overlay: null,
+  };
+}
 
-const THINKING: PhaseVisual = {
-  tickMs: 200,
-  direction: "ltr",
-  // Shared base across all phases so phase entry doesn't cause a color jump.
-  // The thinking-specific "breath" comes from the two-sided overlay below,
-  // which oscillates symmetrically toward a near-white anchor on one lobe and
-  // a deep-saturated-purple anchor on the other. Anchors intentionally far
-  // from the base to give the row a visible "deep contemplation" sway.
-  baseColor: colors.status.processing,
-  shimmerColor: colors.status.processingShimmer,
-  overlay: "two-sided",
-  overlayPeriodMs: 6000,
-  hasSweep: false,
-  lighterColor: "#D8D8FF",
-  deeperColor: "#2828A0",
-};
+function thinkingVisual(): PhaseVisual {
+  return {
+    tickMs: 200,
+    direction: "ltr",
+    // Shared base across all phases so phase entry doesn't cause a color jump.
+    // The thinking-specific "breath" comes from the two-sided overlay below,
+    // which oscillates symmetrically toward a near-white anchor on one lobe and
+    // a deep-saturated-purple anchor on the other. Anchors intentionally far
+    // from the base to give the row a visible "deep contemplation" sway.
+    baseColor: colors.status.processing,
+    shimmerColor: colors.status.processingShimmer,
+    overlay: "two-sided",
+    overlayPeriodMs: 6000,
+    hasSweep: false,
+    lighterColor: colors.status.thinkingLighter,
+    deeperColor: colors.status.thinkingDeeper,
+  };
+}
 
-const TOOL_USE: PhaseVisual = {
-  tickMs: 200,
-  direction: "rtl",
-  baseColor: colors.status.processing,
-  shimmerColor: colors.status.processingShimmer,
-  overlay: "sin-pulse",
-};
+function toolUseVisual(): PhaseVisual {
+  return {
+    tickMs: 200,
+    direction: "rtl",
+    baseColor: colors.status.processing,
+    shimmerColor: colors.status.processingShimmer,
+    overlay: "sin-pulse",
+  };
+}
 
-const RESPONDING: PhaseVisual = {
-  // Between requesting (50ms) and thinking/toolUse (200ms) — the model is
-  // producing tokens, the row should feel responsive rather than contemplative.
-  tickMs: 100,
-  direction: "rtl",
-  baseColor: colors.status.processing,
-  shimmerColor: colors.status.processingShimmer,
-  overlay: null,
-};
+function respondingVisual(): PhaseVisual {
+  return {
+    // Between requesting (50ms) and thinking/toolUse (200ms) — the model is
+    // producing tokens, the row should feel responsive rather than contemplative.
+    tickMs: 100,
+    direction: "rtl",
+    baseColor: colors.status.processing,
+    shimmerColor: colors.status.processingShimmer,
+    overlay: null,
+  };
+}
 
-const DEFAULT_VISUAL: PhaseVisual = {
-  tickMs: 120,
-  direction: "ltr",
-  baseColor: colors.status.processing,
-  shimmerColor: colors.status.processingShimmer,
-  overlay: null,
-};
+function defaultVisual(): PhaseVisual {
+  return {
+    tickMs: 120,
+    direction: "ltr",
+    baseColor: colors.status.processing,
+    shimmerColor: colors.status.processingShimmer,
+    overlay: null,
+  };
+}
 
 export function getPhaseVisual(phase: ExecutionPhase): PhaseVisual {
   switch (phase) {
     case "requesting":
-      return REQUESTING;
+      return requestingVisual();
     case "thinking":
-      return THINKING;
+      return thinkingVisual();
     case "toolUse":
-      return TOOL_USE;
+      return toolUseVisual();
     case "responding":
-      return RESPONDING;
+      return respondingVisual();
     default:
-      return DEFAULT_VISUAL;
+      return defaultVisual();
   }
 }
 

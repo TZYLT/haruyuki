@@ -1,4 +1,4 @@
-import { brandColors, colors, hexToFgAnsi } from "@/cli/components/colors";
+import { colors, hexToFgAnsi } from "@/cli/components/colors";
 import { MAX_CONTEXT_HISTORY } from "./context-tracker";
 import { formatCompact } from "./format";
 
@@ -176,7 +176,7 @@ export function renderContextUsage(opts: ContextChartOptions): string {
     }
     legend = `\n${legendLines.join("\n")}`;
   } else {
-    const barColor = hexToFgAnsi(brandColors.primaryAccent);
+    const barColor = hexToFgAnsi(colors.focus.selected);
     bar = `${barColor}${"▰".repeat(filledFromUsage)}${reset}${"▱".repeat(totalSegments - filledFromUsage)}`;
     if (loading) {
       const placeholderLines = [
@@ -205,21 +205,16 @@ export function renderContextUsage(opts: ContextChartOptions): string {
   return output;
 }
 
-// White-to-purple spectrum with brand color (#8C8CF9) in the middle.
-// Ordered lightest → brand → darkest, then bounced for smooth cycling.
-const CHART_PALETTE = [
-  "#B0B0B0", // grey
-  "#BEBEEE", // light purple
-  "#8C8CF9", // brand purple
-  "#5B5BC8", // dark purple
-  "#3D3D8F", // indigo
-].map(hexToFgAnsi);
+// The chart's ramp: the token owns the values (the light theme darkens the pale
+// end, which used to vanish on a white background); the ANSI wrapping happens per
+// call so a theme resolved after this module loaded is still the one drawn.
+function chartRampAnsi(): string[] {
+  return colors.contextChart.ramp.map(hexToFgAnsi);
+}
 
 function bounceIndex(turnId: number): number {
-  return (
-    ((turnId % CHART_PALETTE.length) + CHART_PALETTE.length) %
-    CHART_PALETTE.length
-  );
+  const length = colors.contextChart.ramp.length;
+  return ((turnId % length) + length) % length;
 }
 
 function renderBrailleChart(
@@ -236,6 +231,7 @@ function renderBrailleChart(
   const chartHeight = 6; // rows of braille characters (4 dots each = 24 vertical resolution)
   const labelWidth = 5; // e.g. "100k "
   const steps = history.length;
+  const chartPalette = chartRampAnsi();
 
   // Chart starts at ~25% of terminal, grows 1 char column per step,
   // caps at ~80% of terminal — then interpolates to fit all steps.
@@ -340,7 +336,7 @@ function renderBrailleChart(
 
   // Default color when not alternating (brand color = middle of palette)
   const defaultColor: string =
-    CHART_PALETTE[Math.floor(CHART_PALETTE.length / 2)] ?? "\x1b[36m";
+    chartPalette[Math.floor(chartPalette.length / 2)] ?? "\x1b[36m";
   const white = "\x1b[97m";
 
   // Pre-compute braille codes per (charRow, charCol)
@@ -440,7 +436,7 @@ function renderBrailleChart(
       // Determine color for this column
       const targetColor =
         colColors && charCol < colColors.length
-          ? (CHART_PALETTE[colColors[charCol] ?? 0] ?? defaultColor)
+          ? (chartPalette[colColors[charCol] ?? 0] ?? defaultColor)
           : defaultColor;
 
       // Only emit escape code when color changes

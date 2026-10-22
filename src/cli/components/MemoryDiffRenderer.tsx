@@ -107,7 +107,7 @@ export function MemoryDiffRenderer({
                 <Box flexGrow={1} width={contentWidth}>
                   <Text
                     backgroundColor={colors.diff.addedLineBg}
-                    color={colors.diff.textOnDark}
+                    color={colors.diff.textOnTint}
                     wrap="wrap"
                   >
                     {`+ ${line}`}
@@ -159,7 +159,7 @@ export function MemoryDiffRenderer({
                   <Box flexGrow={1} width={contentWidth}>
                     <Text
                       backgroundColor={colors.diff.addedLineBg}
-                      color={colors.diff.textOnDark}
+                      color={colors.diff.textOnTint}
                       wrap="wrap"
                     >
                       {`+ ${truncate(line, 60)}`}
@@ -381,7 +381,7 @@ function DiffLine({
         </Box>
         <Box flexGrow={1} width={contentWidth}>
           <Text wrap="wrap">
-            <Text backgroundColor={lineBg} color={colors.diff.textOnDark}>
+            <Text backgroundColor={lineBg} color={colors.diff.textOnTint}>
               {`${prefix} `}
             </Text>
             {wordDiffs.map((part, i) => {
@@ -390,7 +390,7 @@ function DiffLine({
                   <Text
                     key={`w-${i}-${part.value.substring(0, 10)}`}
                     backgroundColor={wordBg}
-                    color={colors.diff.textOnHighlight}
+                    color={colors.diff.textOnTint}
                   >
                     {part.value}
                   </Text>
@@ -400,7 +400,7 @@ function DiffLine({
                   <Text
                     key={`w-${i}-${part.value.substring(0, 10)}`}
                     backgroundColor={wordBg}
-                    color={colors.diff.textOnHighlight}
+                    color={colors.diff.textOnTint}
                   >
                     {part.value}
                   </Text>
@@ -410,7 +410,7 @@ function DiffLine({
                   <Text
                     key={`w-${i}-${part.value.substring(0, 10)}`}
                     backgroundColor={lineBg}
-                    color={colors.diff.textOnDark}
+                    color={colors.diff.textOnTint}
                   >
                     {part.value}
                   </Text>
@@ -433,7 +433,7 @@ function DiffLine({
       <Box flexGrow={1} width={contentWidth}>
         <Text
           backgroundColor={lineBg}
-          color={colors.diff.textOnDark}
+          color={colors.diff.textOnTint}
           wrap="wrap"
         >
           {`${prefix} ${content}`}
@@ -507,7 +507,7 @@ function PatchDiffRenderer({
               <Box flexGrow={1} width={contentWidth}>
                 <Text
                   backgroundColor={colors.diff.addedLineBg}
-                  color={colors.diff.textOnDark}
+                  color={colors.diff.textOnTint}
                   wrap="wrap"
                 >
                   {`+ ${content}`}
@@ -527,7 +527,7 @@ function PatchDiffRenderer({
               <Box flexGrow={1} width={contentWidth}>
                 <Text
                   backgroundColor={colors.diff.removedLineBg}
-                  color={colors.diff.textOnDark}
+                  color={colors.diff.textOnTint}
                   wrap="wrap"
                 >
                   {`- ${content}`}

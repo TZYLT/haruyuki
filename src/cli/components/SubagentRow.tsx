@@ -113,7 +113,9 @@ export const SubagentRow = memo(
                 {modelDisplay.isByokProvider && (
                   <Text
                     color={
-                      modelDisplay.isOpenAICodexProvider ? "#74AA9C" : "yellow"
+                      modelDisplay.isOpenAICodexProvider
+                        ? colors.provider.openaiCodex
+                        : "yellow"
                     }
                   >
                     {" ▲"}

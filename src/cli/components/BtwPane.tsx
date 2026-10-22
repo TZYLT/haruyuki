@@ -4,7 +4,7 @@ import {
   useInputScopeClaim,
   useKeyBindings,
 } from "@/cli/hooks/use-input-router";
-import { brandColors } from "./colors.js";
+import { colors } from "./colors.js";
 
 export type BtwState = {
   status: "idle" | "forking" | "streaming" | "complete" | "error";
@@ -80,13 +80,13 @@ export const BtwPane = memo(
       <Box
         flexDirection="column"
         borderStyle="round"
-        borderColor={brandColors.primaryAccent}
+        borderColor={colors.welcome.border}
         paddingX={1}
         marginY={1}
       >
         {/* Header */}
         <Box>
-          <Text bold color={brandColors.primaryAccent}>
+          <Text bold color={colors.welcome.accent}>
             btw
           </Text>
           {state.question && (
