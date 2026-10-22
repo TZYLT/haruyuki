@@ -15,6 +15,7 @@ import { useSwitchPolicy } from "@/cli/app/shell/use-switch-policy";
 import { useTerminalSelection } from "@/cli/app/shell/use-terminal-selection";
 import { useActiveTabIsPage } from "@/cli/app/tabs";
 import { ViewportTranscript } from "@/cli/app/ViewportTranscript";
+import { Toasts } from "@/cli/components/Toasts";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
 
 /**
@@ -125,6 +126,10 @@ export function V2Shell(props: AppShellProps) {
         <ShellFrame
           {...props}
           transcript={pageIsActive ? PageHost : V2Transcript}
+          // The toast band lives in this shell's row budget (`docs/38` §2.1),
+          // between the transcript and the input — the append shell has neither
+          // the budget nor the band, and passes nothing.
+          aboveInput={Toasts}
         />
       </ContextSidebarScope.Provider>
     </FullScreenFrame>

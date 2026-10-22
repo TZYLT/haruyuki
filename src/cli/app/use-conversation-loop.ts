@@ -124,7 +124,7 @@ import {
   getErrorHintForStopReason,
   getPreferredAgentModelHandle,
 } from "./model-config";
-import { sendDesktopNotification } from "./notifications";
+import { notifyTurnComplete, sendDesktopNotification } from "./notifications";
 import { isRetriableError } from "./retry";
 import { stripSystemReminders } from "./system-reminders";
 import { appendTurnTranscriptDelta } from "./transcript-delta";
@@ -1622,11 +1622,8 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
               }
             }
 
-            // Send desktop notification when turn completes
-            // and we're not about to auto-send another queued message
-            if (!waitingForQueueCancelRef.current) {
-              sendDesktopNotification("Turn completed, awaiting your input");
-            }
+            // Notify — unless a queued message is about to be sent.
+            if (!waitingForQueueCancelRef.current) notifyTurnComplete();
 
             // Check if we were waiting for cancel but stream finished naturally
             if (waitingForQueueCancelRef.current) {

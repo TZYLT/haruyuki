@@ -69,7 +69,7 @@ import { settingsManager } from "@/settings-manager";
 import type { ToolsetName, ToolsetPreference } from "@/tools/toolset";
 import type { QueuedMessage } from "@/utils/message-queue-bridge";
 import { ChromeHeightContext, useMeasuredChromeHeight } from "./chrome-height";
-import { ExitStats } from "./ExitStats";
+import { LiveExitStats } from "./ExitStats";
 import { uid } from "./ids";
 import { SimpleOverlayRoutes } from "./simple-overlay-routes";
 import { queueOrRefuseSwitch } from "./switch-policy";
@@ -322,6 +322,8 @@ export type AppViewProps = PageRuntimeProps & {
 export type AppViewRenderProps = AppViewProps & {
   /** Transcript region supplied by the active shell. */
   transcript: ComponentType<AppViewProps>;
+  /** Rows the shell paints between the transcript and the input (its toast band). */
+  aboveInput?: ComponentType;
 };
 
 export function AppView(props: AppViewRenderProps) {
@@ -456,18 +458,14 @@ export function AppView(props: AppViewRenderProps) {
         {loadingState === "ready" && (
           <>
             {/* Exit stats - shown when exiting via double Ctrl+C */}
-            {showExitStats &&
-              (() => {
-                const stats = sessionStatsRef.current.getSnapshot();
-                return (
-                  <ExitStats
-                    stats={stats}
-                    agentName={agentName}
-                    agentId={agentId}
-                    conversationId={conversationId}
-                  />
-                );
-              })()}
+            {showExitStats && (
+              <LiveExitStats
+                sessionStatsRef={sessionStatsRef}
+                agentName={agentName}
+                agentId={agentId}
+                conversationId={conversationId}
+              />
+            )}
 
             {/* /btw ephemeral pane - shows forked conversation response */}
             {btwState.status !== "idle" && (
@@ -478,6 +476,8 @@ export function AppView(props: AppViewRenderProps) {
               />
             )}
 
+            {/* The shell's toast band; the append shell reserves no rows for one. */}
+            {props.aboveInput && <props.aboveInput />}
             {/* Input row - always mounted to preserve state */}
             <Box marginTop={1}>
               <Input

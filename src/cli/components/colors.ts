@@ -298,6 +298,16 @@ const _colors = {
     bold: "white",
   },
 
+  // The toast band above the input (M6-P6).
+  //
+  // A marker that is asking for attention without claiming a failure — a turn
+  // finished, a connection came back — and text one step quieter than the body, so
+  // a one-line report does not outrank the conversation it is reporting on.
+  toast: {
+    marker: brandColors.statusWarning,
+    text: brandColors.textSecondary,
+  },
+
   // Footer bar
   footer: {
     agentName: brandColors.primaryAccent,

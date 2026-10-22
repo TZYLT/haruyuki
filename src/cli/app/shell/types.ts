@@ -1,3 +1,4 @@
+import type { ComponentType } from "react";
 import type { AppViewProps } from "@/cli/app/AppView";
 
 /**
@@ -16,4 +17,10 @@ export type AppShellProps = AppViewProps & {
   terminalTitleTaskRunning: boolean;
   /** Transient `/title` preview override; `undefined` means "no preview". */
   terminalTitlePreviewOverride: string | null | undefined;
+  /**
+   * The rows this shell paints between the transcript and the input (its toast
+   * band). A shell that does not reserve those rows passes nothing, which is how
+   * the compatibility mode stays frozen without a mode branch in `AppView`.
+   */
+  aboveInput?: ComponentType;
 };

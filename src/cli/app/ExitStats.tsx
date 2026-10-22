@@ -1,8 +1,40 @@
 import { Box } from "ink";
-import type { SessionStatsSnapshot } from "@/agent/stats";
+import type { RefObject } from "react";
+import type { SessionStats, SessionStatsSnapshot } from "@/agent/stats";
 import { colors } from "@/cli/components/colors";
 import { Text } from "@/cli/components/Text";
 import { exitSummaryLines } from "./exit-summary";
+
+/**
+ * The same summary, drawn from a live session's stats at paint time.
+ *
+ * `AppView` needs the snapshot taken during the render that shows it — the summary
+ * must describe the session as it was when the frame was committed, not as it was
+ * when some hook last ran — and that read is one line of pure glue. It lives here
+ * rather than in the view for the reason `scripts/source-file-size-baseline.json`
+ * exists: `AppView` is over the limit and may not grow, and "read the stats and
+ * draw them" belongs with the thing that draws them.
+ */
+export function LiveExitStats({
+  sessionStatsRef,
+  agentName,
+  agentId,
+  conversationId,
+}: {
+  sessionStatsRef: RefObject<SessionStats>;
+  agentName: string | null;
+  agentId: string;
+  conversationId: string;
+}) {
+  return (
+    <ExitStats
+      stats={sessionStatsRef.current.getSnapshot()}
+      agentName={agentName}
+      agentId={agentId}
+      conversationId={conversationId}
+    />
+  );
+}
 
 /**
  * The exit summary in the Ink frame (the append shell's form). The text itself
