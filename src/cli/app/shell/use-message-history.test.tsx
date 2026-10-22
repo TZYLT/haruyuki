@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Readable, Writable } from "node:stream";
 import { render } from "ink";
 import { LeaderHint } from "@/cli/components/LeaderHint";
@@ -101,6 +101,11 @@ function mountHistory() {
     },
   };
 }
+
+// The prefix is module state: another file in the same process can leave it armed,
+// and then this file's `Ctrl+X` would change nothing on screen (arming an already
+// armed prefix notifies nobody) and its frame delta would be empty.
+beforeEach(resetLeader);
 
 afterEach(() => {
   resetLeader();

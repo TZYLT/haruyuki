@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { AppViewProps } from "@/cli/app/AppView";
 import { parseUnifiedDiff } from "@/cli/helpers/diff-patch";
+import { resetLeader } from "@/cli/helpers/leader";
 import { resetMouseHandlers } from "@/cli/helpers/mouse-router";
 import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
@@ -105,6 +106,9 @@ function mount(columns: number) {
 }
 
 beforeEach(() => {
+  // The prefix is module state: with a leaked armed prefix the face's `Space` and
+  // `{` / `}` would be offered to the leader table instead of the face.
+  resetLeader();
   setDiffFaceSource({
     label: "feat/tui-v2",
     files: parseUnifiedDiff(PATCH),

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Readable, Writable } from "node:stream";
 import { render } from "ink";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
@@ -112,6 +112,12 @@ function mountDiffChord(diffs: Map<string, AdvancedDiffSuccess>) {
     },
   };
 }
+
+// The prefix is module state: another file in the same process can leave it armed,
+// and then `Ctrl+X` here would arm an already-armed prefix and `d` would still be
+// matched as a leader key — but the test would be proving nothing about the
+// transition. Start from disarmed.
+beforeEach(resetLeader);
 
 afterEach(() => {
   resetLeader();
