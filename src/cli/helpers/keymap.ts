@@ -181,6 +181,14 @@ export const LEADER_KEY_CHORDS = {
    * `Ctrl+C` is already the draft clear / exit guard.
    */
   copySelection: [{ key: "y" }],
+  /**
+   * The message history face (`docs/38` §15.2).
+   *
+   * `h` for history; `n` was the alternative and it reads as `/new`. The face is
+   * named "message history" rather than "history" for the same reason the key
+   * needs explaining: shell history is a different thing with its own keys.
+   */
+  messageHistory: [{ key: "h" }],
 } as const satisfies Record<string, KeyChordList>;
 
 /** Reserved by later milestones so no M3 binding can claim them by accident. */

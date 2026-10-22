@@ -413,6 +413,12 @@ export const commands: Record<string, Command> = {
     noArgs: true,
     handler: () => pageCommandAnswer("Opening tabs..."),
   },
+  "/message-history": {
+    desc: "Open the message history (also Ctrl+X h)",
+    order: 32.85,
+    noArgs: true,
+    handler: () => pageCommandAnswer("Opening message history..."),
+  },
   "/close": {
     desc: "Close the current tab",
     order: 32.8,

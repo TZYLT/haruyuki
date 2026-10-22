@@ -124,7 +124,7 @@ import {
   getErrorHintForStopReason,
   getPreferredAgentModelHandle,
 } from "./model-config";
-import { notifyTurnComplete, sendDesktopNotification } from "./notifications";
+import { notify, sendDesktopNotification } from "./notifications";
 import { isRetriableError } from "./retry";
 import { stripSystemReminders } from "./system-reminders";
 import { appendTurnTranscriptDelta } from "./transcript-delta";
@@ -1623,7 +1623,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
             }
 
             // Notify — unless a queued message is about to be sent.
-            if (!waitingForQueueCancelRef.current) notifyTurnComplete();
+            if (!waitingForQueueCancelRef.current) notify("turn");
 
             // Check if we were waiting for cancel but stream finished naturally
             if (waitingForQueueCancelRef.current) {
@@ -2517,7 +2517,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
             tuiQueueRef.current?.clear("error");
 
             setStreaming(false);
-            sendDesktopNotification("Stream error", "error"); // Notify user of error
+            notify("error", "Stream error"); // Notify user of error
             refreshDerived();
             resetTrajectoryBases();
             return;
@@ -2671,7 +2671,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
           tuiQueueRef.current?.clear("error");
 
           setStreaming(false);
-          sendDesktopNotification("Execution error", "error"); // Notify user of error
+          notify("error", "Execution error"); // Notify user of error
           refreshDerived();
           resetTrajectoryBases();
           return;
@@ -2717,7 +2717,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
         tuiQueueRef.current?.clear("error");
 
         setStreaming(false);
-        sendDesktopNotification("Processing error", "error"); // Notify user of error
+        notify("error", "Processing error"); // Notify user of error
         refreshDerived();
         resetTrajectoryBases();
       } finally {

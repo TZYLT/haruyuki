@@ -19,6 +19,10 @@ import {
   useTerminalRows,
   useTerminalWidth,
 } from "@/cli/hooks/use-terminal-width";
+import {
+  getMessageHistorySnapshot,
+  subscribeToMessageHistory,
+} from "@/cli/notifications/history-store";
 
 /**
  * The frame's bottom row: the leader's visible half, the composer's transient
@@ -62,9 +66,20 @@ import {
 export function contextHint(input: {
   pageActive: boolean;
   mouseEnabled: boolean;
+  /**
+   * Notifications the message history has not shown yet (`docs/38` §15.2: "在底栏
+   * 提示行末尾显示 `未读 N`"). Zero says nothing at all — the row is one line at
+   * every width, and a `未读 0` would spend columns on the word "nothing".
+   */
+  unread?: number;
 }): string {
   const prefix = LEADER_KEY_CHORDS.activate.map(describeChord).join("/");
   const leader = `${prefix} ? 键位`;
+  // The count sits at the very end, after the leader hint, so that a row that has
+  // to truncate loses it last: "there is something to read" is the one fact the
+  // user cannot discover by pressing anything.
+  const unread =
+    input.unread && input.unread > 0 ? ` · 未读 ${input.unread}` : "";
   // Short on purpose: the row is one line at every width, and it is truncated
   // rather than wrapped — so a label that grows past ~60 columns eats the leader
   // hint itself, which is the only way to discover the other keys. `开鼠标` is the
@@ -72,12 +87,12 @@ export function contextHint(input: {
   const enableMouse = `${prefix} ${LEADER_KEY_CHORDS.toggleMouse[0].key} 开鼠标`;
   if (input.pageActive) {
     return input.mouseEnabled
-      ? `点标签切换 · /tabs 标签 · Esc 回会话 · ${leader}`
-      : `${enableMouse} · /tabs 标签 · Esc 回会话 · ${leader}`;
+      ? `点标签切换 · /tabs 标签 · Esc 回会话 · ${leader}${unread}`
+      : `${enableMouse} · /tabs 标签 · Esc 回会话 · ${leader}${unread}`;
   }
   return input.mouseEnabled
-    ? `Enter 发送 · Shift+Enter 换行 · /tabs 标签 · ${leader}`
-    : `${enableMouse} · Enter 发送 · /tabs 标签 · /close 关 · ${leader}`;
+    ? `Enter 发送 · Shift+Enter 换行 · /tabs 标签 · ${leader}${unread}`
+    : `${enableMouse} · Enter 发送 · /tabs 标签 · /close 关 · ${leader}${unread}`;
 }
 
 /**
@@ -89,6 +104,11 @@ export function contextHint(input: {
  */
 function printKeys(keys: readonly string[]): string {
   return keys[0] ?? "?";
+}
+
+/** The count the hint appends, as a scalar so the row does not re-render on rows. */
+function unreadCount(): number {
+  return getMessageHistorySnapshot().unread;
 }
 
 function summarise(entries: ReturnType<typeof leaderEntries>): string {
@@ -124,6 +144,7 @@ export function LeaderHint() {
   const [armed, setArmed] = useState(isLeaderArmed);
   const [helpOpen, setHelpOpen] = useState(isLeaderHelpOpen);
   const notice = useSyncExternalStore(subscribeToNotice, getNotice);
+  const unread = useSyncExternalStore(subscribeToMessageHistory, unreadCount);
   const mouseEnabled = useSyncExternalStore(
     subscribeToMouseTracking,
     isMouseTrackingEnabled,
@@ -151,7 +172,11 @@ export function LeaderHint() {
   }
 
   if (!armed) {
-    const hint = contextHint({ pageActive, mouseEnabled });
+    const hint = contextHint({
+      pageActive,
+      mouseEnabled,
+      unread,
+    });
     return (
       <Box>
         <Text dimColor wrap="truncate">

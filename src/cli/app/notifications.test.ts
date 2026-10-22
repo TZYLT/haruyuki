@@ -1,10 +1,17 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { notifyTurnComplete } from "@/cli/app/notifications";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { notify } from "@/cli/app/notifications";
 import {
   focusTab,
   openConversationTab,
   resetTabsForTests,
 } from "@/cli/app/tabs";
+import {
+  getMessageHistorySnapshot,
+  resetMessageHistoryForTests,
+} from "@/cli/notifications/history-store";
 import {
   getToastSnapshot,
   resetToastsForTests,
@@ -15,33 +22,65 @@ import {
  *
  * A finished turn writes its own summary row into the transcript, so the toast is
  * only for the case the row cannot cover: the turn finished while a page held the
- * band. Both halves are asserted here because the second one is a one-line change
- * away from being the bug — a toast over a conversation that already shows the
- * same numbers says the same thing twice.
+ * band. Errors are the mirror image — the transcript is where they must stay, so
+ * they are history and nothing else. Both halves are asserted here because the
+ * second one is a one-line change away from being the bug: a toast over a
+ * conversation that already shows the same numbers says the same thing twice.
  */
 
-afterEach(() => {
+let tempRoot: string | null = null;
+const originalHome = process.env.HARUYUKI_HOME;
+
+beforeEach(async () => {
+  tempRoot = await mkdtemp(join(tmpdir(), "haruyuki-notify-"));
+  process.env.HARUYUKI_HOME = tempRoot;
+});
+
+afterEach(async () => {
+  if (originalHome === undefined) delete process.env.HARUYUKI_HOME;
+  else process.env.HARUYUKI_HOME = originalHome;
+  if (tempRoot) await rm(tempRoot, { recursive: true, force: true });
+  tempRoot = null;
   resetTabsForTests();
   resetToastsForTests();
+  resetMessageHistoryForTests();
 });
 
 describe("a finished turn", () => {
   test("says nothing on the frame while its own row is on screen", () => {
     openConversationTab("conversation-a", "Conversation A");
 
-    notifyTurnComplete();
+    notify("turn", "Turn finished");
 
     expect(getToastSnapshot().toasts).toEqual([]);
+    expect(getMessageHistorySnapshot().entries).toEqual([]);
   });
 
-  test("toasts when a page holds the band", () => {
+  test("toasts and is remembered when a page holds the band", () => {
     openConversationTab("conversation-a", "Conversation A");
     focusTab("settings");
 
-    notifyTurnComplete();
+    notify("turn", "Turn finished");
 
     expect(getToastSnapshot().toasts.map((toast) => toast.text)).toEqual([
       "Turn finished",
+    ]);
+    expect(getMessageHistorySnapshot().entries).toEqual([
+      expect.objectContaining({ kind: "turn", text: "Turn finished" }),
+    ]);
+  });
+});
+
+describe("an error", () => {
+  test("is remembered and never toasted, even while a page holds the band", () => {
+    openConversationTab("conversation-a", "Conversation A");
+    focusTab("usage");
+
+    notify("error", "Stream error");
+
+    expect(getToastSnapshot().toasts).toEqual([]);
+    expect(getMessageHistorySnapshot().entries).toEqual([
+      expect.objectContaining({ kind: "error", text: "Stream error" }),
     ]);
   });
 });

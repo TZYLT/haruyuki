@@ -76,6 +76,7 @@ export type ActiveOverlay =
   | "skills"
   | "window-title"
   | "tabs"
+  | "message-history"
   | null;
 
 export type QueuedOverlayAction =

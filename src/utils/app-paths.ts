@@ -62,6 +62,17 @@ export const APP_SUBDIRS = {
   transcripts: "transcripts",
   /** Per-turn usage ledger (`usage/ledger.jsonl`). Numbers only, no content. */
   usage: "usage",
+  /**
+   * The message history the toast band writes (`notifications/message-history.jsonl`).
+   *
+   * Its own directory rather than the usage ledger's, which `docs/38` §15.2 asks
+   * for by saying "与用量台账同目录": what that ruling is about is the *mechanism*
+   * (one JSONL file under the harness root, pruned lazily on read), and the two
+   * files answer different questions — numbers about model usage, and a short
+   * record of what the shell told the user. A reader of either should not have to
+   * filter the other's lines out.
+   */
+  notifications: "notifications",
   viewers: "viewers",
   workflows: "workflows",
   worktrees: "worktrees",

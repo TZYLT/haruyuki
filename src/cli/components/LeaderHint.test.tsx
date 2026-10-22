@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Writable } from "node:stream";
 import { render } from "ink";
 import { resetTabsForTests } from "@/cli/app/tabs";
@@ -12,6 +15,10 @@ import {
 import { LEADER_KEY_CHORDS } from "@/cli/helpers/keymap";
 import { armLeader, disarmLeader, resetLeader } from "@/cli/helpers/leader";
 import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
+import {
+  recordMessageHistory,
+  resetMessageHistoryForTests,
+} from "@/cli/notifications/history-store";
 import { contextHint, LeaderHint } from "./LeaderHint";
 
 /**
@@ -124,6 +131,7 @@ afterEach(() => {
   resetBindingOwners();
   resetMouseTrackingForTests();
   resetTabsForTests();
+  resetMessageHistoryForTests();
 });
 
 describe("LeaderHint", () => {
@@ -233,5 +241,42 @@ describe("the idle hint line", () => {
     expect([...named].filter((name) => commands[name] === undefined)).toEqual(
       [],
     );
+  });
+
+  /**
+   * `docs/38` §15.2 puts the count at the end of this row, and only when there is
+   * something to read: `未读 0` would spend columns saying "nothing happened".
+   */
+  test("the unread count rides at the end, and only when it is not zero", () => {
+    const idle = contextHint({ pageActive: false, mouseEnabled: true });
+    const unread = contextHint({
+      pageActive: false,
+      mouseEnabled: true,
+      unread: 3,
+    });
+
+    expect(idle).not.toContain("未读");
+    expect(unread).toBe(`${idle} · 未读 3`);
+    expect(
+      contextHint({ pageActive: true, mouseEnabled: true, unread: 0 }),
+    ).not.toContain("未读");
+  });
+
+  /**
+   * The subscription is what makes it appear at all: the row is a leaf, and the
+   * store changes while it is mounted (a turn finishing is not a keystroke).
+   */
+  test("the frame picks the count up from the history store", async () => {
+    const root = await mkdtemp(join(tmpdir(), "haruyuki-hint-"));
+    const original = process.env.HARUYUKI_HOME;
+    process.env.HARUYUKI_HOME = root;
+    try {
+      recordMessageHistory("turn", "Turn finished");
+      expect(await frame()).toContain("未读 1");
+    } finally {
+      if (original === undefined) delete process.env.HARUYUKI_HOME;
+      else process.env.HARUYUKI_HOME = original;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

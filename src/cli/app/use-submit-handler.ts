@@ -1137,12 +1137,12 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           return { submitted: true };
         }
 
-        // The top bar's own commands (M6-P2), which exist only in the full-screen
-        // shell — see `shell-commands.ts` for why `/close` must not act in legacy.
+        // The shell's own commands (M6-P2); see `shell-commands.ts` for `/close`.
         if (
           runShellCommand(trimmed, {
             openTabs: () =>
               openOverlay("tabs", "/tabs", "标签列表", "标签列表已关闭"),
+            openOverlay,
             tabStrip,
           })
         ) {

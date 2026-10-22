@@ -1,5 +1,5 @@
 import { Box, useStdout } from "ink";
-import type { ReactNode } from "react";
+import { type ReactNode, useCallback } from "react";
 import type { AppViewProps } from "@/cli/app/AppView";
 import { PageHost } from "@/cli/app/pages/page-host";
 import { ShellFrame } from "@/cli/app/shell/ShellFrame";
@@ -10,6 +10,7 @@ import { TAB_STRIP_ROWS } from "@/cli/app/shell/tab-strip-layout";
 import type { AppShellProps } from "@/cli/app/shell/types";
 import { useAmbiguousWidthProbe } from "@/cli/app/shell/use-ambiguous-width";
 import { useExitSummaryAfterTeardown } from "@/cli/app/shell/use-exit-summary";
+import { useMessageHistory } from "@/cli/app/shell/use-message-history";
 import { useMouseInput } from "@/cli/app/shell/use-mouse-input";
 import { useSwitchPolicy } from "@/cli/app/shell/use-switch-policy";
 import { useTerminalSelection } from "@/cli/app/shell/use-terminal-selection";
@@ -107,6 +108,13 @@ export function V2Shell(props: AppShellProps) {
   const geometry = sidebarGeometry(frameColumns, terminalRows);
   // The tab row replaces the main area with a page when one is focused.
   const pageIsActive = useActiveTabIsPage();
+  // The message history face's chord. Registered here, in the shell that has the
+  // band reporting into it — the append shell registers nothing and stays frozen.
+  const { setActiveOverlay } = props;
+  const openMessageHistory = useCallback(() => {
+    setActiveOverlay("message-history");
+  }, [setActiveOverlay]);
+  useMessageHistory(openMessageHistory);
   // The selection stands down while a page holds the band: there is no transcript
   // text under the pointer, and it is the page's rows that answer a press now.
   useTerminalSelection({
