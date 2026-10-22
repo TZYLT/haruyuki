@@ -73,7 +73,11 @@ export function exceedsAdvancedDiffHighlightLimits(
 // Render a single diff line split into full-width rows.
 // Each visual row gets its own <Text> with backgroundColor so there are no gaps.
 // See ~/dev/codex/codex-rs/tui/src/diff_render.rs lines 836-936.
-function Line({
+//
+// Exported because the full-screen diff face (M6-P8) paints the same lines at a
+// pane width: one line painter, so the face and the inline preview cannot drift
+// apart in colour, gutter width or continuation indent.
+export function AdvancedDiffLine({
   kind,
   displayNo,
   text,
@@ -308,7 +312,7 @@ export function AdvancedDiffRenderer(
         </>
       ) : null}
       {rows.map((r, idx) => (
-        <Line
+        <AdvancedDiffLine
           key={`row-${idx}-${r.kind}-${r.displayNo || idx}`}
           kind={r.kind}
           displayNo={r.displayNo}

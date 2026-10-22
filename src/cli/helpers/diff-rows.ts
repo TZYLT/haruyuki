@@ -175,8 +175,92 @@ export interface AdvancedDiffRenderRow {
 }
 
 /**
- * Walk diff hunks into render rows: skips `\ No newline` meta lines, numbers old
- * and new lines separately, and marks each row's kind.
+ * One displayable line of a hunk, with both sides' numbers resolved.
+ *
+ * The walk is the one place line numbering happens: the render rows and the
+ * full-screen face's fold model both read it, so a context run the face hides and
+ * re-shows cannot renumber the lines around it.
+ */
+export interface AdvancedDiffWalkLine {
+  kind: DiffRowKind;
+  /** The row's own side's number (old for a removal, new otherwise). */
+  displayNo: number;
+  oldNo: number;
+  newNo: number;
+  /** Index among the hunk's displayable lines (meta lines are not counted). */
+  displayIndex: number;
+  /** The body without its leading marker; the raw line when it has none. */
+  text: string;
+}
+
+/**
+ * Walk one hunk's lines in order: skips `\ No newline` meta lines, numbers old and
+ * new lines separately, and marks each line's kind.
+ */
+export function* walkAdvancedDiffHunk(
+  hunk: AdvancedDiffSuccess["hunks"][number],
+): Generator<AdvancedDiffWalkLine> {
+  let oldNo = hunk.oldStart;
+  let newNo = hunk.newStart;
+  let displayIndex = 0;
+  for (const line of hunk.lines) {
+    if (!line) continue;
+    const raw = line.raw || "";
+    const ch = raw.charAt(0);
+    const body = raw.slice(1);
+    // Skip meta lines (e.g., "\ No newline at end of file")
+    if (ch === "\\") continue;
+
+    if (ch === " ") {
+      yield {
+        kind: "context",
+        displayNo: newNo,
+        oldNo,
+        newNo,
+        displayIndex,
+        text: body,
+      };
+      oldNo++;
+      newNo++;
+    } else if (ch === "-") {
+      yield {
+        kind: "remove",
+        displayNo: oldNo,
+        oldNo,
+        newNo,
+        displayIndex,
+        text: body,
+      };
+      oldNo++;
+    } else if (ch === "+") {
+      yield {
+        kind: "add",
+        displayNo: newNo,
+        oldNo,
+        newNo,
+        displayIndex,
+        text: body,
+      };
+      newNo++;
+    } else {
+      yield {
+        kind: "context",
+        displayNo: newNo,
+        oldNo,
+        newNo,
+        displayIndex,
+        text: raw,
+      };
+      oldNo++;
+      newNo++;
+    }
+    displayIndex++;
+  }
+}
+
+/**
+ * Walk diff hunks into render rows, attaching the caller's syntax spans by
+ * display index.
  */
 export function buildAdvancedDiffRows(
   hunks: AdvancedDiffSuccess["hunks"],
@@ -191,55 +275,13 @@ export function buildAdvancedDiffRows(
     }
 
     const syntaxForHunk = hunkSyntaxLines[hunkIndex] ?? [];
-    let oldNo = hunk.oldStart;
-    let newNo = hunk.newStart;
-    let displayLineIdx = 0; // index into syntaxForHunk
-    for (const line of hunk.lines) {
-      if (!line) continue;
-      const raw = line.raw || "";
-      const ch = raw.charAt(0);
-      const body = raw.slice(1);
-      // Skip meta lines (e.g., "\ No newline at end of file")
-      if (ch === "\\") continue;
-
-      const spans = syntaxForHunk[displayLineIdx];
-      displayLineIdx++;
-
-      if (ch === " ") {
-        rows.push({
-          kind: "context",
-          displayNo: newNo,
-          text: body,
-          syntaxSpans: spans,
-        });
-        oldNo++;
-        newNo++;
-      } else if (ch === "-") {
-        rows.push({
-          kind: "remove",
-          displayNo: oldNo,
-          text: body,
-          syntaxSpans: spans,
-        });
-        oldNo++;
-      } else if (ch === "+") {
-        rows.push({
-          kind: "add",
-          displayNo: newNo,
-          text: body,
-          syntaxSpans: spans,
-        });
-        newNo++;
-      } else {
-        rows.push({
-          kind: "context",
-          displayNo: newNo,
-          text: raw,
-          syntaxSpans: spans,
-        });
-        oldNo++;
-        newNo++;
-      }
+    for (const walked of walkAdvancedDiffHunk(hunk)) {
+      rows.push({
+        kind: walked.kind,
+        displayNo: walked.displayNo,
+        text: walked.text,
+        syntaxSpans: syntaxForHunk[walked.displayIndex],
+      });
     }
   }
 
