@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { runShellCommand } from "@/cli/app/shell-commands";
 import {
   focusTab,
@@ -7,6 +9,7 @@ import {
   resetTabsForTests,
 } from "@/cli/app/tabs";
 import type { TabStripProjection } from "@/cli/app/types";
+import { FULL_SCREEN_ONLY_COMMANDS } from "@/cli/components/SlashCommandAutocomplete";
 import { resetUiV2Resolution } from "@/experiments/ui-v2";
 
 /**
@@ -133,5 +136,23 @@ describe("chrome commands in the full-screen shell", () => {
     expect(seen.overlays).toEqual(["message-history"]);
     // A command, not a page: the tab strip does not move.
     expect(getTabsState().activeId).toBe("conv-1");
+  });
+
+  test("the autocomplete's full-screen-only list is exactly these commands", () => {
+    // Two lists say the same thing in different places — this switch decides
+    // *which shell owns* a command, and `SlashCommandAutocomplete`'s set decides
+    // *whether legacy is offered it*. They drifted once already: `/message-history`
+    // moved into this switch and the set kept advertising it in the append shell,
+    // where it does nothing but print a receipt. Read the switch's own source
+    // (the `switch-policy` precedent) so the comparison cannot be stale.
+    const source = readFileSync(
+      join(import.meta.dir, "shell-commands.ts"),
+      "utf8",
+    );
+    const owned = [...source.matchAll(/case "(\/[^"]+)":/g)].map(
+      (match) => match[1] ?? "",
+    );
+    expect(owned.length).toBe(5);
+    expect([...FULL_SCREEN_ONLY_COMMANDS].sort()).toEqual([...owned].sort());
   });
 });

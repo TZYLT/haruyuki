@@ -33,20 +33,26 @@ const BUILTIN_SKILL_ALIASES = new Set([
 /**
  * The commands that only mean something in the full-screen shell.
  *
- * `/tabs`, `/close`, `/settings` and `/usage` name the tab strip and the two fixed
- * pages. The append shell draws neither, so in legacy they are not offered at all —
- * typing one still works (the registry answers with one honest line), but a list
- * that offers a command the shell cannot perform is a list that lies.
+ * `/tabs`, `/close`, `/settings`, `/usage` and `/message-history` name the tab
+ * strip, the two fixed pages and the notification faces. The append shell draws
+ * none of them, so in legacy they are not offered at all — typing one still works
+ * (the registry answers with one honest line), but a list that offers a command
+ * the shell cannot perform is a list that lies.
  *
  * Read at render time, never at module load: `resolveUiV2Once` resolves the
  * experiment through the settings cache, and at import time that cache may not be
  * populated yet — a wrong answer there is cached for the whole process.
  */
-const FULL_SCREEN_ONLY_COMMANDS = new Set([
+export const FULL_SCREEN_ONLY_COMMANDS = new Set([
   "/tabs",
   "/close",
   "/settings",
   "/usage",
+  // It was missing: `/message-history` has been a shell command since it landed
+  // (`shell-commands.ts` answers `false` for it in legacy, so the registry prints
+  // its one-line receipt) but the list kept offering it there — a suggestion for a
+  // command the shell cannot perform, which is exactly what this set is for.
+  "/message-history",
 ]);
 
 // Compute filtered command list (excluding hidden commands), sorted by order
