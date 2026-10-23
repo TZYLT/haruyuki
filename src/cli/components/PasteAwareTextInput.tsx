@@ -60,6 +60,15 @@ interface PasteAwareTextInputProps {
   onCursorMove?: (position: number) => void;
 
   /**
+   * Columns this field may occupy, when the parent knows them.
+   *
+   * Forwarded to the leaf editor, which lays the draft out at exactly this width
+   * and places the terminal cursor on the caret's cell (IME support). Omitted by
+   * surfaces that measure themselves; they keep Ink's own wrapping and no cursor.
+   */
+  wrapWidth?: number;
+
+  /**
    * Called when the user presses `!` while the input is empty.
    * Return true to consume the keystroke (it will NOT appear in the input).
    */
@@ -139,6 +148,7 @@ export function PasteAwareTextInput({
   mask,
   cursorPosition,
   onCursorMove,
+  wrapWidth,
   onBangAtEmpty,
   onBackspaceAtEmpty,
   onPasteError,
@@ -698,6 +708,7 @@ export function PasteAwareTextInput({
       placeholder={placeholder}
       mask={mask}
       focus={focus}
+      wrapWidth={wrapWidth}
     />
   );
 }

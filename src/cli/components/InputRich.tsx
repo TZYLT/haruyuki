@@ -1753,7 +1753,6 @@ export function Input({
   const lowerPane = useMemo(() => {
     return (
       <>
-        {/* Queue display - show whenever there are queued messages */}
         {messageQueue && messageQueue.length > 0 && (
           <QueuedMessages messages={messageQueue} queueMode={queueMode} />
         )}
@@ -1762,7 +1761,6 @@ export function Input({
           <Box flexDirection="column">
             {modPanelRow}
 
-            {/* Top horizontal divider */}
             {!suppressDividers && (
               <Text
                 dimColor={!isBashMode}
@@ -1772,7 +1770,6 @@ export function Input({
               </Text>
             )}
 
-            {/* Two-column layout for input, matching message components */}
             <Box flexDirection="row">
               <Box width={promptVisualWidth} flexShrink={0}>
                 <Text
@@ -1795,6 +1792,9 @@ export function Input({
                   cursorPosition={cursorPos}
                   onCursorMove={setCurrentCursorPosition}
                   focus={interactionEnabled && !onEscapeCancel}
+                  // The width the draft is laid out at; the editor wraps its own rows at it
+                  // and puts the terminal cursor on the caret (IME).
+                  wrapWidth={contentWidth}
                   onBangAtEmpty={handleBangAtEmpty}
                   onBackspaceAtEmpty={handleBackspaceAtEmpty}
                   onPasteError={onPasteError}

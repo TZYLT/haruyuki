@@ -348,6 +348,48 @@ describe("PasteAwareTextInput paste delivery", () => {
  * keys are chords in the input router's table now. These cases pin the readings
  * that only the raw layer used to get right.
  */
+describe("PasteAwareTextInput layout", () => {
+  /**
+   * The width has to survive this wrapper: the leaf editor wraps at it and publishes
+   * the caret's cell from it (the IME opens there), and a wrapper that silently
+   * dropped the prop would leave the composer with Ink's own wrapping and no cursor
+   * — which looks fine in a frame and is wrong in the terminal.
+   */
+  test("forwards the wrap width to the leaf editor", async () => {
+    const stdin = new MultiReadStdin();
+    const stdout = new CaptureStream() as CaptureStream & NodeJS.WriteStream;
+
+    function Harness() {
+      const [value, setValue] = useState("");
+      return (
+        <PasteAwareTextInput
+          value={value}
+          onChange={setValue}
+          focus
+          wrapWidth={4}
+        />
+      );
+    }
+
+    const instance = render(<Harness />, {
+      stdin: stdin as unknown as NodeJS.ReadStream,
+      stdout,
+      debug: false,
+      patchConsole: false,
+      exitOnCtrlC: false,
+    });
+    try {
+      await tick();
+      stdin.pushReads(["abcdef"]);
+      await tick();
+    } finally {
+      instance.unmount();
+    }
+
+    expect(stdout.frames.join("")).toContain("abcd\nef");
+  });
+});
+
 describe("PasteAwareTextInput editing keys", () => {
   const CTRL_W = "\u0017";
   const HOME = "\u001b[H";

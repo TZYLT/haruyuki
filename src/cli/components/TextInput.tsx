@@ -1,6 +1,12 @@
 import chalk from "chalk";
-import { type Key, Text, useInput } from "ink";
+import { Box, type Key, Text, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
+import {
+  getCaretCell,
+  renderCaretRows,
+  wrapDisplayRows,
+} from "@/cli/helpers/text-layout";
+import { useTerminalCaret } from "@/cli/helpers/use-terminal-caret";
 
 // Owned text input for the composer.
 //
@@ -80,6 +86,17 @@ export interface TextInputProps {
   /** Parent-driven caret position (applied once, then reported back). */
   externalCursorOffset?: number;
   onCursorOffsetChange?: (offset: number) => void;
+  /**
+   * Columns the parent has given this input, when it knows them.
+   *
+   * With a width, the input lays the draft out itself (one `<Text>` row per wrapped
+   * line) and puts the terminal cursor on the caret's cell — the IME opens its
+   * candidate window there. Without one (an overlay's field, which measures itself)
+   * it keeps the old shape: Ink wraps, and no cursor is published. Publishing a cell
+   * from a guessed width would be worse than no cursor: it would drag the IME window
+   * to a column nothing is drawn at.
+   */
+  wrapWidth?: number;
 }
 
 export function TextInput({
@@ -91,6 +108,7 @@ export function TextInput({
   mask,
   externalCursorOffset,
   onCursorOffsetChange,
+  wrapWidth,
 }: TextInputProps) {
   const [cursorOffset, setCursorOffset] = useState(
     (originalValue || "").length,
@@ -218,34 +236,55 @@ export function TextInput({
 
   const value = latestValueRef.current;
   const maskedValue = mask ? mask.repeat(value.length) : value;
-  let renderedValue = maskedValue;
+
+  // Lay the draft out at the width the parent gave us, then place both carets with
+  // the same cell (`text-layout.ts`): the inverse-video one the user sees, and — via
+  // `useTerminalCaret` — the terminal's real one that the IME opens its candidate
+  // window at. Wrapping here instead of leaving it to Ink is what makes "the cell" a
+  // fact rather than a guess: Ink only ever re-wraps a row it measures wider than the
+  // box, and every row here stays within `wrapWidth` *display columns*.
+  const laidOutWidth = Math.max(0, wrapWidth ?? 0);
+  const rows =
+    laidOutWidth > 0
+      ? wrapDisplayRows(maskedValue, laidOutWidth)
+      : [maskedValue];
+  const layout = useTerminalCaret({
+    text: maskedValue,
+    caretOffset: cursorOffset,
+    focused: focus,
+    wrapWidth: laidOutWidth,
+  });
+
+  let renderedValue = rows.join("\n");
   let renderedPlaceholder = placeholder ? chalk.grey(placeholder) : undefined;
 
-  // Fake caret: render the character under it (or a trailing space) in inverse
-  // video. Ink does not expose a real terminal cursor here.
+  // The visible caret is the character under it (or a trailing space) in inverse
+  // video; the terminal's own cursor is placed on that same cell by the hook above.
   if (focus) {
     renderedPlaceholder =
       placeholder.length > 0
         ? chalk.inverse(placeholder[0]) + chalk.grey(placeholder.slice(1))
         : chalk.inverse(" ");
-    renderedValue = maskedValue.length > 0 ? "" : chalk.inverse(" ");
-    let index = 0;
-    for (const char of maskedValue) {
-      renderedValue += index === cursorOffset ? chalk.inverse(char) : char;
-      index++;
-    }
-    if (maskedValue.length > 0 && cursorOffset === maskedValue.length) {
-      renderedValue += chalk.inverse(" ");
-    }
+    renderedValue = renderCaretRows(
+      rows,
+      getCaretCell(maskedValue, cursorOffset, laidOutWidth),
+      chalk.inverse,
+    );
   }
 
+  // The box wraps the text only to have something measurable: it *is* the text's
+  // origin. The prompt (or an overlay's marker) sits outside it, so the cursor's
+  // column is this box's `x` plus the caret's column and its row is the box's `y`
+  // plus the wrapped line — nothing here has to know how wide the prompt was.
   return (
-    <Text>
-      {placeholder
-        ? maskedValue.length > 0
-          ? renderedValue
-          : renderedPlaceholder
-        : renderedValue}
-    </Text>
+    <Box ref={layout.ref}>
+      <Text>
+        {placeholder
+          ? maskedValue.length > 0
+            ? renderedValue
+            : renderedPlaceholder
+          : renderedValue}
+      </Text>
+    </Box>
   );
 }

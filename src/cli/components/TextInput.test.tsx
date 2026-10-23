@@ -75,7 +75,7 @@ interface ProbeHandle {
  */
 function mountProbe(
   initial: string,
-  options: { mask?: string; refuse?: boolean } = {},
+  options: { mask?: string; refuse?: boolean; wrapWidth?: number } = {},
 ): ProbeHandle {
   const stdin = new FakeStdin();
   const stdout = new CaptureStream();
@@ -89,6 +89,7 @@ function mountProbe(
       <TextInput
         value={value}
         mask={options.mask}
+        wrapWidth={options.wrapWidth}
         onChange={(next) => {
           edits.push(next);
           if (options.refuse) return false;
@@ -192,6 +193,40 @@ describe("TextInput", () => {
       await press(probe, "z");
       expect(probe.edits).toEqual(["xy", "xz"]);
       expect(probe.current()).toBe("x");
+    } finally {
+      probe.stop();
+    }
+  });
+
+  test("lays the draft out at the width the parent gives it", async () => {
+    // The composer hands its own content width down so the editor can place the
+    // terminal cursor on the caret's cell (an IME opens there). That is only sound
+    // if the editor wraps at exactly that width, so the break has to be its own.
+    const probe = mountProbe("abcdef", { wrapWidth: 4 });
+    try {
+      await press(probe, "");
+      expect(probe.stdout.frame()).toContain("abcd\nef");
+    } finally {
+      probe.stop();
+    }
+  });
+
+  test("counts a CJK character as two columns when it wraps", async () => {
+    const probe = mountProbe("中文中", { wrapWidth: 4 });
+    try {
+      await press(probe, "");
+      // Two per row, not four: the terminal draws each of them two columns wide.
+      expect(probe.stdout.frame()).toContain("中文\n中");
+    } finally {
+      probe.stop();
+    }
+  });
+
+  test("wraps nothing without a width", async () => {
+    const probe = mountProbe("abcdef");
+    try {
+      await press(probe, "");
+      expect(probe.stdout.frame()).not.toContain("abcd\nef");
     } finally {
       probe.stop();
     }
