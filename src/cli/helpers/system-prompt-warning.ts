@@ -129,12 +129,16 @@ function buildRejectedEnvToggleWarnings(): string[] {
     }
     reportedRejectedEnvToggles.add(toggle.envVar);
 
+    // On an experiment that is on by default (`ui_v2`), a rejected spelling does
+    // not leave it off — it turns it off. The sentence follows `defaultEnabled` so
+    // the warning describes what happened instead of what used to happen.
+    const outcome = toggle.defaultEnabled ? "is read as off" : "stays off";
     debugWarn(
       "experiments",
-      `${toggle.envVar}="${toggle.value}" is not an accepted toggle value, so "${toggle.id}" stays off (use 1, true or yes)`,
+      `${toggle.envVar}="${toggle.value}" is not an accepted toggle value, so "${toggle.id}" ${outcome} (use 1, true or yes)`,
     );
     warnings.push(
-      `⚠ **Warning:** \`${toggle.envVar}=${toggle.value}\` is ignored — \`${toggle.id}\` stays off. Use \`1\`, \`true\` or \`yes\`.`,
+      `⚠ **Warning:** \`${toggle.envVar}=${toggle.value}\` is ignored — \`${toggle.id}\` ${outcome}. Use \`1\`, \`true\` or \`yes\`.`,
     );
   }
 

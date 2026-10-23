@@ -32,6 +32,15 @@ export interface RejectedEnvToggle {
   id: ExperimentId;
   envVar: string;
   value: string;
+  /**
+   * What the experiment would be without the env var.
+   *
+   * The warning says what the value actually did, and on an experiment that is on
+   * by default (`ui_v2`, since 2026-10-23) a rejected spelling does not leave it
+   * off — it turns it **off**. Saying "stays off" there would be the opposite of
+   * the truth.
+   */
+  defaultEnabled: boolean;
 }
 
 /**
@@ -55,7 +64,12 @@ export function findRejectedEnvToggles(): RejectedEnvToggle[] {
 
     const value = raw.trim();
     if (REJECTED_ON_VALUES.has(value.toLowerCase())) {
-      rejected.push({ id: definition.id, envVar, value });
+      rejected.push({
+        id: definition.id,
+        envVar,
+        value,
+        defaultEnabled: definition.defaultEnabled === true,
+      });
     }
   }
 
@@ -104,8 +118,9 @@ const EXPERIMENT_DEFINITIONS: readonly ExperimentDefinition[] = [
     id: "ui_v2",
     label: "full-screen TUI",
     description:
-      "Render the interactive TUI with the new full-screen shell (viewport, key and mouse handling, panels) instead of the append-style shell. Off by default while the new shell is being built.",
+      "Render the interactive TUI with the full-screen shell (viewport, tabs, rail, pages, mouse) instead of the append-style compatibility shell. On by default since 2026-10-23; turn it off here to get the append shell back.",
     envVar: "HARUYUKI_UI_V2",
+    defaultEnabled: true,
   },
 ] as const;
 
@@ -174,14 +189,19 @@ class ExperimentManager {
       };
     }
 
-    const envEnabled = definition.envVar
-      ? isEnabledToggle(process.env[definition.envVar])
-      : false;
+    const envVar = definition.envVar;
+    const envRaw = envVar ? process.env[envVar] : undefined;
+    // "Set at all" is the test, not "set to something we like": on an experiment
+    // that is **on** by default (`ui_v2`), `HARUYUKI_UI_V2=0` is the only way a
+    // script or a wrapper can ask for the append shell, so a set-but-unrecognised
+    // value has to mean off rather than "fall through to the default".
+    const envSet = envRaw !== undefined && envRaw.trim() !== "";
+    const envEnabled = envSet ? isEnabledToggle(envRaw) : undefined;
 
     return {
       ...definition,
-      enabled: envEnabled,
-      source: envEnabled ? "env" : "default",
+      enabled: envEnabled ?? definition.defaultEnabled ?? false,
+      source: envEnabled === undefined ? "default" : "env",
       override: null,
     };
   }

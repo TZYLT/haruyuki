@@ -75,11 +75,15 @@ describe("full-screen terminal wiring", () => {
   test("captures frames only when the full-screen shell is on", () => {
     const stream = fakeStream();
 
+    // Off is now something you ask for: `ui_v2` defaults to on (2026-10-23), so
+    // deleting the env var no longer means the append shell.
+    process.env.HARUYUKI_UI_V2 = "0";
+    resetUiV2Resolution();
     expect(wireFullScreenTerminal(stream)).toBe(false);
     expect(isCapturingTerminalFrame()).toBe(false);
 
-    resetUiV2Resolution();
     process.env.HARUYUKI_UI_V2 = "1";
+    resetUiV2Resolution();
     const fullScreenStream = fakeStream();
 
     expect(wireFullScreenTerminal(fullScreenStream)).toBe(true);

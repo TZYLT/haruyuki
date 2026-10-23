@@ -44,7 +44,9 @@ describe("buildStartupWarnings", () => {
     const first = buildStartupWarnings(null);
     expect(first).toHaveLength(1);
     expect(first[0]).toContain("HARUYUKI_UI_V2=on");
-    expect(first[0]).toContain("`ui_v2` stays off");
+    // `ui_v2` is on by default now, so a rejected spelling does not leave it off —
+    // it turns it off. The sentence has to say so.
+    expect(first[0]).toContain("`ui_v2` is read as off");
     expect(first[0]).toContain("`1`, `true` or `yes`");
 
     // One-off: the next conversation's status block does not repeat it.

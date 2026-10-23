@@ -69,8 +69,21 @@ function useFullScreenShell(): void {
   resetUiV2Resolution();
 }
 
+/**
+ * The append shell now has to be asked for.
+ *
+ * Since 2026-10-23 `ui_v2` is on by default (the full-screen shell is the product),
+ * so "no env var" no longer means legacy — a test that wants the append shell has
+ * to turn it off, exactly as a user would.
+ */
+function useAppendShell(): void {
+  process.env.HARUYUKI_UI_V2 = "0";
+  resetUiV2Resolution();
+}
+
 describe("chrome commands in the append shell", () => {
   test("none of the five is acted on", () => {
+    useAppendShell();
     openConversationTab("conv-1", "M6 shell");
     focusTab("conv-1");
     const { seen, deps } = harness();

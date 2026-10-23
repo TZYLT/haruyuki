@@ -40,9 +40,15 @@ describe("findRejectedEnvToggles", () => {
     process.env.HARUYUKI_UI_V2 = "on";
 
     expect(findRejectedEnvToggles()).toEqual([
-      { id: "ui_v2", envVar: "HARUYUKI_UI_V2", value: "on" },
+      {
+        id: "ui_v2",
+        envVar: "HARUYUKI_UI_V2",
+        value: "on",
+        defaultEnabled: true,
+      },
     ]);
-    // The hint must not change the semantics it explains.
+    // The hint must not change the semantics it explains: `on` is not an accepted
+    // spelling, so on an experiment that is on by default it reads as **off**.
     expect(experimentManager.isEnabled("ui_v2")).toBe(false);
   });
 
@@ -70,7 +76,12 @@ describe("findRejectedEnvToggles", () => {
     for (const value of ["ON", " on ", "Enable", "ENABLED", "Y", "t"]) {
       process.env.HARUYUKI_UI_V2 = value;
       expect(findRejectedEnvToggles()).toEqual([
-        { id: "ui_v2", envVar: "HARUYUKI_UI_V2", value: value.trim() },
+        {
+          id: "ui_v2",
+          envVar: "HARUYUKI_UI_V2",
+          value: value.trim(),
+          defaultEnabled: true,
+        },
       ]);
     }
   });

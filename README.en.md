@@ -192,13 +192,16 @@ something or want to contribute, a pull request is very welcome.
 ### Turning the full-screen shell off, or rolling back
 
 The full-screen shell (tab strip, right-hand rail, the `Settings` / `Usage` pages, toasts, message
-history, the diff face) is behind one experiment, `ui_v2`, and it is **off** by default:
+history, the diff face) is behind one experiment, `ui_v2`, and it is **on** by default — it is the shell
+this release ships:
 
-- run `/experiments` and flip **full-screen TUI**; it takes effect on the **next start** — the shell is
-  decided once per process (the tab strip, the alternate screen and the page commands all hang off that
-  one answer), so flipping it mid-session deliberately does not repaint the shell you are in;
-- `HARUYUKI_UI_V2=1` also turns it on (only `1` / `true` / `yes` count). It loses to a value stored by
-  `/experiments`; to force it off, turn it off there;
+- to get the old **append-style** shell back, run `/experiments` and turn **full-screen TUI** off. It
+  takes effect on the **next start** — the shell is decided once per process (the tab strip, the
+  alternate screen and the page commands all hang off that one answer), so flipping it mid-session
+  deliberately does not repaint the shell you are in (the settings row's `restart` marker and the
+  selector's footer say so);
+- from a script or a wrapper: `HARUYUKI_UI_V2=0` means off (`1` / `true` / `yes` mean on). It loses to a
+  value stored by `/experiments` — if you turned it off there, an env `1` will not turn it back on;
 - with it off you get **compatibility mode**: the command set, the keys and the output semantics are the
   ones from before the new shell, minus the surfaces listed above.
 

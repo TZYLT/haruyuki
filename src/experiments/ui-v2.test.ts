@@ -46,15 +46,29 @@ afterEach(async () => {
 });
 
 describe("ui_v2 shell experiment", () => {
-  test("is listed and off by default", () => {
+  test("is listed and on by default", () => {
+    // It was off while the shell was being built. Since 2026-10-23 the full-screen
+    // shell is the product, so the switch now exists to turn it **off** — a machine
+    // with no stored override gets the shell we ship (maintainer's ruling: there is
+    // no second machine to test a default on, so the answer is semantic).
     const snapshot = experimentManager
       .list()
       .find((entry) => entry.id === "ui_v2");
     expect(snapshot).toMatchObject({
       id: "ui_v2",
-      enabled: false,
+      enabled: true,
       source: "default",
       override: null,
+    });
+  });
+
+  test("HARUYUKI_UI_V2=0 turns the default off", () => {
+    // The env var beats a *default* (a stored override still beats both), which is
+    // what makes `HARUYUKI_UI_V2=0` the way a script asks for the append shell.
+    process.env.HARUYUKI_UI_V2 = "0";
+    expect(experimentManager.getSnapshot("ui_v2")).toMatchObject({
+      enabled: false,
+      source: "env",
     });
   });
 
@@ -105,15 +119,15 @@ describe("ui_v2 shell experiment", () => {
   });
 
   test("the shell decision is taken once, however many callers ask", () => {
-    process.env.HARUYUKI_UI_V2 = "1";
-    expect(resolveUiV2Once()).toBe(true);
+    process.env.HARUYUKI_UI_V2 = "0";
+    expect(resolveUiV2Once()).toBe(false);
 
     // A later change must not move the shell out from under the alternate screen
     // that was already chosen for it.
     delete process.env.HARUYUKI_UI_V2;
-    expect(resolveUiV2Once()).toBe(true);
+    expect(resolveUiV2Once()).toBe(false);
 
     resetUiV2Resolution();
-    expect(resolveUiV2Once()).toBe(false);
+    expect(resolveUiV2Once()).toBe(true);
   });
 });
