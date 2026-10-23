@@ -155,6 +155,29 @@ function cellWidth(cell: Cell): number {
   return visibleWidth(cell.name) + (cell.close ? visibleWidth(cell.close) : 0);
 }
 
+/**
+ * The same cell with its title shortened to `maxWidth` columns, or `null` when not
+ * even the cell's own chrome fits.
+ *
+ * Only the current tab is narrowed: it is never dropped, so on a terminal narrower
+ * than the tab it has to give up title columns instead of pushing the row past the
+ * edge. A row wider than the terminal **wraps**, and a wrapped top row scrolls the
+ * strip itself away — the artifact the first machine run reported.
+ */
+function narrowCell(cell: Cell, maxWidth: number): Cell | null {
+  const title = truncateToWidth(cell.item.title, TAB_TITLE_COLUMNS);
+  const fixedWidth =
+    visibleWidth(cell.name) -
+    visibleWidth(title) +
+    (cell.close === null ? 0 : visibleWidth(cell.close));
+  const titleBudget = maxWidth - fixedWidth;
+  if (titleBudget < 1) return null;
+  // The title is the cell name's tail, so its prefix (rail, marker, unread mark) is
+  // whatever is left in front of it.
+  const prefix = cell.name.slice(0, cell.name.length - title.length);
+  return { ...cell, name: `${prefix}${truncateToWidth(title, titleBudget)}` };
+}
+
 /** Total width of `count` cells laid out with `TAB_GAP` between them. */
 function rowWidth(widths: readonly number[], count: number): number {
   let used = 0;
@@ -251,6 +274,7 @@ export function layoutTabStrip(
     .filter((item) => item.kind === "conversation")
     .map(cellFor);
   const pages = items.filter((item) => item.kind === "page").map(cellFor);
+  let widths = conversations.map(cellWidth);
   const activeCell = conversations.find((cell) => cell.item.active);
   const activeWidth = activeCell ? cellWidth(activeCell) : 0;
 
@@ -273,7 +297,6 @@ export function layoutTabStrip(
     width - pageWidth - (admittedPages.length > 0 ? TAB_GAP : 0),
   );
 
-  const widths = conversations.map(cellWidth);
   let admitted = Array.from(
     { length: fitCount(widths, conversationBudget) },
     (_, index) => index,
@@ -281,18 +304,34 @@ export function layoutTabStrip(
   const activeIndex = conversations.findIndex((cell) => cell.item.active);
 
   // The current tab is never the one dropped: when it did not survive the greedy
-  // fit, it is pulled in and the tabs after it give way instead.
+  // fit, it is pulled in and the tabs after it give way instead. When the terminal
+  // is narrower than the tab itself there is nothing to give way — the tab is
+  // shortened instead, because drawing it whole (or drawing nothing but the `+N`
+  // count) puts a row wider than the terminal on screen, and that wraps.
   if (activeIndex >= 0 && !admitted.includes(activeIndex)) {
-    const forced = [activeIndex];
-    let used = widths[activeIndex] ?? 0;
-    for (let index = 0; index < conversations.length; index += 1) {
-      if (index === activeIndex) continue;
-      const next = used + TAB_GAP + (widths[index] ?? 0);
-      if (next > conversationBudget) break;
-      forced.push(index);
-      used = next;
+    const forcedCell = conversations[activeIndex];
+    const forcedWidth = widths[activeIndex] ?? 0;
+    if (forcedCell !== undefined && forcedWidth > conversationBudget) {
+      const narrowed = narrowCell(forcedCell, conversationBudget);
+      if (narrowed === null) {
+        admitted = [];
+      } else {
+        conversations[activeIndex] = narrowed;
+        widths = conversations.map(cellWidth);
+        admitted = [activeIndex];
+      }
+    } else {
+      const forced = [activeIndex];
+      let used = forcedWidth;
+      for (let index = 0; index < conversations.length; index += 1) {
+        if (index === activeIndex) continue;
+        const next = used + TAB_GAP + (widths[index] ?? 0);
+        if (next > conversationBudget) break;
+        forced.push(index);
+        used = next;
+      }
+      admitted = forced.sort((a, b) => a - b);
     }
-    admitted = forced.sort((a, b) => a - b);
   }
 
   /** The admitted cells' own width, before the marker. */

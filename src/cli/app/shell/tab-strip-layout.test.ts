@@ -229,9 +229,11 @@ describe("the tab row", () => {
     expect(text).not.toContain("Usage");
     expect(text).toContain("> M6 shell");
 
-    // Too narrow even for that: the conversation tabs keep the row.
+    // Too narrow even for that: the conversation tabs keep the row, and the
+    // current one shortens its title rather than pushing the row past the edge.
     const tiny = layoutTabStrip(items, 12);
-    expect(draw(tiny)).toContain("> M6 shell");
+    expect(draw(tiny)).toContain("> M6");
+    expect(visibleWidth(draw(tiny))).toBe(12);
     expect(draw(tiny)).not.toContain("Settings");
   });
 
@@ -313,6 +315,41 @@ describe("the tab row, at every width", () => {
         hasCurrent: true,
       });
     }
+  });
+
+  test("even narrower than the current tab, the row still fits", () => {
+    // Below the current tab's own width the old layout forced the whole tab in and
+    // painted past the terminal (measured: 15 columns on a 10-column window). That
+    // row wraps, and a wrapped top row scrolls the strip away.
+    for (let columns = 1; columns <= 24; columns += 1) {
+      const layout = layoutTabStrip(ITEMS, columns);
+      expect({ columns, width: visibleWidth(draw(layout)) }).toEqual({
+        columns,
+        width: columns,
+      });
+      for (const region of layout.regions) {
+        if (region.to > columns) {
+          throw new Error(
+            `columns ${columns}: region ${JSON.stringify(region)} is outside the row`,
+          );
+        }
+      }
+    }
+
+    // Narrower than the tab's own chrome: the tab becomes the `+N` count it was
+    // collapsed into, and at one column even that does not fit, so the row is blank
+    // padding rather than a wrapped tab.
+    const collapsed = layoutTabStrip(
+      [conversation("a", { title: "M6 shell", active: true })],
+      2,
+    );
+    expect(draw(collapsed).trim()).toBe("+1");
+    const blank = layoutTabStrip(
+      [conversation("a", { title: "M6 shell", active: true })],
+      1,
+    );
+    expect(draw(blank).trim()).toBe("");
+    expect(visibleWidth(draw(blank))).toBe(1);
   });
 
   test("a collapsed count is a rectangle you can click (《38》§3.8)", () => {
