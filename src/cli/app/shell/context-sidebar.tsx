@@ -2,6 +2,7 @@
 
 import { Box, Text } from "ink";
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { emptyTurnStats, type SessionStatsSnapshot } from "@/agent/stats";
 import {
   getSubagentLifecycleSnapshot,
   subscribeToSubagentLifecycle,
@@ -10,7 +11,7 @@ import type { AppViewProps } from "@/cli/app/AppView";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { type MemfsStats, readMemfsStats } from "@/cli/helpers/memfs-stats";
 import { readUsageLedger } from "@/usage/ledger";
-import { summarizeUsage } from "@/usage/summary";
+import { summarizeUsage, type UsageSummary } from "@/usage/summary";
 import {
   buildSidebarSections,
   fitSidebarSections,
@@ -119,6 +120,52 @@ export function ContextSidebar({
   );
 }
 
+/** Everything the rail reads, in the app's own terms. */
+export type SidebarProjectionInputs = {
+  stats: SessionStatsSnapshot;
+  usedContextTokens: number | null;
+  contextWindowSize: number | null;
+  agents: readonly { type: string; durationMs: number }[];
+  /** Today's ledger summary, or `null` while the read is still in flight. */
+  today: UsageSummary["today"] | null;
+  memfs: MemfsStats | null;
+};
+
+/**
+ * Bind the app's numbers to the rail's rows — the one place a source field is
+ * named.
+ *
+ * Pure and exported because a wrong binding here is invisible to a frame test:
+ * the row is still painted, only with another number. `today.completion` is
+ * the day's output count; `cacheWrite` — what the `out` row used to print — is
+ * a third *input* price, and reading it there made the row meaningless.
+ */
+export function sidebarProjectionFrom(
+  inputs: SidebarProjectionInputs,
+): Omit<SidebarProjection, "width"> {
+  const { stats, today } = inputs;
+  return {
+    usedContextTokens: inputs.usedContextTokens,
+    contextWindowSize: inputs.contextWindowSize,
+    contextBreakdown: stats.contextBreakdown ?? null,
+    turn: stats.turn ?? emptyTurnStats(),
+    reasoningTokens: stats.usage.reasoningTokens,
+    agents: inputs.agents,
+    today: today
+      ? {
+          tokens: today.tokens,
+          turns: today.turns,
+          cacheReadTokens: today.cachedInput,
+          uncachedTokens: today.prompt,
+          outputTokens: today.completion,
+          hitRate: today.cacheHitRate,
+          costUsd: today.cost,
+        }
+      : null,
+    memfs: inputs.memfs,
+  };
+}
+
 /**
  * The rail wired to the app's own projections.
  *
@@ -166,7 +213,7 @@ export function ContextSidebarSlot({
   // Usage section answers "what have I spent today", which spans conversations
   // and does not restart with this process.
   const [memfs, setMemfs] = useState<MemfsStats | null>(null);
-  const [today, setToday] = useState<SidebarProjection["today"]>(null);
+  const [today, setToday] = useState<UsageSummary["today"] | null>(null);
   useEffect(() => {
     // Triggers, not reads: a switch and a finished turn are *when* to re-read.
     void view.conversationId;
@@ -177,15 +224,9 @@ export function ContextSidebarSlot({
     });
     void readUsageLedger().then((records) => {
       if (cancelled) return;
-      const summary = summarizeUsage(records, new Date());
-      setToday({
-        tokens: summary.today.tokens,
-        turns: summary.today.turns,
-        cacheReadTokens: summary.today.cachedInput,
-        uncachedTokens: summary.today.prompt,
-        writeTokens: summary.today.cacheWrite,
-        costUsd: summary.today.cost,
-      });
+      // The whole `today` view is kept, not a hand-copied subset: the binding
+      // between its fields and the rail's rows lives in `sidebarProjectionFrom`.
+      setToday(summarizeUsage(records, new Date()).today);
     });
     return () => {
       cancelled = true;
@@ -194,15 +235,10 @@ export function ContextSidebarSlot({
 
   const stats = view.sessionStatsRef.current.getSnapshot();
   const now = Date.now();
-  const projection: Omit<SidebarProjection, "width"> = {
+  const projection = sidebarProjectionFrom({
+    stats,
     usedContextTokens: view.usedContextTokens ?? null,
     contextWindowSize: view.contextWindowSize ?? null,
-    contextBreakdown: stats.contextBreakdown ?? null,
-    stepCount: stats.usage.stepCount,
-    inputTokens: stats.usage.promptTokens,
-    outputTokens: stats.usage.completionTokens,
-    reasoningTokens: stats.usage.reasoningTokens,
-    sessionWallMs: stats.totalWallMs,
     agents: running.map((agent) => ({
       type: agent.type,
       durationMs:
@@ -212,7 +248,7 @@ export function ContextSidebarSlot({
     })),
     today,
     memfs,
-  };
+  });
 
   return (
     // The gutter: the one spacer column `《38》§6.3`'s table leaves between the

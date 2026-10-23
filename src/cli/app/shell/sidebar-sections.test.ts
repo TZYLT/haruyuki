@@ -216,11 +216,15 @@ function projection(
     usedContextTokens: 84_000,
     contextWindowSize: 128_000,
     contextBreakdown: { system: 8_000, messages: 23_000, tools: 31_000 },
-    stepCount: 12,
-    inputTokens: 3_400,
-    outputTokens: 1_200,
+    turn: {
+      startedAtMs: 1_000,
+      wallMs: 42_000,
+      steps: 12,
+      inputTokens: 3_400,
+      outputTokens: 1_200,
+      active: false,
+    },
     reasoningTokens: 800,
-    sessionWallMs: 42_000,
     agents: null,
     today: null,
     memfs: null,
@@ -241,26 +245,47 @@ describe("buildSidebarSections", () => {
     const context = buildSidebarSections(projection()).find(
       (item) => item.id === "context",
     );
-    // Three parts, each a measurement of the last request.
-    expect(context?.detail[1]).toBe("sys 8k · tools 31k");
-    expect(context?.detail[2]).toBe("chat 23k");
-    expect(context?.detail[3]).toBe("reasoning 800");
+    // Four parts, each a measurement of the last request. System and tools get
+    // a row each: the split is the point, and `sys 31k · tools 4k` on a narrow
+    // rail reads as a single number.
+    expect(context?.detail[1]).toBe("sys 8k");
+    expect(context?.detail[2]).toBe("tools 31k");
+    expect(context?.detail[3]).toBe("chat 23k");
+    expect(context?.detail[4]).toBe("reasoning 800");
   });
 
   test("before the first turn the composition is a dash, not a zero", () => {
     const context = buildSidebarSections(
       projection({ contextBreakdown: null }),
     ).find((item) => item.id === "context");
-    expect(context?.detail[1]).toBe("sys — · tools —");
-    expect(context?.detail[2]).toBe("chat —");
+    expect(context?.detail[1]).toBe("sys —");
+    expect(context?.detail[2]).toBe("tools —");
+    expect(context?.detail[3]).toBe("chat —");
   });
 
-  test("the session section is titled Turn", () => {
+  test("the Turn section reads the turn projection, not the session", () => {
     const turn = buildSidebarSections(projection()).find(
       (item) => item.id === "turn",
     );
     expect(turn?.title).toBe("Turn");
     expect(turn?.detail).toEqual(["12 steps · 00:42", "1.2k out · 3.4k in"]);
+  });
+
+  test("a turn that has not started is zero, not the session's running totals", () => {
+    const turn = buildSidebarSections(
+      projection({
+        turn: {
+          startedAtMs: null,
+          wallMs: 0,
+          steps: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          active: false,
+        },
+      }),
+    ).find((item) => item.id === "turn");
+    expect(turn?.detail).toEqual(["0 steps · 00:00", "0 out · 0 in"]);
+    expect(turn?.summary).toBe("0 steps · 00:00");
   });
 
   test("an empty agent list hides its section instead of printing zero", () => {
@@ -300,18 +325,39 @@ describe("buildSidebarSections", () => {
           turns: 1,
           cacheReadTokens: 1_200,
           uncachedTokens: 3_400,
-          writeTokens: 500,
+          outputTokens: 540,
+          // hit / (hit + miss) = 1200 / 4600.
+          hitRate: 1_200 / 4_600,
           costUsd: 0.12,
         },
       }),
     ).find((item) => item.id === "usage");
+    // Hit above miss, one decimal on the share; the output row reads the day's
+    // completion count, not the cache-fill bucket.
     expect(wired?.detail).toEqual([
       "today 26k tok",
-      "miss 3.4k · hit 1.2k",
-      "write 500",
+      "hit 1.2k (26.1%)",
+      "miss 3.4k",
+      "out 540",
       "cost $ 0.12",
     ]);
     expect(wired?.summary).toBe("today 26k tok");
+  });
+
+  test("a day with no input has no hit rate to print, not a zero percent", () => {
+    const usage = buildSidebarSections(
+      projection({
+        today: {
+          tokens: 540,
+          turns: 1,
+          cacheReadTokens: 0,
+          uncachedTokens: 0,
+          outputTokens: 540,
+        },
+      }),
+    ).find((item) => item.id === "usage");
+    expect(usage?.detail[1]).toBe("hit 0");
+    expect(usage?.detail[2]).toBe("miss 0");
   });
 
   test("an unpriced day shows a dash, not a free turn", () => {
@@ -322,11 +368,12 @@ describe("buildSidebarSections", () => {
           turns: 2,
           cacheReadTokens: 0,
           uncachedTokens: 900,
-          writeTokens: 0,
+          outputTokens: 100,
+          hitRate: 0,
         },
       }),
     ).find((item) => item.id === "usage");
-    expect(usage?.detail[3]).toBe("cost —");
+    expect(usage?.detail[4]).toBe("cost —");
   });
 
   test("a sub-cent day is not rounded into a false free", () => {
@@ -337,12 +384,13 @@ describe("buildSidebarSections", () => {
           turns: 1,
           cacheReadTokens: 0,
           uncachedTokens: 900,
-          writeTokens: 0,
+          outputTokens: 100,
+          hitRate: 0,
           costUsd: 0.0004,
         },
       }),
     ).find((item) => item.id === "usage");
-    expect(usage?.detail[3]).toBe("cost $ <0.01");
+    expect(usage?.detail[4]).toBe("cost $ <0.01");
   });
 
   test("memfs says what is missing, and counts bytes rather than megabytes", () => {
@@ -366,13 +414,22 @@ describe("buildSidebarSections", () => {
   test("every line a caller gets already fits the rail", () => {
     const wide = projection({
       width: 18,
+      turn: {
+        startedAtMs: 1_000,
+        wallMs: 3_600_000,
+        steps: 999,
+        inputTokens: 12_345_678,
+        outputTokens: 9_876_543,
+        active: false,
+      },
       agents: [{ type: "Workflow", durationMs: 61_000 }],
       today: {
         tokens: 787_776,
         turns: 9,
         cacheReadTokens: 123_456,
         uncachedTokens: 654_321,
-        writeTokens: 9_999,
+        outputTokens: 77_777,
+        hitRate: 0.1588,
         costUsd: 12.34,
       },
       memfs: { commits7d: 123, changedLines7d: -4_567, totalBytes: 987_654 },
@@ -383,6 +440,10 @@ describe("buildSidebarSections", () => {
         expect(visibleWidth(line)).toBeLessThanOrEqual(18);
       }
     }
+    // The turn's clock stays inside the rail too: an hour-long turn is still
+    // `100:00`, not a growing number of digits that pushes the row wide.
+    const turn = buildSidebarSections(wide).find((item) => item.id === "turn");
+    expect(turn?.detail[0]).toBe("999 steps · 60:00");
   });
 
   test("the registry is the extension seam and keeps its order", () => {

@@ -1,5 +1,6 @@
 // src/cli/app/shell/sidebar-sections.ts
 
+import type { TurnStatsSnapshot } from "@/agent/stats";
 import { truncateToWidth } from "@/cli/display/statusline/formatting";
 import { formatCompact } from "@/cli/helpers/format";
 import { formatCost } from "@/cli/helpers/usage-format";
@@ -247,12 +248,18 @@ export type SidebarProjection = {
   contextWindowSize: number | null;
   /** What the last request was made of; `null` before the first turn. */
   contextBreakdown: UsageContextBreakdown | null;
-  /** Model requests this session, the rail's "steps". */
-  stepCount: number;
-  inputTokens: number;
-  outputTokens: number;
+  /**
+   * The current user turn, or the one that just ended.
+   *
+   * A turn is one user message and its answer; its steps, tokens and clock are
+   * the turn's own, not the session's. The stats snapshot hands this over
+   * already projected — a second tally here would drift from the ledger and the
+   * status line with no error, which is the class of bug the rail exists to
+   * avoid. Zeros (not `null`) before the first message: "nothing has run yet"
+   * is a real measurement, unlike a ledger read that has not finished.
+   */
+  turn: TurnStatsSnapshot;
   reasoningTokens: number;
-  sessionWallMs: number;
   /** Running subagents, newest first; `null` (or empty) hides the section. */
   agents: readonly { type: string; durationMs: number }[] | null;
   /**
@@ -269,7 +276,10 @@ export type SidebarProjection = {
     cacheReadTokens: number;
     /** Input billed at the miss rate. */
     uncachedTokens: number;
-    writeTokens: number;
+    /** Output tokens — `completion` in the ledger's own words. */
+    outputTokens: number;
+    /** `cachedInput / (prompt + cachedInput)` for today; absent with no input. */
+    hitRate?: number;
     /** Absent when nothing today carried a price. */
     costUsd?: number;
   } | null;
@@ -334,16 +344,17 @@ function contextSection(projection: SidebarProjection) {
   // The split the section exists for: what stands in front of the conversation
   // (system prompt and tool definitions) versus the transcript itself. It comes
   // from the last request the backend assembled, so every part is a measurement
-  // of that request, not a subtraction of the live number.
+  // of that request, not a subtraction of the live number. The two leader parts
+  // get a row each: `sys 31k · tools 4k` on 22 content columns of a folded rail
+  // reads as one number, and the split is the whole point of the row.
   const breakdown = projection.contextBreakdown;
   // Plain text, no bar: the rail's job is the numbers, and a glyph bar on a
   // 28-column line would spend a third of the width saying what `62%` says.
   return {
     detail: [
       `ctx ${percent === null ? "—" : `${percent}%`} · ${hasUsage ? formatCompact(used as number) : "—"} / ${limit === null ? "—" : formatCompact(limit)}`,
-      breakdown
-        ? `sys ${formatCompact(breakdown.system)} · tools ${formatCompact(breakdown.tools)}`
-        : "sys — · tools —",
+      `sys ${breakdown ? formatCompact(breakdown.system) : "—"}`,
+      `tools ${breakdown ? formatCompact(breakdown.tools) : "—"}`,
       `chat ${breakdown ? formatCompact(breakdown.messages) : "—"}`,
       `reasoning ${formatCompact(projection.reasoningTokens)}`,
     ],
@@ -352,14 +363,21 @@ function contextSection(projection: SidebarProjection) {
 }
 
 function turnSection(projection: SidebarProjection) {
-  const head = `${projection.stepCount} steps · ${clock(projection.sessionWallMs)}`;
+  const turn = projection.turn;
+  const head = `${turn.steps} steps · ${clock(turn.wallMs)}`;
   return {
     detail: [
       head,
-      `${formatCompact(projection.outputTokens)} out · ${formatCompact(projection.inputTokens)} in`,
+      `${formatCompact(turn.outputTokens)} out · ${formatCompact(turn.inputTokens)} in`,
     ],
     summary: head,
   };
+}
+
+/** ` (95.4%)`, or nothing when the day had no input to divide by. */
+function hitRateLabel(rate: number | undefined): string {
+  if (rate === undefined || !Number.isFinite(rate)) return "";
+  return ` (${(rate * 100).toFixed(1)}%)`;
 }
 
 function usageSection(projection: SidebarProjection) {
@@ -367,15 +385,16 @@ function usageSection(projection: SidebarProjection) {
   if (!today) {
     return { detail: ["today — (ledger pending)"], summary: "today —" };
   }
-  // The four lines are the four things the page's cost section is made of, in
-  // the same words: `miss`/`hit` are the two input prices, `write` the cache
-  // fill, and `cost` the day's total. A `—` cost is "nothing priced today",
-  // which is not the same statement as free.
+  // The rows are the day's four numbers in the words the page uses: `hit` and
+  // `miss` are the two input prices (hit first, with its share of input), `out`
+  // is what the model produced, `cost` the day's total. A `—` cost is "nothing
+  // priced today", which is not the same statement as free.
   return {
     detail: [
       `today ${formatCompact(today.tokens)} tok`,
-      `miss ${formatCompact(today.uncachedTokens)} · hit ${formatCompact(today.cacheReadTokens)}`,
-      `write ${formatCompact(today.writeTokens)}`,
+      `hit ${formatCompact(today.cacheReadTokens)}${hitRateLabel(today.hitRate)}`,
+      `miss ${formatCompact(today.uncachedTokens)}`,
+      `out ${formatCompact(today.outputTokens)}`,
       `cost ${formatCost(today.costUsd)}`,
     ],
     summary: `today ${formatCompact(today.tokens)} tok`,
@@ -425,9 +444,9 @@ function memfsSection(projection: SidebarProjection) {
  */
 export const SIDEBAR_SECTIONS: readonly SidebarSectionDefinition[] = [
   { id: "context", title: "Context", build: contextSection },
-  // "Turn" rather than "Session": the rows are the session's running totals, but
-  // read at a glance they answer "how far has this turn/an exchange got", and
-  // 「Session」 collided with the conversation tab of the same name.
+  // `Turn`, not `Session`: the rows are the current user message's own steps,
+  // tokens and clock — they reset when the next message starts a new turn. The
+  // title also avoids colliding with the conversation tab of the same name.
   { id: "turn", title: "Turn", build: turnSection },
   { id: "usage", title: "Usage", build: usageSection },
   { id: "agents", title: "Agents", build: agentsSection },

@@ -1,9 +1,12 @@
 // src/cli/app/shell/context-sidebar.test.tsx
 
 import { afterEach, describe, expect, test } from "bun:test";
+import type { SessionStatsSnapshot, TurnStatsSnapshot } from "@/agent/stats";
 import { visibleWidth } from "@/cli/display/statusline/formatting";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
-import { ContextSidebar } from "./context-sidebar";
+import type { UsageSummary } from "@/usage/summary";
+import { emptyUsageCost } from "@/utils/usage-cost";
+import { ContextSidebar, sidebarProjectionFrom } from "./context-sidebar";
 import type { SidebarProjection } from "./sidebar-sections";
 
 /**
@@ -21,11 +24,15 @@ function projection(
     usedContextTokens: 84_000,
     contextWindowSize: 128_000,
     contextBreakdown: { system: 8_000, messages: 23_000, tools: 31_000 },
-    stepCount: 12,
-    inputTokens: 3_400,
-    outputTokens: 1_200,
+    turn: {
+      startedAtMs: 1_000,
+      wallMs: 42_000,
+      steps: 12,
+      inputTokens: 3_400,
+      outputTokens: 1_200,
+      active: false,
+    },
     reasoningTokens: 800,
-    sessionWallMs: 42_000,
     agents: null,
     today: null,
     memfs: null,
@@ -108,35 +115,130 @@ describe("ContextSidebar", () => {
     }
   });
 
-  test("paints the composition the projection carries", async () => {
+  test("paints the composition the projection carries, system and tools apart", async () => {
     const frame = mount(24);
     try {
-      const text = await frame.text();
-      expect(text).toContain("sys 8k · tools 31k");
+      const text = (await frame.rows()).join("\n");
+      expect(text).toContain("sys 8k");
+      expect(text).toContain("tools 31k");
       expect(text).toContain("chat 23k");
+      // The two leader parts no longer share a row.
+      expect(text).not.toContain("sys 8k · tools 31k");
     } finally {
       frame.stop();
     }
   });
 
-  test("paints today's ledger, not a pending placeholder", async () => {
+  test("paints the turn's own steps, clock and tokens", async () => {
+    const frame = mount(24);
+    try {
+      const text = await frame.text();
+      expect(text).toContain("12 steps · 00:42");
+      expect(text).toContain("1.2k out · 3.4k in");
+    } finally {
+      frame.stop();
+    }
+  });
+
+  test("paints today's ledger, hit above miss and the day's output", async () => {
     const frame = mount(24, 30, {
       today: {
         tokens: 26_400,
         turns: 1,
         cacheReadTokens: 1_200,
         uncachedTokens: 3_400,
-        writeTokens: 500,
+        outputTokens: 1_234,
+        hitRate: 1_200 / 4_600,
         costUsd: 0.12,
       },
     });
     try {
       const text = await frame.text();
       expect(text).toContain("today 26k tok");
+      expect(text).toContain("hit 1.2k (26.1%)");
+      expect(text).toContain("miss 3.4k");
+      expect(text).toContain("out 1.2k");
       expect(text).toContain("cost $ 0.12");
       expect(text).not.toContain("ledger pending");
+      // The cache-fill bucket is an input price; it is not the output row.
+      expect(text).not.toContain("write");
     } finally {
       frame.stop();
     }
+  });
+});
+
+describe("sidebarProjectionFrom", () => {
+  const TURN: TurnStatsSnapshot = {
+    startedAtMs: 5_000,
+    wallMs: 12_000,
+    steps: 3,
+    inputTokens: 4_500,
+    outputTokens: 600,
+    active: true,
+  };
+
+  const SNAPSHOT: SessionStatsSnapshot = {
+    sessionStartMs: 0,
+    totalWallMs: 60_000,
+    totalApiMs: 10_000,
+    usage: {
+      promptTokens: 999_999,
+      completionTokens: 888_888,
+      totalTokens: 1_888_887,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 42,
+      stepCount: 77,
+    },
+    requestCount: 77,
+    turn: TURN,
+  };
+
+  function inputs(
+    overrides: Partial<Parameters<typeof sidebarProjectionFrom>[0]> = {},
+  ): Parameters<typeof sidebarProjectionFrom>[0] {
+    return {
+      stats: SNAPSHOT,
+      usedContextTokens: null,
+      contextWindowSize: null,
+      agents: [],
+      today: null,
+      memfs: null,
+      ...overrides,
+    };
+  }
+
+  test("the Turn row reads the snapshot's turn, not the session totals", () => {
+    const view = sidebarProjectionFrom(inputs());
+    expect(view.turn).toEqual(TURN);
+    // The session has 77 steps and 888,888 output tokens; the turn does not.
+    expect(view.turn.steps).toBe(3);
+    expect(view.turn.outputTokens).toBe(600);
+  });
+
+  test("the out row is today's completion, not the cache-write bucket", () => {
+    const today: UsageSummary["today"] = {
+      tokens: 10_000,
+      turns: 2,
+      prompt: 3_000,
+      cachedInput: 7_000,
+      cacheWrite: 555,
+      completion: 1_234,
+      cost: 0.5,
+      costBreakdown: emptyUsageCost(),
+      cacheHitRate: 0.7,
+    };
+    const view = sidebarProjectionFrom(inputs({ today }));
+    expect(view.today?.outputTokens).toBe(1_234);
+    expect(view.today?.outputTokens).not.toBe(today.cacheWrite);
+    expect(view.today?.cacheReadTokens).toBe(7_000);
+    expect(view.today?.uncachedTokens).toBe(3_000);
+    expect(view.today?.hitRate).toBe(0.7);
+  });
+
+  test("an unread ledger stays absent rather than becoming zeros", () => {
+    const view = sidebarProjectionFrom(inputs());
+    expect(view.today).toBeNull();
   });
 });

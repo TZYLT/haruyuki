@@ -193,3 +193,112 @@ describe("the session's own projections", () => {
     );
   });
 });
+
+describe("the turn projection", () => {
+  const beforeAnyTurn = {
+    startedAtMs: null,
+    wallMs: 0,
+    steps: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    active: false,
+  };
+
+  test("starts at zero, accumulates, keeps its final numbers, then clears", () => {
+    const stats = new SessionStats();
+    // "Nothing has run yet" is a zero, not a missing source.
+    expect(stats.getSnapshot().turn).toEqual(beforeAnyTurn);
+
+    stats.startTrajectory();
+    const started = stats.getSnapshot().turn;
+    expect(started?.active).toBe(true);
+    expect(started?.startedAtMs).not.toBeNull();
+    expect(started?.steps).toBe(0);
+    expect(started?.inputTokens).toBe(0);
+    expect(started?.outputTokens).toBe(0);
+    expect(started?.wallMs).toBeLessThan(1_000);
+
+    stats.accumulateTrajectory({
+      usageDelta: usageDelta({ promptTokens: 900, completionTokens: 120 }),
+      usageSteps: 2,
+      wallMs: 1_500,
+    });
+    const running = stats.getSnapshot().turn;
+    expect(running?.steps).toBe(2);
+    expect(running?.inputTokens).toBe(900);
+    expect(running?.outputTokens).toBe(120);
+    // The live clock is at least the segments the turn has already banked.
+    expect(running?.wallMs).toBeGreaterThanOrEqual(1_500);
+
+    stats.endTrajectory();
+    // The rail is read between turns, so the ended turn must not drop to zero.
+    expect(stats.getTrajectorySnapshot()).toBeNull();
+    const ended = stats.getSnapshot().turn;
+    expect(ended?.active).toBe(false);
+    expect(ended?.steps).toBe(2);
+    expect(ended?.inputTokens).toBe(900);
+    expect(ended?.outputTokens).toBe(120);
+    expect(ended?.wallMs).toBeGreaterThanOrEqual(1_500);
+    expect(ended?.startedAtMs).toBe(started?.startedAtMs ?? null);
+
+    // The next user message opens a new turn, which starts at zero again.
+    stats.startTrajectory();
+    const next = stats.getSnapshot().turn;
+    expect(next?.active).toBe(true);
+    expect(next?.steps).toBe(0);
+    expect(next?.inputTokens).toBe(0);
+    expect(next?.outputTokens).toBe(0);
+    expect(next?.wallMs).toBeLessThan(1_000);
+  });
+
+  test("the turn's steps reset while the session's request count accumulates", () => {
+    const stats = new SessionStats();
+    stats.startTrajectory();
+    stats.accumulateTrajectory({ usageSteps: 3 });
+    stats.endTrajectory();
+
+    stats.startTrajectory();
+    stats.accumulateTrajectory({ usageSteps: 1 });
+    // The turn row answers "how many steps has this message taken"; the session
+    // snapshot answers "how many requests has this session made".
+    expect(stats.getSnapshot().turn?.steps).toBe(1);
+    expect(stats.getSnapshot().usage.stepCount).toBe(4);
+  });
+
+  test("a backend that reports step_count deltas is counted too", () => {
+    const stats = new SessionStats();
+    const buffers = createBuffers();
+    stats.startTrajectory();
+    buffers.usage.stepCount = 2;
+    stats.accumulateTrajectory({
+      usageDelta: stats.updateUsageFromBuffers(buffers),
+    });
+    expect(stats.getSnapshot().turn?.steps).toBe(2);
+  });
+
+  test("an approval continuation does not wipe the turn it continues", () => {
+    const stats = new SessionStats();
+    stats.startTrajectory();
+    stats.accumulateTrajectory({
+      usageDelta: usageDelta({ promptTokens: 40, completionTokens: 4 }),
+      usageSteps: 1,
+    });
+    // The approval flow calls `startTrajectory` again to time the tool batch;
+    // the turn is already open, so this must not reset the row.
+    stats.startTrajectory();
+    expect(stats.getSnapshot().turn?.steps).toBe(1);
+    expect(stats.getSnapshot().turn?.inputTokens).toBe(40);
+    expect(stats.getSnapshot().turn?.active).toBe(true);
+  });
+
+  test("a session reset drops the previous turn", () => {
+    const stats = new SessionStats();
+    stats.startTrajectory();
+    stats.accumulateTrajectory({ usageSteps: 2 });
+    stats.endTrajectory();
+    expect(stats.getSnapshot().turn?.steps).toBe(2);
+
+    stats.reset();
+    expect(stats.getSnapshot().turn).toEqual(beforeAnyTurn);
+  });
+});
