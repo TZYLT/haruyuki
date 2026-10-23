@@ -115,6 +115,10 @@ import {
   shouldSlashCommandBypassQueue,
 } from "./command-routing";
 import { buildTextParts } from "./content-parts";
+import {
+  EXPERIMENTS_OVERLAY_ARGS,
+  isExperimentsSelectorRequest,
+} from "./experiments-command";
 import { openWorktreeDiffFace } from "./faces/open-worktree-diff";
 import {
   appendOptimisticUserLine,
@@ -729,13 +733,9 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           return { submitted: true };
         }
 
-        if (trimmed === "/experiments") {
-          openOverlay(
-            "experiment",
-            "/experiments",
-            "Opening experiments selector...",
-            "Experiments dialog dismissed",
-          );
+        // `diffs` is the only sub-command; `/experiments ui_v2` opens the selector.
+        if (isExperimentsSelectorRequest(trimmed)) {
+          openOverlay(...EXPERIMENTS_OVERLAY_ARGS);
           return { submitted: true };
         }
 
