@@ -35,6 +35,18 @@ export interface ModContextWindowContext {
   usedPercentage: number | null;
   remainingPercentage: number | null;
   currentUsage: ModTokenUsageContext | null;
+  /**
+   * Tokens the last request occupied in the window, or absent when the provider
+   * never reported it.
+   *
+   * `usedPercentage` cannot be turned back into a count (it is rounded, and it is
+   * `null` without a window size), and the status line has to print the pair the
+   * user asked for — `ctx 84k/128k(66%)` — when the rail folds and its own
+   * `ctx 66% · 84k / 128k` line goes away. Optional so a host that never measured
+   * an occupancy (the headless adapter, a mod test) stays type-correct instead of
+   * declaring a zero it does not know.
+   */
+  usedTokens?: number | null;
 }
 
 export interface ModCostContext {

@@ -109,6 +109,10 @@ export function buildCliModContext(input: CliModContextBuildInput): ModContext {
       usedPercentage: percentages?.used ?? null,
       remainingPercentage: percentages?.remaining ?? null,
       currentUsage: null,
+      // Unknown is not zero: an absent occupancy is what the status line's chip
+      // must not print as `ctx 0/235k(0%)`.
+      usedTokens:
+        input.usedContextTokens === undefined ? null : usedContextTokens,
     },
     cost: {
       totalDurationMs,

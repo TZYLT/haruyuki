@@ -1,8 +1,12 @@
 import chalk from "chalk";
 import type { ReactNode } from "react";
+import { isRailDrawn } from "@/cli/app/shell/rail-state";
 import { colors } from "@/cli/components/colors";
 import { Box, Text } from "@/cli/display/DisplayComponents";
-import { truncateStatuslineText } from "@/cli/display/statusline/formatting";
+import {
+  statuslineContextLabel,
+  truncateStatuslineText,
+} from "@/cli/display/statusline/formatting";
 import type { StatuslineUiContext } from "@/cli/display/statusline/types";
 import type { ModContext } from "@/mods/types";
 
@@ -27,7 +31,22 @@ export function buildDefaultStatuslineParts(
   rightColumnWidth = getDefaultStatuslineRightColumnWidth(context, ui),
 ): DefaultStatuslineParts {
   const separatorWidth = 3;
-  const availableTextWidth = Math.max(12, rightColumnWidth - separatorWidth);
+  // The context chip only exists while the rail is folded: with the rail on
+  // screen the same number is already printed there (`《32》§6.3` — "折叠后只把
+  // ctx 降级进状态行"), and printing it twice would spend the status row on a
+  // duplicate.
+  const contextLabel = isRailDrawn()
+    ? null
+    : statuslineContextLabel({
+        usedTokens: context.contextWindow.usedTokens ?? null,
+        windowSize: context.contextWindow.size,
+      });
+  const contextWidth =
+    contextLabel === null ? 0 : separatorWidth + contextLabel.length;
+  const availableTextWidth = Math.max(
+    12,
+    rightColumnWidth - separatorWidth - contextWidth,
+  );
   const maxAgentChars = Math.max(8, Math.floor(availableTextWidth * 0.4));
   const displayAgentName = truncateStatuslineText(
     context.agent.name || "Unnamed",
@@ -43,13 +62,20 @@ export function buildDefaultStatuslineParts(
   );
 
   const rightWidth =
-    displayAgentName.length + separatorWidth + displayModel.length;
+    displayAgentName.length +
+    separatorWidth +
+    displayModel.length +
+    contextWidth;
   const rightPrefixSpaces = Math.max(0, rightColumnWidth - rightWidth);
 
   const rightCoreParts: string[] = [];
   rightCoreParts.push(chalk.hex(colors.footer.agentName)(displayAgentName));
   rightCoreParts.push(chalk.dim(" · "));
   rightCoreParts.push(chalk.dim(displayModel));
+  if (contextLabel !== null) {
+    rightCoreParts.push(chalk.dim(" · "));
+    rightCoreParts.push(chalk.dim(contextLabel));
+  }
 
   const rightCore = rightCoreParts.join("");
   const right = " ".repeat(rightPrefixSpaces) + rightCore;

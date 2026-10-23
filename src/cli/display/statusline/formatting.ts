@@ -1,5 +1,6 @@
 import stripAnsi from "strip-ansi";
 import { terminalTextWidth } from "@/cli/helpers/char-width";
+import { formatCompact } from "@/cli/helpers/format";
 
 const OSC8 = "\x1b]8;;";
 const ST = "\x1b\\";
@@ -153,4 +154,35 @@ export function columns(parts: string[], width: number): string {
 export function link(label: string, url: string): string {
   if (!url) return label;
   return `${OSC8}${url}${ST}${label}${OSC8}${ST}`;
+}
+
+/**
+ * The rail's context number, in the one line the status line has left.
+ *
+ * While the rail is on screen it prints `ctx 66% · 84k / 128k` itself; when the
+ * terminal folds it (`《32》§6.3`, `<80` columns or `<26` rows) that number is the
+ * one thing in the rail that can page a conversation out, so it moves to the
+ * bottom row instead of vanishing. The format is the compact pair — `ctx
+ * 84k/128k(66%)` — because the status line shares its row with `agent · model`:
+ * the sidebar's spelling (`84k / 128k`) spends four columns on air the bottom row
+ * does not have.
+ *
+ * `null` when there is nothing honest to print: no window size means no
+ * percentage, an unreported occupancy means no count, and **zero counts as
+ * unreported** — the rail prints `ctx —` for it too (`sidebar-sections.ts`'s
+ * `hasUsage`), so a chip reading `ctx 0/235k(0%)` on a fresh conversation would
+ * be the one place the app claimed to have measured nothing.
+ */
+export function statuslineContextLabel(input: {
+  usedTokens: number | null;
+  windowSize: number;
+}): string | null {
+  if (input.usedTokens === null || input.usedTokens <= 0) return null;
+  const used = formatCompact(input.usedTokens);
+  if (input.windowSize <= 0) return `ctx ${used}`;
+  const percent = Math.min(
+    100,
+    Math.max(0, Math.round((input.usedTokens / input.windowSize) * 100)),
+  );
+  return `ctx ${used}/${formatCompact(input.windowSize)}(${percent}%)`;
 }

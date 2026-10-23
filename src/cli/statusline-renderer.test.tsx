@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import stripAnsi from "strip-ansi";
+import {
+  resetRailStateForTests,
+  setRailDrawn,
+} from "@/cli/app/shell/rail-state";
 import { shouldRenderDefaultStatuslineRenderer } from "@/cli/display/statusline/default-renderer-activation";
 import {
   buildDefaultStatuslineParts,
@@ -24,6 +28,8 @@ function createStatuslineFixture({
   rightColumnWidth = 80,
   terminalWidth = 120,
   toolset = "letta-code",
+  usedContextTokens,
+  contextWindowSize,
 }: {
   agentName?: string;
   modelDisplayName?: string;
@@ -31,6 +37,8 @@ function createStatuslineFixture({
   rightColumnWidth?: number;
   terminalWidth?: number;
   toolset?: string;
+  usedContextTokens?: number;
+  contextWindowSize?: number;
 } = {}): { context: ModContext; ui: StatuslineUiContext } {
   return {
     context: buildCliModContext({
@@ -42,6 +50,8 @@ function createStatuslineFixture({
       reasoningEffort,
       terminalWidth,
       toolset,
+      usedContextTokens,
+      contextWindowSize,
     }),
     ui: {
       isByokProvider: false,
@@ -124,5 +134,62 @@ describe("statusline renderers", () => {
         transientHintActive: true,
       }),
     ).toBe(false);
+  });
+
+  test("the context chip appears only when the rail has folded", () => {
+    // `《32》§6.3`: with the rail on screen the ctx number is the rail's; when it
+    // folds, that number is the one thing that can page a conversation out, so it
+    // moves to the bottom row instead of vanishing (which is what it used to do).
+    const folded = () => {
+      setRailDrawn(false);
+      const { context, ui } = createStatuslineFixture({
+        usedContextTokens: 84_000,
+        contextWindowSize: 128_000,
+      });
+      return stripAnsi(String(buildDefaultStatuslineParts(context, ui).right));
+    };
+
+    expect(folded()).toContain("ctx 84k/128k(66%)");
+
+    setRailDrawn(true);
+    const { context, ui } = createStatuslineFixture({
+      usedContextTokens: 84_000,
+      contextWindowSize: 128_000,
+    });
+    // Not printed twice: with the rail up, the number is already on the rail.
+    expect(
+      stripAnsi(String(buildDefaultStatuslineParts(context, ui).right)),
+    ).not.toContain("ctx ");
+    resetRailStateForTests();
+  });
+
+  test("the chip says nothing it did not measure", () => {
+    setRailDrawn(false);
+    const unknown = createStatuslineFixture({ contextWindowSize: 128_000 });
+    // No occupancy reported: an absent number must not become `ctx 0/128k(0%)`.
+    expect(
+      stripAnsi(
+        String(buildDefaultStatuslineParts(unknown.context, unknown.ui).right),
+      ),
+    ).not.toContain("ctx ");
+    // Zero is "nothing measured yet", the reading the rail itself gives it.
+    const fresh = createStatuslineFixture({
+      usedContextTokens: 0,
+      contextWindowSize: 128_000,
+    });
+    expect(
+      stripAnsi(
+        String(buildDefaultStatuslineParts(fresh.context, fresh.ui).right),
+      ),
+    ).not.toContain("ctx ");
+    const noWindow = createStatuslineFixture({ usedContextTokens: 84_000 });
+    expect(
+      stripAnsi(
+        String(
+          buildDefaultStatuslineParts(noWindow.context, noWindow.ui).right,
+        ),
+      ),
+    ).toContain("ctx 84k");
+    resetRailStateForTests();
   });
 });
