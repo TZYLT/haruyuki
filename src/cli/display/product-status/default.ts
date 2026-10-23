@@ -1,6 +1,6 @@
-import stringWidth from "string-width";
 import { BRAILLE_SPINNER_FRAMES } from "@/cli/components/BlinkingSpinner";
 import { colors } from "@/cli/components/colors";
+import { terminalTextWidth } from "@/cli/helpers/char-width";
 import type { ModPanel } from "@/cli/mods/types";
 import { DEFAULT_PRODUCT_STATUS_ORDER } from "./order";
 
@@ -20,7 +20,10 @@ export interface DefaultProductStatusPanelOptions {
 }
 
 function paddedSpinnerFrame(frame: string, width: number): string {
-  const frameWidth = stringWidth(frame);
+  // The padding is columns the terminal will draw, not `string-width`'s answer: the
+  // fallback frame is `·`, which is ambiguous — one column under Consolas and two
+  // under a CJK face — and a one-cell error here shifts the whole status line.
+  const frameWidth = terminalTextWidth(frame);
   const targetWidth = Math.max(1, width);
   const totalPadding = Math.max(0, targetWidth - frameWidth);
   const leftPadding = Math.floor(totalPadding / 2);

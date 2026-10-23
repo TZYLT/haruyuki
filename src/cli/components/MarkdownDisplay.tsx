@@ -1,6 +1,6 @@
 import { Box, Transform } from "ink";
 import type React from "react";
-import stringWidth from "string-width";
+import { terminalTextWidth } from "@/cli/helpers/char-width";
 import {
   BLOCKQUOTE_RE,
   CODE_FENCE_OPEN_RE,
@@ -60,7 +60,11 @@ export const MarkdownDisplay: React.FC<MarkdownDisplayProps> = ({
   const bgAnsi = backgroundColor ? hexToBgAnsi(backgroundColor) : "";
   const padLine = (ln: string): string => {
     if (!contentWidth || !backgroundColor) return ln;
-    const visWidth = stringWidth(ln);
+    // The terminal's columns, not `string-width`'s: the rendered line carries ANSI
+    // (stripped by `terminalTextWidth`) and may carry `—`/`·`, which a CJK console
+    // face draws two columns wide. Over-padding pushes the background past the box
+    // and Ink wraps the line, adding a row.
+    const visWidth = terminalTextWidth(ln);
     const pad = Math.max(0, contentWidth - visWidth);
     if (pad <= 0) return ln;
     return `${ln}${bgAnsi}${" ".repeat(pad)}\x1b[0m`;

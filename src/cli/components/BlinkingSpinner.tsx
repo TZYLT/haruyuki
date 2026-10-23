@@ -1,6 +1,6 @@
 import { memo, useEffect, useState } from "react";
-import stringWidth from "string-width";
 import { useAnimation } from "@/cli/contexts/AnimationContext.js";
+import { terminalTextWidth } from "@/cli/helpers/char-width";
 import { colors } from "./colors.js";
 import { useFrameCycle } from "./spinners/use-frame-cycle.js";
 import { Text } from "./Text";
@@ -65,7 +65,9 @@ export const BlinkingSpinner = memo(
           : (frames[0] ?? "·")
         : "·";
 
-    const frameWidth = stringWidth(frame);
+    // The fallback frame is `·` (ambiguous: one column or two); padding it by
+    // `string-width`'s one column shifts everything after it on a CJK console face.
+    const frameWidth = terminalTextWidth(frame);
     const targetWidth = Math.max(1, width);
     const totalPadding = Math.max(0, targetWidth - frameWidth);
     const leftPadding = Math.floor(totalPadding / 2);

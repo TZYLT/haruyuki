@@ -1,8 +1,8 @@
 import { memo } from "react";
-import stringWidth from "string-width";
 import { colors } from "@/cli/components/colors.js";
 import { Text } from "@/cli/components/Text";
 import { useAnimation } from "@/cli/contexts/AnimationContext.js";
+import { terminalTextWidth } from "@/cli/helpers/char-width";
 import {
   BRAILLE_ANIMATIONS,
   type BrailleAnimationKey,
@@ -62,6 +62,25 @@ function resolveAnimationKey(
 }
 
 /**
+ * Center one spinner frame in `width` cells.
+ *
+ * The columns are the **terminal's**, not `string-width`'s: the fallback frame is
+ * `·`, which Unicode calls ambiguous — one column under a Western console face and
+ * two under a CJK one — and padding it by one column shifts everything drawn after
+ * the spinner by a cell. (Same rule as `BlinkingSpinner`.)
+ *
+ * Exported so a test can pin the ambiguous case without a terminal.
+ */
+export function padStatusSpinnerFrame(frame: string, width: number): string {
+  const frameWidth = terminalTextWidth(frame);
+  const targetWidth = Math.max(1, width);
+  const totalPadding = Math.max(0, targetWidth - frameWidth);
+  const leftPadding = Math.floor(totalPadding / 2);
+  const rightPadding = totalPadding - leftPadding;
+  return " ".repeat(leftPadding) + frame + " ".repeat(rightPadding);
+}
+
+/**
  * Spinner for the streaming-status row of the chat input.
  *
  * Selection priority:
@@ -91,13 +110,7 @@ export const StreamingStatusSpinner = memo(
     const frameIndex = useFrameCycle(frames, intervalMs, shouldAnimate);
     const frame = frames[frameIndex] ?? frames[0] ?? "·";
 
-    const frameWidth = stringWidth(frame);
-    const targetWidth = Math.max(1, width);
-    const totalPadding = Math.max(0, targetWidth - frameWidth);
-    const leftPadding = Math.floor(totalPadding / 2);
-    const rightPadding = totalPadding - leftPadding;
-    const paddedFrame =
-      " ".repeat(leftPadding) + frame + " ".repeat(rightPadding);
+    const paddedFrame = padStatusSpinnerFrame(frame, width);
 
     const output = paddedFrame + " ".repeat(Math.max(0, marginRight));
 

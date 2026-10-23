@@ -1,7 +1,6 @@
 import { Box } from "ink";
 import Link from "ink-link";
 import { memo, useMemo } from "react";
-import stringWidth from "string-width";
 import type { ModelReasoningEffort } from "@/agent/model";
 import { isCloudServerUrl } from "@/backend/api/server-url";
 import {
@@ -9,6 +8,7 @@ import {
   buildChatWebUrl,
   isLocalAgentId,
 } from "@/cli/helpers/app-urls";
+import { terminalTextWidth } from "@/cli/helpers/char-width";
 import { shouldHideReasoningForModelDisplay } from "@/cli/helpers/startup-model-display";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
 import { DEFAULT_AGENT_NAME } from "@/constants";
@@ -39,13 +39,21 @@ function formatReasoningLabel(
   return null;
 }
 
+/**
+ * Wrap a token by the columns the **terminal** draws.
+ *
+ * `string-width` answers one column for `·`/`—`; a CJK console face draws two, and
+ * the footer line this feeds would then be wider than the box it was wrapped for.
+ * Ink wraps what it is given, so a pre-wrap that undercounts costs an extra physical
+ * row in the footer.
+ */
 function splitTokenToWidth(token: string, maxWidth: number): string[] {
   const chunks: string[] = [];
   let current = "";
 
   for (const char of Array.from(token)) {
     const candidate = `${current}${char}`;
-    if (current && stringWidth(candidate) > maxWidth) {
+    if (current && terminalTextWidth(candidate) > maxWidth) {
       chunks.push(current);
       current = char;
     } else {
@@ -68,7 +76,7 @@ function wrapTextToWidth(text: string, maxWidth: number): string[] {
 
   for (const word of words) {
     if (!current) {
-      if (stringWidth(word) <= maxWidth) {
+      if (terminalTextWidth(word) <= maxWidth) {
         current = word;
       } else {
         const chunks = splitTokenToWidth(word, maxWidth);
@@ -79,13 +87,13 @@ function wrapTextToWidth(text: string, maxWidth: number): string[] {
     }
 
     const candidate = `${current} ${word}`;
-    if (stringWidth(candidate) <= maxWidth) {
+    if (terminalTextWidth(candidate) <= maxWidth) {
       current = candidate;
       continue;
     }
 
     lines.push(current);
-    if (stringWidth(word) <= maxWidth) {
+    if (terminalTextWidth(word) <= maxWidth) {
       current = word;
     } else {
       const chunks = splitTokenToWidth(word, maxWidth);
