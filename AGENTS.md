@@ -121,6 +121,25 @@ oversized files are pinned in `scripts/source-file-size-baseline.json`: they may
 shrink, but they may not grow. Lower the baseline in the same change whenever an
 oversized file gets smaller, and remove its entry once it reaches the limit.
 
+**Wiring exception (a pinned or near-ceiling file may grow slightly).** Wiring an
+existing feature — a call site, a prop, an import and the parameters it needs —
+may add a few lines to a file that is already at the ceiling, so a mechanical
+connection does not force a refactor of a module the feature does not own. Raise
+the baseline by exactly the growth in that change. Two conditions:
+
+1. **It is plumbing, not behaviour.** A new branch, a new exported helper, a new
+   state block or a new render section is new behaviour: it goes in a new module,
+   not into the pinned file. If the diff needs a sentence to explain what it now
+   does, this exception does not cover it.
+2. **It is recorded where the work is recorded**: append file, line delta and
+   reason to the current work log (`docs/NN`, when this checkout keeps one), or
+   ask the maintainer before making the change. A growth with no record is a
+   ratchet failure however small it is.
+
+The exception is deliberately procedural: the check can only see the number, so
+the record is what keeps the ratchet's history readable. It does not apply to
+*new* files — those start under the limit or not at all.
+
 **Why:** Agents commonly inspect large files in slices and miss distant state,
 cleanup, or fallback paths. Responsibility-sized modules make the whole behavior
 readable in one pass and give tests an obvious home.
