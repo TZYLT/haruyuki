@@ -165,7 +165,9 @@ memory.
 
 [Common commands reference (Chinese)](https://github.com/TZYLT/haruyuki/blob/main/docs/commands.zh-CN.md)
 
-## 5. Platform notes and known limitations
+## 5. Known limits and potential problems
+
+### Known limits
 
 | Item | Notes |
 |---|---|
@@ -173,6 +175,19 @@ memory.
 | Sandboxing | Kernel-level filesystem sandboxing is available only on macOS (seatbelt) and Linux (bwrap); **Windows has no kernel backend** (a code fact — see `src/sandbox/availability.ts`), so the cross-agent memory fence falls back to a static path guard |
 | Legacy flags | `--computer`, `--no-wait`, `--memfs-startup` and similar are still in the help output (upstream compatibility surface); this fork does not promise their cloud semantics work |
 | Multiple platforms untested | This project is developed on Windows and I have no other machines to test on. If you hit a problem, please open an issue |
+
+### If you don't like the new TUI, or cannot start it
+
+Turn the full-screen shell off — that is the new TUI with tabs and mouse clicks — or roll back to the
+old version.
+
+To get the old **append-style** shell back: run `/experiments` and turn **full-screen TUI** off. It takes
+effect on the **next start**. With it off you get **compatibility mode**: the command set, the keys and
+the output semantics are the ones from before the new shell.
+
+If compatibility mode does not run for you either, roll the whole version back and install the old one.
+Config, memory and conversations live in `~/.haruyuki` and do not need to move; installing `0.2.1` is
+enough. If you are willing, opening an issue helps us improve compatibility.
 
 ## 6. Roadmap and contributing
 
@@ -182,35 +197,13 @@ something or want to contribute, a pull request is very welcome.
 **To do:**
 - [x] Prefix freezing → raise cache hit rate and cut cost substantially
 - [x] Topic markers → freer context trimming
-- [ ] Passive memory recall → improve answer accuracy (the effect on cost, short or long term, is not yet clear)
-- [ ] Single-conversation mode → a continuous, unified conversation experience
-- [ ] Repackage the GUI → a clean, fast graphical interface
+- [x] Passive memory recall → improve answer accuracy (the effect on cost, short or long term, is not yet clear)
+- [ ] Active conversation tree → a continuous, unified conversation experience
+- [x] Redesign the TUI (still polishing the details)
 - [ ] Network access and a web UI
-- [ ] Downstream polish (voice synthesis, character art, and so on)
+- [ ] A stable "dreaming" mechanism → a little extra spend on memory upkeep and on finishing leftover small tasks
 - [ ] Stable personality and conversational style
-
-### Turning the full-screen shell off, or rolling back
-
-The full-screen shell (tab strip, right-hand rail, the `Settings` / `Usage` pages, toasts, message
-history, the diff face) is behind one experiment, `ui_v2`, and it is **on** by default — it is the shell
-this release ships:
-
-- to get the old **append-style** shell back, run `/experiments` and turn **full-screen TUI** off. It
-  takes effect on the **next start** — the shell is decided once per process (the tab strip, the
-  alternate screen and the page commands all hang off that one answer), so flipping it mid-session
-  deliberately does not repaint the shell you are in (the settings row's `restart` marker and the
-  selector's footer say so);
-- from a script or a wrapper: `HARUYUKI_UI_V2=0` means off (`1` / `true` / `yes` mean on). It loses to a
-  value stored by `/experiments` — if you turned it off there, an env `1` will not turn it back on;
-- with it off you get **compatibility mode**: the command set, the keys and the output semantics are the
-  ones from before the new shell, minus the surfaces listed above.
-
-Rolling back a version: install the old one. Config, memory and conversations live in `~/.haruyuki` and
-do not move with the version number:
-
-```bash
-npm install -g haruyuki@0.2.1     # a specific version; see the table below
-```
+- [ ] Vector-embedding-enhanced retrieval
 
 ### Version history at a glance
 
@@ -226,7 +219,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
-| `0.3.0` | - | **The full-screen shell becomes the default**: alternate screen, tab strip, `Settings` / `Usage` pages, right-hand info rail, status row, toasts, message history, the diff screen, mouse and copy; the transcript becomes a bounded viewport with back-paging; the render stack moves to Ink 7 + React 19. Turn it off with `/experiments` or `HARUYUKI_UI_V2=0` to get the old shell back |
+| `0.3.0` | + | **A full TUI upgrade**: the TUI becomes a full-screen shell with mouse clicks and tabs, plus settings and usage pages |
 | `0.2.1` | + | Fixes known problems and updates the documentation |
 | `0.2.0` | + | **Passive recall**: every question searches your past conversations and memory files and brings the relevant passages into the current turn, so answers fit your history better; the effect on cost, short or long term, is not yet clear |
 | `0.1.3` | + | Adds `hryk` as a shortcut input, fully equivalent to `haruyuki` |
@@ -333,3 +326,5 @@ Haruyuki is derived from [letta-code](https://github.com/letta-ai/letta-code), b
 [MemGPT](https://arxiv.org/abs/2310.08560) and [sleep-time compute](https://arxiv.org/abs/2504.13171) (now
 called "dreaming"). Upstream code is licensed under Apache-2.0, and this fork is grateful for it. Apart from
 attribution and technical identifiers, this project has no relationship with upstream.
+
+Friend links: [an unofficial Haruyuki desktop client for macOS](https://github.com/QianXiquq/haruyuki-desktop) — please support it.
