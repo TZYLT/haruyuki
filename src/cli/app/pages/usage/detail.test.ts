@@ -181,6 +181,27 @@ describe("buildDetailRows", () => {
     expect(detailOf([])[0]).toBe("No usage recorded yet.");
   });
 
+  test("every section opens after exactly one blank row", () => {
+    // The 2026-10-23 pass: four dim titles on consecutive lines read as one long
+    // list, so each section now starts after a row of air — the first one
+    // included, otherwise its title touches the page header.
+    const rows = detailOf([record("2026-10-22T09")]);
+    const titles = [
+      "Cost (est.",
+      "Context composition (latest request)",
+      "By model",
+      "History (last 14 days)",
+    ];
+    for (const title of titles) {
+      const index = rows.findIndex((row) => row.startsWith(title));
+      expect(index).toBeGreaterThan(0);
+      expect(rows[index - 1]).toBe("");
+    }
+    // One blank per section: a doubled blank is a design bug the frame would
+    // happily paint, so the count is pinned rather than only the position.
+    expect(rows.filter((row) => row === "")).toHaveLength(titles.length);
+  });
+
   test("the history table carries one row per active day, with its cost", () => {
     const rows = detailOf([
       record("2026-10-22T09", {

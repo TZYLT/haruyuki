@@ -185,6 +185,28 @@ describe("the usage page", () => {
     expect((await tty.rows()).join("\n")).toContain("Usage / Overview");
   });
 
+  test("the detail screen paints a blank row above every section", async () => {
+    // The row list says "blank"; only the frame knows whether it *painted* one
+    // (Ink collapses an empty <Text>). This is the same class of bug as the
+    // overview's wordmark running into the hero number (2026-10-22).
+    await homeWithLedger();
+    const tty = mount(100);
+    await settle();
+    await tty.press(TAB);
+    await settle();
+    const rows = await tty.rows();
+    for (const title of [
+      "Cost (est.",
+      "Context composition",
+      "By model",
+      "History (last",
+    ]) {
+      const index = rows.findIndex((row) => row.includes(title));
+      expect(index).toBeGreaterThan(0);
+      expect(rows[index - 1]?.trim()).toBe("");
+    }
+  });
+
   test("Esc hands focus back to the conversation tab", async () => {
     await homeWithLedger();
     const tty = mount(100);

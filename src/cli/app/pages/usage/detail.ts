@@ -20,6 +20,15 @@
  *   cost inside the content width: the row came to ~75 columns against the ~65
  *   the band gives. The counts and the cost survive, and the shares are one
  *   screen up, aggregated over the same buckets. Recorded in §14.8.
+ *
+ * **The third visual pass (2026-10-23).** Four section titles and a table used to
+ * sit on five consecutive lines, so the screen read as one long list with dim
+ * captions in it rather than as four blocks. Every section now opens after one
+ * blank row — including `Cost`, whose title otherwise touched the page header.
+ * The blank is the frame's empty `text` row, which `page-frame.tsx` paints as one
+ * space (Ink collapses an empty `<Text>` to zero height, so asking for the row is
+ * not the same as getting it). It costs four rows: the detail screen does not
+ * have a tier rule — it scrolls — so nothing is pushed off screen by them.
  */
 
 import type { PageRow } from "@/cli/app/pages/page-model";
@@ -51,6 +60,23 @@ function textRow(text: string, width: number): PageRow {
 
 function headerRow(text: string): PageRow {
   return { kind: "header", text };
+}
+
+/**
+ * A row of air between two sections.
+ *
+ * `text: ""` and not a space: the frame owns the painting rule (`page-frame.tsx`
+ * draws an empty text row as one space, because Ink would otherwise collapse it
+ * to zero height and the section would touch the one above it again).
+ */
+function blankRow(): PageRow {
+  return { kind: "text", text: "" };
+}
+
+/** Open a section: one blank row, then its dim title. */
+function openSection(rows: PageRow[], title: string): void {
+  rows.push(blankRow());
+  rows.push(headerRow(title));
 }
 
 interface BucketRow {
@@ -151,7 +177,7 @@ export function buildDetailRows(input: {
   const breakdown = summary.totals.costBreakdown;
   // No record in scope carried a price: the buckets are unknown, not zero.
   const priced = summary.totals.cost !== undefined;
-  rows.push(headerRow(`Cost (est. ${money(summary.totals.cost)})`));
+  openSection(rows, `Cost (est. ${money(summary.totals.cost)})`);
   const bucketRows: BucketRow[] = [
     {
       label: "Input miss",
@@ -184,7 +210,7 @@ export function buildDetailRows(input: {
     rows.push(textRow(`  ${label}${count}  ${amount}  ${share}`, width));
   }
 
-  rows.push(headerRow("Context composition (latest request)"));
+  openSection(rows, "Context composition (latest request)");
   const contextTokens = latestContextTokens(records);
   const composition = latestContextBreakdown(records);
   if (composition) {
@@ -225,7 +251,7 @@ export function buildDetailRows(input: {
     );
   }
 
-  rows.push(headerRow("By model"));
+  openSection(rows, "By model");
   for (const [model, totals] of aggregateUsageByModel(records)) {
     const input = totals.prompt + totals.cachedInput + totals.cacheWrite;
     const cost = totals.cost.total > 0 ? money(totals.cost.total) : "—";
@@ -237,7 +263,7 @@ export function buildDetailRows(input: {
     );
   }
 
-  rows.push(headerRow(`History (last ${DETAIL_HISTORY_DAYS} days)`));
+  openSection(rows, `History (last ${DETAIL_HISTORY_DAYS} days)`);
   const byDay = aggregateUsageByDay(records);
   const days = recentDays(records, now);
   if (days.length === 0) {
