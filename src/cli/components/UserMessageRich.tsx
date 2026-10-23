@@ -52,12 +52,6 @@ export function formatSystemReminderBlock(
   return `▸ System reminder · ${lineLabel} (ctrl+r to expand)`;
 }
 
-function getCurrentStdoutColumns(): number | null {
-  if (typeof process === "undefined") return null;
-  const columns = (process.stdout as NodeJS.WriteStream | undefined)?.columns;
-  return typeof columns === "number" && columns > 0 ? columns : null;
-}
-
 /**
  * Split text into system-reminder blocks and user content blocks.
  * System-reminder blocks are identified by <system-reminder>...</system-reminder> tags.
@@ -181,8 +175,9 @@ export function renderBlock(
  *
  * Renders user messages as pre-formatted text with ANSI background codes:
  * - Custom prompt prefix on first line, matching-width spaces on subsequent lines
- * - User content blocks: full-width highlight box extending to terminal edge
- *   with one highlighted blank row above and below
+ * - User content blocks: full-width highlight box extending to the layout's right
+ *   edge (the terminal's in the append shell, the transcript band's in the
+ *   full-screen one) with one highlighted blank row above and below
  * - Word wrapping respects the prompt prefix width
  * - System-reminder parts are shown plain (no highlight), user parts highlighted
  */
@@ -198,7 +193,18 @@ export const UserMessage = memo(
     systemRemindersVisible?: boolean;
     systemRemindersExpanded?: boolean;
   }) => {
-    const trackedColumns = useTerminalWidth();
+    // **The width is whatever `useTerminalWidth()` says, and nothing else.** Inside
+    // the full-screen shell that is the transcript *band* (`TranscriptColumnsScope`),
+    // which is narrower than the terminal because the context rail sits beside it and
+    // two columns of right margin are kept as slack. This used to prefer
+    // `process.stdout.columns` — the whole terminal — whenever it was available, so
+    // the pre-wrap ran at the terminal's width while the box holding the rows was
+    // the band's: every wrapped row was wider than its container and Ink truncated
+    // it, which is the `…` that appeared mid-sentence in the main view on 2026-10-23.
+    // The row model measures at the band width too (`ViewportTranscript` passes
+    // `contentColumns`), so reading the same one number here is also what keeps the
+    // predicted height equal to the painted height.
+    const columns = useTerminalWidth();
     // Feature ②'s tier is display state like the reminder toggle beside it, so it
     // is read from the store rather than drilled in as a prop: Ctrl+R's gate lives
     // outside React and has to see the same value. Read before the early return
@@ -207,7 +213,6 @@ export const UserMessage = memo(
       subscribeToSystemReminderDisplay,
       getRecallDisplay,
     );
-    const columns = getCurrentStdoutColumns() ?? trackedColumns;
     const promptPrefix = `${prompt || CLI_GLYPHS.prompt} `;
     const prefixWidth = inkStringWidth(promptPrefix);
     const continuationPrefix = " ".repeat(prefixWidth);
