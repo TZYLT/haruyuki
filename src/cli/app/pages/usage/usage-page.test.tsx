@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { clearAllSubagents } from "@/agent/subagent-state";
 import type { AppViewProps } from "@/cli/app/AppView";
 import { ChromeHeightContext } from "@/cli/app/chrome-height";
-import { UsagePage } from "@/cli/app/pages/usage/usage-page";
+import {
+  UsagePage,
+  usageHeaderSegments,
+} from "@/cli/app/pages/usage/usage-page";
 import {
   focusTab,
   getTabsState,
@@ -116,6 +119,32 @@ function mount(columns: number): InkTty {
   );
 }
 
+/** A left click on a screen cell (1-based row and column). */
+async function clickAt(
+  tty: InkTty,
+  row: number,
+  column: number,
+): Promise<void> {
+  await tty.press(`${ESC}[<0;${column};${row}M`, `${ESC}[<0;${column};${row}m`);
+  await settle(120);
+}
+
+/**
+ * The 1-based column of a word painted on the header row.
+ *
+ * Read out of the frame rather than hard-coded: the header's own layout is what a
+ * click has to agree with, and a test that computed the column itself would pass
+ * while the drawn line disagreed. The header is screen row 1, and the band's
+ * padding puts the first glyph in column 2 — the same coordinates the settings
+ * page's breadcrumb test uses.
+ */
+async function headerColumn(tty: InkTty, word: string): Promise<number> {
+  const header = (await tty.rows())[0] ?? "";
+  const index = header.indexOf(word);
+  if (index < 0) throw new Error(`the header does not draw ${word}: ${header}`);
+  return index + 1;
+}
+
 afterEach(async () => {
   if (originalHome === undefined) {
     delete process.env.HARUYUKI_HOME;
@@ -196,6 +225,57 @@ describe("the usage page", () => {
     await tty.press(TAB);
     await settle();
     expect((await tty.rows()).join("\n")).toContain("Usage / Overview");
+  });
+
+  test("only the two screen words carry a target", () => {
+    const segments = usageHeaderSegments("overview", "2026-09-28 – 2026-10-22");
+    expect(
+      segments.flatMap((segment) => (segment.target ? [segment.target] : [])),
+    ).toEqual(["overview", "detail"]);
+    // The page name, the gap, the date and the key hint are told, not aimed at.
+    expect(segments[0]?.target).toBeUndefined();
+    expect(segments[2]?.target).toBeUndefined();
+    expect(segments[4]?.target).toBeUndefined();
+  });
+
+  test("clicking a screen word switches, the same move Tab makes", async () => {
+    // A page owns the main area, so a mouse user had no way to change screens
+    // without going back to the keyboard (2026-10-23). The header draws both
+    // words, so each is a target whatever screen is up.
+    await homeWithLedger();
+    const tty = mount(100);
+    try {
+      await settle();
+      expect((await tty.rows())[0]).toContain("Usage / Overview");
+
+      await clickAt(tty, 1, await headerColumn(tty, "Detail"));
+      const detail = (await tty.rows()).join("\n");
+      expect(detail).toContain("Usage / Detail");
+      expect(detail).toContain("Cost (est. $ 1.00000)");
+
+      // The words swap places, and the one that now names the other screen is
+      // still a target: clicking it goes back.
+      await clickAt(tty, 1, await headerColumn(tty, "Overview"));
+      expect((await tty.rows()).join("\n")).toContain("Usage / Overview");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the page name, the date and the key hint are not click targets", async () => {
+    await homeWithLedger();
+    const tty = mount(100);
+    try {
+      await settle();
+      // Aim at each non-segment on purpose: none may change the screen, because
+      // a click there is spent on nothing rather than on the screen switcher.
+      for (const word of ["Usage", "2026-", "Tab switch"]) {
+        await clickAt(tty, 1, await headerColumn(tty, word));
+        expect((await tty.rows())[0]).toContain("Usage / Overview");
+      }
+    } finally {
+      tty.stop();
+    }
   });
 
   test("the detail screen paints a blank row above every section", async () => {

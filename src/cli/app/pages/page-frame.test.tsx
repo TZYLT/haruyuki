@@ -122,7 +122,7 @@ describe("the page frame", () => {
     try {
       const rows = await page.rows({ keepTrailingBlanks: true });
       expect(rows[0]).toContain("Usage / Overview");
-      expect(rows.join("\n")).toContain("Tab detail");
+      expect(rows.join("\n")).toContain("Tab switch");
     } finally {
       page.stop();
       if (originalHome === undefined) {

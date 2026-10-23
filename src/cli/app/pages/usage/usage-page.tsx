@@ -1,8 +1,9 @@
 // src/cli/app/pages/usage/usage-page.tsx
 
-import { Box } from "ink";
-import { useEffect, useState } from "react";
+import { Box, type DOMElement } from "ink";
+import { useEffect, useRef, useState } from "react";
 import type { AppViewProps } from "@/cli/app/AppView";
+import { type ClickSegment, useLineClicks } from "@/cli/app/pages/click-line";
 import { PageFrame } from "@/cli/app/pages/page-frame";
 import type { PageRow } from "@/cli/app/pages/page-model";
 import { Text } from "@/cli/components/Text";
@@ -25,7 +26,10 @@ type LedgerState =
  * Two screens, one page: `Tab` switches between them (docs/38 §14.1 — the page
  * owns the keyboard, so `Tab` here is **not** the reasoning-level switch it is
  * in the app scope; the binding below is what makes that true, and there is a
- * test for the collision).
+ * test for the collision). The header's two screen words are the same switch for
+ * the pointer, including the one you are already on: clicking a word sets that
+ * screen, never toggles, so a stray click cannot drop you somewhere you did not
+ * aim at.
  *
  * The ledger is read once when the page mounts. It is a JSONL file that only
  * grows at the end of a turn, so there is nothing to poll: switching screens is
@@ -110,25 +114,75 @@ export function UsagePage(view: AppViewProps) {
     <PageFrame
       view={view}
       body={body}
-      headerSlot={<UsageHeader screen={screen} range={rangeLabel(now)} />}
+      headerSlot={
+        <UsageHeader
+          screen={screen}
+          range={rangeLabel(now)}
+          onScreen={setScreen}
+        />
+      }
     />
   );
+}
+
+/** How each screen is written in the header. */
+const SCREEN_LABEL: Record<UsageScreen, string> = {
+  overview: "Overview",
+  detail: "Detail",
+};
+
+/**
+ * The header's clickable words: the screen the page is on, and the other one.
+ *
+ * A page owns the main area, so `Tab` is the keyboard's switch and these words are
+ * the pointer's. Both are drawn — the current one inside the breadcrumb, the other
+ * beside it — because a pointer target that only appears while you are on the
+ * *other* screen is a target you cannot see when you need it. Clicking either sets
+ * that screen (never toggles), which is exactly what `Tab` does.
+ *
+ * The prefix, the date and the key hint are told, not aimed at: they carry no
+ * target, so a click on them is spent on nothing rather than switching screens.
+ */
+export function usageHeaderSegments(
+  screen: UsageScreen,
+  range: string,
+): readonly ClickSegment<UsageScreen>[] {
+  const other: UsageScreen = screen === "overview" ? "detail" : "overview";
+  return [
+    // The page's own name, not a destination.
+    { label: "Usage / " },
+    { label: SCREEN_LABEL[screen], target: screen },
+    { label: "   " },
+    { label: SCREEN_LABEL[other], target: other },
+    { label: `   ${range}   Tab switch · Esc` },
+  ];
 }
 
 function UsageHeader({
   screen,
   range,
+  onScreen,
 }: {
   screen: UsageScreen;
   range: string;
+  onScreen: (screen: UsageScreen) => void;
 }) {
-  const label = screen === "overview" ? "Overview" : "Detail";
-  const other = screen === "overview" ? "Tab detail" : "Tab overview";
+  const headerRef = useRef<DOMElement | null>(null);
+  const other: UsageScreen = screen === "overview" ? "detail" : "overview";
+  useLineClicks<UsageScreen>({
+    ref: headerRef,
+    segments: usageHeaderSegments(screen, range),
+    onSelect: (segment) => {
+      if (segment.target) onScreen(segment.target);
+    },
+    name: "usage-screen-words",
+  });
+
   return (
-    <Box flexDirection="row">
-      <Text bold>{`Usage / ${label}`}</Text>
-      <Text dimColor>{`   ${range}`}</Text>
-      <Text>{`   ${other} · Esc`}</Text>
+    <Box ref={headerRef} flexDirection="row">
+      <Text bold>{`Usage / ${SCREEN_LABEL[screen]}`}</Text>
+      <Text>{`   ${SCREEN_LABEL[other]}`}</Text>
+      <Text dimColor>{`   ${range}   Tab switch · Esc`}</Text>
     </Box>
   );
 }
