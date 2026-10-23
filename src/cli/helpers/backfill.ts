@@ -12,6 +12,7 @@ import {
   SYSTEM_REMINDER_OPEN,
 } from "@/constants";
 import { isRecallReminderText } from "@/reminders/recall-reminder";
+import { debugWarn } from "@/utils/debug";
 import { extractTaskNotificationsForDisplay } from "@/utils/task-notifications";
 import type { Buffers } from "./accumulator";
 import { extractCompactionSummary } from "./compaction-utils";
@@ -143,6 +144,24 @@ function renderUserContentParts(
 }
 
 export function backfillBuffers(buffers: Buffers, history: Message[]): void {
+  // A backfill rebuilds the transcript from message history, so every line that is
+  // **not** a message — a `command` row, a `status` row — is dropped. That is by
+  // design (idempotency), but it is also invisible: a `/context` that finished
+  // while a backfill was in flight would leave no output and no error, which is one
+  // of the two shapes that could explain the "no output" report of 2026-10-23 (the
+  // other is a hung request, closed with a hard deadline in `with-deadline.ts`).
+  // Say it out loud, so a recurrence has a name in the log instead of a shrug.
+  const droppedCommands = buffers.order.filter((id) => {
+    const line = buffers.byId.get(id);
+    return line?.kind === "command" || line?.kind === "bash_command";
+  }).length;
+  if (droppedCommands > 0) {
+    debugWarn(
+      "backfill",
+      `rebuilding the transcript drops ${droppedCommands} finished command row(s)`,
+    );
+  }
+
   // Clear buffers to ensure idempotency (in case this is called multiple times)
   buffers.order = [];
   buffers.byId.clear();

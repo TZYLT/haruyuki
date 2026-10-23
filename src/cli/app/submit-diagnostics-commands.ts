@@ -13,7 +13,18 @@ import {
 import type { ContextTracker } from "@/cli/helpers/context-tracker";
 import { resetContextHistory } from "@/cli/helpers/context-tracker";
 import { formatErrorDetails } from "@/cli/helpers/error-formatter";
+import { withDeadline } from "@/cli/helpers/with-deadline";
 import type { AppCommandRunner } from "./types";
+
+/**
+ * How long `/context` waits for the backend's composition before answering with
+ * what it has locally.
+ *
+ * This fork's backend has no `/v1/agents/:id/context` route, so the honest budget
+ * is short: the number under it (window, occupancy, history) is already known, and
+ * a status row that hangs is worse than a report without the breakdown.
+ */
+const CONTEXT_BREAKDOWN_BUDGET_MS = 1500;
 
 type SubmitCommandResult = { submitted: boolean };
 
@@ -74,21 +85,26 @@ export async function handleDiagnosticsCommand(
 
     const cmd = commandRunner.start(trimmed, "Fetching context breakdown...");
 
+    // The local report never waits on the network: the breakdown is a bonus, and
+    // `withDeadline` is what makes that true. Awaiting the request directly (with
+    // an `AbortController` as the only bound) left the row on "Fetching…" for good
+    // whenever the request hung before `fetch` — the machine saw "no output" and
+    // then saw it work again on its own (2026-10-23).
+    const controller = new AbortController();
     let breakdown: ContextWindowOverview | undefined;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-      try {
-        breakdown = await getAgentContextOverview<ContextWindowOverview>(
-          agentIdRef.current,
-          { signal: controller.signal },
-        );
-      } finally {
-        clearTimeout(timeoutId);
-      }
+      breakdown = await withDeadline(
+        getAgentContextOverview<ContextWindowOverview>(agentIdRef.current, {
+          signal: controller.signal,
+        }),
+        CONTEXT_BREAKDOWN_BUDGET_MS,
+      );
     } catch {
-      // Timeout or network error: proceed without breakdown.
+      // Timeout, 404 from a backend without the endpoint, network error: the
+      // report below is the part that always exists.
+    } finally {
+      // Only meaningful when the deadline won; a settled request ignores it.
+      controller.abort();
     }
 
     cmd.finish(
