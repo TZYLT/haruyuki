@@ -280,7 +280,17 @@ export function settingRow(item: SettingsItem, ctx: SettingsContext): PageRow {
     value: displayValue(item, item.read(ctx)),
     hint: scopeMarker(item),
     // The schema's `reason` already says where to go instead ("use /model").
-    note: item.editable ? undefined : (item.reason ?? "read-only"),
+    //
+    // `requiresRestart` used to be a dead field: assigned by seven schema entries
+    // and read by nobody, so flipping `ui_v2` in this page changed a file and not
+    // the screen — with no hint that a restart was the missing step. It is drawn
+    // in the aside column (accent, like "where to go instead"): the value stays a
+    // value, and a narrow terminal cannot cut the marker into illegibility.
+    note: item.editable
+      ? item.requiresRestart
+        ? "restart"
+        : undefined
+      : (item.reason ?? "read-only"),
     disabled: !item.editable,
   };
 }

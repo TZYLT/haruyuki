@@ -194,6 +194,26 @@ describe("rows", () => {
     expect(row.hint).toBe("[Global]");
     expect(row.note).toBe("start or /reload");
   });
+
+  test("a row that needs a restart says so", () => {
+    // `requiresRestart` was assigned by seven schema entries and read by nobody:
+    // flipping `ui_v2` here rewrote a file, nothing on screen moved, and the page
+    // said nothing about why. The aside column is where the page already tells the
+    // reader "the value you see is not the whole story".
+    const item = SETTINGS_ITEMS.find(
+      (entry) => entry.id === "experiment:ui_v2",
+    );
+    if (!item) throw new Error("ui_v2 is missing from the schema");
+    const row = settingRow(item, CTX);
+    if (row.kind !== "item") throw new Error("not an item row");
+    expect(row.note).toBe("restart");
+    // And a row that takes effect immediately stays quiet.
+    const live = SETTINGS_ITEMS.find((entry) => entry.id === "showCompactions");
+    if (!live) throw new Error("showCompactions is missing");
+    const liveRow = settingRow(live, CTX);
+    if (liveRow.kind !== "item") throw new Error("not an item row");
+    expect(liveRow.note).not.toBe("restart");
+  });
 });
 
 describe("values", () => {

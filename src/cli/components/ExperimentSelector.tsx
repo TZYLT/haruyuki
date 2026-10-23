@@ -56,7 +56,15 @@ export const ExperimentSelector = memo(function ExperimentSelector({
   );
 
   return (
-    <OverlayFrame command="/experiments" title="Toggle Experiments">
+    <OverlayFrame
+      command="/experiments"
+      title="Toggle Experiments"
+      // The full-screen shell is decided **once per process** (`experiments/ui-v2.ts`
+      // caches it), so a toggle here cannot take effect in this session. Saying so
+      // is the difference between "the switch is broken" and "the switch needs the
+      // next start", which is what the machine reported.
+      footer="Shell experiments take effect on the next start."
+    >
       <MultiSelectPicker
         items={items}
         selected={initialSelected}
