@@ -48,6 +48,13 @@ describe("wrappedRowCount / countTextRows", () => {
     expect(wrappedRowCount("hello world", 6)).toBe(2);
   });
 
+  test("fills a hard-wrapped word's last row with the words after it", () => {
+    // Ink's wrapper (wrap-ansi, hard + trim:false) fills the tail of the long
+    // token and continues on that row: 38 columns of `a`, then `aaa tail`.
+    // Flushing the tail into a fresh row measured three rows for a two-row draw.
+    expect(wrappedRowCount(`${"a".repeat(45)} tail`, 38)).toBe(2);
+  });
+
   test("counts hard breaks and wraps together", () => {
     // "hello" / "world" / "x"
     expect(countTextRows("hello world\nx", 6)).toBe(3);

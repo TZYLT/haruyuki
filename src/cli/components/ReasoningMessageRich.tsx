@@ -1,6 +1,7 @@
 import { Box } from "ink";
 import { memo, useSyncExternalStore } from "react";
 import { markdownRowCount } from "@/cli/helpers/markdown-rows";
+import { normalizeMarkdownBody } from "@/cli/helpers/markdown-text";
 import {
   useTerminalRows,
   useTerminalWidth,
@@ -11,14 +12,6 @@ import {
   getThinkingExpanded,
   subscribeToThinkingDisplay,
 } from "./transcript-display-state";
-
-// Helper function to normalize text - copied from old codebase
-// NOTE: Less aggressive than before to preserve spacing when content is split across chunks
-const normalize = (s: string) =>
-  s
-    .replace(/\r\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/^\n+/g, ""); // Only trim leading newlines, preserve trailing ones
 
 type ReasoningLine = {
   kind: "reasoning";
@@ -70,7 +63,7 @@ export const ReasoningMessage = memo(
     const terminalRows = useTerminalRows();
     const contentWidth = Math.max(0, columns - 2);
 
-    const normalizedText = normalize(line.text);
+    const normalizedText = normalizeMarkdownBody(line.text);
 
     // Continuation rows belong to the preceding thinking block. Keep them
     // hidden with that block rather than emitting extra collapsed headers.

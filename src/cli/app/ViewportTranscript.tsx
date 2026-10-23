@@ -583,6 +583,14 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
    * model over-counting, which is the one anomaly this line exists for. A window
    * that starts at 0 is the whole history and is allowed to stop short.
    *
+   * `blankHead` is the same count from the **top** of the band. It is not
+   * decoration: the viewport is bottom-anchored (the newest visible row sits on
+   * the band's last row), so an over-counted window paints short and the gap lands
+   * *above* the content, not below it. The 2026-10-23 report was exactly that
+   * ("large blank area, this time from the top"), and the tail-only probe could
+   * not see it — every logged frame had `blankTail=0`. Both edges are logged now,
+   * and either one is an anomaly when the window is clipped above.
+   *
    * Three guards, because the first version of this log was a mistake worth
    * recording: it wrote a line **per render**, and the session log can be initialised
    * *after* the shell draws, so those lines went to the console, Ink repainted for
@@ -602,13 +610,20 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
     const frame = getTerminalFrame();
     const top = props.reserveTopRows ?? 0;
     let blankTail = 0;
+    let blankHead = 0;
     if (frame) {
       for (let row = top + bandHeight - 1; row > top; row -= 1) {
         if ((frame.lines[row] ?? "").trim().length > 0) break;
         blankTail += 1;
       }
+      // Stop at the row that carries content, and never past the frame: a band
+      // taller than the frame is its own (already separate) artifact.
+      for (let row = top; row < top + bandHeight; row += 1) {
+        if ((frame.lines[row] ?? "").trim().length > 0) break;
+        blankHead += 1;
+      }
     }
-    const shortOfTheBand = blankTail > 0 && window.start > 0;
+    const shortOfTheBand = (blankTail > 0 || blankHead > 0) && window.start > 0;
     if (!shortOfTheBand && !everyFrame) return;
     if (!isDebugLogFileReady()) return;
     const now = Date.now();
@@ -619,7 +634,7 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
     const resident = window.resident;
     debugLog(
       "viewport",
-      `band=${bandHeight} blankTail=${blankTail} items=${items.length} prefix=${olderPrefix} pages=${olderBlocks.length} window=${window.start}..${window.end} offset=${window.contentOffset} fromBottom=${window.scrollFromBottom} anchor=${window.anchor.end}/${window.anchor.delta} resident=${resident === null ? "core" : `${resident.from}..${resident.to}`} rows=${window.debugRows?.join(",") ?? "-"}`,
+      `band=${bandHeight} blankTail=${blankTail} blankHead=${blankHead} items=${items.length} prefix=${olderPrefix} pages=${olderBlocks.length} window=${window.start}..${window.end} offset=${window.contentOffset} fromBottom=${window.scrollFromBottom} anchor=${window.anchor.end}/${window.anchor.delta} resident=${resident === null ? "core" : `${resident.from}..${resident.to}`} rows=${window.debugRows?.join(",") ?? "-"}`,
     );
   }, [
     bandHeight,

@@ -11,6 +11,8 @@
  * Everything here is pure and width-parameterised so it can run outside React.
  */
 
+import wrapAnsi from "wrap-ansi";
+
 /**
  * Match Ink's `@alcalzone/ansi-tokenize/is-fullwidth-code-point` width
  * semantics. In particular U+26A0 WARNING SIGN is narrow here even though
@@ -53,7 +55,16 @@ export function inkStringWidth(text: string): number {
 
 /**
  * Word-wrap plain text to a given visible width.
- * Returns an array of lines, each at most `width` visible characters wide.
+ *
+ * This is the **app's own pre-wrap**, used by renderers that layout each row
+ * themselves (`UserMessageRich.renderBlock`), so those rows never reach Ink's
+ * wrapper. It is deliberately not Ink's algorithm: it keeps no leading space on a
+ * continuation row, and it flushes a long word's tail before the words that
+ * follow it. A pre-wrapping renderer and the row model that mirrors it must use
+ * *this* function (`row-model.ts`'s `renderedBlockRows`), not `wrappedRowCount`.
+ *
+ * For a line Ink itself wraps (`<Text wrap="wrap">`), the exact row count comes
+ * from `wrappedRowCount` instead — see its note.
  */
 export function wrapText(text: string, width: number): string[] {
   if (width <= 0) return [text];
@@ -118,9 +129,42 @@ export function wrapText(text: string, width: number): string[] {
   return lines.length > 0 ? lines : [""];
 }
 
-/** Rows a single hard-break-free line occupies once word-wrapped. */
+/**
+ * Rows a single hard-break-free line occupies once **Ink** wraps it.
+ *
+ * This asks Ink's own wrapper (`wrap-ansi`, the module `ink` loads with
+ * `trim: false, hard: true` for `<Text wrap="wrap">`) rather than re-deriving
+ * its rules. Two of its behaviours are easy to get subtly wrong, and both were
+ * measured against the real renderer on 2026-10-23:
+ *
+ * - **A long word is filled across rows, and the words after it continue on the
+ *   last row** instead of starting a fresh one. The hand-rolled wrapper used to
+ *   flush the tail and open a new line, so a 79-column path followed by
+ *   `(585 KB)` in a 62-column band measured 3 rows where Ink drew 2 — a phantom
+ *   row the viewport turns into blank space at the top.
+ * - **A row break adds a leading space** (`trim: false`), which can cost one more
+ *   column than this file's own `wrapText` assumes.
+ *
+ * A small cache keeps this affordable on the render path: one call per text line
+ * per frame, and `wrap-ansi` segments the string for grapheme clusters. The cache
+ * is bounded and dropped whole on overflow — the entries are cheap to rebuild and
+ * a line's width is identical every frame until the text changes.
+ */
+const WRAP_ROW_CACHE_LIMIT = 4096;
+const wrapRowCache = new Map<string, number>();
+
 export function wrappedRowCount(text: string, width: number): number {
-  return wrapText(text, width).length;
+  if (!text) return 1;
+  const usable = Math.max(1, width);
+  const key = `${usable}\u0000${text}`;
+  const cached = wrapRowCache.get(key);
+  if (cached !== undefined) return cached;
+  const rows = wrapAnsi(text, usable, { trim: false, hard: true }).split(
+    "\n",
+  ).length;
+  if (wrapRowCache.size >= WRAP_ROW_CACHE_LIMIT) wrapRowCache.clear();
+  wrapRowCache.set(key, rows);
+  return rows;
 }
 
 /**

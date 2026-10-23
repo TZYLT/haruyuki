@@ -35,6 +35,7 @@ import {
   LIST_ITEM_RE,
   TABLE_ROW_RE,
 } from "@/cli/helpers/markdown-blocks";
+import { inlineMarkdownDisplayText } from "@/cli/helpers/markdown-text";
 import { inkStringWidth, wrappedRowCount } from "@/cli/helpers/text-metrics";
 
 /** `MarkdownTable`'s constants, mirrored for the row math. */
@@ -55,10 +56,15 @@ export interface MarkdownRowOptions {
 
 /**
  * Rows one markdown block occupies at `width`, following `MarkdownDisplay`'s block
- * classification. Inline markers (`**bold**`, `` `code` ``) are not stripped, so
- * decorated text is over-estimated slightly — an over-estimate leaves a blank
- * row, an under-estimate hides content, and the render pass clips to the
- * measured height.
+ * classification.
+ *
+ * Inline markers are stripped before the width is taken
+ * (`inlineMarkdownDisplayText`), because `InlineMarkdown` does not paint them:
+ * counting `**`, `` ` `` or a link's brackets as visible columns made a styled
+ * line measure one row taller than it drew whenever the extra columns crossed the
+ * wrap boundary. That row is not cosmetic in the full-screen viewport — the
+ * window is fitted from these numbers — so the text measured here has to be the
+ * text the renderer wraps.
  */
 export function markdownRowCount(
   text: string,
@@ -99,7 +105,10 @@ export function markdownRowCount(
 
     const header = line.match(HEADER_RE);
     if (header?.[1] && header[2] !== undefined) {
-      rows += Math.max(1, wrappedRowCount(header[2], usable));
+      rows += Math.max(
+        1,
+        wrappedRowCount(inlineMarkdownDisplayText(header[2]), usable),
+      );
       index += 1;
       continue;
     }
@@ -109,7 +118,10 @@ export function markdownRowCount(
       const bulletWidth = inkStringWidth(`${list[2]} `);
       const indent = (list[1] ?? "").length;
       const available = Math.max(1, usable - indent - bulletWidth);
-      rows += Math.max(1, wrappedRowCount(list[3], available));
+      rows += Math.max(
+        1,
+        wrappedRowCount(inlineMarkdownDisplayText(list[3]), available),
+      );
       index += 1;
       continue;
     }
@@ -118,7 +130,10 @@ export function markdownRowCount(
     if (blockquote && blockquote[1] !== undefined) {
       rows += Math.max(
         1,
-        wrappedRowCount(blockquote[1], Math.max(1, usable - 4)),
+        wrappedRowCount(
+          inlineMarkdownDisplayText(blockquote[1]),
+          Math.max(1, usable - 4),
+        ),
       );
       index += 1;
       continue;
@@ -151,7 +166,10 @@ export function markdownRowCount(
       continue;
     }
 
-    rows += Math.max(1, wrappedRowCount(line, usable));
+    rows += Math.max(
+      1,
+      wrappedRowCount(inlineMarkdownDisplayText(line), usable),
+    );
     index += 1;
   }
 

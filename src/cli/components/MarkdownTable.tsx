@@ -4,6 +4,7 @@ import {
   ROW_SAFETY_COLUMNS,
   visibleWidth,
 } from "@/cli/display/statusline/formatting";
+import { inlineMarkdownDisplayText } from "@/cli/helpers/markdown-text";
 import { colors } from "./colors.js";
 import { InlineMarkdown } from "./InlineMarkdownRenderer.js";
 import { Text } from "./Text";
@@ -124,13 +125,10 @@ export function parseMarkdownTable(
 }
 
 export function tableCellDisplayText(value: string): string {
-  return value
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 ($2)")
-    .replace(/(`+)(.*?)\1/g, "$2")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/~~([^~]+)~~/g, "$1")
-    .replace(/\*([^*]+)\*/g, "$1")
-    .replace(/\\([\\|`*~[\]])/g, "$1");
+  // Shared with the row model's prose measurement (`helpers/markdown-text.ts`):
+  // one transform for "what an inline-styled line paints", so a table cell and a
+  // paragraph wrap at the same visible width.
+  return inlineMarkdownDisplayText(value);
 }
 
 function displayWidth(value: string): number {

@@ -34,11 +34,12 @@ import type { Line } from "@/cli/helpers/accumulator";
 import type { AdvancedDiffSuccess } from "@/cli/helpers/diff";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { markdownRowCount } from "@/cli/helpers/markdown-rows";
+import { normalizeMarkdownBody } from "@/cli/helpers/markdown-text";
 import { selectCollapsedOutput } from "@/cli/helpers/shell-output";
 import {
   countTextRows,
   inkStringWidth,
-  wrappedRowCount,
+  wrapText,
 } from "@/cli/helpers/text-metrics";
 import {
   COMPACTION_SUMMARY_HEADER,
@@ -291,8 +292,13 @@ export function measureLineRows(
 
     case "assistant":
       // `AssistantMessageRich` hands its `contentWidth` to `MarkdownDisplay`,
-      // so tables lay out against that width too.
-      return markdownRowCount(line.text, contentWidth, { contentWidth });
+      // so tables lay out against that width too. The body is normalized the way
+      // that component normalizes it before the markdown walk: a run of blank
+      // lines collapses to one, and a leading blank run disappears — rows the
+      // renderer never paints.
+      return markdownRowCount(normalizeMarkdownBody(line.text), contentWidth, {
+        contentWidth,
+      });
 
     case "reasoning": {
       const expanded = options.reasoningExpanded ?? false;
@@ -301,7 +307,10 @@ export function measureLineRows(
       // continuation line has no header and no spacer. Measuring the raw text
       // over-counts when `normalize` collapses a blank run, and the streaming
       // live window is capped below the body's height: both err large.
-      const body = markdownRowCount(line.text, contentWidth);
+      const body = markdownRowCount(
+        normalizeMarkdownBody(line.text),
+        contentWidth,
+      );
       return line.isContinuation ? body : 2 + body;
     }
 
@@ -505,6 +514,13 @@ function userLineRows(
  * Rows `UserMessageRich.renderBlock` produces for one block: every `\n` segment
  * wraps independently, and a blank segment still takes a row. A blank segment
  * also means the block is empty, and an empty block renders no rows at all.
+ *
+ * The renderer **pre-wraps** each segment with `wrapText` and paints the result,
+ * so nothing Ink's own wrapper would do (a leading space on a continuation row,
+ * filling a long word's tail) applies here. Counting with `wrappedRowCount` made
+ * this branch the odd one out either way: it was identical to `wrapText` before,
+ * and after `wrappedRowCount` moved to Ink's wrapper it would over-count exactly
+ * those pre-wrapped lines.
  */
 function renderedBlockRows(text: string, contentWidth: number): number {
   let rows = 0;
@@ -513,7 +529,7 @@ function renderedBlockRows(text: string, contentWidth: number): number {
       rows += 1;
       continue;
     }
-    rows += wrappedRowCount(inputLine, contentWidth);
+    rows += wrapText(inputLine, contentWidth).length;
   }
   return rows;
 }
