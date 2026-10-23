@@ -736,76 +736,76 @@ Commands marked hidden still work but are kept out of autocomplete.
 
 | Slash command | Arguments | What it does | Source |
 | --- | --- | --- | --- |
-| `/agents` | — | Browse agents (pinned, Haruyuki, all) | `src/cli/commands/registry.ts:71` |
-| `/model` | — | Switch model | `src/cli/commands/registry.ts:80` |
-| `/init` | — | Initialize (or re-init) your agent's memory | `src/cli/commands/registry.ts:88` |
-| `/doctor` | `[symptom]` | Investigate an agent issue in this conversation | `src/cli/commands/registry.ts:97` |
-| `/dream` | `[--recent N \| --conversation ID ... \| --auto] [--instruction TEXT]` | Reflect on memory (alias for /reflect; Cloud reflects this conversation) | `src/cli/commands/registry.ts:106` |
-| `/reflect` | `[--recent N \| --conversation ID ... \| --auto] [--instruction TEXT]` | Launch reflection (/reflect [--recent N \| --conversation ID ... \| --auto] [--instruction TEXT]) | `src/cli/commands/registry.ts:112` |
-| `/reflection` | `[--recent N \| --conversation ID ... \| --auto] [--instruction TEXT]` | Alias for /reflect (hidden) | `src/cli/commands/registry.ts:118` |
-| `/skills` | — | Browse available skills | `src/cli/commands/registry.ts:124` |
-| `/skill-creator` | — | Enter skill creation mode (/skill-creator [description]) | `src/cli/commands/registry.ts:133` |
-| `/memory` | — | View your agent's memory | `src/cli/commands/registry.ts:141` |
-| `/palace` | — | Open the Memory Palace in your browser | `src/cli/commands/registry.ts:150` |
-| `/sleeptime` | — | Configure sleep-time reflection trigger and merge settings | `src/cli/commands/registry.ts:159` |
-| `/compaction` | — | Configure compaction mode settings | `src/cli/commands/registry.ts:168` |
-| `/context-limit` | `[tokens] [--override]` | Set or reset the max context window | `src/cli/commands/registry.ts:177` |
-| `/memfs` | `[enable\|disable\|sync\|reset]` | Manage filesystem-backed memory (/memfs [enable\|sync\|reset]) | `src/cli/commands/registry.ts:186` |
-| `/search` | — | Search messages across all agents (/search [query]) | `src/cli/commands/registry.ts:195` |
-| `/connect` | — | Connect your LLM API keys (OpenAI, Anthropic, etc.) | `src/cli/commands/registry.ts:203` |
-| `/clear` | — | Clear in-context messages | `src/cli/commands/registry.ts:212` |
-| `/clear-messages` | — | Reset all agent messages (destructive) (hidden) | `src/cli/commands/registry.ts:221` |
-| `/chdir` | `<path>` | Change working directory for this TUI session (/chdir <path>) | `src/cli/commands/registry.ts:230` |
-| `/cd` | `<path>` | Alias for /chdir (hidden) | `src/cli/commands/registry.ts:239` |
-| `/new` | — | Start a new conversation (keep agent memory) | `src/cli/commands/registry.ts:250` |
-| `/fork` | — | Fork the current conversation | `src/cli/commands/registry.ts:259` |
-| `/btw` | — | Fork conversation and ask a side question (/btw <question>) | `src/cli/commands/registry.ts:268` |
-| `/pin` | — | Pin current agent (/pin [name]) | `src/cli/commands/registry.ts:276` |
-| `/unpin` | — | Unpin current agent | `src/cli/commands/registry.ts:284` |
-| `/rename` | — | Rename agent or conversation (/rename agent [name]\|convo [name]) | `src/cli/commands/registry.ts:292` |
-| `/description` | — | Update the current agent's description (/description <text>) | `src/cli/commands/registry.ts:300` |
-| `/toolset` | — | Switch toolset (replaces /link and /unlink) | `src/cli/commands/registry.ts:308` |
-| `/experiments` | — | Toggle experiments | `src/cli/commands/registry.ts:317` |
-| `/reload` | — | Reload settings and local mods | `src/cli/commands/registry.ts:325` |
-| `/mods` | `learn [memory-citations] [options] \| generate-env [request]` | Run mod learning targets | `src/cli/commands/registry.ts:334` |
-| `/ade` | — | Open agent in ADE (browser) | `src/cli/commands/registry.ts:343` |
-| `/system` | — | Switch system prompt | `src/cli/commands/registry.ts:354` |
-| `/personality` | — | Switch personality | `src/cli/commands/registry.ts:363` |
-| `/subagents` | — | Manage custom subagents | `src/cli/commands/registry.ts:372` |
-| `/mcp` | — | Manage MCP servers (add, connect with OAuth) | `src/cli/commands/registry.ts:381` |
-| `/secret` | `<set\|list\|unset> [key] [value]` | Manage secrets for shell commands | `src/cli/commands/registry.ts:389` |
-| `/memory-repository` | `<set\|unset\|status\|push> [url]` | Push this agent's memory repo to an additional git remote | `src/cli/commands/registry.ts:395` |
-| `/usage` | — | Open the Usage page (overview + breakdown) | `src/cli/commands/registry.ts:404` |
-| `/tabs` | — | List open tabs (switch with Enter, close with D) | `src/cli/commands/registry.ts:410` |
-| `/message-history` | — | Open the message history (also Ctrl+X h) | `src/cli/commands/registry.ts:416` |
-| `/close` | — | Close the current tab | `src/cli/commands/registry.ts:422` |
-| `/settings` | — | Open the Settings page | `src/cli/commands/registry.ts:428` |
-| `/context` | — | Show context window usage | `src/cli/commands/registry.ts:434` |
-| `/recompile` | — | Recompile current agent + conversation (warning: this will evict the cache and increase costs) | `src/cli/commands/registry.ts:443` |
-| `/context-pending` | `[full]` | Show prefix changes registered but not yet applied (memory, system, skills, tools, model) | `src/cli/commands/registry.ts:452` |
-| `/feedback` | — | Save a feedback report to the local log (file bugs at github.com/TZYLT/haruyuki/issues) | `src/cli/commands/registry.ts:461` |
-| `/help` | — | Show available commands (hidden) | `src/cli/commands/registry.ts:469` |
-| `/hooks` | — | Manage hooks configuration | `src/cli/commands/registry.ts:479` |
-| `/statusline` | `[request]` | Customize the bottom statusline | `src/cli/commands/registry.ts:488` |
-| `/title` | — | Configure terminal window title | `src/cli/commands/registry.ts:497` |
-| `/reasoning-tab` | `[on\|off\|status]` | Toggle Tab shortcut for reasoning tiers (/reasoning-tab on\|off\|status) | `src/cli/commands/registry.ts:506` |
-| `/system-reminders` | `[on\|off\|status]` | Show or hide system reminders | `src/cli/commands/registry.ts:515` |
-| `/terminal` | — | Setup terminal shortcuts [--revert] | `src/cli/commands/registry.ts:521` |
-| `/font-width` | `auto\|narrow\|wide` | How wide this terminal draws ambiguous characters (auto probes it) | `src/cli/commands/registry.ts:586` |
-| `/console-font` | `auto\|off\|<face>` | Hold the Windows console font at the configured face | `src/cli/commands/registry.ts:656` |
-| `/install-github-app` | — | Setup Haruyuki GitHub Action in this repo | `src/cli/commands/registry.ts:742` |
-| `/bg` | — | Show background shell processes | `src/cli/commands/registry.ts:753` |
-| `/workflows` | — | Show workflow runs, their agents, and token usage | `src/cli/commands/registry.ts:762` |
-| `/exit` | — | Exit this session | `src/cli/commands/registry.ts:774` |
-| `/logout` | — | Clear saved credentials and exit | `src/cli/commands/registry.ts:783` |
-| `/stream` | — | Toggle token streaming on/off (hidden) | `src/cli/commands/registry.ts:794` |
-| `/compact` | `[n\|help]` | Trim older context at a topic boundary you pick | `src/cli/commands/registry.ts:803` |
-| `/topic` | `<title> [summary]` | Mark a topic boundary in this conversation | `src/cli/commands/registry.ts:811` |
-| `/topics` | `[--all]` | List the topic blocks of the current context | `src/cli/commands/registry.ts:816` |
-| `/recall` | `[setting] [value]` | Configure passive recall of earlier conversations and memory | `src/cli/commands/registry.ts:821` |
-| `/set-max-context` | `[tokens] [--override]` | Alias for /context-limit (hidden) | `src/cli/commands/registry.ts:826` |
-| `/link` | — | Attach all Haruyuki tools to agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:835` |
-| `/unlink` | — | Remove all Haruyuki tools from agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:844` |
-| `/resume` | `[conversation_id]` | Resume a previous conversation | `src/cli/commands/registry.ts:853` |
-| `/pinned` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:862` |
-| `/profiles` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:870` |
+| `/agents` | — | Browse agents (pinned, Haruyuki, all) | `src/cli/commands/registry.ts:75` |
+| `/model` | — | Switch model | `src/cli/commands/registry.ts:84` |
+| `/init` | — | Initialize (or re-init) your agent's memory | `src/cli/commands/registry.ts:92` |
+| `/doctor` | `[symptom]` | Investigate an agent issue in this conversation | `src/cli/commands/registry.ts:101` |
+| `/dream` | `[--recent N \| --conversation ID ... \| --auto] [--instruction TEXT]` | Reflect on memory (alias for /reflect; Cloud reflects this conversation) | `src/cli/commands/registry.ts:110` |
+| `/reflect` | `[--recent N \| --conversation ID ... \| --auto] [--instruction TEXT]` | Launch reflection (/reflect [--recent N \| --conversation ID ... \| --auto] [--instruction TEXT]) | `src/cli/commands/registry.ts:116` |
+| `/reflection` | `[--recent N \| --conversation ID ... \| --auto] [--instruction TEXT]` | Alias for /reflect (hidden) | `src/cli/commands/registry.ts:122` |
+| `/skills` | — | Browse available skills | `src/cli/commands/registry.ts:128` |
+| `/skill-creator` | — | Enter skill creation mode (/skill-creator [description]) | `src/cli/commands/registry.ts:137` |
+| `/memory` | — | View your agent's memory | `src/cli/commands/registry.ts:145` |
+| `/palace` | — | Open the Memory Palace in your browser | `src/cli/commands/registry.ts:154` |
+| `/sleeptime` | — | Configure sleep-time reflection trigger and merge settings | `src/cli/commands/registry.ts:163` |
+| `/compaction` | — | Configure compaction mode settings | `src/cli/commands/registry.ts:172` |
+| `/context-limit` | `[tokens] [--override]` | Set or reset the max context window | `src/cli/commands/registry.ts:181` |
+| `/memfs` | `[enable\|disable\|sync\|reset]` | Manage filesystem-backed memory (/memfs [enable\|sync\|reset]) | `src/cli/commands/registry.ts:190` |
+| `/search` | — | Search messages across all agents (/search [query]) | `src/cli/commands/registry.ts:199` |
+| `/connect` | — | Connect your LLM API keys (OpenAI, Anthropic, etc.) | `src/cli/commands/registry.ts:207` |
+| `/clear` | — | Clear in-context messages | `src/cli/commands/registry.ts:216` |
+| `/clear-messages` | — | Reset all agent messages (destructive) (hidden) | `src/cli/commands/registry.ts:225` |
+| `/chdir` | `<path>` | Change working directory for this TUI session (/chdir <path>) | `src/cli/commands/registry.ts:234` |
+| `/cd` | `<path>` | Alias for /chdir (hidden) | `src/cli/commands/registry.ts:243` |
+| `/new` | — | Start a new conversation (keep agent memory) | `src/cli/commands/registry.ts:254` |
+| `/fork` | — | Fork the current conversation | `src/cli/commands/registry.ts:263` |
+| `/btw` | — | Fork conversation and ask a side question (/btw <question>) | `src/cli/commands/registry.ts:272` |
+| `/pin` | — | Pin current agent (/pin [name]) | `src/cli/commands/registry.ts:280` |
+| `/unpin` | — | Unpin current agent | `src/cli/commands/registry.ts:288` |
+| `/rename` | — | Rename agent or conversation (/rename agent [name]\|convo [name]) | `src/cli/commands/registry.ts:296` |
+| `/description` | — | Update the current agent's description (/description <text>) | `src/cli/commands/registry.ts:304` |
+| `/toolset` | — | Switch toolset (replaces /link and /unlink) | `src/cli/commands/registry.ts:312` |
+| `/experiments` | — | Toggle experiments | `src/cli/commands/registry.ts:321` |
+| `/reload` | — | Reload settings and local mods | `src/cli/commands/registry.ts:329` |
+| `/mods` | `learn [memory-citations] [options] \| generate-env [request]` | Run mod learning targets | `src/cli/commands/registry.ts:338` |
+| `/ade` | — | Open agent in ADE (browser) | `src/cli/commands/registry.ts:347` |
+| `/system` | — | Switch system prompt | `src/cli/commands/registry.ts:358` |
+| `/personality` | — | Switch personality | `src/cli/commands/registry.ts:367` |
+| `/subagents` | — | Manage custom subagents | `src/cli/commands/registry.ts:376` |
+| `/mcp` | — | Manage MCP servers (add, connect with OAuth) | `src/cli/commands/registry.ts:385` |
+| `/secret` | `<set\|list\|unset> [key] [value]` | Manage secrets for shell commands | `src/cli/commands/registry.ts:393` |
+| `/memory-repository` | `<set\|unset\|status\|push> [url]` | Push this agent's memory repo to an additional git remote | `src/cli/commands/registry.ts:399` |
+| `/usage` | — | Open the Usage page (overview + breakdown) | `src/cli/commands/registry.ts:408` |
+| `/tabs` | — | List open tabs (switch with Enter, close with D) | `src/cli/commands/registry.ts:414` |
+| `/message-history` | — | Open the message history (also Ctrl+X h) | `src/cli/commands/registry.ts:420` |
+| `/close` | — | Close the current tab | `src/cli/commands/registry.ts:426` |
+| `/settings` | — | Open the Settings page | `src/cli/commands/registry.ts:432` |
+| `/context` | — | Show context window usage | `src/cli/commands/registry.ts:438` |
+| `/recompile` | — | Recompile current agent + conversation (warning: this will evict the cache and increase costs) | `src/cli/commands/registry.ts:447` |
+| `/context-pending` | `[full]` | Show prefix changes registered but not yet applied (memory, system, skills, tools, model) | `src/cli/commands/registry.ts:456` |
+| `/feedback` | — | Save a feedback report to the local log (file bugs at github.com/TZYLT/haruyuki/issues) | `src/cli/commands/registry.ts:465` |
+| `/help` | — | Show available commands (hidden) | `src/cli/commands/registry.ts:473` |
+| `/hooks` | — | Manage hooks configuration | `src/cli/commands/registry.ts:483` |
+| `/statusline` | `[request]` | Customize the bottom statusline | `src/cli/commands/registry.ts:492` |
+| `/title` | — | Configure terminal window title | `src/cli/commands/registry.ts:501` |
+| `/reasoning-tab` | `[on\|off\|status]` | Toggle Tab shortcut for reasoning tiers (/reasoning-tab on\|off\|status) | `src/cli/commands/registry.ts:510` |
+| `/system-reminders` | `[on\|off\|status]` | Show or hide system reminders | `src/cli/commands/registry.ts:519` |
+| `/terminal` | — | Setup terminal shortcuts [--revert] | `src/cli/commands/registry.ts:525` |
+| `/font-width` | `auto\|narrow\|wide` | How wide this terminal draws ambiguous characters (auto probes it) | `src/cli/commands/registry.ts:590` |
+| `/console-font` | `auto\|off\|<face>` | Hold the Windows console font at the configured face | `src/cli/commands/registry.ts:660` |
+| `/install-github-app` | — | Setup Haruyuki GitHub Action in this repo | `src/cli/commands/registry.ts:746` |
+| `/bg` | — | Show background shell processes | `src/cli/commands/registry.ts:757` |
+| `/workflows` | — | Show workflow runs, their agents, and token usage | `src/cli/commands/registry.ts:766` |
+| `/exit` | — | Exit this session | `src/cli/commands/registry.ts:778` |
+| `/logout` | — | Clear saved credentials and exit | `src/cli/commands/registry.ts:787` |
+| `/stream` | — | Toggle token streaming on/off (hidden) | `src/cli/commands/registry.ts:798` |
+| `/compact` | `[n\|help]` | Trim older context at a topic boundary you pick | `src/cli/commands/registry.ts:807` |
+| `/topic` | `<title> [summary]` | Mark a topic boundary in this conversation | `src/cli/commands/registry.ts:815` |
+| `/topics` | `[--all]` | List the topic blocks of the current context | `src/cli/commands/registry.ts:820` |
+| `/recall` | `[setting] [value]` | Configure passive recall of earlier conversations and memory | `src/cli/commands/registry.ts:825` |
+| `/set-max-context` | `[tokens] [--override]` | Alias for /context-limit (hidden) | `src/cli/commands/registry.ts:830` |
+| `/link` | — | Attach all Haruyuki tools to agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:839` |
+| `/unlink` | — | Remove all Haruyuki tools from agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:848` |
+| `/resume` | `[conversation_id]` | Resume a previous conversation | `src/cli/commands/registry.ts:857` |
+| `/pinned` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:866` |
+| `/profiles` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:874` |
