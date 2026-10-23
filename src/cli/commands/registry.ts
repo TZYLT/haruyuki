@@ -28,7 +28,11 @@ import { handleTopicsCommand } from "./topics";
 function pageCommandAnswer(openingOutput: string): string {
   return resolveUiV2Once()
     ? openingOutput
-    : "Pages need the full-screen shell (HARUYUKI_UI_V2=1 or /experiments ui_v2, then restart).";
+    : // It used to name `/experiments ui_v2` as the way to switch. That form is
+      // not implemented — `/experiments` takes no UI argument and only knows the
+      // `diffs` sub-command — so the receipt taught a command that does nothing
+      // but print this same line back. Name the surface that exists.
+      "Pages need the full-screen shell (/experiments → full-screen TUI, then restart).";
 }
 
 type CommandHandlerResult =
