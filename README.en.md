@@ -226,6 +226,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
+| `0.3.0` | - | **The full-screen shell becomes the default**: alternate screen, tab strip, `Settings` / `Usage` pages, right-hand info rail, status row, toasts, message history, the diff screen, mouse and copy; the transcript becomes a bounded viewport with back-paging; the render stack moves to Ink 7 + React 19. Turn it off with `/experiments` or `HARUYUKI_UI_V2=0` to get the old shell back |
 | `0.2.1` | + | Fixes known problems and updates the documentation |
 | `0.2.0` | + | **Passive recall**: every question searches your past conversations and memory files and brings the relevant passages into the current turn, so answers fit your history better; the effect on cost, short or long term, is not yet clear |
 | `0.1.3` | + | Adds `hryk` as a shortcut input, fully equivalent to `haruyuki` |
