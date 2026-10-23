@@ -379,7 +379,7 @@ haruyuki trajectories search <关键词> [--out <dir>] [--source <name>] \
 | `/toolset` | 切换工具集（取代旧的 `/link`、`/unlink`） |
 | `[隐藏] /reasoning-tab [on\|off\|status]` | Tab 键切换推理档位 |
 | `[隐藏] /link` `[隐藏] /unlink` | 已废弃，请用 `/toolset` |
-| `/experiments` | 开关实验特性 |
+| `/experiments` | 开关实验特性（含 `ui_v2` 全屏外壳）；改了**下一次启动**才生效 |
 
 ### 技能、mod、MCP、密钥
 

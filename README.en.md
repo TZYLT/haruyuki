@@ -189,7 +189,28 @@ something or want to contribute, a pull request is very welcome.
 - [ ] Downstream polish (voice synthesis, character art, and so on)
 - [ ] Stable personality and conversational style
 
+### Turning the full-screen shell off, or rolling back
+
+The full-screen shell (tab strip, right-hand rail, the `Settings` / `Usage` pages, toasts, message
+history, the diff face) is behind one experiment, `ui_v2`, and it is **off** by default:
+
+- run `/experiments` and flip **full-screen TUI**; it takes effect on the **next start** — the shell is
+  decided once per process (the tab strip, the alternate screen and the page commands all hang off that
+  one answer), so flipping it mid-session deliberately does not repaint the shell you are in;
+- `HARUYUKI_UI_V2=1` also turns it on (only `1` / `true` / `yes` count). It loses to a value stored by
+  `/experiments`; to force it off, turn it off there;
+- with it off you get **compatibility mode**: the command set, the keys and the output semantics are the
+  ones from before the new shell, minus the surfaces listed above.
+
+Rolling back a version: install the old one. Config, memory and conversations live in `~/.haruyuki` and
+do not move with the version number:
+
+```bash
+npm install -g haruyuki@0.2.1     # a specific version; see the table below
+```
+
 ### Version history at a glance
+
 
 The itemised detail, with the reasons behind each change, is in [`CHANGELOG.md`](CHANGELOG.md).
 **A `-` means that version number has no matching package on npm** — either it was never published,
