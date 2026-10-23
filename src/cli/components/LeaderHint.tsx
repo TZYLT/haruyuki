@@ -1,7 +1,15 @@
-import { Box, Text, useStdout } from "ink";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { Box, type DOMElement, measureElement, Text, useStdout } from "ink";
+import {
+  type RefObject,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useActiveTabIsPage } from "@/cli/app/tabs";
 import { colors } from "@/cli/components/colors";
+import { terminalTextWidth } from "@/cli/helpers/char-width";
+import { owningInputScope } from "@/cli/helpers/focus-ledger";
 import { describeChord } from "@/cli/helpers/input-keys";
 import { leaderEntries } from "@/cli/helpers/input-router";
 import { LEADER_KEY_CHORDS } from "@/cli/helpers/keymap";
@@ -10,6 +18,9 @@ import {
   isLeaderHelpOpen,
   subscribeToLeader,
 } from "@/cli/helpers/leader";
+import { createClickTracker } from "@/cli/helpers/mouse-click";
+import { registerMouseHandler } from "@/cli/helpers/mouse-router";
+import type { MouseReport } from "@/cli/helpers/mouse-sequence";
 import {
   isMouseTrackingEnabled,
   subscribeToMouseTracking,
@@ -23,6 +34,10 @@ import {
   getMessageHistorySnapshot,
   subscribeToMessageHistory,
 } from "@/cli/notifications/history-store";
+import {
+  hasMessageHistoryOpener,
+  openMessageHistory,
+} from "@/cli/notifications/message-history-request";
 
 /**
  * The frame's bottom row: the leader's visible half, the composer's transient
@@ -52,6 +67,28 @@ import {
  */
 
 /**
+ * The word the unread tail is built around. Exported for the hit test in the
+ * tests: the tail is found in the painted text by this word, so a test can point
+ * at the cells the component will claim without hard-coding their column.
+ */
+export const UNREAD_MARKER = "未读";
+
+/**
+ * The tail the idle row appends while messages are unread, `""` otherwise.
+ *
+ * The chord is printed *beside* the count for the reason the count exists at
+ * all: a count with no visible way to clear it is a permanent `未读 1`. It is
+ * derived from the leader table, not typed here, so the row cannot name a key
+ * that does not open the face (`use-message-history.ts` binds the same chord).
+ */
+export function unreadSuffix(unread?: number): string {
+  if (!unread || unread <= 0) return "";
+  const prefix = LEADER_KEY_CHORDS.activate.map(describeChord).join("/");
+  const chord = LEADER_KEY_CHORDS.messageHistory.map(describeChord).join("/");
+  return ` · ${UNREAD_MARKER} ${unread} · ${prefix} ${chord}`;
+}
+
+/**
  * The one-line idle hint: what the current context's keys are.
  *
  * **It only names commands that exist**, and as of P2 all three the design prints
@@ -75,11 +112,13 @@ export function contextHint(input: {
 }): string {
   const prefix = LEADER_KEY_CHORDS.activate.map(describeChord).join("/");
   const leader = `${prefix} ? 键位`;
-  // The count sits at the very end, after the leader hint, so that a row that has
-  // to truncate loses it last: "there is something to read" is the one fact the
-  // user cannot discover by pressing anything.
-  const unread =
-    input.unread && input.unread > 0 ? ` · 未读 ${input.unread}` : "";
+  // The count and the key that clears it ride together at the very end, so a row
+  // that has to truncate loses them last: "there is something to read" is the one
+  // fact the user cannot discover by pressing anything, and the chord printed
+  // beside it is the door — the same one the tail's cells click. The tail can
+  // still be cut on a narrow row (the longest variant is ~69 columns before it),
+  // which is why the hit test declines wherever it is not painted.
+  const unread = unreadSuffix(input.unread);
   // Short on purpose: the row is one line at every width, and it is truncated
   // rather than wrapped — so a label that grows past ~60 columns eats the leader
   // hint itself, which is the only way to discover the other keys. `开鼠标` is the
@@ -93,6 +132,149 @@ export function contextHint(input: {
   return input.mouseEnabled
     ? `Enter 发送 · Shift+Enter 换行 · /tabs 标签 · ${leader}${unread}`
     : `${enableMouse} · Enter 发送 · /tabs 标签 · /close 关 · ${leader}${unread}`;
+}
+
+/**
+ * Which cells of the painted row belong to the unread tail.
+ *
+ * Columns are 0-based offsets from the row's first cell, the same space the mouse
+ * report is converted into. They come from `terminalTextWidth`, never from
+ * `.length`: `未读` is four cells but two code units, so a string index would aim
+ * two columns left of the tail on every row that carries CJK.
+ *
+ * `paintedWidth` is how much of the row the terminal actually drew (Ink truncates
+ * the line to the row's width). Two consequences, both deliberate:
+ *
+ * - **A row truncated before the tail has no tail.** `paintedWidth < from` makes
+ *   the answer `null` instead of a span past the right edge: the cells under the
+ *   pointer are then some other hint, and claiming them would open the face from
+ *   a piece of text that never named it.
+ * - **A row truncated inside the tail** keeps only the painted part clickable,
+ *   which is exactly what the user can see.
+ */
+export interface UnreadSuffixSpan {
+  /** 0-based first cell of the tail, inclusive. */
+  from: number;
+  /** 0-based cell one past the last painted cell of the tail, exclusive. */
+  to: number;
+}
+
+export function unreadSuffixSpan(
+  line: string,
+  paintedWidth: number,
+): UnreadSuffixSpan | null {
+  const marker = line.lastIndexOf(UNREAD_MARKER);
+  if (marker < 0) return null;
+  // The separator belongs to the target as well: the whole visible tail is one
+  // thing, and a two-column word is a small target for a pointer.
+  const separator = " · ";
+  const start = line.slice(0, marker).endsWith(separator)
+    ? marker - separator.length
+    : marker;
+  const from = terminalTextWidth(line.slice(0, start));
+  if (paintedWidth < from) return null;
+  const to = Math.min(
+    from + terminalTextWidth(line.slice(start)),
+    paintedWidth,
+  );
+  if (to <= from) return null;
+  return { from, to };
+}
+
+/** Whether a report landed on the unread tail of the measured row. */
+function onUnreadTail(
+  node: DOMElement,
+  line: string,
+  report: MouseReport,
+): boolean {
+  const box = measureElement(node);
+  if (box.width <= 0 || box.height <= 0) return false;
+  // `measureElement` is 0-based on both axes (the layout tree's origin) while a
+  // mouse report is 1-based: the frame's first row and column are 1.
+  if (report.row !== box.y + 1) return false;
+  const offset = report.column - (box.x + 1);
+  if (offset < 0 || offset >= box.width) return false;
+  const painted = Math.min(box.width, terminalTextWidth(line));
+  const span = unreadSuffixSpan(line, painted);
+  return span !== null && offset >= span.from && offset < span.to;
+}
+
+/**
+ * Make the unread tail a click target that opens the message history face.
+ *
+ * The tail is the one part of this row with an action behind it, and it is also
+ * the part a user has no reason to try: a count that never goes away with nothing
+ * to press is a bug report (`未读 N 出现后从不消失`). Clicking the tail is defined
+ * as the chord beside it — it calls the same opener — so the pointer and the
+ * keyboard cannot drift apart.
+ *
+ * Three rules, the same ones the tab row keeps (`use-chrome-clicks.ts`):
+ *
+ * 1. **Only this row, only those cells.** Anything else returns `false` so the
+ *    selection layer and the page rows still get their clicks.
+ * 2. **An open overlay or approval owns the pointer.** Raising the face from
+ *    under an open surface would switch screens out from under the user, so a
+ *    blocked scope declines before measuring anything.
+ * 3. **A click is decided by `mouse-click.ts`**, so a drag that began on the tail
+ *    and ended elsewhere is not a click.
+ *
+ * The handler is registered once and reads the painted line through a ref: the
+ * line changes on every unread count and resize, and re-registering mid-gesture
+ * would reorder the handler chain (`mouse-router.ts`). The registration is on the
+ * **chrome** layer because this row is the shell's own bottom line, not content.
+ */
+function useUnreadTailClicks(input: {
+  /** The row box, measured at event time; `null` while another state owns it. */
+  rowRef: RefObject<DOMElement | null>;
+  /** The text the row painted, `""` when the row shows something else. */
+  line: string;
+}): void {
+  const tracker = useRef(createClickTracker());
+  const latest = useRef(input);
+  latest.current = input;
+
+  useEffect(() => {
+    return registerMouseHandler(
+      (report) => {
+        if (report.wheel) return false;
+        const owning = owningInputScope();
+        if (owning === "overlay" || owning === "modal") return false;
+        // No door: this shell has no face to raise (the append shell), so the
+        // tail is text and the click falls through to whatever is below.
+        if (!hasMessageHistoryOpener()) return false;
+        const node = latest.current.rowRef.current;
+        if (!node) return false;
+
+        if (report.kind === "press") {
+          if (!onUnreadTail(node, latest.current.line, report)) return false;
+          tracker.current.press(report, Date.now());
+          return true;
+        }
+
+        if (report.kind === "move") {
+          // A press this row claimed owns the motion of its own gesture; handing
+          // the tail back would start a selection under the pointer.
+          if (!tracker.current.isPending()) return false;
+          tracker.current.move(report);
+          return true;
+        }
+
+        // A press this row claimed owns its release even when it was not a click:
+        // returning `false` would hand the tail of a chrome gesture to the
+        // selection layer, which reads a release as the end of its own drag.
+        const wasPending = tracker.current.isPending();
+        const point = tracker.current.release(report, Date.now());
+        if (!point) return wasPending;
+        // The press cell decides, not the release: that is what makes a drag that
+        // began on the tail still a click on it (`mouse-click.ts`).
+        const pressed = { ...report, row: point.row, column: point.column };
+        if (!onUnreadTail(node, latest.current.line, pressed)) return true;
+        openMessageHistory();
+        return true;
+      },
+      { layer: "chrome", name: "unread-tail" },
+    );
+  }, []);
 }
 
 /**
@@ -161,6 +343,21 @@ export function LeaderHint() {
     return subscribeToLeader(sync);
   }, []);
 
+  // The row the unread tail is clicked on, and the exact text it painted.
+  //
+  // The line is computed here rather than inside the branch that draws it,
+  // because the click handler needs the same string the frame was laid out from:
+  // the mouse reports a screen cell, and only this string says which cells the
+  // tail occupies (a notice or the armed list paints something else entirely, and
+  // then there is no tail to aim at — the row box is not even mounted).
+  const rowRef = useRef<DOMElement | null>(null);
+  const hint =
+    notice === null && !armed
+      ? contextHint({ pageActive, mouseEnabled, unread })
+      : "";
+  const line = hint === "" || !size ? hint : `${size} ${hint}`;
+  useUnreadTailClicks({ rowRef, line });
+
   if (notice !== null) {
     return (
       <Box>
@@ -172,15 +369,10 @@ export function LeaderHint() {
   }
 
   if (!armed) {
-    const hint = contextHint({
-      pageActive,
-      mouseEnabled,
-      unread,
-    });
     return (
-      <Box>
+      <Box ref={rowRef}>
         <Text dimColor wrap="truncate">
-          {size ? `${size} ${hint}` : hint}
+          {line}
         </Text>
       </Box>
     );

@@ -1,5 +1,5 @@
 import { Box, useStdout } from "ink";
-import { type ReactNode, useCallback } from "react";
+import { type ReactNode, useCallback, useEffect } from "react";
 import type { AppViewProps } from "@/cli/app/AppView";
 import { DiffFaceHost } from "@/cli/app/faces/diff-face";
 import { diffFaceTotals } from "@/cli/app/faces/diff-face-model";
@@ -24,6 +24,7 @@ import { ViewportTranscript } from "@/cli/app/ViewportTranscript";
 import { Toasts } from "@/cli/components/Toasts";
 import type { DiffPatchFile } from "@/cli/helpers/diff-patch";
 import { useTerminalRows } from "@/cli/hooks/use-terminal-width";
+import { registerMessageHistoryOpener } from "@/cli/notifications/message-history-request";
 
 /**
  * The full-screen frame: exactly the terminal's rows, and clipped to them.
@@ -126,6 +127,15 @@ export function V2Shell(props: AppShellProps) {
     setActiveOverlay("message-history");
   }, [setActiveOverlay]);
   useMessageHistory(openMessageHistory);
+  // The hint row's unread tail is a click target for the same face. It cannot
+  // reach `setActiveOverlay` itself (the append shell has no overlay), so this
+  // shell publishes the opener it already has, and the row asks for it.
+  // Registered in an effect, not during render: the row must only find a door
+  // once this shell is actually mounted, and the cleanup must run on unmount.
+  useEffect(
+    () => registerMessageHistoryOpener(openMessageHistory),
+    [openMessageHistory],
+  );
   // The diff face's chord (`Ctrl+X d`): the newest diff the transcript can draw.
   const openDiffFace = useCallback(
     (files: DiffPatchFile[]) => {
