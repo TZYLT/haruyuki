@@ -40,13 +40,26 @@ const settle = (ms = 250) => new Promise((resolve) => setTimeout(resolve, ms));
 const tempDirs: string[] = [];
 const originalHome = process.env.HARUYUKI_HOME;
 
+/**
+ * 09:00 local **today**, for a record the overview will call "today".
+ *
+ * The fixture used to pin `new Date(2026, 9, 22, 9)`. The page was right and the
+ * test was wrong the moment the wall clock left that day: "today 960k tok"
+ * became "today 0 tok" with nothing changed in `src/`. A ledger record's day is
+ * relative by nature, so the fixture derives it from the clock too.
+ */
+function todayAtNine(): Date {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9);
+}
+
 async function homeWithLedger(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "haruyuki-usage-page-"));
   tempDirs.push(dir);
   process.env.HARUYUKI_HOME = dir;
   await appendUsageRecord(
     buildUsageRecord({
-      at: new Date(2026, 9, 22, 9),
+      at: todayAtNine(),
       agentId: "agent-1",
       model: "openai/gpt-5.5",
       prompt: 700_000,
