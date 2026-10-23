@@ -33,7 +33,6 @@ import {
   bytesToTokens,
   formatCompact,
   formatElapsedLabel,
-  formatModeLabel,
 } from "@/cli/helpers/format";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { armLeader } from "@/cli/helpers/leader";
@@ -97,7 +96,10 @@ const EMPTY_COMPOSER_PROMPT_HINTS = [
 ];
 
 /**
- * What the transient permission-mode hint says: the mode's name, no marker glyph.
+ * What the transient permission-mode hint says: the mode's name, capitalised, and
+ * nothing else (2026-10-23 — the machine asked for `Accept edits`, not
+ * `accept edits (shift+tab to cycle)`: the sentence was longer than the slot, and
+ * the mode is a state, not an instruction).
  *
  * The markers this used to draw are font dependent — on the machine this is
  * developed on they paint as empty boxes, and `U+26A1` alone is enough to make the
@@ -110,17 +112,17 @@ function getPermissionModeTransientHintInfo(mode: PermissionMode): {
 } {
   switch (mode) {
     case "acceptEdits":
-      return { name: "accept edits", color: colors.status.processing };
+      return { name: "Accept edits", color: colors.status.processing };
     case "standard":
       return {
-        name: "standard (request approval) mode",
+        name: "Standard (request approval)",
         color: colors.status.processingShimmer,
       };
     case "unrestricted":
-      return { name: "unrestricted mode", color: colors.status.success };
+      return { name: "Unrestricted", color: colors.status.success };
     case "strict":
       return {
-        name: "strict (all tools require approval)",
+        name: "Strict (all tools require approval)",
         color: colors.status.error,
       };
   }
@@ -142,8 +144,6 @@ type StatuslineTransientHint =
       type: "permission-mode";
       modeName: string;
       modeColor: string;
-      modeGlyph?: string | null;
-      showExitHint: boolean;
     }
   | { type: "queued-message-hint" };
 
@@ -211,20 +211,16 @@ function StatuslineBashModeHint() {
 function StatuslineModeHint({
   modeName,
   modeColor,
-  modeGlyph,
-  showExitHint,
 }: {
   modeName: string;
   modeColor: string;
-  modeGlyph?: string | null;
-  showExitHint: boolean;
 }) {
   return (
     <Text>
-      <Text color={modeColor}>{formatModeLabel(modeName, modeGlyph)}</Text>
+      <Text color={modeColor}>{modeName}</Text>
       <Text color={modeColor} dimColor>
         {" "}
-        (shift+tab to {showExitHint ? "exit" : "cycle"})
+        (shift+tab)
       </Text>
     </Text>
   );
@@ -253,8 +249,6 @@ function StatuslineTransientHintView({
         <StatuslineModeHint
           modeName={hint.modeName}
           modeColor={hint.modeColor}
-          modeGlyph={hint.modeGlyph}
-          showExitHint={hint.showExitHint}
         />
       );
     case "queued-message-hint":
@@ -277,34 +271,26 @@ function shouldTransientHintBlankRightColumn({
   return hint.type !== "bash-mode" && hint.type !== "permission-mode";
 }
 
+/**
+ * The idle row's left half: bash mode, else whatever the default renderer put
+ * there — which is the context chip (2026-10-23).
+ *
+ * The permission mode used to live here **persistently** whenever it was not
+ * `unrestricted`, which is why the chip could never be seen in `accept edits`.
+ * The machine's ruling (2026-10-23) is that the mode is an announcement: it shows
+ * for a few seconds after the switch and the slot goes back to the chip — so it
+ * is the *transient* hint's job (`showStatuslineTransientHint`, 3s), not this
+ * component's.
+ */
 function DefaultStatuslineLeftContent({
   defaultLeftStatusline,
   isBashMode,
-  modeName,
-  modeColor,
-  modeGlyph,
-  showExitHint,
 }: {
   defaultLeftStatusline: ReactNode;
   isBashMode: boolean;
-  modeName: string | null;
-  modeColor: string | null;
-  modeGlyph?: string | null;
-  showExitHint: boolean;
 }) {
   if (isBashMode) {
     return <StatuslineBashModeHint />;
-  }
-
-  if (modeName && modeColor) {
-    return (
-      <StatuslineModeHint
-        modeName={modeName}
-        modeColor={modeColor}
-        modeGlyph={modeGlyph}
-        showExitHint={showExitHint}
-      />
-    );
   }
 
   return defaultLeftStatusline;
@@ -340,10 +326,6 @@ const StatuslineSlot = memo(function StatuslineSlot({
   ctrlCPressed,
   escapePressed,
   isBashMode,
-  modeName,
-  modeColor,
-  modeGlyph,
-  showExitHint,
   isOpenAICodexProvider,
   isByokProvider,
   hideFooter,
@@ -357,10 +339,6 @@ const StatuslineSlot = memo(function StatuslineSlot({
   ctrlCPressed: boolean;
   escapePressed: boolean;
   isBashMode: boolean;
-  modeName: string | null;
-  modeColor: string | null;
-  modeGlyph?: string | null;
-  showExitHint: boolean;
   isOpenAICodexProvider: boolean;
   isByokProvider: boolean;
   hideFooter: boolean;
@@ -430,10 +408,6 @@ const StatuslineSlot = memo(function StatuslineSlot({
     <DefaultStatuslineLeftContent
       defaultLeftStatusline={defaultLeftStatusline}
       isBashMode={isBashMode}
-      modeName={modeName}
-      modeColor={modeColor}
-      modeGlyph={modeGlyph}
-      showExitHint={showExitHint}
     />
   );
   const shouldBlankRightColumn =
@@ -446,7 +420,11 @@ const StatuslineSlot = memo(function StatuslineSlot({
   const shouldRenderDefaultStatusline = shouldRenderDefaultStatuslineRenderer({
     hideFooterContent,
     isBashMode,
-    modeActive: Boolean(modeName && modeColor),
+    // No permission mode holds the row any more: it is a three-second
+    // announcement (`getPermissionModeTransientHintInfo`), so the idle row is the
+    // default renderer's — `agent · model` on the right, the context chip on the
+    // left (2026-10-23).
+    modeActive: false,
     preemptionActive: Boolean(preemption),
     transientHintActive: Boolean(transientHint),
   });
@@ -1664,30 +1642,10 @@ export function Input({
     [value, draftDiscards],
   );
 
-  // Get display name and color for permission mode
-  // Memoized to prevent unnecessary footer re-renders
-  const modeInfo = useMemo<{
-    name: string;
-    color: string;
-    showExitHint?: boolean;
-  } | null>(() => {
-    // Fall through to permission modes
-    switch (currentMode) {
-      case "acceptEdits":
-        return { name: "accept edits", color: colors.status.processing };
-      case "standard":
-        return {
-          name: "standard (request approval) mode",
-          color: colors.status.processingShimmer,
-        };
-      case "unrestricted":
-        // Default mode — show nothing so the built-in idle row owns the space.
-        return null;
-      default:
-        return null;
-    }
-  }, [currentMode]);
-
+  // The permission mode is an **announcement**: it appears when the mode changes
+  // and is gone three seconds later, so the row's left slot belongs to the context
+  // chip by default (2026-10-23). It used to be drawn persistently for every mode
+  // but `unrestricted`, which is what kept the chip off screen in `accept edits`.
   const previousModeRef = useRef(currentMode);
   useEffect(() => {
     if (previousModeRef.current === currentMode) {
@@ -1700,7 +1658,6 @@ export function Input({
       type: "permission-mode",
       modeName: hintInfo.name,
       modeColor: hintInfo.color,
-      showExitHint: false,
     });
   }, [currentMode, showStatuslineTransientHint]);
 
@@ -1885,10 +1842,6 @@ export function Input({
                 ctrlCPressed={ctrlCPressed}
                 escapePressed={escapePressed}
                 isBashMode={isBashMode}
-                modeName={modeInfo?.name ?? null}
-                modeColor={modeInfo?.color ?? null}
-                modeGlyph={null}
-                showExitHint={modeInfo?.showExitHint ?? false}
                 isOpenAICodexProvider={
                   currentModelProvider === OPENAI_CODEX_PROVIDER_NAME
                 }
@@ -1942,9 +1895,6 @@ export function Input({
     conversationId,
     ctrlCPressed,
     escapePressed,
-    modeInfo?.name,
-    modeInfo?.color,
-    modeInfo?.showExitHint,
     currentModel,
     currentReasoningEffort,
     fileAutocompleteFdPath,

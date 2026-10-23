@@ -60,13 +60,12 @@ export function buildDefaultStatuslineParts(
   );
 
   // The context chip is the row's **default left content**, not a right-hand
-  // suffix (2026-10-23). The machine asked for it by name: `ctx 84k/128k(66%)` at
-  // the bottom, shown by default, with a permission switch temporarily taking the
-  // slot and handing it back afterwards — which is exactly what the left slot
-  // already does for `>> bash mode` and `accept edits (… cycle)`
-  // (`DefaultStatuslineLeftContent`). It is printed whether or not the rail is
-  // folded: the rail's `ctx 66% · 84k / 128k` is the detailed reading, this is the
-  // one that survives the rail going away.
+  // suffix (2026-10-23). The machine asked for it by name: `84k/128k(66%)` at the
+  // bottom, shown by default, with a permission switch temporarily taking the slot
+  // and handing it back afterwards — which is exactly what the left slot does for
+  // `>> bash mode` and the transient mode hint (`DefaultStatuslineLeftContent`).
+  // It is printed whether or not the rail is folded: the rail's `ctx 66% · 84k /
+  // 128k` is the detailed reading, this is the one that outlives it.
   const contextLabel = statuslineContextLabel({
     usedTokens: context.contextWindow.usedTokens ?? null,
     windowSize: context.contextWindow.size,

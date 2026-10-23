@@ -159,19 +159,17 @@ export function link(label: string, url: string): string {
 /**
  * The rail's context number, in the one line the status line has left.
  *
- * While the rail is on screen it prints `ctx 66% · 84k / 128k` itself; when the
- * terminal folds it (`《32》§6.3`, `<80` columns or `<26` rows) that number is the
- * one thing in the rail that can page a conversation out, so it moves to the
- * bottom row instead of vanishing. The format is the compact pair — `ctx
- * 84k/128k(66%)` — because the status line shares its row with `agent · model`:
- * the sidebar's spelling (`84k / 128k`) spends four columns on air the bottom row
- * does not have.
+ * The rail prints `ctx 66% · 84k / 128k` in its own column; this is the **same
+ * pair in the bottom row**, compacted — `84k/128k(66%)` — because the status line
+ * shares its row with `agent · model` and the sidebar's spelling spends four
+ * columns on air the bottom row does not have. No `ctx` prefix, by the machine's
+ * ruling (2026-10-23): the pair is unambiguous there, and four columns are worth
+ * more than the word.
  *
- * `null` when there is nothing honest to print: no window size means no
- * percentage, an unreported occupancy means no count, and **zero counts as
- * unreported** — the rail prints `ctx —` for it too (`sidebar-sections.ts`'s
- * `hasUsage`), so a chip reading `ctx 0/235k(0%)` on a fresh conversation would
- * be the one place the app claimed to have measured nothing.
+ * `null` when there is nothing honest to print: an unreported occupancy means no
+ * count, and **zero counts as unreported** — the rail prints `ctx —` for it too
+ * (`sidebar-sections.ts`'s `hasUsage`), so a chip reading `0/235k(0%)` on a fresh
+ * conversation would be the one place the app claimed to have measured nothing.
  */
 export function statuslineContextLabel(input: {
   usedTokens: number | null;
@@ -179,10 +177,10 @@ export function statuslineContextLabel(input: {
 }): string | null {
   if (input.usedTokens === null || input.usedTokens <= 0) return null;
   const used = formatCompact(input.usedTokens);
-  if (input.windowSize <= 0) return `ctx ${used}`;
+  if (input.windowSize <= 0) return used;
   const percent = Math.min(
     100,
     Math.max(0, Math.round((input.usedTokens / input.windowSize) * 100)),
   );
-  return `ctx ${used}/${formatCompact(input.windowSize)}(${percent}%)`;
+  return `${used}/${formatCompact(input.windowSize)}(${percent}%)`;
 }

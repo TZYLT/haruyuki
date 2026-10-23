@@ -141,26 +141,28 @@ describe("statusline renderers", () => {
   });
 
   test("the context chip is the row's default left content", () => {
-    // The machine asked for this on 2026-10-23: `ctx 84k/128k(66%)` at the bottom
-    // by default, with the permission switch taking that slot while it is shown and
-    // handing it back afterwards. The slot is the one `>> bash mode` and
-    // `accept edits (… cycle)` already use, which is exactly that behaviour.
+    // The machine asked for this on 2026-10-23: the pair at the bottom by default,
+    // with the permission switch taking that slot while it is shown and handing it
+    // back afterwards. The slot is the one `>> bash mode` already uses.
+    //
+    // No `ctx` prefix either, by the same ruling — the sentence above keeps the
+    // word for readability, the row does not (§4.32 修订).
     const { context, ui } = createStatuslineFixture({
       usedContextTokens: 84_000,
       contextWindowSize: 128_000,
     });
     expect(buildDefaultStatuslineParts(context, ui).leftLabel).toBe(
-      "ctx 84k/128k(66%)",
+      "84k/128k(66%)",
     );
-    // The right column is still `agent · model`, and no longer carries the chip.
+    // The right column is still `agent · model`, and does not carry the chip.
     expect(
       stripAnsi(String(buildDefaultStatuslineParts(context, ui).right)),
-    ).not.toContain("ctx ");
+    ).not.toContain("84k");
   });
 
   test("the chip is blank when it has nothing to measure", () => {
     const unknown = createStatuslineFixture({ contextWindowSize: 128_000 });
-    // No occupancy reported: an absent number must not become `ctx 0/128k(0%)`.
+    // No occupancy reported: an absent number must not become `0/128k(0%)`.
     expect(
       buildDefaultStatuslineParts(unknown.context, unknown.ui).leftLabel,
     ).toBeNull();
@@ -176,6 +178,6 @@ describe("statusline renderers", () => {
     const noWindow = createStatuslineFixture({ usedContextTokens: 84_000 });
     expect(
       buildDefaultStatuslineParts(noWindow.context, noWindow.ui).leftLabel,
-    ).toBe("ctx 84k");
+    ).toBe("84k");
   });
 });
