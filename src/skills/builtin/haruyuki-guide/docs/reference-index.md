@@ -792,20 +792,20 @@ Commands marked hidden still work but are kept out of autocomplete.
 | `/system-reminders` | `[on\|off\|status]` | Show or hide system reminders | `src/cli/commands/registry.ts:515` |
 | `/terminal` | — | Setup terminal shortcuts [--revert] | `src/cli/commands/registry.ts:521` |
 | `/font-width` | `auto\|narrow\|wide` | How wide this terminal draws ambiguous characters (auto probes it) | `src/cli/commands/registry.ts:586` |
-| `/console-font` | `auto\|off\|<face>` | Restore the Windows console font when conhost flips it to the raster face | `src/cli/commands/registry.ts:656` |
-| `/install-github-app` | — | Setup Haruyuki GitHub Action in this repo | `src/cli/commands/registry.ts:740` |
-| `/bg` | — | Show background shell processes | `src/cli/commands/registry.ts:751` |
-| `/workflows` | — | Show workflow runs, their agents, and token usage | `src/cli/commands/registry.ts:760` |
-| `/exit` | — | Exit this session | `src/cli/commands/registry.ts:772` |
-| `/logout` | — | Clear saved credentials and exit | `src/cli/commands/registry.ts:781` |
-| `/stream` | — | Toggle token streaming on/off (hidden) | `src/cli/commands/registry.ts:792` |
-| `/compact` | `[n\|help]` | Trim older context at a topic boundary you pick | `src/cli/commands/registry.ts:801` |
-| `/topic` | `<title> [summary]` | Mark a topic boundary in this conversation | `src/cli/commands/registry.ts:809` |
-| `/topics` | `[--all]` | List the topic blocks of the current context | `src/cli/commands/registry.ts:814` |
-| `/recall` | `[setting] [value]` | Configure passive recall of earlier conversations and memory | `src/cli/commands/registry.ts:819` |
-| `/set-max-context` | `[tokens] [--override]` | Alias for /context-limit (hidden) | `src/cli/commands/registry.ts:824` |
-| `/link` | — | Attach all Haruyuki tools to agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:833` |
-| `/unlink` | — | Remove all Haruyuki tools from agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:842` |
-| `/resume` | `[conversation_id]` | Resume a previous conversation | `src/cli/commands/registry.ts:851` |
-| `/pinned` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:860` |
-| `/profiles` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:868` |
+| `/console-font` | `auto\|off\|<face>` | Hold the Windows console font at the configured face | `src/cli/commands/registry.ts:656` |
+| `/install-github-app` | — | Setup Haruyuki GitHub Action in this repo | `src/cli/commands/registry.ts:742` |
+| `/bg` | — | Show background shell processes | `src/cli/commands/registry.ts:753` |
+| `/workflows` | — | Show workflow runs, their agents, and token usage | `src/cli/commands/registry.ts:762` |
+| `/exit` | — | Exit this session | `src/cli/commands/registry.ts:774` |
+| `/logout` | — | Clear saved credentials and exit | `src/cli/commands/registry.ts:783` |
+| `/stream` | — | Toggle token streaming on/off (hidden) | `src/cli/commands/registry.ts:794` |
+| `/compact` | `[n\|help]` | Trim older context at a topic boundary you pick | `src/cli/commands/registry.ts:803` |
+| `/topic` | `<title> [summary]` | Mark a topic boundary in this conversation | `src/cli/commands/registry.ts:811` |
+| `/topics` | `[--all]` | List the topic blocks of the current context | `src/cli/commands/registry.ts:816` |
+| `/recall` | `[setting] [value]` | Configure passive recall of earlier conversations and memory | `src/cli/commands/registry.ts:821` |
+| `/set-max-context` | `[tokens] [--override]` | Alias for /context-limit (hidden) | `src/cli/commands/registry.ts:826` |
+| `/link` | — | Attach all Haruyuki tools to agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:835` |
+| `/unlink` | — | Remove all Haruyuki tools from agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:844` |
+| `/resume` | `[conversation_id]` | Resume a previous conversation | `src/cli/commands/registry.ts:853` |
+| `/pinned` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:862` |
+| `/profiles` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:870` |

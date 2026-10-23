@@ -45,7 +45,7 @@ import {
  */
 
 /** How often the console is asked what it is drawing with. */
-const CHECK_INTERVAL_MS = 1000;
+const CHECK_INTERVAL_MS = 250;
 
 /**
  * `FF_MODERN | TMPF_VECTOR | TMPF_TRUETYPE`.
@@ -242,10 +242,20 @@ async function resolveConsoleFontMode(): Promise<ConsoleFontMode> {
   }
   try {
     const settings = await loadSettings();
-    return parseConsoleFontMode(settings.consoleFont);
+    if (
+      typeof settings.consoleFont === "string" &&
+      settings.consoleFont.trim() !== ""
+    ) {
+      return parseConsoleFontMode(settings.consoleFont);
+    }
   } catch {
-    return "auto";
+    // An unreadable settings file falls through to the preset.
   }
+  // Nothing stored: the **preset**, never the console's own face. `auto` adopts
+  // whatever conhost happened to be drawing when the guard armed, and on a machine
+  // whose console default is 宋体 that means adopting 宋体 — the guard then faithfully
+  // puts the user back into the font they were escaping (report, 2026-10-23).
+  return { pinnedFace: DEFAULT_CONSOLE_FONT.face };
 }
 
 /**
@@ -303,6 +313,17 @@ export async function startConsoleFontGuardRuntime(): Promise<void> {
         debugLog(
           "console-font",
           `console refused ${event.target.face} ${event.target.cellHeight}`,
+        );
+        return;
+      }
+      if (event.kind === "not-taken") {
+        // conhost accepted the call and drew something else: on a CJK-only console a
+        // Western face is substituted. Worth one line per attempt — it is the only
+        // record of what the console decided.
+        state.reason = `the console draws ${event.observed.face} instead of ${event.target.face}`;
+        debugLog(
+          "console-font",
+          `asked for ${event.target.face} ${event.target.cellHeight}, console drew ${event.observed.face} ${event.observed.cellWidth}x${event.observed.cellHeight}`,
         );
         return;
       }

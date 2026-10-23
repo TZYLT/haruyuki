@@ -11,7 +11,7 @@ import {
   startConsoleFontGuard,
 } from "@/cli/helpers/console-font";
 
-/** What the machine's window reports before the flip (2026-10-23 measurement). */
+/** The preset, at the height this machine's window uses. */
 const CONSOLAS_18: ConsoleFont = {
   face: "Consolas",
   cellWidth: 8,
@@ -20,7 +20,7 @@ const CONSOLAS_18: ConsoleFont = {
   weight: 400,
 };
 
-/** The flip itself: the smallest raster face, and it has no block glyphs. */
+/** The flip: the smallest raster face, and it has no block glyphs. */
 const RASTER_12: ConsoleFont = {
   face: "Terminal",
   cellWidth: 8,
@@ -29,7 +29,16 @@ const RASTER_12: ConsoleFont = {
   weight: 400,
 };
 
-/** A CJK monospace console face, to pin that "not Consolas" is not "raster". */
+/** What conhost puts back around startup when the console's default is 宋体. */
+const SIMSUN_16: ConsoleFont = {
+  face: "宋体",
+  cellWidth: 8,
+  cellHeight: 16,
+  family: 0x36,
+  weight: 400,
+};
+
+/** A CJK monospace console face, to pin that "not the preset" is not "raster". */
 const XIAWU_16: ConsoleFont = {
   face: "霞鹜文楷等宽",
   cellWidth: 7,
@@ -43,12 +52,19 @@ interface FakeConsole {
   applied: ConsoleFontTarget[];
   reads: () => number;
   show(font: ConsoleFont | null): void;
+  /** Accept the call but keep drawing `font` — what a CJK console does. */
+  substitute(font: ConsoleFont): void;
   refuse(value: boolean): void;
 }
 
+/**
+ * A console the test drives: `apply` records the request, then either takes effect
+ * (the console now reports the requested face at the requested height) or refuses.
+ */
 function createFakeConsole(initial: ConsoleFont | null): FakeConsole {
   let font = initial;
   let refused = false;
+  let substituted: ConsoleFont | null = null;
   let reads = 0;
   const applied: ConsoleFontTarget[] = [];
   return {
@@ -61,11 +77,21 @@ function createFakeConsole(initial: ConsoleFont | null): FakeConsole {
       },
       apply: (target) => {
         applied.push(target);
-        return !refused;
+        if (refused) return false;
+        font = substituted ?? {
+          ...(font ?? CONSOLAS_18),
+          face: target.face,
+          cellHeight: target.cellHeight,
+          weight: target.weight,
+        };
+        return true;
       },
     },
     show: (next) => {
       font = next;
+    },
+    substitute: (next) => {
+      substituted = next;
     },
     refuse: (value) => {
       refused = value;
@@ -106,6 +132,7 @@ describe("isRasterConsoleFont", () => {
 
   test("a scalable face is not, whatever it is called", () => {
     expect(isRasterConsoleFont(CONSOLAS_18)).toBe(false);
+    expect(isRasterConsoleFont(SIMSUN_16)).toBe(false);
     expect(isRasterConsoleFont(XIAWU_16)).toBe(false);
   });
 });
@@ -124,7 +151,7 @@ describe("parseConsoleFontMode", () => {
     expect(parseConsoleFontMode(" off ")).toBe("off");
   });
 
-  test("anything else is a face to restore, trimmed", () => {
+  test("anything else is a face to draw with, trimmed", () => {
     expect(parseConsoleFontMode(" Consolas ")).toEqual({
       pinnedFace: "Consolas",
     });
@@ -135,7 +162,7 @@ describe("parseConsoleFontMode", () => {
 });
 
 describe("consoleFontTargetFor", () => {
-  test("auto restores the session's own face at its own height", () => {
+  test("auto keeps the session's own face at its own height", () => {
     expect(consoleFontTargetFor("auto", CONSOLAS_18)).toEqual({
       face: "Consolas",
       cellHeight: 18,
@@ -143,14 +170,14 @@ describe("consoleFontTargetFor", () => {
     });
   });
 
-  test("a pinned face wins, the height still comes from the session", () => {
-    expect(
-      consoleFontTargetFor({ pinnedFace: "霞鹜文楷等宽" }, CONSOLAS_18),
-    ).toEqual({
-      face: "霞鹜文楷等宽",
-      cellHeight: 18,
-      weight: 400,
-    });
+  test("the preset wins over the session's face but keeps its height", () => {
+    expect(consoleFontTargetFor({ pinnedFace: "Consolas" }, SIMSUN_16)).toEqual(
+      {
+        face: "Consolas",
+        cellHeight: 16,
+        weight: 400,
+      },
+    );
   });
 
   test("a session with no scalable reading falls back to the preset", () => {
@@ -167,17 +194,38 @@ describe("consoleFontTargetFor", () => {
 });
 
 describe("startConsoleFontGuard", () => {
-  test("records the baseline and leaves a healthy console alone", () => {
+  test("records the baseline and leaves the preset face alone", () => {
     const fake = createFakeConsole(CONSOLAS_18);
     const events: ConsoleFontGuardEvent[] = [];
     startConsoleFontGuard({
       port: fake.port,
-      mode: "auto",
+      mode: { pinnedFace: "Consolas" },
       onEvent: (event) => events.push(event),
     });
 
     expect(events).toEqual([{ kind: "baseline", font: CONSOLAS_18 }]);
     expect(fake.applied).toEqual([]);
+  });
+
+  test("a face that is not the preset is repaired, not just a raster one", () => {
+    // The 2026-10-23 report: conhost re-applies the console's saved default (宋体)
+    // around startup. 宋体 is TrueType, so a raster-only judgement let it stand.
+    const fake = createFakeConsole(SIMSUN_16);
+    const events: ConsoleFontGuardEvent[] = [];
+    startConsoleFontGuard({
+      port: fake.port,
+      mode: { pinnedFace: "Consolas" },
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(fake.applied).toEqual([
+      { face: "Consolas", cellHeight: 16, weight: 400 },
+    ]);
+    expect(events.at(-1)).toEqual({
+      kind: "repaired",
+      before: SIMSUN_16,
+      target: { face: "Consolas", cellHeight: 16, weight: 400 },
+    });
   });
 
   test("puts the session's face back after a flip", () => {
@@ -202,20 +250,37 @@ describe("startConsoleFontGuard", () => {
     });
   });
 
+  test("a steady window is not rewritten on every tick", () => {
+    const fake = createFakeConsole(SIMSUN_16);
+    const timer = createFakeTimer();
+    startConsoleFontGuard({
+      port: fake.port,
+      mode: { pinnedFace: "Consolas" },
+      intervalMs: 250,
+      setIntervalImpl: timer.setIntervalImpl,
+      clearIntervalImpl: timer.clearIntervalImpl,
+    });
+
+    // The first check repaired 宋体 → Consolas; the fake now reports Consolas, so the
+    // next three ticks must write nothing.
+    expect(fake.applied).toHaveLength(1);
+    timer.tick();
+    timer.tick();
+    timer.tick();
+    expect(fake.applied).toHaveLength(1);
+  });
+
   test("a pinned face is what the repair writes", () => {
     const fake = createFakeConsole(CONSOLAS_18);
-    const guard = startConsoleFontGuard({
+    startConsoleFontGuard({
       port: fake.port,
       mode: { pinnedFace: "霞鹜文楷等宽" },
     });
 
-    fake.show(RASTER_12);
-    guard.check();
-
     expect(fake.applied[0]?.face).toBe("霞鹜文楷等宽");
   });
 
-  test("a session that starts flipped falls back to the preset face", () => {
+  test("a session that starts raster falls back to the preset face", () => {
     const fake = createFakeConsole(RASTER_12);
     const events: ConsoleFontGuardEvent[] = [];
     startConsoleFontGuard({
@@ -241,7 +306,7 @@ describe("startConsoleFontGuard", () => {
     const events: ConsoleFontGuardEvent[] = [];
     const guard = startConsoleFontGuard({
       port: fake.port,
-      mode: "auto",
+      mode: { pinnedFace: "Consolas" },
       onEvent: (event) => events.push(event),
     });
 
@@ -259,54 +324,60 @@ describe("startConsoleFontGuard", () => {
     expect(fake.applied).toEqual([]);
   });
 
-  test("three refused repairs end the polling", () => {
-    const fake = createFakeConsole(CONSOLAS_18);
+  test("a substituted face ends the guard instead of flickering forever", () => {
+    // A CJK-only console accepts `Consolas` and keeps drawing 宋体. Without the
+    // read-back this would rewrite the same rejected face every tick.
+    const fake = createFakeConsole(SIMSUN_16);
+    fake.substitute(SIMSUN_16);
     const timer = createFakeTimer();
     const events: ConsoleFontGuardEvent[] = [];
     startConsoleFontGuard({
       port: fake.port,
-      mode: "auto",
-      intervalMs: 1000,
+      mode: { pinnedFace: "Consolas" },
+      intervalMs: 250,
       setIntervalImpl: timer.setIntervalImpl,
       clearIntervalImpl: timer.clearIntervalImpl,
       onEvent: (event) => events.push(event),
     });
 
-    fake.show(RASTER_12);
-    fake.refuse(true);
-    timer.tick();
+    expect(events.at(-1)?.kind).toBe("not-taken");
     timer.tick();
     timer.tick();
     timer.tick();
 
-    expect(fake.applied).toHaveLength(3);
-    expect(
-      events.filter((event) => event.kind === "repair-failed"),
-    ).toHaveLength(3);
+    expect(fake.applied).toHaveLength(2);
+    expect(events.filter((event) => event.kind === "not-taken")).toHaveLength(
+      2,
+    );
     expect(timer.clears()).toBe(1);
   });
 
-  test("the timer keeps checking until it is stopped", () => {
+  test("two refused repairs end the polling", () => {
     const fake = createFakeConsole(CONSOLAS_18);
     const timer = createFakeTimer();
-    const guard = startConsoleFontGuard({
+    const events: ConsoleFontGuardEvent[] = [];
+    fake.refuse(true);
+    startConsoleFontGuard({
       port: fake.port,
       mode: "auto",
-      intervalMs: 1000,
+      intervalMs: 250,
       setIntervalImpl: timer.setIntervalImpl,
       clearIntervalImpl: timer.clearIntervalImpl,
+      onEvent: (event) => events.push(event),
     });
 
-    expect(fake.reads()).toBe(1);
-    timer.tick();
-    expect(fake.reads()).toBe(2);
-
+    // The baseline is Consolas and the window is Consolas, so the guard is quiet
+    // until something changes.
+    expect(fake.applied).toHaveLength(0);
     fake.show(RASTER_12);
     timer.tick();
-    expect(fake.applied).toHaveLength(1);
-
-    guard.stop();
     timer.tick();
-    expect(fake.reads()).toBe(3);
+    timer.tick();
+
+    expect(fake.applied).toHaveLength(2);
+    expect(
+      events.filter((event) => event.kind === "repair-failed"),
+    ).toHaveLength(2);
+    expect(timer.clears()).toBe(1);
   });
 });

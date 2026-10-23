@@ -30,9 +30,16 @@
  * ## What the guard does, and what it cannot do
  *
  * No escape sequence selects a console font — the Win32 call is the only lever — so
- * the guard reads the console's font on a timer and, when the face is the raster
- * fallback, writes this session's own face back. A reading is one Win32 call and a
- * repair is one more, so a one-second poll is free.
+ * the guard reads the console's font on a timer and writes the target face back when
+ * the window is drawing anything else. A reading is one Win32 call and a repair is
+ * one more, so a quarter-second poll is free.
+ *
+ * The [user] expectation it serves is *“字体始终保持一致”*, not “换坏了再修”：the
+ * guard exists because the console host changes the font on its own, twice observed —
+ * `Consolas` → `宋体` around startup (the console's saved default being re-applied) and
+ * `Consolas` → `Terminal` 8×12 mid-turn. A repair that only looked for the raster
+ * fallback adopted `宋体` as “this session's face” and then restored *that* (report,
+ * 2026-10-23), which is why the target is the configured face and the loop holds it.
  *
  * It **cannot** notice the flip any other way, and the measurement says why: the
  * cell grid did not change (99×39 stayed 99×39), so the terminal never sent
@@ -58,11 +65,13 @@ export const RASTER_CONSOLE_FACE = "Terminal";
 const TRUE_TYPE_FAMILY_FLAGS = 0x06;
 
 /**
- * What to restore when the session never reported a TrueType face of its own.
+ * The preset face: what to draw with when nothing else says otherwise.
  *
- * `Consolas` is the machine's own console default (`HKCU\Console` FaceName) and the
- * face the TUI is designed against: a Western monospace at ~0.55 em, which is what
- * makes ambiguous characters one column (`/font-width`).
+ * `Consolas` is the machine's own console default (`HKCU\Console` FaceName on the
+ * machine this was written for) and the face the TUI is designed against: a Western
+ * monospace at ~0.55 em, which is what makes ambiguous characters one column
+ * (`/font-width`). It is also the fallback target for a session that never reported a
+ * scalable face of its own.
  */
 export const DEFAULT_CONSOLE_FONT = {
   face: "Consolas",
@@ -92,9 +101,11 @@ export interface ConsoleFontTarget {
 /**
  * The guard's configuration.
  *
- * `auto` restores the face this session started with — right on a machine whose
- * console is configured for some other monospace (the repair should not overrule
- * it). `off` disables the guard. A pinned face overrides the session's own.
+ * The runtime's default is the **preset** (`{ pinnedFace: "Consolas" }`, see
+ * `DEFAULT_CONSOLE_FONT`): the window draws that face and the guard holds it there.
+ * `auto` is the opt-in alternative — restore the face this session started with, for
+ * a machine whose console is configured for some other monospace. `off` disables the
+ * guard. A pinned face always wins over the session's own.
  */
 export type ConsoleFontMode = "auto" | "off" | { pinnedFace: string };
 
@@ -110,6 +121,8 @@ export type ConsoleFontGuardEvent =
   | { kind: "baseline"; font: ConsoleFont }
   | { kind: "repaired"; before: ConsoleFont; target: ConsoleFontTarget }
   | { kind: "repair-failed"; target: ConsoleFontTarget }
+  /** The console accepted the call and drew a different face (substitution). */
+  | { kind: "not-taken"; target: ConsoleFontTarget; observed: ConsoleFont }
   | { kind: "unavailable" };
 
 export interface ConsoleFontGuard {
@@ -130,8 +143,8 @@ export interface ConsoleFontGuardOptions {
   clearIntervalImpl?: typeof clearInterval;
 }
 
-/** How many refused repairs in a row end the polling. */
-const MAX_REPAIR_FAILURES = 3;
+/** How many refusals in a row end the polling. */
+const MAX_REPAIR_FAILURES = 2;
 
 /** Whether this reading is the raster fallback rather than a scalable face. */
 export function isRasterConsoleFont(
@@ -179,17 +192,31 @@ export function consoleFontTargetFor(
 }
 
 /**
- * Watch the console font and repair the raster fallback.
+ * Hold the console at the target face.
  *
- * The **baseline** is the first *scalable* reading: a session that starts already
- * flipped has no face of its own to restore, so it falls back to
- * `DEFAULT_CONSOLE_FONT` rather than "restoring" `Terminal`. A healthy reading is
- * never adopted as the baseline — that would let one moment of raster state become
- * the target.
+ * **A face that is not the target is repaired, not just a raster one.** On the
+ * machine this was written for, conhost also swaps `Consolas` for `宋体` (the
+ * console's saved default) when it re-applies console properties around startup,
+ * and a guard that only looked for the raster fallback ended up "restoring" `宋体`:
+ * the app adopted `宋体` as the session's face and faithfully put the user back into
+ * the font they were trying to leave (user report, 2026-10-23: `Consolas → 启动 →
+ * 宋体 → 手动 Consolas → 运行命令 → 点阵 → 自动切换宋体`). The rule is therefore "the
+ * window draws the target face", and the only thing compared is the **face**: a
+ * different cell height is the user zooming with `Ctrl+wheel`, which the guard leaves
+ * alone.
  *
- * A console that does not answer (a ConPTY host, a redirected stdout) ends the
- * guard on the first reading instead of spawning a timer that can never do
- * anything.
+ * The **baseline** is the first scalable reading, and only `auto` consults it (auto
+ * restores whatever the session started with). A raster reading is never adopted, so
+ * one flipped moment cannot become the target.
+ *
+ * Every write is **verified with a second reading**. conhost may accept the call and
+ * draw something else — a CJK-only console substitutes `宋体` for a Western face —
+ * and without the check the guard would rewrite the same rejected font every tick:
+ * a flicker forever, and a repair that exists only to fight itself. Two rejections
+ * end the polling with a logged reason, which is the honest outcome.
+ *
+ * A console that does not answer (a ConPTY host, a redirected stdout) ends the guard
+ * on the first reading instead of spawning a timer that can never do anything.
  */
 export function startConsoleFontGuard(
   options: ConsoleFontGuardOptions,
@@ -204,7 +231,7 @@ export function startConsoleFontGuard(
   } = options;
 
   let baseline: ConsoleFont | null = null;
-  let failures = 0;
+  let refusals = 0;
   let stopped = mode === "off";
   let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -229,10 +256,7 @@ export function startConsoleFontGuard(
     if (baseline === null && !isRasterConsoleFont(current)) {
       baseline = current;
       onEvent?.({ kind: "baseline", font: current });
-      return;
     }
-
-    if (!isRasterConsoleFont(current)) return;
 
     const target = consoleFontTargetFor(mode, baseline);
     if (target === null) {
@@ -240,15 +264,32 @@ export function startConsoleFontGuard(
       return;
     }
 
-    if (port.apply(target)) {
-      failures = 0;
-      onEvent?.({ kind: "repaired", before: current, target });
+    const holding =
+      current.face === target.face && !isRasterConsoleFont(current);
+    if (holding) return;
+
+    if (!port.apply(target)) {
+      refusals += 1;
+      onEvent?.({ kind: "repair-failed", target });
+      if (refusals >= MAX_REPAIR_FAILURES) stop();
       return;
     }
 
-    failures += 1;
-    onEvent?.({ kind: "repair-failed", target });
-    if (failures >= MAX_REPAIR_FAILURES) stop();
+    const observed = port.read();
+    if (observed === null) {
+      onEvent?.({ kind: "unavailable" });
+      stop();
+      return;
+    }
+    if (observed.face !== target.face) {
+      refusals += 1;
+      onEvent?.({ kind: "not-taken", target, observed });
+      if (refusals >= MAX_REPAIR_FAILURES) stop();
+      return;
+    }
+
+    refusals = 0;
+    onEvent?.({ kind: "repaired", before: current, target });
   };
 
   check();

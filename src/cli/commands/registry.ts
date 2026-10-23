@@ -654,7 +654,7 @@ export const commands: Record<string, Command> = {
     },
   },
   "/console-font": {
-    desc: "Restore the Windows console font when conhost flips it to the raster face",
+    desc: "Hold the Windows console font at the configured face",
     args: "auto|off|<face>",
     order: 38.5,
     handler: async (args: string[]) => {
@@ -686,10 +686,10 @@ export const commands: Record<string, Command> = {
         const lines = [`In force: ${mode}${standing}`];
         if (status.baseline !== null) {
           lines.push(
-            `This session's own face: ${status.baseline.face} ${status.baseline.cellWidth}x${status.baseline.cellHeight}.`,
+            `This session started on: ${status.baseline.face} ${status.baseline.cellWidth}x${status.baseline.cellHeight}.`,
           );
-          lines.push(`Repairs this session: ${status.repairs}.`);
         }
+        lines.push(`Repairs this session: ${status.repairs}.`);
         return lines;
       };
 
@@ -700,17 +700,19 @@ export const commands: Record<string, Command> = {
           "",
           "/console-font auto | off | <face>",
           "",
-          "Classic Windows `conhost.exe` sometimes swaps a live window to the",
-          "smallest raster font — `Terminal`, an 8x12 cell that has none of the",
-          "block or ambiguous glyphs this UI is drawn with — and keeps it until the",
-          "window's properties are changed by hand. Nothing the app writes brings it",
-          "back and no escape sequence selects a font, so the guard asks the console",
-          "what it is drawing with once a second and writes the session's own face",
-          "back. Windows console host + Bun only.",
+          "Classic Windows `conhost.exe` changes a live window's font by itself —",
+          "`Consolas` → `宋体` around startup (the console's saved default being",
+          "re-applied), `Consolas` → `Terminal` 8×12 mid-turn (the smallest raster face,",
+          "which has none of the block or ambiguous glyphs this UI is drawn with) — and",
+          "keeps it until the window's properties are changed by hand. No escape",
+          "sequence selects a font, so the only way to keep the font still is to hold",
+          "it: the guard asks the console what it is drawing with four times a second",
+          "and writes the target face back. Windows console host + Bun.",
           "",
-          "  auto     — restore the face this session started with (the default)",
+          "  (unset)  — the preset, `Consolas`",
+          "  auto     — whatever face this session started with",
           "  off      — stop watching",
-          "  <face>   — restore that face instead, e.g. Consolas",
+          "  <face>   — draw with that face, e.g. 霞鹜文楷等宽",
         ].join("\n");
       }
 
