@@ -2,6 +2,7 @@ import {
   getViewportRows,
   getViewportScrollRows,
 } from "@/cli/app/viewport-scroll";
+import { startConsoleFontGuardRuntime } from "@/cli/helpers/console-font-bun";
 import type { FrameStream } from "@/cli/helpers/terminal-frame";
 import {
   getTerminalFrame,
@@ -9,7 +10,7 @@ import {
   subscribeToTerminalFrame,
 } from "@/cli/helpers/terminal-frame";
 import { resolveUiV2Once } from "@/experiments/ui-v2";
-import { debugLog, suppressDebugScreenOutput } from "@/utils/debug";
+import { debugLog, debugWarn, suppressDebugScreenOutput } from "@/utils/debug";
 
 /**
  * The full-screen shell's terminal hand-over, in one place.
@@ -39,6 +40,19 @@ export function wireFullScreenTerminal(
   // (2026-10-20). This call is evaluated as a `render()` option, i.e. exactly at
   // that boundary.
   suppressDebugScreenOutput();
+
+  // The console-font guard also belongs at this seam, and for the same timing
+  // reason: classic Windows conhost can swap this window to the smallest raster
+  // font mid-session and keeps it until the window's properties are changed by
+  // hand (2026-10-23: three seconds into a turn, with the cell grid, the screen
+  // buffer and the code page unchanged — `helpers/console-font.ts` carries the
+  // measurement). No escape sequence selects a font, so the repair is a Win32
+  // call, and it has to be armed before the first frame. It is not shell-specific:
+  // the append shell is drawn into the same console, so this runs before the
+  // full-screen early return below.
+  startConsoleFontGuardRuntime().catch((error: unknown) => {
+    debugWarn("console-font", `guard did not start: ${String(error)}`);
+  });
 
   const fullScreen = resolveUiV2Once();
   if (!fullScreen) return false;

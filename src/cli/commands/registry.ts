@@ -653,6 +653,90 @@ export const commands: Record<string, Command> = {
       return `${inForce}\n${requested}: ${now} column(s) — ${change}; saved to settings.`;
     },
   },
+  "/console-font": {
+    desc: "Restore the Windows console font when conhost flips it to the raster face",
+    args: "auto|off|<face>",
+    order: 38.5,
+    handler: async (args: string[]) => {
+      const { parseConsoleFontMode } = await import(
+        "@/cli/helpers/console-font"
+      );
+      const {
+        getConsoleFontGuardStatus,
+        restartConsoleFontGuardRuntime,
+        stopConsoleFontGuardRuntime,
+      } = await import("@/cli/helpers/console-font-bun");
+
+      const describe = (
+        status: ReturnType<typeof getConsoleFontGuardStatus>,
+      ): string[] => {
+        const mode =
+          typeof status.mode === "object"
+            ? status.mode.pinnedFace
+            : status.mode;
+        const standing =
+          status.mode === "off"
+            ? " (off)"
+            : status.running
+              ? ` — restoring ${status.targetFace}`
+              : ` — not running (${status.reason ?? "not started"})`;
+        // The command answers with what is in force first, the way `/font-width`
+        // does: a repair that happened once is invisible on screen, so the state
+        // has to be written down rather than left to the frame.
+        const lines = [`In force: ${mode}${standing}`];
+        if (status.baseline !== null) {
+          lines.push(
+            `This session's own face: ${status.baseline.face} ${status.baseline.cellWidth}x${status.baseline.cellHeight}.`,
+          );
+          lines.push(`Repairs this session: ${status.repairs}.`);
+        }
+        return lines;
+      };
+
+      const requested = (args[0] ?? "").trim();
+      if (requested === "") {
+        return [
+          ...describe(getConsoleFontGuardStatus()),
+          "",
+          "/console-font auto | off | <face>",
+          "",
+          "Classic Windows `conhost.exe` sometimes swaps a live window to the",
+          "smallest raster font — `Terminal`, an 8x12 cell that has none of the",
+          "block or ambiguous glyphs this UI is drawn with — and keeps it until the",
+          "window's properties are changed by hand. Nothing the app writes brings it",
+          "back and no escape sequence selects a font, so the guard asks the console",
+          "what it is drawing with once a second and writes the session's own face",
+          "back. Windows console host + Bun only.",
+          "",
+          "  auto     — restore the face this session started with (the default)",
+          "  off      — stop watching",
+          "  <face>   — restore that face instead, e.g. Consolas",
+        ].join("\n");
+      }
+
+      const mode = parseConsoleFontMode(requested);
+      try {
+        const { updateSettings } = await import("@/settings");
+        await updateSettings({
+          consoleFont: typeof mode === "object" ? mode.pinnedFace : mode,
+        });
+      } catch {
+        // An unreadable settings file still leaves the session value in force.
+      }
+      if (mode === "off") {
+        stopConsoleFontGuardRuntime();
+        return [
+          ...describe(getConsoleFontGuardStatus()),
+          "Stopped; saved to settings.",
+        ].join("\n");
+      }
+      await restartConsoleFontGuardRuntime();
+      return [
+        ...describe(getConsoleFontGuardStatus()),
+        "Saved to settings.",
+      ].join("\n");
+    },
+  },
   "/install-github-app": {
     desc: "Setup Haruyuki GitHub Action in this repo",
     order: 38,

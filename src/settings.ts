@@ -22,6 +22,16 @@ export interface Settings {
    * modules read the same JSON file.
    */
   ambiguousCharWidth?: "auto" | "narrow" | "wide";
+  /**
+   * Which console face the Windows font guard restores, and whether it runs.
+   *
+   * `auto` (the default) puts back the face the session started with; `off` stops
+   * the guard; any other value is a face name to restore (`Consolas`). Legacy
+   * `conhost.exe` sometimes swaps a live window to the smallest raster font, which
+   * has none of the glyphs this UI draws with — `/console-font` writes this, and
+   * `cli/helpers/console-font.ts` explains the artifact.
+   */
+  consoleFont?: string;
   permissions?: PermissionRules;
   env?: Record<string, string>;
   // Shift+Enter keybinding state (for VS Code/Cursor/Windsurf)
