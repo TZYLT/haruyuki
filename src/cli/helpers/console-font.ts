@@ -21,7 +21,7 @@
  *
  * It is not our byte stream either: a synthetic load of exactly what the shell
  * writes (full-height frames with `ESC[2J`, alternate-screen hops at 8 Hz, an OSC 0
- * title spinner at 10 Hz, OSC 9;4 progress, rows past the band, CJK and block
+ * title spinner at 10 Hz, OSC 9/4 progress, rows past the band, CJK and block
  * glyphs) ran for a minute on a console of the same kind without a flip. Codex CLI
  * reports the same runtime flip under classic conhost (openai/codex#19141,
  * 2026-04-23) and confirms an external `SetCurrentConsoleFontEx` repairs the
@@ -48,8 +48,39 @@
  * frame differs; only a console query can see it. That is also why the guard polls
  * instead of hooking an event: there is no event.
  *
- * The port (`ConsoleFontPort`) is the whole Win32 surface, so everything above it
- * is testable without a console; `./console-font-bun.ts` supplies the real one.
+ * ## The port is asynchronous, and why
+ *
+ * `ConsoleFontPort` is the whole Win32 surface, so everything above it is testable
+ * without a console. Both readings are `Promise`s because the two runtimes reach
+ * Win32 differently: Bun calls `bun:ffi` in-process (immediate), while Node has no
+ * FFI and has to talk to a child process (`./console-font-node.ts`) — and a child
+ * process round trip cannot be answered synchronously without blocking the whole
+ * TUI. The guard therefore awaits one reading at a time and never lets a slow
+ * console overlap two checks.
+ *
+ * ## What the target face is
+ *
+ * `Consolas` — the face the user asked for, and the one the layout's default
+ * ambiguous width assumes (`/font-width`). The hypothesis that conhost would
+ * *replace* it because Consolas carries no CJK glyphs was tested against a real
+ * conhost on 2026-10-23: after forcing `Consolas` on a window and printing
+ * Chinese, block glyphs and `—`, the console still reported `Consolas` 400 ms and
+ * 1.4 s later. conhost does not swap a Western face out because of the content.
+ *
+ * The flip's actual trigger was found the same day, and it is worth writing down
+ * because it explains why the artifact only shows up "when a tool runs": **starting
+ * Windows PowerShell 5.1 in the console drops it to the raster `Terminal` 8×12
+ * face**. A no-op `powershell.exe -NoProfile -Command "exit 0"` reproduces it (the
+ * same `-EncodedCommand` form does too), while `cmd.exe` and `node.exe` children do
+ * not. PowerShell's start-up re-applies console properties, and on a console it did
+ * not create that application lands on the raster face. The TUI spawns PowerShell
+ * in several paths (`tools/impl/shell-launchers.ts`, `utils/process-liveness.ts`,
+ * archive extraction), so each such spawn used to reset the font — and holding the
+ * target face is the repair.
+ *
+ * The helper in `./console-font-node.ts` therefore starts in its own hidden console
+ * and attaches to this one afterwards, so the guard does not add a flip of its own
+ * on every session start.
  */
 
 /** What conhost calls the raster fallback, in `FaceName`. */
@@ -67,17 +98,44 @@ const TRUE_TYPE_FAMILY_FLAGS = 0x06;
 /**
  * The preset face: what to draw with when nothing else says otherwise.
  *
- * `Consolas` is the machine's own console default (`HKCU\Console` FaceName on the
- * machine this was written for) and the face the TUI is designed against: a Western
- * monospace at ~0.55 em, which is what makes ambiguous characters one column
- * (`/font-width`). It is also the fallback target for a session that never reported a
- * scalable face of its own.
+ * `Consolas` is the face this session is designed against: a Western monospace at
+ * ~0.55 em, which is what makes ambiguous characters one column (`/font-width`),
+ * and it is what the user asked for by name. Its tiny cell (7×16 at the height
+ * this machine's window uses) is the opposite of the complaint this guard exists
+ * to answer.
+ *
+ * `cellHeight` is only the fallback for a session that never reported a scalable
+ * face; a real reading keeps the window's own height (zooming with `Ctrl+wheel`
+ * must survive a repair).
  */
 export const DEFAULT_CONSOLE_FONT = {
   face: "Consolas",
   cellHeight: 16,
   weight: 400,
 } as const;
+
+/**
+ * Faces to fall back to, best first, when the preferred one is not installed.
+ *
+ * The console can only draw a fixed-pitch TrueType face, and a face the machine
+ * does not have cannot be applied — conhost answers the call and keeps drawing
+ * something else, which the guard would then log as `not-taken` twice and stop
+ * over. Choosing from the inventory the console reports is the difference between
+ * "hold Consolas" and "hold a font that exists".
+ *
+ * The CJK-capable monospace faces come last on purpose: `新宋体` is the face the
+ * console already falls back to, and its small-size bitmaps are the artifact being
+ * escaped — picking it as the default would restore the complaint. It is still
+ * better than a face that is not installed at all.
+ */
+export const FALLBACK_CONSOLE_FACES = [
+  "Cascadia Mono",
+  "Lucida Console",
+  "DejaVu Sans Mono",
+  "NSimSun",
+  "新宋体",
+  "MS Gothic",
+] as const;
 
 /** One reading of the console's font (`GetCurrentConsoleFontEx`). */
 export interface ConsoleFont {
@@ -112,9 +170,18 @@ export type ConsoleFontMode = "auto" | "off" | { pinnedFace: string };
 /** Everything the guard needs from Win32. */
 export interface ConsoleFontPort {
   /** The console's current font, or `null` when this console does not answer. */
-  read(): ConsoleFont | null;
+  read(): Promise<ConsoleFont | null>;
   /** Ask the console to draw with `target`; `false` when it refused. */
-  apply(target: ConsoleFontTarget): boolean;
+  apply(target: ConsoleFontTarget): Promise<boolean>;
+  /**
+   * The faces the console can be given, or `null` when the port cannot ask.
+   *
+   * Only the Node helper (which already runs PowerShell) can enumerate the font
+   * registry for free; the FFI port leaves it out and the preset is trusted.
+   */
+  listFaces?(): Promise<readonly string[] | null>;
+  /** Release whatever the port holds (a helper process, a handle). Idempotent. */
+  close?(): void;
 }
 
 export type ConsoleFontGuardEvent =
@@ -127,17 +194,24 @@ export type ConsoleFontGuardEvent =
 
 export interface ConsoleFontGuard {
   /** Run one check; the timer calls this, and `/console-font` may force it. */
-  check(): void;
-  /** Stop the timer. Idempotent. */
+  check(): Promise<void>;
+  /** Stop the timer and release the port. Idempotent. */
   stop(): void;
 }
 
 export interface ConsoleFontGuardOptions {
   port: ConsoleFontPort;
   mode: ConsoleFontMode;
+  /**
+   * The face to write when the mode has none of its own.
+   *
+   * `auto` without a scalable baseline (and a console that starts raster) needs a
+   * face, and the runtime may have chosen one from the installed inventory.
+   */
+  defaultFace?: string;
   /** Called for everything worth a log line; never writes to the screen itself. */
   onEvent?: (event: ConsoleFontGuardEvent) => void;
-  /** Poll interval in milliseconds; `0` checks once and stops. */
+  /** Poll interval in milliseconds; `0` checks once and arms no timer. */
   intervalMs?: number;
   setIntervalImpl?: typeof setInterval;
   clearIntervalImpl?: typeof clearInterval;
@@ -152,6 +226,33 @@ export function isRasterConsoleFont(
 ): boolean {
   if (font.face === RASTER_CONSOLE_FACE) return true;
   return (font.family & TRUE_TYPE_FAMILY_FLAGS) !== TRUE_TYPE_FAMILY_FLAGS;
+}
+
+/** Case- and whitespace-insensitive face comparison (`宋体` has no case). */
+function normalizeFace(face: string): string {
+  return face.trim().toLowerCase();
+}
+
+/**
+ * Pick the face to hold, given the faces the console says exist.
+ *
+ * `installed === null` means "the runtime could not ask", and the preference is
+ * trusted as-is — a guard that silently swapped the user's chosen face because the
+ * inventory call failed would be worse than one that tried and logged the refusal.
+ */
+export function chooseConsoleFace(
+  preferred: string,
+  installed: readonly string[] | null,
+): string {
+  if (installed === null) return preferred;
+  const available = new Set(installed.map(normalizeFace));
+  if (available.has(normalizeFace(preferred))) return preferred;
+  for (const candidate of FALLBACK_CONSOLE_FACES) {
+    if (available.has(normalizeFace(candidate))) return candidate;
+  }
+  // Nothing on the list is installed either: still try the preference, so the
+  // console — not a guess — gets to decide, and the read-back says what happened.
+  return preferred;
 }
 
 /**
@@ -174,12 +275,14 @@ export function parseConsoleFontMode(value: unknown): ConsoleFontMode {
 export function consoleFontTargetFor(
   mode: ConsoleFontMode,
   baseline: ConsoleFont | null,
+  defaultFace: string = DEFAULT_CONSOLE_FONT.face,
 ): ConsoleFontTarget | null {
   if (mode === "off") return null;
+  const fallback = defaultFace === "" ? DEFAULT_CONSOLE_FONT.face : defaultFace;
   const face =
     typeof mode === "object" ? mode.pinnedFace : (baseline?.face ?? "");
   return {
-    face: face === "" ? DEFAULT_CONSOLE_FONT.face : face,
+    face: face === "" ? fallback : face,
     cellHeight:
       baseline !== null && baseline.cellHeight > 0
         ? baseline.cellHeight
@@ -217,13 +320,17 @@ export function consoleFontTargetFor(
  *
  * A console that does not answer (a ConPTY host, a redirected stdout) ends the guard
  * on the first reading instead of spawning a timer that can never do anything.
+ *
+ * One check runs at a time: a child-process port can take a few milliseconds and a
+ * 250 ms timer must not stack overlapping round trips on a busy console.
  */
-export function startConsoleFontGuard(
+export async function startConsoleFontGuard(
   options: ConsoleFontGuardOptions,
-): ConsoleFontGuard {
+): Promise<ConsoleFontGuard> {
   const {
     port,
     mode,
+    defaultFace,
     onEvent,
     intervalMs = 0,
     setIntervalImpl = setInterval,
@@ -233,68 +340,91 @@ export function startConsoleFontGuard(
   let baseline: ConsoleFont | null = null;
   let refusals = 0;
   let stopped = mode === "off";
+  let checking = false;
   let timer: ReturnType<typeof setInterval> | null = null;
 
   const stop = (): void => {
+    if (stopped && timer === null) return;
     stopped = true;
     if (timer !== null) {
       clearIntervalImpl(timer);
       timer = null;
     }
+    port.close?.();
   };
 
-  const check = (): void => {
-    if (stopped) return;
+  const check = async (): Promise<void> => {
+    if (stopped || checking) return;
+    checking = true;
+    try {
+      const current = await port.read();
+      if (stopped) return;
+      if (current === null) {
+        onEvent?.({ kind: "unavailable" });
+        stop();
+        return;
+      }
 
-    const current = port.read();
-    if (current === null) {
-      onEvent?.({ kind: "unavailable" });
-      stop();
-      return;
+      if (baseline === null && !isRasterConsoleFont(current)) {
+        baseline = current;
+        onEvent?.({ kind: "baseline", font: current });
+      }
+
+      const target = consoleFontTargetFor(mode, baseline, defaultFace);
+      if (target === null) {
+        stop();
+        return;
+      }
+
+      const holding =
+        current.face === target.face && !isRasterConsoleFont(current);
+      if (holding) return;
+
+      if (!(await port.apply(target))) {
+        if (stopped) return;
+        refusals += 1;
+        onEvent?.({ kind: "repair-failed", target });
+        if (refusals >= MAX_REPAIR_FAILURES) stop();
+        return;
+      }
+
+      const observed = await port.read();
+      if (stopped) return;
+      if (observed === null) {
+        onEvent?.({ kind: "unavailable" });
+        stop();
+        return;
+      }
+      if (observed.face !== target.face) {
+        refusals += 1;
+        onEvent?.({ kind: "not-taken", target, observed });
+        if (refusals >= MAX_REPAIR_FAILURES) stop();
+        return;
+      }
+
+      refusals = 0;
+      onEvent?.({ kind: "repaired", before: current, target });
+    } catch {
+      // A port that *throws* is a port that cannot answer: a helper process that
+      // dies mid-request rejects instead of returning `null`. The timer cannot
+      // await, so an unhandled rejection here would take the TUI down — the
+      // failure is the guard's own stop condition, which is what `null` means.
+      if (!stopped) {
+        onEvent?.({ kind: "unavailable" });
+        stop();
+      }
+    } finally {
+      checking = false;
     }
-
-    if (baseline === null && !isRasterConsoleFont(current)) {
-      baseline = current;
-      onEvent?.({ kind: "baseline", font: current });
-    }
-
-    const target = consoleFontTargetFor(mode, baseline);
-    if (target === null) {
-      stop();
-      return;
-    }
-
-    const holding =
-      current.face === target.face && !isRasterConsoleFont(current);
-    if (holding) return;
-
-    if (!port.apply(target)) {
-      refusals += 1;
-      onEvent?.({ kind: "repair-failed", target });
-      if (refusals >= MAX_REPAIR_FAILURES) stop();
-      return;
-    }
-
-    const observed = port.read();
-    if (observed === null) {
-      onEvent?.({ kind: "unavailable" });
-      stop();
-      return;
-    }
-    if (observed.face !== target.face) {
-      refusals += 1;
-      onEvent?.({ kind: "not-taken", target, observed });
-      if (refusals >= MAX_REPAIR_FAILURES) stop();
-      return;
-    }
-
-    refusals = 0;
-    onEvent?.({ kind: "repaired", before: current, target });
   };
 
-  check();
+  await check();
   if (!stopped && intervalMs > 0) {
-    timer = setIntervalImpl(check, intervalMs);
+    timer = setIntervalImpl(() => {
+      // The timer is not a reason to keep the process alive, and neither is a
+      // check it started: an unhandled rejection here would take the TUI down.
+      void check();
+    }, intervalMs);
     // A guard is not a reason to keep the process alive.
     if (
       typeof timer === "object" &&

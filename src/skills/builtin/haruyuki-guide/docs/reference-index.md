@@ -793,19 +793,19 @@ Commands marked hidden still work but are kept out of autocomplete.
 | `/terminal` | — | Setup terminal shortcuts [--revert] | `src/cli/commands/registry.ts:525` |
 | `/font-width` | `auto\|narrow\|wide` | How wide this terminal draws ambiguous characters (auto probes it) | `src/cli/commands/registry.ts:590` |
 | `/console-font` | `auto\|off\|<face>` | Hold the Windows console font at the configured face | `src/cli/commands/registry.ts:660` |
-| `/install-github-app` | — | Setup Haruyuki GitHub Action in this repo | `src/cli/commands/registry.ts:746` |
-| `/bg` | — | Show background shell processes | `src/cli/commands/registry.ts:757` |
-| `/workflows` | — | Show workflow runs, their agents, and token usage | `src/cli/commands/registry.ts:766` |
-| `/exit` | — | Exit this session | `src/cli/commands/registry.ts:778` |
-| `/logout` | — | Clear saved credentials and exit | `src/cli/commands/registry.ts:787` |
-| `/stream` | — | Toggle token streaming on/off (hidden) | `src/cli/commands/registry.ts:798` |
-| `/compact` | `[n\|help]` | Trim older context at a topic boundary you pick | `src/cli/commands/registry.ts:807` |
-| `/topic` | `<title> [summary]` | Mark a topic boundary in this conversation | `src/cli/commands/registry.ts:815` |
-| `/topics` | `[--all]` | List the topic blocks of the current context | `src/cli/commands/registry.ts:820` |
-| `/recall` | `[setting] [value]` | Configure passive recall of earlier conversations and memory | `src/cli/commands/registry.ts:825` |
-| `/set-max-context` | `[tokens] [--override]` | Alias for /context-limit (hidden) | `src/cli/commands/registry.ts:830` |
-| `/link` | — | Attach all Haruyuki tools to agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:839` |
-| `/unlink` | — | Remove all Haruyuki tools from agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:848` |
-| `/resume` | `[conversation_id]` | Resume a previous conversation | `src/cli/commands/registry.ts:857` |
-| `/pinned` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:866` |
-| `/profiles` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:874` |
+| `/install-github-app` | — | Setup Haruyuki GitHub Action in this repo | `src/cli/commands/registry.ts:751` |
+| `/bg` | — | Show background shell processes | `src/cli/commands/registry.ts:762` |
+| `/workflows` | — | Show workflow runs, their agents, and token usage | `src/cli/commands/registry.ts:771` |
+| `/exit` | — | Exit this session | `src/cli/commands/registry.ts:783` |
+| `/logout` | — | Clear saved credentials and exit | `src/cli/commands/registry.ts:792` |
+| `/stream` | — | Toggle token streaming on/off (hidden) | `src/cli/commands/registry.ts:803` |
+| `/compact` | `[n\|help]` | Trim older context at a topic boundary you pick | `src/cli/commands/registry.ts:812` |
+| `/topic` | `<title> [summary]` | Mark a topic boundary in this conversation | `src/cli/commands/registry.ts:820` |
+| `/topics` | `[--all]` | List the topic blocks of the current context | `src/cli/commands/registry.ts:825` |
+| `/recall` | `[setting] [value]` | Configure passive recall of earlier conversations and memory | `src/cli/commands/registry.ts:830` |
+| `/set-max-context` | `[tokens] [--override]` | Alias for /context-limit (hidden) | `src/cli/commands/registry.ts:835` |
+| `/link` | — | Attach all Haruyuki tools to agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:844` |
+| `/unlink` | — | Remove all Haruyuki tools from agent (deprecated, use /toolset instead) (hidden) | `src/cli/commands/registry.ts:853` |
+| `/resume` | `[conversation_id]` | Resume a previous conversation | `src/cli/commands/registry.ts:862` |
+| `/pinned` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:871` |
+| `/profiles` | — | Browse pinned agents (hidden) | `src/cli/commands/registry.ts:879` |
