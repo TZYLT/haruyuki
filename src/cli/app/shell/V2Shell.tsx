@@ -6,7 +6,6 @@ import { diffFaceTotals } from "@/cli/app/faces/diff-face-model";
 import { setDiffFaceSource } from "@/cli/app/faces/diff-face-store";
 import { PageHost } from "@/cli/app/pages/page-host";
 import { DiffFaceScope } from "@/cli/app/shell/diff-face-scope";
-import { setRailDrawn } from "@/cli/app/shell/rail-state";
 import { ShellFrame } from "@/cli/app/shell/ShellFrame";
 import { ContextSidebarScope } from "@/cli/app/shell/sidebar-scope";
 import { sidebarGeometry } from "@/cli/app/shell/sidebar-sections";
@@ -113,10 +112,6 @@ export function V2Shell(props: AppShellProps) {
       : Math.min(props.columns, inkColumns);
   const terminalRows = useTerminalRows();
   const geometry = sidebarGeometry(frameColumns, terminalRows);
-  // The rail's own fate for this frame, for the status line: when the rail folds
-  // (narrow or short terminal) its `ctx` number does not disappear, it moves to
-  // the bottom row (`rail-state.ts`, 《32》§6.3).
-  setRailDrawn(geometry.railWidth > 0);
   // The tab row replaces the main area with a page when one is focused.
   const pageIsActive = useActiveTabIsPage();
   // The diff face takes the band for as long as its overlay route is open. It is

@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import stripAnsi from "strip-ansi";
-import {
-  resetRailStateForTests,
-  setRailDrawn,
-} from "@/cli/app/shell/rail-state";
 import { shouldRenderDefaultStatuslineRenderer } from "@/cli/display/statusline/default-renderer-activation";
 import {
   buildDefaultStatuslineParts,
@@ -104,7 +100,11 @@ describe("statusline renderers", () => {
     );
   });
 
-  test("default renderer uses idle row width for long agent names", () => {
+  test("the right column is a budget, not the row", () => {
+    // It used to be `terminalWidth - 4` and the row drew a box that wide, which
+    // left the left-hand slot four columns — no context chip, no `>> bash mode`,
+    // no permission hint (the machine hit it on 2026-10-23). The budget the
+    // composer already computes from the terminal is what the right column gets.
     const { context, ui } = createStatuslineFixture({
       agentName: "A Very Long Agent Name",
       modelDisplayName: "Claude",
@@ -112,10 +112,14 @@ describe("statusline renderers", () => {
       terminalWidth: 80,
     });
 
-    expect(getDefaultStatuslineRightColumnWidth(context, ui)).toBe(76);
-    expect(
-      stripAnsi(String(buildDefaultStatuslineParts(context, ui).right)),
-    ).toContain("A Very Long Agent Name");
+    expect(getDefaultStatuslineRightColumnWidth(context, ui)).toBe(36);
+    const parts = buildDefaultStatuslineParts(context, ui);
+    // It fits the budget, and the budget is what the row gives it — so a name that
+    // does not fit is truncated (`A Very Lon…`) instead of squeezing the left slot
+    // to four columns. The model keeps its share.
+    expect(stripAnsi(parts.right)).toContain("A Very Lon");
+    expect(stripAnsi(parts.right)).toContain("Claude");
+    expect(stripAnsi(parts.right).trim().length).toBeLessThanOrEqual(36);
   });
 
   test("default renderer does not override safety preemptions", () => {
@@ -136,60 +140,42 @@ describe("statusline renderers", () => {
     ).toBe(false);
   });
 
-  test("the context chip appears only when the rail has folded", () => {
-    // `《32》§6.3`: with the rail on screen the ctx number is the rail's; when it
-    // folds, that number is the one thing that can page a conversation out, so it
-    // moves to the bottom row instead of vanishing (which is what it used to do).
-    const folded = () => {
-      setRailDrawn(false);
-      const { context, ui } = createStatuslineFixture({
-        usedContextTokens: 84_000,
-        contextWindowSize: 128_000,
-      });
-      return stripAnsi(String(buildDefaultStatuslineParts(context, ui).right));
-    };
-
-    expect(folded()).toContain("ctx 84k/128k(66%)");
-
-    setRailDrawn(true);
+  test("the context chip is the row's default left content", () => {
+    // The machine asked for this on 2026-10-23: `ctx 84k/128k(66%)` at the bottom
+    // by default, with the permission switch taking that slot while it is shown and
+    // handing it back afterwards. The slot is the one `>> bash mode` and
+    // `accept edits (… cycle)` already use, which is exactly that behaviour.
     const { context, ui } = createStatuslineFixture({
       usedContextTokens: 84_000,
       contextWindowSize: 128_000,
     });
-    // Not printed twice: with the rail up, the number is already on the rail.
+    expect(buildDefaultStatuslineParts(context, ui).leftLabel).toBe(
+      "ctx 84k/128k(66%)",
+    );
+    // The right column is still `agent · model`, and no longer carries the chip.
     expect(
       stripAnsi(String(buildDefaultStatuslineParts(context, ui).right)),
     ).not.toContain("ctx ");
-    resetRailStateForTests();
   });
 
-  test("the chip says nothing it did not measure", () => {
-    setRailDrawn(false);
+  test("the chip is blank when it has nothing to measure", () => {
     const unknown = createStatuslineFixture({ contextWindowSize: 128_000 });
     // No occupancy reported: an absent number must not become `ctx 0/128k(0%)`.
     expect(
-      stripAnsi(
-        String(buildDefaultStatuslineParts(unknown.context, unknown.ui).right),
-      ),
-    ).not.toContain("ctx ");
+      buildDefaultStatuslineParts(unknown.context, unknown.ui).leftLabel,
+    ).toBeNull();
     // Zero is "nothing measured yet", the reading the rail itself gives it.
     const fresh = createStatuslineFixture({
       usedContextTokens: 0,
       contextWindowSize: 128_000,
     });
     expect(
-      stripAnsi(
-        String(buildDefaultStatuslineParts(fresh.context, fresh.ui).right),
-      ),
-    ).not.toContain("ctx ");
+      buildDefaultStatuslineParts(fresh.context, fresh.ui).leftLabel,
+    ).toBeNull();
+    // A count without a window is still a fact worth printing.
     const noWindow = createStatuslineFixture({ usedContextTokens: 84_000 });
     expect(
-      stripAnsi(
-        String(
-          buildDefaultStatuslineParts(noWindow.context, noWindow.ui).right,
-        ),
-      ),
-    ).toContain("ctx 84k");
-    resetRailStateForTests();
+      buildDefaultStatuslineParts(noWindow.context, noWindow.ui).leftLabel,
+    ).toBe("ctx 84k");
   });
 });
