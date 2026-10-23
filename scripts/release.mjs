@@ -16,6 +16,13 @@
  *
  *   npm dist-tag add haruyuki@<version> latest
  *
+ * **The post-publish read cannot gate the release.** `npm publish` returning 0 means the
+ * registry accepted the tarball; the version then spends ten minutes to a few hours in
+ * npm's `Validating` stage. So "the version is not in the registry document yet" is a
+ * warning with a re-check command, not a failure — a successful publish must exit 0 and
+ * must always print the promote steps (`verifyPublished`). Only a version that *is*
+ * visible with `beta` pointing somewhere else is a real post-publish failure.
+ *
  * Human runs confirm by typing the release token; automation supplies the same token
  * through the environment, so there is exactly one code path:
  *
@@ -616,28 +623,57 @@ function checkTarball(entry) {
 // ---------------------------------------------------------------------------
 
 /**
- * Confirm the version actually went live, and where it went live. The publish step
- * targets `beta` on purpose, so "the version exists" and "`latest` resolves to it" are
- * different facts: this asserts the first and prints both dist-tags, so the second is
- * visible rather than assumed.
+ * Confirm what the registry can confirm *now*, and say so honestly when it cannot.
+ *
+ * **A version that is not visible yet is not a failure.** `npm publish` exiting 0 means
+ * the registry accepted the tarball; the version then goes through npm's `Validating`
+ * stage, measured on this machine (2026-10-13, `0.2.1`) as **ten minutes to a few
+ * hours**. A read that happens seconds later therefore answers "not there yet" for a
+ * release that succeeded — the old code called that `[FAIL] … not published` and exited
+ * 1, which reported a good release as a broken one and (because `fail()` exits early)
+ * swallowed the promote instructions after it. Recorded as S-14 in the internal
+ * suspended-issues register; this is the fix.
+ *
+ * The split is by what the read can actually prove:
+ *
+ * - **cannot see the version yet** → a warning, and a command to re-check later;
+ * - **the registry does not answer at all** → a warning, for the same reason;
+ * - **the version exists but `beta` points at something else** → a real failure: the
+ *   publish's own tag application did not take, and that is not a propagation delay.
+ *
+ * Returns whether the release is confirmed visible, so the caller can print the right
+ * next step rather than guessing.
  */
 async function verifyPublished(main) {
   heading("verifying what went live");
+  const recheck = `npm view ${main.name}@${main.version} version`;
   const result = await fetchRegistryDocument(main.name);
   if (result.state === "error") {
-    return bad("registry lookup", `${result.detail} — cannot confirm the release`);
+    warn(
+      "registry lookup",
+      `${result.detail} — the publish already returned 0; re-check later: ${recheck}`,
+    );
+    return "pending";
   }
   if (result.state === "absent") {
-    return bad(main.name, "not on the registry");
+    warn(
+      `${main.name} is not on the registry yet`,
+      `the publish returned 0; npm's Validating stage takes minutes to hours — re-check later: ${recheck}`,
+    );
+    return "pending";
   }
   const version = result.document.versions?.[main.version];
   if (!version) {
-    return bad(`${main.name}@${main.version}`, "not published");
+    warn(
+      `${main.name}@${main.version} is not visible yet`,
+      `the publish returned 0; npm's Validating stage takes 10 minutes to a few hours — re-check later: ${recheck}`,
+    );
+    return "pending";
   }
   const distTags = result.document["dist-tags"] ?? {};
   ok(
     `${main.name}@${main.version}`,
-    `tarball integrity ${version.dist?.integrity ?? "(unknown)"}`,
+    `visible; tarball integrity ${version.dist?.integrity ?? "(unknown)"}`,
   );
   ok(
     "dist-tags",
@@ -647,8 +683,9 @@ async function verifyPublished(main) {
   );
   if (distTags.beta !== main.version) {
     bad("dist-tag beta", `expected ${main.version}, found ${distTags.beta ?? "(absent)"}`);
+    return "confirmed";
   }
-  return undefined;
+  return "confirmed";
 }
 
 function summarize() {
@@ -703,24 +740,50 @@ async function main() {
   heading(`publishing ${main.name}@${main.version} to the beta dist-tag`);
   runNpm(["publish", "--access", "public", "--tag", "beta"]);
   ok(`published ${main.name}@${main.version} to beta`);
-  await verifyPublished(main);
+  const outcome = await verifyPublished(main);
 
   const remaining = summarize();
+  // Always, *before* any failure exit: the promote step is the next thing the operator
+  // has to do, and it must not hinge on whether the post-publish read happened to see
+  // the version yet (npm takes minutes to hours to validate a tarball; see
+  // `verifyPublished`). This is the part S-14 lost.
+  printNextSteps(main, outcome);
   if (remaining > 0) {
     return fail(`${remaining} check(s) failed after publishing; inspect the output above.`);
   }
+  console.log("");
+}
 
+/**
+ * The operator's next steps, printed after `npm publish` whatever the read said.
+ *
+ * `latest` stays manual by policy, so the promote command has to reach a human: it is
+ * the one irreversible public switch in this flow, and a script that could flip it is a
+ * script that can flip it by accident.
+ */
+function printNextSteps(main, outcome) {
   heading("published to beta");
   console.log(
-    `  ${main.name}@${main.version} is live, but \`latest\` still points at the previous version.`,
+    `  ${main.name}@${main.version} was accepted by the registry${
+      outcome === "confirmed" ? " and is already visible" : ""
+    }.`,
   );
-  console.log("  Still manual, by policy. Try it first, then flip the switch yourself:");
+  if (outcome !== "confirmed") {
+    console.log(
+      "  It is not visible on the registry yet. That is expected: npm validates a tarball",
+    );
+    console.log(
+      "  for minutes to hours before listing it. Check when you are ready, do not block on it:",
+    );
+    console.log(`    npm view ${main.name}@${main.version} version`);
+  }
+  console.log("  Once it is visible (promote fails before that), try it first:");
   console.log(`    npm install -g ${main.name}@beta`);
+  console.log("  Then flip `latest` yourself. This script does not:");
   console.log(`    npm dist-tag add ${main.name}@${main.version} latest`);
   console.log("  And when that is done:");
   console.log("    git push                 # the tagged commit");
   console.log(`    git push --tags          # v${main.version}`);
-  console.log("");
 }
 
 await main();
