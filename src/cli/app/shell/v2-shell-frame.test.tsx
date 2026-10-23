@@ -133,11 +133,14 @@ function Shell({
   chromeRows,
   items = [],
   reportedChrome,
+  columns = TERMINAL_COLUMNS,
 }: {
   chromeRows: number;
   items?: StaticItem[];
   /** Override the chrome height the band is told about (the frame it lags by). */
   reportedChrome?: number;
+  /** Override the terminal width (the narrow-terminal tests). */
+  columns?: number;
 }) {
   const { ref, rows } = useMeasuredChromeHeight();
   const buffersRef = useRef(createBuffers());
@@ -149,7 +152,7 @@ function Shell({
           onSelect={() => {}}
           onClose={() => {}}
           onOverflow={() => {}}
-          frameColumns={TERMINAL_COLUMNS}
+          frameColumns={columns}
         />
         <Box flexDirection="column">
           <ChromeHeightContext.Provider value={reportedChrome ?? rows}>
@@ -157,7 +160,7 @@ function Shell({
               {...({
                 staticItems: items,
                 liveItems: [],
-                columns: TERMINAL_COLUMNS,
+                columns,
                 agentId: "agent-1",
                 conversationId: "conv-1",
                 buffersRef,
@@ -279,6 +282,76 @@ describe("the frame with the tab strip on it", () => {
         expect(
           bandRows.some((line) => line.slice(junction).includes("ctx ")),
         ).toBe(true);
+      }
+    } finally {
+      unsubscribe();
+      instance.unmount();
+      instance.cleanup();
+      restore();
+    }
+  });
+
+  test("an 80x24 terminal folds the rail and the band takes the columns", async () => {
+    // `《32》§6.3` (`<80` columns or `<26` rows ⇒ the rail folds) had only
+    // pure-function coverage: `sidebar-sections.test.ts` pins the geometry table,
+    // but nothing mounted the shell at the size the ruling names, so "the rail is
+    // not drawn" was a claim about a function, not about a frame.
+    openConversationTab("conv-1", "M6 shell");
+    const narrowColumns = 80;
+    const narrowRows = 24;
+    const restore = resizeProcessStdout(narrowRows, narrowColumns);
+    const stdout = new CaptureStream() as CaptureStream & NodeJS.WriteStream;
+    stdout.columns = narrowColumns;
+    stdout.rows = narrowRows;
+    installTerminalFrameCapture(stdout);
+    const items: StaticItem[] = [
+      {
+        kind: "assistant",
+        id: "narrow-answer",
+        text: "the band takes the whole width when the rail folds",
+        phase: "finished",
+      },
+    ];
+
+    const frames: string[][] = [];
+    const unsubscribe = subscribeToTerminalFrame(() => {
+      const frame = getTerminalFrame();
+      if (frame) frames.push([...frame.text]);
+    });
+
+    const instance = render(
+      <Shell chromeRows={CHROME_ROWS} items={items} columns={narrowColumns} />,
+      {
+        stdin: fakeStdin(),
+        stdout,
+        debug: false,
+        patchConsole: false,
+        exitOnCtrlC: false,
+        alternateScreen: true,
+      },
+    );
+
+    try {
+      await waitForRender();
+      await waitForRender();
+      const geometry = sidebarGeometry(narrowColumns, narrowRows);
+      expect(geometry.railWidth).toBe(0);
+      expect(frames.length).toBeGreaterThan(0);
+      for (const frame of frames.slice(-2)) {
+        expect(frame.length).toBeLessThanOrEqual(narrowRows);
+        for (const line of frame) {
+          expect(visibleWidth(line)).toBeLessThanOrEqual(
+            narrowColumns - ROW_SAFETY_COLUMNS,
+          );
+        }
+        // No rail: none of its sections, and no divider on any band row. Its `ctx`
+        // number is the status line's job at this size (`rail-state.ts`).
+        expect(frame.join("\n")).not.toContain("Context");
+        expect(
+          frame.some((line) => line.at(geometry.junctionColumn - 1) === "│"),
+        ).toBe(false);
+        // The transcript is there, so the empty rail is not an empty band.
+        expect(frame.join("\n")).toContain("the band takes the whole width");
       }
     } finally {
       unsubscribe();
