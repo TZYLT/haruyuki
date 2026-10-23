@@ -141,17 +141,26 @@ export function streakLabel(days: number): string {
 /**
  * The right-hand numbers beside the grid.
  *
- * Totals first, then today's — the same order the M6.5 report drew it in. The
- * three figures that *are* today (tokens, hit rate, streak) are not repeated here:
- * they read better as one line under the grid, where each of them can carry its
- * own label without a 14-column column around it.
+ * Read down the column (2026-10-23): `total tokens` on the row of the `Last 4
+ * weeks` title, a blank on the weekday-header row — which has no number beside it
+ * — then cost and turns for the totals and for today, each on its own week row.
+ * Starting on the title's row makes the column begin where the grid's block does
+ * instead of one row under it, and the four figures then sit beside four week
+ * rows, which is what makes the two blocks read as one table.
+ *
+ * The three figures that *are* today (tokens, hit rate, streak) are not repeated
+ * here: they read better as one line under the grid, where each of them can carry
+ * its own label without a 14-column column around it.
  */
 function dataLines(summary: UsageSummary): string[] {
   const row = (label: string, value: string) =>
     `${label.padEnd(DATA_LABEL_WIDTH)}${value}`;
   return [
-    row("total cost", formatCost(summary.totals.cost)),
     row("total tokens", formatCompact(summary.totals.tokens)),
+    // The left column of this row is the weekday header alone; an empty right
+    // line makes `twoColumnBlock` draw that one column and nothing else.
+    "",
+    row("total cost", formatCost(summary.totals.cost)),
     row("total turns", `${summary.totals.turns}`),
     row("today cost", formatCost(summary.today.cost)),
     row("today turns", `${summary.today.turns}`),

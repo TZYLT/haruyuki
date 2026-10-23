@@ -144,8 +144,22 @@ describe("buildOverviewRows (block tier)", () => {
 
   test("the grid and the numbers share one two-column block", () => {
     expect(rows[14]).toContain("Last 4 weeks");
-    expect(rows[14]).toContain("total cost");
+    expect(rows[14]).toContain("total tokens");
     expect(rows[19]).toContain("-3w");
+    expect(rows[19]).toContain("today turns");
+  });
+
+  test("the data column opens on the heatmap's title row and skips the header row", () => {
+    // The column starts beside `Last 4 weeks` (2026-10-23), so the weekday
+    // header's row has no number on its right at all; the four figures then sit
+    // beside the four week rows.
+    expect(rows[14]).toContain("total tokens");
+    expect(rows[15]).toContain("M T W T F S S");
+    expect(rows[15]).not.toMatch(/total|today/);
+    expect(rows[16]).toContain("total cost");
+    expect(rows[17]).toContain("total turns");
+    expect(rows[18]).toContain("today cost");
+    expect(rows[19]).toContain("today turns");
   });
 
   test("today's three figures close the block on one line", () => {
