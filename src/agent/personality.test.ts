@@ -169,7 +169,7 @@ describe("personality helpers", () => {
   });
 
   test("tutorial includes onboarding memory by default", async () => {
-    expect(ONBOARDING_PERSONALITIES).toEqual(["tutorial"]);
+    expect(ONBOARDING_PERSONALITIES).toEqual(["memo", "tutorial"]);
 
     const options = await buildCreateAgentOptionsForPersonality({
       personalityId: "tutorial",
@@ -180,11 +180,11 @@ describe("personality helpers", () => {
     );
 
     expect(onboardingBlock?.value).toContain(
-      "The person you are working with is new to Haruyuki.",
+      "This is a first contact, not a feature tour.",
     );
     // There is no Cloud variant to offer a profile picture any more: the
     // default environment is local, and the local text says not to.
-    expect(onboardingBlock?.value).toContain("This agent is running locally.");
+    expect(onboardingBlock?.value).toContain("This build runs locally.");
     expect(
       getPersonalityBlockDefinitions("tutorial").onboarding
         ?.templatePromptAssetName,
@@ -202,9 +202,9 @@ describe("personality helpers", () => {
         "label" in block && block.label === "onboarding",
     );
 
-    expect(onboardingBlock?.value).toContain("This agent is running locally.");
+    expect(onboardingBlock?.value).toContain("This build runs locally.");
     expect(onboardingBlock?.value).toContain(
-      "Do not offer or attempt to create, generate, or set a profile picture or other image in local mode.",
+      "Do not offer or attempt to create, generate, or set a profile picture or other image.",
     );
     expect(onboardingBlock?.value).not.toContain(
       "Offer to create one yourself.",
@@ -231,7 +231,7 @@ describe("personality helpers", () => {
     expect(body).toContain("the final sentence is the recommended action");
   });
 
-  test("onboarding block sets proactive, ordered checklist rules", async () => {
+  test("onboarding block is a first-contact guide, not a feature checklist", async () => {
     const options = await buildCreateAgentOptionsForPersonality({
       personalityId: "tutorial",
     });
@@ -240,22 +240,22 @@ describe("personality helpers", () => {
         "label" in block && block.label === "onboarding",
     );
 
+    // One question at a time, asked once, and no capability tour: S-13 came
+    // from a greeting that turned into a workspace inspection.
+    expect(onboardingBlock?.value).toContain("Ask one question at a time");
+    expect(onboardingBlock?.value).toContain("Ask once.");
     expect(onboardingBlock?.value).toContain(
-      "Explain each of these concepts to the user",
+      "Do not read their files, inspect the working directory",
     );
-    // Declines are generalized, not hard-coded to "skip".
-    expect(onboardingBlock?.value).toMatch(
-      /"skip", "pass", "next", "no thanks", "rather not"/,
-    );
-    // Checklist completion syntax is unambiguous.
-    expect(onboardingBlock?.value).toContain("Mark an item `[x]`");
-    expect(onboardingBlock?.value).toContain("Connect to a channel");
+    expect(onboardingBlock?.value).toContain("First contact:");
+    expect(onboardingBlock?.value).not.toContain("Connect to a channel");
+    expect(onboardingBlock?.value).not.toContain("Mark an item `[x]`");
   });
 
-  test("non-tutorial personalities do not include onboarding", async () => {
+  test("unguided personalities do not include onboarding", async () => {
     for (const personality of [
-      "memo",
       "blank",
+      "coding",
       "linus",
       "kawaii",
       "claude",

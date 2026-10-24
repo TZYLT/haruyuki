@@ -72,7 +72,8 @@ describe("PersonalitySelector", () => {
       { columns: 120 },
     );
     try {
-      await tty.press("j", "j", "j");
+      // The table now leads with memo, coding, tutorial, blank, then Linus.
+      await tty.press("j", "j", "j", "j");
       expect(await cursorRow(tty)).toContain("Linus");
 
       await tty.press(DOWN);

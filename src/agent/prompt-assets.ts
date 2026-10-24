@@ -7,6 +7,7 @@ import haruyukiNoMemfsPrompt from "./prompts/haruyuki_no_memfs.md";
 import haruyukiRootMemfsPrompt from "./prompts/haruyuki_root_memfs.md";
 import haruyukiTopicMarkingPrompt from "./prompts/haruyuki_topic_marking.md";
 import humanPrompt from "./prompts/human.mdx";
+import humanCodingPrompt from "./prompts/human_coding.mdx";
 import humanKawaiiPrompt from "./prompts/human_kawaii.mdx";
 import humanLinusPrompt from "./prompts/human_linus.mdx";
 import humanMemoPrompt from "./prompts/human_memo.mdx";
@@ -17,6 +18,7 @@ import onboardingPrompt from "./prompts/onboarding.mdx";
 import onboardingLocalPrompt from "./prompts/onboarding_local.mdx";
 import personaPrompt from "./prompts/persona.mdx";
 import personaBlankPrompt from "./prompts/persona_blank.mdx";
+import personaCodingPrompt from "./prompts/persona_coding.mdx";
 import personaKawaiiPrompt from "./prompts/persona_kawaii.mdx";
 import personaLinusPrompt from "./prompts/persona_linus.mdx";
 import personaMemoPrompt from "./prompts/persona_memo.mdx";
@@ -44,11 +46,13 @@ export const TOPIC_MARKING_PROMPT = haruyukiTopicMarkingPrompt;
 export const MEMORY_PROMPTS: Record<string, string> = {
   "persona.mdx": personaPrompt,
   "persona_blank.mdx": personaBlankPrompt,
+  "persona_coding.mdx": personaCodingPrompt,
   "persona_kawaii.mdx": personaKawaiiPrompt,
   "persona_linus.mdx": personaLinusPrompt,
   "persona_memo.mdx": personaMemoPrompt,
   "persona_tutorial.mdx": personaTutorialPrompt,
   "human.mdx": humanPrompt,
+  "human_coding.mdx": humanCodingPrompt,
   "human_kawaii.mdx": humanKawaiiPrompt,
   "human_linus.mdx": humanLinusPrompt,
   "human_memo.mdx": humanMemoPrompt,

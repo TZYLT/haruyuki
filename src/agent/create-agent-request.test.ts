@@ -70,6 +70,8 @@ describe("buildCreateAgentRequest", () => {
       "MEMORY",
       "persona",
       "human",
+      // memo ships the guided first-contact block too (41 §2.3).
+      "onboarding",
       "project",
     ]);
     expect(

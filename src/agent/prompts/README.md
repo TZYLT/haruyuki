@@ -47,8 +47,10 @@ Default values for agent memory blocks. Loaded via `MEMORY_PROMPTS` in `promptAs
 | `persona.mdx` | Default persona for all new agents | Blank-slate "ready to be shaped" |
 | `persona_blank.mdx` | Overrides persona for the Blank personality | Prompts user to provide a personality |
 | `persona_memo.mdx` | Overrides persona for the default Haruyuki agent | Warm, curious collaborator personality |
+| `persona_coding.mdx` | Overrides persona for the Coding personality | The pre-companion Haruyuki voice, kept for engineering work |
 | `persona_kawaii.mdx` | Not wired into any agent creation flow | Kawaii voice persona preset |
 | `human.mdx` | Default human block for all new agents | Placeholder for learning about the user |
+| `human_coding.mdx` | Overrides human block for the Coding personality | The pre-companion human block |
 | `project.mdx` | Registered but not loaded into agents | Placeholder for codebase knowledge |
 | `style.mdx` | Registered but not loaded into agents | Placeholder for coding preferences |
 | `memory_filesystem.mdx` | Read-only block for memfs agents | Renders the memory directory tree in-context |

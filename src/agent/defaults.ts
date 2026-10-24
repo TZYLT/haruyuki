@@ -10,49 +10,24 @@ import type { Backend } from "@/backend";
 import { isCloudServerUrl } from "@/backend/api/server-url";
 import { settingsManager } from "@/settings-manager";
 import { type CreateAgentOptions, createAgent } from "./create";
-import { parseMdxFrontmatter } from "./memory";
 import { getDefaultModel, models, resolveModel } from "./model";
 import { buildCreateAgentOptionsForPersonality } from "./personality";
-import { MEMORY_PROMPTS } from "./prompt-assets";
 
 // Tags used to identify default agents
 export const MEMO_TAG = "default:memo";
 export const TUTOR_TAG = "default:tutorial";
 
 /**
- * Personalities the startup bootstrap can create. Kept deliberately simple:
- * a true fresh start (brand-new account, nothing to resume) gets the Tutor
- * onboarding agent, while an explicit `--new-agent` (and headless runs) get
- * the standard Haruyuki (memo) agent.
+ * Personalities the startup bootstrap can create. Both a true fresh start
+ * (brand-new account, nothing to resume) and an explicit `--new-agent` get the
+ * companion memo agent; tutorial stays selectable from the preset table.
  */
 export type DefaultAgentPersonality = "memo" | "tutorial";
 
-// Haruyuki's default memory blocks - loaded from Memo-specific prompts.
-const MEMO_PERSONA = parseMdxFrontmatter(
-  MEMORY_PROMPTS["persona_memo.mdx"] ?? "",
-).body;
-const MEMO_HUMAN = parseMdxFrontmatter(
-  MEMORY_PROMPTS["human_memo.mdx"] ?? "",
-).body;
-
-// Agent descriptions shown in /agents selector
+// Identity of the default agent, shown in /agent list. The persona/human bodies come
+// from the personality preset table, so there is no second copy to drift.
+const MEMO_NAME = "Haruyuki";
 const MEMO_DESCRIPTION = "The default Haruyuki agent with persistent memory";
-
-/**
- * Default agent configurations.
- */
-export const DEFAULT_AGENT_CONFIGS: Record<string, CreateAgentOptions> = {
-  memo: {
-    name: "Haruyuki",
-    description: MEMO_DESCRIPTION,
-    // Uses default memory blocks and tools (full stateful config)
-    // Override global blocks with Memo-specific personality defaults
-    blockValues: {
-      persona: MEMO_PERSONA,
-      human: MEMO_HUMAN,
-    },
-  },
-};
 
 function isSelfHostedServer(): boolean {
   // One Cloud judgement for the whole repo lives in `server-url.ts`; it compares
@@ -199,6 +174,10 @@ export async function ensureDefaultAgents(
       options?.preferredModel,
     );
 
+    const environment = backend.capabilities.localMemfs ? "local" : "cloud";
+    // Both default personalities go through the preset builder: memo now ships
+    // the guided first-contact block too (41 §2.3), so the two creation paths
+    // must not fork again.
     const createOptions: CreateAgentOptions =
       personality === "tutorial"
         ? {
@@ -206,13 +185,18 @@ export async function ensureDefaultAgents(
               personalityId: "tutorial",
               model,
               tags: [ONBOARDING_ORIGIN_TAG],
-              environment: backend.capabilities.localMemfs ? "local" : "cloud",
+              environment,
             })),
             memoryPromptMode,
           }
         : {
-            ...DEFAULT_AGENT_CONFIGS.memo,
-            model,
+            ...(await buildCreateAgentOptionsForPersonality({
+              personalityId: "memo",
+              name: MEMO_NAME,
+              description: MEMO_DESCRIPTION,
+              model,
+              environment,
+            })),
             memoryPromptMode,
           };
 

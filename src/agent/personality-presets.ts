@@ -20,7 +20,15 @@ export interface PersonalityDefaultMemoryFile {
 }
 
 export interface PersonalityOption {
-  id: "blank" | "kawaii" | "codex" | "claude" | "linus" | "memo" | "tutorial";
+  id:
+    | "blank"
+    | "kawaii"
+    | "codex"
+    | "claude"
+    | "coding"
+    | "linus"
+    | "memo"
+    | "tutorial";
   label: string;
   description: string;
   /** Model ID or handle to use when no explicit model is provided. */
@@ -34,6 +42,11 @@ export const PERSONALITY_OPTIONS: PersonalityOption[] = [
     id: "memo",
     label: "Haruyuki",
     description: "The memory-first agent",
+  },
+  {
+    id: "coding",
+    label: "Coding",
+    description: "Companion defaults, tuned for engineering work",
   },
   {
     id: "tutorial",
@@ -140,6 +153,7 @@ export interface PersonalityBlockDefinition {
 }
 
 export const ONBOARDING_PERSONALITIES = [
+  "memo",
   "tutorial",
 ] as const satisfies readonly PersonalityId[];
 
@@ -302,6 +316,10 @@ export function getPersonalityContent(personalityId: PersonalityId): string {
     return getPromptBody("persona_memo.mdx");
   }
 
+  if (personalityId === "coding") {
+    return getPromptBody("persona_coding.mdx");
+  }
+
   if (personalityId === "tutorial") {
     return getPromptBody("persona_tutorial.mdx");
   }
@@ -334,6 +352,10 @@ export function getPersonalityHumanContent(
 ): string {
   if (personalityId === "memo") {
     return getPromptBody("human_memo.mdx");
+  }
+
+  if (personalityId === "coding") {
+    return getPromptBody("human_coding.mdx");
   }
 
   if (personalityId === "tutorial") {
@@ -377,25 +399,29 @@ export function getPersonalityBlockDefinitions(
   const personaTemplatePromptAssetName =
     personalityId === "memo"
       ? "persona_memo.mdx"
-      : personalityId === "tutorial"
-        ? "persona_tutorial.mdx"
-        : personalityId === "blank"
-          ? "persona_blank.mdx"
-          : personalityId === "kawaii"
-            ? "persona_kawaii.mdx"
-            : personalityId === "linus"
-              ? "persona_linus.mdx"
-              : "persona.mdx";
+      : personalityId === "coding"
+        ? "persona_coding.mdx"
+        : personalityId === "tutorial"
+          ? "persona_tutorial.mdx"
+          : personalityId === "blank"
+            ? "persona_blank.mdx"
+            : personalityId === "kawaii"
+              ? "persona_kawaii.mdx"
+              : personalityId === "linus"
+                ? "persona_linus.mdx"
+                : "persona.mdx";
   const humanTemplatePromptAssetName =
     personalityId === "memo"
       ? "human_memo.mdx"
-      : personalityId === "tutorial"
-        ? "human_tutorial.mdx"
-        : personalityId === "kawaii"
-          ? "human_kawaii.mdx"
-          : personalityId === "linus"
-            ? "human_linus.mdx"
-            : "human.mdx";
+      : personalityId === "coding"
+        ? "human_coding.mdx"
+        : personalityId === "tutorial"
+          ? "human_tutorial.mdx"
+          : personalityId === "kawaii"
+            ? "human_kawaii.mdx"
+            : personalityId === "linus"
+              ? "human_linus.mdx"
+              : "human.mdx";
   const onboardingTemplatePromptAssetName =
     environment === "local" ? "onboarding_local.mdx" : "onboarding.mdx";
 

@@ -28,7 +28,7 @@ const INLINE_LIST_SOURCES: ReadonlyArray<readonly [string, RegExp]> = [
 
 test("the preset table is the expected shape", () => {
   expect(PERSONALITY_ID_LIST).toBe(
-    "memo, tutorial, blank, linus, kawaii, claude, codex",
+    "memo, coding, tutorial, blank, linus, kawaii, claude, codex",
   );
 });
 

@@ -690,7 +690,7 @@ async function main(): Promise<void> {
     : null;
   if (personalityInput && !personality) {
     console.error(
-      `Error: Unknown personality "${personalityInput}". Valid: memo, tutorial, blank, linus, kawaii, claude, codex`,
+      `Error: Unknown personality "${personalityInput}". Valid: memo, coding, tutorial, blank, linus, kawaii, claude, codex`,
     );
     process.exit(1);
   }
@@ -699,7 +699,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Validate against the same options advertised by /toolset and the listener.
+  // Validate against the same options advertised by /agent toolset and the listener.
   if (specifiedToolset && !isToolsetPreference(specifiedToolset)) {
     console.error(
       `Error: Invalid toolset "${specifiedToolset}". Must be ${TOOLSET_OPTIONS.map((option) => `"${option.id}"`).join(", ")}.`,
@@ -1278,11 +1278,10 @@ async function main(): Promise<void> {
             try {
               const defaultAgent = await ensureDefaultAgents(getBackend(), {
                 preferredModel: model,
-                // True fresh start (brand-new account, nothing to resume)
-                // gets the Tutor onboarding agent; an explicit --new-agent
-                // gets the standard Haruyuki agent.
-                personality:
-                  target.trigger === "fresh-start" ? "tutorial" : "memo",
+                // A true fresh start gets the companion preset with the guided
+                // first-contact block; an explicit --new-agent gets the same
+                // preset without conflating the two triggers.
+                personality: "memo",
               });
               if (defaultAgent) {
                 startupCreatedAgentRef.current = defaultAgent;

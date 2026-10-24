@@ -1037,7 +1037,7 @@ export async function handleHeadlessCommand(
     : null;
   if (personalityInput && !personality) {
     console.error(
-      `Error: Unknown personality "${personalityInput}". Valid: memo, tutorial, blank, linus, kawaii, claude, codex`,
+      `Error: Unknown personality "${personalityInput}". Valid: memo, coding, tutorial, blank, linus, kawaii, claude, codex`,
     );
     process.exit(1);
   }

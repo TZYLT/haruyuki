@@ -1,13 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  DEFAULT_AGENT_CONFIGS,
-  selectDefaultAgentModel,
-} from "@/agent/defaults";
+import { selectDefaultAgentModel } from "@/agent/defaults";
 import { getDefaultModel } from "@/agent/model";
-import {
-  getPersonalityContent,
-  getPersonalityHumanContent,
-} from "@/agent/personality-presets";
 import {
   clearRuntimeModelCatalogFixture,
   installRuntimeModelCatalogFixture,
@@ -72,23 +65,5 @@ describe("selectDefaultAgentModel", () => {
     });
 
     expect(result).toBe("anthropic/claude-haiku-4-5");
-  });
-});
-
-describe("default agent configs", () => {
-  test("memo default agent is Haruyuki with memo persona and human", () => {
-    expect(DEFAULT_AGENT_CONFIGS.memo?.name).toBe("Haruyuki");
-    expect(DEFAULT_AGENT_CONFIGS.memo?.blockValues?.persona?.trim()).toBe(
-      getPersonalityContent("memo").trim(),
-    );
-    expect(DEFAULT_AGENT_CONFIGS.memo?.blockValues?.human?.trim()).toBe(
-      getPersonalityHumanContent("memo").trim(),
-    );
-  });
-
-  test("no config can opt out of MemFS", () => {
-    for (const config of Object.values(DEFAULT_AGENT_CONFIGS)) {
-      expect(config).not.toHaveProperty("enableMemfs");
-    }
   });
 });
