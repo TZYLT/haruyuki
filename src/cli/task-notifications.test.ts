@@ -155,6 +155,55 @@ ACTION REQUIRED: Resolve pending reflection memory merge.
         cleanedText: "",
       });
     });
+
+    test("does not extract a notification quoted inside a recall block", () => {
+      // A recall block quotes an earlier user message, and that message can be a
+      // background-task notification. The block is truncated (no closing
+      // `</task-notification>`), so the removal used to run to the end of the
+      // message: the quoted XML and the closing `</system-reminder>` went with it,
+      // the user's prose after the block was deleted, and the renderer showed the
+      // raw reminder as literal user text (2026-10-24).
+      const quoted = `<system-reminder>
+<recall-injected items="1" transcript="1" memory="0" />
+[1] transcript · message ui-msg-1
+user: <task-notification>
+<task-id>bash_25</task-id>
+<status>completed</status>
+<summary>Background command "Run the comparison" completed</summary>
+<result>$ run --output=...`;
+      const message = `${quoted}</system-reminder>
+
+夜深了，晚安。`;
+
+      const result = extractTaskNotificationsForDisplay(message);
+
+      expect(result.notifications).toEqual([]);
+      // The block survives whole, closing tag included, and the user's prose after
+      // it is still there.
+      expect(result.cleanedText).toBe(message.trim());
+      expect(result.cleanedText).toEndWith("夜深了，晚安。");
+    });
+
+    test("still extracts a notification outside a reminder block", () => {
+      const reminder = `<system-reminder>
+<recall-injected items="1" transcript="1" memory="0" />
+user: <task-notification>
+<summary>Quoted, not this turn's</summary>
+</system-reminder>`;
+      const own = `<task-notification>
+<task-id>bash_1</task-id>
+<status>completed</status>
+<summary>Real command completed</summary>
+<result>ok</result>
+</task-notification>`;
+
+      const result = extractTaskNotificationsForDisplay(
+        `${reminder}\n\n${own}`,
+      );
+
+      expect(result.notifications).toEqual(["Real command completed"]);
+      expect(result.cleanedText).toBe(reminder);
+    });
   });
 });
 

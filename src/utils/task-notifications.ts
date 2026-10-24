@@ -1,5 +1,10 @@
 import { getConversationId, getCurrentAgentId } from "@/agent/context";
-import { SYSTEM_REMINDER_OPEN } from "@/constants";
+import {
+  SYSTEM_ALERT_CLOSE,
+  SYSTEM_ALERT_OPEN,
+  SYSTEM_REMINDER_CLOSE,
+  SYSTEM_REMINDER_OPEN,
+} from "@/constants";
 
 /**
  * Task Notification Formatting
@@ -123,6 +128,86 @@ export function formatMonitorEventNotification(notification: {
 </task-notification>`;
 }
 
+const NOTIFICATION_PATTERN =
+  /<task-notification>[\s\S]*?(?:<\/task-notification>|$)(?:\s*Full transcript available at:[^\n]*\n?)?/g;
+
+/** A half-open character range `[start, end)` inside a message. */
+type Range = [start: number, end: number];
+
+/**
+ * Ranges covered by `<system-reminder>` / legacy `<system-alert>` blocks.
+ *
+ * A recall block quotes earlier messages verbatim, and one of those messages can
+ * be a background-task notification. A notification match that *starts* inside
+ * one of these ranges is history being quoted, not something this turn produced.
+ * Reading it does two things, both wrong: it paints another conversation's
+ * notification as an event row of this one, and — because the quoted entry is
+ * truncated and usually has no closing tag — the removal runs to the end of the
+ * message, taking the closing `</system-reminder>` and the user's own prose with
+ * it. The renderer then sees an unterminated opening tag and shows the raw
+ * reminder as literal user text (2026-10-24, "the user message became unexpected
+ * content after a restart").
+ *
+ * An unterminated opening tag covers the rest of the message, which is also how
+ * `splitSystemReminderBlocks` reads it: nothing after it is the user's prose.
+ * A notification that merely *contains* a reminder (an agent-only notification is
+ * delivered as one) still starts outside every range and is handled as before.
+ */
+function reminderRanges(message: string): Range[] {
+  const tags = [
+    { open: SYSTEM_REMINDER_OPEN, close: SYSTEM_REMINDER_CLOSE },
+    { open: SYSTEM_ALERT_OPEN, close: SYSTEM_ALERT_CLOSE },
+  ];
+  const found: Range[] = [];
+  for (const tag of tags) {
+    let cursor = 0;
+    while (cursor < message.length) {
+      const open = message.indexOf(tag.open, cursor);
+      if (open < 0) break;
+      const close = message.indexOf(tag.close, open + tag.open.length);
+      const end = close < 0 ? message.length : close + tag.close.length;
+      found.push([open, end]);
+      cursor = end;
+    }
+  }
+  if (found.length <= 1) return found;
+
+  found.sort((a, b) => a[0] - b[0]);
+  const merged: Range[] = [found[0] as Range];
+  for (const range of found.slice(1)) {
+    const last = merged[merged.length - 1] as Range;
+    if (range[0] <= last[1]) {
+      last[1] = Math.max(last[1], range[1]);
+    } else {
+      merged.push(range);
+    }
+  }
+  return merged;
+}
+
+/**
+ * The message with every reminder block overwritten by one inert character per
+ * code unit, so indices still line up with the original.
+ *
+ * The extractor searches this copy and reads the matched XML from the original:
+ * a `<task-notification>` quoted inside a recall block is invisible to the search
+ * (so it can neither become an event row nor swallow the surrounding prose), while
+ * a notification that legitimately *contains* a reminder is still found as one
+ * match and still recognised as agent-only.
+ */
+function maskReminders(message: string, ranges: readonly Range[]): string {
+  if (ranges.length === 0) return message;
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    parts.push(message.slice(cursor, start));
+    parts.push("\u0000".repeat(end - start));
+    cursor = end;
+  }
+  parts.push(message.slice(cursor));
+  return parts.join("");
+}
+
 export function extractTaskNotificationsForDisplay(message: string): {
   notifications: string[];
   cleanedText: string;
@@ -131,37 +216,49 @@ export function extractTaskNotificationsForDisplay(message: string): {
     return { notifications: [], cleanedText: message };
   }
 
-  const notificationRegex =
-    /<task-notification>[\s\S]*?(?:<\/task-notification>|$)(?:\s*Full transcript available at:[^\n]*\n?)?/g;
+  const quoted = reminderRanges(message);
+  const searchable = maskReminders(message, quoted);
   const notifications: string[] = [];
+  const removals: Range[] = [];
 
-  let match: RegExpExecArray | null = notificationRegex.exec(message);
+  NOTIFICATION_PATTERN.lastIndex = 0;
+  let match = NOTIFICATION_PATTERN.exec(searchable);
   while (match !== null) {
-    const xml = match[0];
+    // The match was found in the masked copy; read the real XML at the same
+    // offsets so the fields (and the agent-only check) see the original text.
+    const xml = message.slice(match.index, match.index + match[0].length);
     const summaryMatch = xml.match(/<summary>([\s\S]*?)<\/summary>/);
     const statusMatch = xml.match(/<status>([\s\S]*?)<\/status>/);
     const resultMatch = xml.match(/<result>([\s\S]*?)<\/result>/);
     const result = resultMatch?.[1]?.trim() || "";
-    const isAgentOnlyReminder = result.includes(SYSTEM_REMINDER_OPEN);
-    if (isAgentOnlyReminder) {
-      match = notificationRegex.exec(message);
-      continue;
+    if (!result.includes(SYSTEM_REMINDER_OPEN)) {
+      const status = statusMatch?.[1]?.trim();
+      let summary = summaryMatch?.[1]?.trim() || "";
+      summary = unescapeXml(summary);
+      notifications.push(summary || `Agent task ${status || "completed"}`);
     }
-    const status = statusMatch?.[1]?.trim();
-    let summary = summaryMatch?.[1]?.trim() || "";
-    summary = unescapeXml(summary);
-    const display = summary || `Agent task ${status || "completed"}`;
-    notifications.push(display);
-    match = notificationRegex.exec(message);
+    // Removal is taken from the original string: a notification that contains a
+    // reminder takes the reminder with it, exactly as the old regex did.
+    removals.push([match.index, match.index + match[0].length]);
+    match = NOTIFICATION_PATTERN.exec(searchable);
   }
+  NOTIFICATION_PATTERN.lastIndex = 0;
 
-  const cleanedText = message
-    .replace(notificationRegex, "")
-    .replace(/^\s*Full transcript available at:[^\n]*\n?/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  let cleanedText = "";
+  let cursor = 0;
+  for (const [start, end] of removals) {
+    cleanedText += message.slice(cursor, start);
+    cursor = end;
+  }
+  cleanedText += message.slice(cursor);
 
-  return { notifications, cleanedText };
+  return {
+    notifications,
+    cleanedText: cleanedText
+      .replace(/^\s*Full transcript available at:[^\n]*\n?/gm, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim(),
+  };
 }
 
 // ============================================================================
