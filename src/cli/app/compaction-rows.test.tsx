@@ -1,5 +1,5 @@
 /**
- * The row model against `EventMessage`, for the one event that has a body.
+ * The row model against `EventMessage`, for both `event` kinds that exist.
  *
  * This lives outside `row-model.fidelity.test.tsx` for a boring reason — that file
  * is at the 1,000-line ceiling — but it belongs to the same differential family:
@@ -7,7 +7,9 @@
  * with what the model predicted for the same item.
  *
  * Why it is worth a file of its own: a finished compaction has **two** display
- * gates and the model used to honour neither.
+ * gates and the model used to honour neither. A task notification has none — it
+ * is always one summary row — and the model used to count the compaction body for
+ * it (2026-10-24).
  *
  * - `showCompactionsEnabled` off (the default) ⇒ `TranscriptItemView` renders
  *   `null`. Not a short row — **no row at all**.
@@ -147,6 +149,54 @@ async function withDebug(value: string, body: () => Promise<void>) {
     else process.env.HARUYUKI_DEBUG = before;
   }
 }
+
+/**
+ * A task notification is the other `event` kind, and it has no body to gate.
+ *
+ * `EventMessage` returns after one bold summary row for it; the model used to
+ * fall through to the compaction branch and count a header, a blank and the body
+ * that only `HARUYUKI_DEBUG=1` paints — for a *compaction*. Under debug, every
+ * notification was therefore measured several rows taller than it drew, and the
+ * viewport's shortfall lands at the top of the band (2026-10-24).
+ */
+describe("a task notification", () => {
+  const NOTIFICATION_ITEM = {
+    kind: "event",
+    id: "ev-task",
+    eventType: "task_notification",
+    eventData: {},
+    phase: "finished",
+    summary:
+      'Background command "Record the original translation comparison" completed',
+  } as unknown as StaticItem;
+
+  test("is its summary row plus the gap, even while the debug body is on", async () => {
+    await withDebug("1", async () => {
+      expect(getCompactionSummaryVisible()).toBe(true);
+      const index = 1;
+      const predicted = measureTranscriptItemRows(NOTIFICATION_ITEM, {
+        columns: COLUMNS,
+        index,
+        terminalRows: ROWS,
+        showCompactionsEnabled: true,
+        compactionSummaryVisible: true,
+      });
+      const painted = await measureHeight(
+        <TranscriptItemView
+          item={NOTIFICATION_ITEM}
+          index={index}
+          columns={COLUMNS}
+          statusLinePrompt={PROMPT}
+          showCompactionsEnabled={true}
+          precomputedDiffs={new Map()}
+        />,
+      );
+      // At the width this suite renders at the summary fits one row: gap + 1.
+      expect(painted).toBe(2);
+      expect(predicted).toBe(painted);
+    });
+  });
+});
 
 describe("a compaction event", () => {
   test("is not a row at all while compactions are hidden", async () => {

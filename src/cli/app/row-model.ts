@@ -415,6 +415,16 @@ export function measureLineRows(
       ) {
         return 0;
       }
+      // A task notification has **no body to gate**: `EventMessage` returns after
+      // one bold summary row in a `columns - 2` box. It used to fall through to
+      // the compaction branch, so under `HARUYUKI_DEBUG=1` every notification was
+      // measured as header + blank + body (7 rows for a 3-row paint); the viewport
+      // painted the band short and the gap landed at the top (2026-10-24, the
+      // restart with one notification in view).
+      if (line.eventType === "task_notification") {
+        const summary = line.summary || "Agent task completed";
+        return countTextRows(summary, Math.max(1, columns - 2));
+      }
       if (options.compactionSummaryVisible !== true || !line.summary) return 1;
       // The painted body, mirrored from `EventMessage`: a `  └  ` gutter row with
       // the summary header in a `columns - 5` box, one blank row, then the body in

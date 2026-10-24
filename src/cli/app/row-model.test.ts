@@ -468,6 +468,46 @@ describe("measureLineRows", () => {
     // 40 columns of markdown in a 35-column box: two rows.
     expect(measureLineRows(line, OPTIONS)).toBe(1 + 2);
   });
+
+  test("a task notification counts its own summary, not a compaction body", () => {
+    // `EventMessage` returns after one bold summary row for a task notification;
+    // the compaction branch's header + blank + body is never painted. With
+    // `HARUYUKI_DEBUG=1` the old branch measured this 30-character summary as the
+    // whole compaction body (2026-10-24).
+    const summary = "Background command completed";
+    const line: Line = {
+      kind: "event",
+      id: "ev",
+      eventType: "task_notification",
+      eventData: {},
+      phase: "finished",
+      summary,
+    };
+    expect(
+      measureLineRows(line, {
+        columns: 40,
+        showCompactionsEnabled: true,
+        compactionSummaryVisible: true,
+      }),
+    ).toBe(countTextRows(summary, 38));
+  });
+
+  test("a task notification with no summary still paints one row", () => {
+    const line: Line = {
+      kind: "event",
+      id: "ev",
+      eventType: "task_notification",
+      eventData: {},
+      phase: "finished",
+    };
+    expect(
+      measureLineRows(line, {
+        columns: 40,
+        showCompactionsEnabled: true,
+        compactionSummaryVisible: true,
+      }),
+    ).toBe(1);
+  });
 });
 
 /**
