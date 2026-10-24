@@ -312,7 +312,7 @@ export async function runConnectSubcommand(
 
         if (await io.isChatGPTOAuthConnected(providerName)) {
           io.stdout(
-            `Already connected to ChatGPT via OAuth as '${providerName}'. Use /connect in the TUI and select ChatGPT / Codex plan to disconnect or re-authenticate.`,
+            `Already connected to ChatGPT via OAuth as '${providerName}'. Use /config connect in the TUI and select ChatGPT / Codex plan to disconnect or re-authenticate.`,
           );
           return 0;
         }

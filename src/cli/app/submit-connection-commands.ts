@@ -86,7 +86,7 @@ export async function handleConnectionCommand(
         "Checking MCP connection options...",
       );
       cmd.fail(
-        "The server-side MCP OAuth flow is deprecated in Haruyuki. Use /mcp add to configure a client-local stdio, HTTP, or SSE server.",
+        "The server-side MCP OAuth flow is deprecated in Haruyuki. Use /config mcp add to configure a client-local stdio, HTTP, or SSE server.",
       );
       return { submitted: true };
     }
@@ -98,7 +98,9 @@ export async function handleConnectionCommand(
     }
 
     const cmd = commandRunner.start(msg, "Checking MCP usage...");
-    cmd.fail(`Unknown subcommand: "${firstWord}". Run /mcp help for usage.`);
+    cmd.fail(
+      `Unknown subcommand: "${firstWord}". Run /config mcp help for usage.`,
+    );
     return { submitted: true };
   }
 

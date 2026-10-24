@@ -881,7 +881,7 @@ export async function ensureLocalMemfsGitConfig(
 }
 
 /* ------------------------------------------------------------------ *
- * Memory repository (/memory-repository slash command helpers)
+ * Memory repository (/memory remote slash command helpers)
  *
  * The remote URL lives in each repo's local `.git/config` under
  * `letta.memoryRepository.url`. The post-commit hook reads that key and
@@ -940,7 +940,7 @@ export interface MemoryRepositoryPushResult {
 
 /**
  * One-shot push to the memory-repository remote. Used by
- * `/memory-repository push` to retry after a failure or to do an initial push
+ * `/memory remote push` to retry after a failure or to do an initial push
  * without waiting for the next commit.
  */
 export async function pushToMemoryRepository(
@@ -954,7 +954,7 @@ export async function pushToMemoryRepository(
       url: null,
       branch: null,
       output:
-        "No memory-repository URL configured. Use /memory-repository set <url> to configure one.",
+        "No memory-repository URL configured. Use /memory remote set <url> to configure one.",
     };
   }
 
@@ -1013,7 +1013,7 @@ export async function pushToMemoryRepository(
 
 /**
  * Return the tail of the memory-repository push log.
- * Used by `/memory-repository status`.
+ * Used by `/memory remote status`.
  */
 export function readMemoryRepositoryPushLog(
   agentId: string,

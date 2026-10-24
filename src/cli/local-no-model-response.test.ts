@@ -5,9 +5,9 @@ import {
 } from "@/cli/helpers/local-no-model-response";
 
 describe("local no-model synthetic response", () => {
-  test("points at /connect and an env key, and nothing else", () => {
+  test("points at /config connect and an env key, and nothing else", () => {
     const message = buildLocalNoModelResponse();
-    expect(message).toContain("/connect");
+    expect(message).toContain("/config connect");
     expect(message).toContain("export OPENAI_API_KEY=...");
     // `/login` is gone, so no copy may still send the user there.
     expect(message).not.toContain("/login");

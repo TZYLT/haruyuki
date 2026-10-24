@@ -56,7 +56,7 @@ export interface LocalCompiledSystemPrompt {
   frozenReason?: LocalFreezeReason;
   /**
    * Last live values observed at a turn that differed from the frozen ones.
-   * Reporting-only (feeds `/context-pending`); never used to build a request.
+   * Reporting-only (feeds `/context pending`); never used to build a request.
    */
   observedSkillsBlock?: string;
   observedTools?: string;

@@ -10,7 +10,7 @@ describe("reasoning tab toggle command parsing", () => {
     expect(resolveReasoningTabToggleCommand("/reasoning-tab", false)).toEqual({
       kind: "status",
       message:
-        "Reasoning Tab shortcut is disabled. Use /reasoning-tab on to enable it.",
+        "Reasoning Tab shortcut is disabled. Use /config reasoning-tab on to enable it.",
     });
 
     expect(
@@ -51,7 +51,7 @@ describe("reasoning tab toggle command parsing", () => {
       resolveReasoningTabToggleCommand("/reasoning-tab maybe", true),
     ).toEqual({
       kind: "invalid",
-      message: "Usage: /reasoning-tab [on|off|status] (default is off)",
+      message: "Usage: /config reasoning-tab [on|off|status] (default is off)",
     });
   });
 });

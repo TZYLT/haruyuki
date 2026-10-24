@@ -48,7 +48,7 @@ interface McpSelectorProps {
 }
 
 /**
- * `/mcp`'s three views, on the toolkit.
+ * `/config mcp`'s three views, on the toolkit.
  *
  * The face used to page its own list: a page size, a page index, a cursor
  * clamped inside the page, and a `Page 2/5` line — a second window
@@ -196,7 +196,7 @@ export const McpSelector = memo(function McpSelector({
           chords: [{ key: "d" }, { key: "d", shift: true }],
           run: ({ input }) => {
             // Removing a server cannot be undone from this face, so it sits behind
-            // Shift the way `/agents`'s delete does: the chord matcher is
+            // Shift the way `/agent list`'s delete does: the chord matcher is
             // case-insensitive, so without this a bare `d` would open the
             // confirmation. `A` and `R` stay bare — they open a flow and re-read
             // state, they do not destroy anything.

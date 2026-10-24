@@ -3,13 +3,14 @@ import {
   setSystemRemindersVisible,
 } from "@/cli/components/transcript-display-state";
 
-const USAGE = "Usage: /system-reminders [on|off|status] (default is off)";
+const USAGE =
+  "Usage: /config system-reminders [on|off|status] (default is off)";
 
 export function handleSystemRemindersCommand(args: string[]): string {
   if (args.length === 0) {
     return getSystemRemindersVisible()
       ? "System reminders are shown. Ctrl+R expands or collapses their contents."
-      : "System reminders are hidden. Use /system-reminders on to show them.";
+      : "System reminders are hidden. Use /config system-reminders on to show them.";
   }
 
   if (args.length !== 1) return USAGE;
@@ -18,7 +19,7 @@ export function handleSystemRemindersCommand(args: string[]): string {
   if (mode === "status") {
     return getSystemRemindersVisible()
       ? "System reminders are shown. Ctrl+R expands or collapses their contents."
-      : "System reminders are hidden. Use /system-reminders on to show them.";
+      : "System reminders are hidden. Use /config system-reminders on to show them.";
   }
   if (mode === "on") {
     setSystemRemindersVisible(true);

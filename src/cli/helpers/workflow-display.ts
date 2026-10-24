@@ -1,6 +1,6 @@
 /**
  * Pure formatting for the Workflow tool's TUI surfaces: the status rows
- * under the input, the launch line in the transcript, and the /workflows
+ * under the input, the launch line in the transcript, and the /maintenance workflows
  * tree (one block per run, agents grouped by phase, with duration and token
  * usage per agent).
  */

@@ -9,14 +9,14 @@ import {
   resolveChdirTarget,
 } from "@/cli/helpers/chdir-command";
 
-describe("/chdir command", () => {
-  test("is registered with /cd alias", () => {
+describe("/cd command", () => {
+  test("is the only working-directory name the registry keeps", () => {
     const registryPath = fileURLToPath(
       new URL("../cli/commands/registry.ts", import.meta.url),
     );
     const source = readFileSync(registryPath, "utf-8");
 
-    expect(source).toContain('"/chdir"');
+    expect(source).not.toContain('"/chdir"');
     expect(source).toContain('"/cd"');
     expect(source).toContain("Change working directory for this TUI session");
   });
@@ -33,11 +33,11 @@ describe("/chdir command", () => {
     expect(source).toContain('"cwd_changed"');
   });
 
-  test("parses chdir commands and aliases", () => {
-    expect(parseChdirCommand("/chdir ../foo")).toEqual({
-      command: "/chdir",
-      pathArg: "../foo",
-    });
+  test("parses the surviving command and refuses the retired spelling", () => {
+    // `/chdir` is retired at the routing boundary (hubs.ts REMOVED_COMMANDS), and
+    // the parser no longer knows it either: two layers agreeing is what keeps the
+    // old name from working by accident.
+    expect(parseChdirCommand("/chdir ../foo")).toBeNull();
     expect(parseChdirCommand('/cd "dir with spaces"')).toEqual({
       command: "/cd",
       pathArg: "dir with spaces",

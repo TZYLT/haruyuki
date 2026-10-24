@@ -125,7 +125,7 @@ function parseStepCount(raw: string): number | null {
 }
 
 /**
- * `/sleeptime`'s form.
+ * `/memory config`'s form.
  *
  * It is the tree's one self-drawn form: a radio group over two sections with two
  * fields edited **in place** rather than in a sub-view, which is what it was

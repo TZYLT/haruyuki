@@ -79,7 +79,7 @@ export function localCompactionSettingsForStorage(
  * Merge a compaction-settings patch into the record already stored on the agent.
  *
  * `updateAgent` is a PATCH: a writer may send only the field it changed (the
- * `/compaction` overlay reports just what the user edited, and an agent editing
+ * `/compact config` overlay reports just what the user edited, and an agent editing
  * settings through the self-configuration skill does the same). Writing the
  * patch wholesale would silently drop the compaction model, the summary prompt
  * and the compression rate — the same defect B-1 fixed for conversation-level

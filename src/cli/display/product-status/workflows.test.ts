@@ -182,7 +182,7 @@ describe("workflow status panel", () => {
       createContext(),
     ).map(stripAnsi);
     expect(lines).toHaveLength(7);
-    expect(lines[6]?.trim()).toBe("+3 more · /workflows");
+    expect(lines[6]?.trim()).toBe("+3 more · /maintenance workflows");
   });
 
   test("shows active runs before newer completed runs under the panel cap", () => {
@@ -206,7 +206,7 @@ describe("workflow status panel", () => {
     expect(lines[0]).toStartWith("○ active");
     expect(lines[2]).toStartWith("● finished-3");
     expect(lines[4]).toStartWith("● finished-2");
-    expect(lines[6]?.trim()).toBe("+2 more · /workflows");
+    expect(lines[6]?.trim()).toBe("+2 more · /maintenance workflows");
   });
 
   test("withWorkflowStatusPanel adds a below-input panel only when there are runs", () => {

@@ -16,7 +16,7 @@ export interface Settings {
    *
    * `auto` (the default) asks the terminal at startup and after each resize;
    * `narrow`/`wide` pin the answer. It is a property of the *machine* and the font
-   * it draws with, so it lives here and not in project settings — `/font-width`
+   * it draws with, so it lives here and not in project settings — `/config font-width`
    * writes it (`cli/helpers/char-width.ts`). Declared in this module rather than
    * `settings-manager.ts` because that file is at its size ratchet, and both
    * modules read the same JSON file.
@@ -28,7 +28,7 @@ export interface Settings {
    * `auto` (the default) puts back the face the session started with; `off` stops
    * the guard; any other value is a face name to restore (`Consolas`). Legacy
    * `conhost.exe` sometimes swaps a live window to the smallest raster font, which
-   * has none of the glyphs this UI draws with — `/console-font` writes this, and
+   * has none of the glyphs this UI draws with — `/config console-font` writes this, and
    * `cli/helpers/console-font.ts` explains the artifact.
    */
   consoleFont?: string;

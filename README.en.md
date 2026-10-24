@@ -18,7 +18,7 @@ English · [简体中文](README.md)
 > - **Not an official release**: this is not an official Letta, Inc. product and has not been reviewed,
 >   tested, or endorsed by them (see [§8](#8-license-and-legal-notices)).
 > - **If you find a problem**: report it on this project's [issue tracker](https://github.com/TZYLT/haruyuki/issues).
->   A `/feedback` report is written to a local log only; it is never sent there automatically.
+>   A `/maintenance feedback` report is written to a local log only; it is never sent there automatically.
 > - I am currently the only developer, and I am working through the code by hand to review and clean it up.
 >   Please bear with me — my time and ability are limited. If you would like to contribute, a pull request
 >   on GitHub is very welcome. Thank you.
@@ -63,14 +63,14 @@ to that end.
 
 | Highlight | Description |
 |---|---|
-| **Prefix freezing** | Changes to prompts, tools, or memory **never silently rewrite context already sent**, so you don't wake up to a terrifying bill; `/context-pending` shows what is queued, `/recompile` applies it explicitly |
-| **Topic trimming** | `/topic`, `/topics`, `/compact` — trim context along topic boundaries you choose, instead of dropping the tail proportionally |
+| **Prefix freezing** | Changes to prompts, tools, or memory **never silently rewrite context already sent**, so you don't wake up to a terrifying bill; `/context pending` shows what is queued, `/recompile` applies it explicitly |
+| **Topic trimming** | `/topic`, `/topic list`, `/compact` — trim context along topic boundaries you choose, instead of dropping the tail proportionally |
 | **Memory as a file tree** | MemFS: all context (including memory blocks) is tracked by git — diffable, revertible, and pushable to your own remote |
-| **Passive memory** | A reflection agent runs alongside you and organises memory itself; `/reflect`, `/dream`, and `/sleeptime` control when it fires |
+| **Passive memory** | A reflection agent runs alongside you and organises memory itself; `/reflect`, `/dream`, and `/memory config` control when it fires |
 | **Local backend** | A single backend mode (`--backend local`): agent, conversations, memory, and transcripts all live on this machine |
 | **Multi-agent** | Any agent can act as another agent's subagent (including built-in subagents such as fork and recall) |
 | **Channels and a local server** | `haruyuki server` provides a local app-server, WebSocket, and Slack/Telegram channels |
-| **Fully local diagnostics** | No telemetry; crashes, boundary errors, and `/feedback` are written to local logs only |
+| **Fully local diagnostics** | No telemetry; crashes, boundary errors, and `/maintenance feedback` are written to local logs only |
 
 ## 2. What changed relative to upstream
 
@@ -144,7 +144,7 @@ built, but the registry **rejected the name as too similar to existing packages*
 
 ```bash
 haruyuki connect openai        # or anthropic / z.ai / etc.; you will be prompted for an API key
-# or use /connect inside a session
+# or use /config connect inside a session
 ```
 
 - Start it up:
@@ -156,8 +156,8 @@ haruyuki --new                                # new conversation (keeps agent me
 haruyuki -p "describe yourself in one sentence" --output-format json   # headless, with stats
 ```
 
-Inside an interactive session, start with `/help`, `/init` (initialise memory), `/model` (switch model),
-`/skills`, and `/doctor`.
+Inside an interactive session, start with `/help`, `/memory init` (initialise memory), `/model` (switch model),
+`/skill` (lists skills), and `/doctor`.
 
 **To learn how to use it**: have the agent use the bundled `haruyuki-guide` skill. It explains how
 this build works and why, reading the reference documents shipped with it rather than guessing from
@@ -171,7 +171,7 @@ memory.
 
 | Item | Notes |
 |---|---|
-| Windows | **Automatic reflection is off by default** (including a saved `/sleeptime` setting); manual `/reflect` and `/dream` work. To enable it, set `HARUYUKI_ENABLE_WINDOWS_AUTO_REFLECTION=1` in the process that starts Haruyuki |
+| Windows | **Automatic reflection is off by default** (including a saved `/memory config` setting); manual `/reflect` and `/dream` work. To enable it, set `HARUYUKI_ENABLE_WINDOWS_AUTO_REFLECTION=1` in the process that starts Haruyuki |
 | Sandboxing | Kernel-level filesystem sandboxing is available only on macOS (seatbelt) and Linux (bwrap); **Windows has no kernel backend** (a code fact — see `src/sandbox/availability.ts`), so the cross-agent memory fence falls back to a static path guard |
 | Legacy flags | `--computer`, `--no-wait`, `--memfs-startup` and similar are still in the help output (upstream compatibility surface); this fork does not promise their cloud semantics work |
 | Multiple platforms untested | This project is developed on Windows and I have no other machines to test on. If you hit a problem, please open an issue |
@@ -181,7 +181,7 @@ memory.
 Turn the full-screen shell off — that is the new TUI with tabs and mouse clicks — or roll back to the
 old version.
 
-To get the old **append-style** shell back: run `/experiments` and turn **full-screen TUI** off. It takes
+To get the old **append-style** shell back: run `/config experiments` and turn **full-screen TUI** off. It takes
 effect on the **next start**. With it off you get **compatibility mode**: the command set, the keys and
 the output semantics are the ones from before the new shell.
 
@@ -237,7 +237,7 @@ older in time**, and they record what changed **relative to the original project
 - All agent state, memory, and transcripts live in `~/.haruyuki` (or wherever `HARUYUKI_HOME` points) and
   in your own provider account; this project **never** reports telemetry and **never** sends diagnostic
   content to a third party.
-- Crash/boundary-error logs and `/feedback` reports are written to local files (`~/.haruyuki/logs/`).
+- Crash/boundary-error logs and `/maintenance feedback` reports are written to local files (`~/.haruyuki/logs/`).
 - `haruyuki memory backup` takes a snapshot before you touch memory, and the memory directory is itself a
   git repository, so every change has a commit — see
   [the common commands reference (Chinese)](https://github.com/TZYLT/haruyuki/blob/main/docs/commands.zh-CN.md).

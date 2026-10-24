@@ -783,7 +783,7 @@ export function useConversationSwitching(ctx: ConversationSwitchingContext) {
         // Build success message with hints
         const agentUrl = buildAgentReference(agent.id);
         const memfsTip =
-          "Tip: use /init to initialize your agent's memory system!";
+          "Tip: use /memory init to initialize your agent's memory system!";
         const successOutput = [
           `Created **${agent.name || agent.id}** (use /pin to save)`,
           `${CLI_GLYPHS.result}  ${agentUrl}`,

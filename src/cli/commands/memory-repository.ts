@@ -1,16 +1,16 @@
 /**
- * /memory-repository command handler.
+ * /memory remote command handler.
  *
  * Configures an additional git remote that the memfs repo pushes to after
  * every commit. Backed by per-repo git config (`letta.memoryRepository.url`)
  * and a post-commit hook installed by src/agent/memoryGit.ts.
  *
  * Usage:
- *   /memory-repository set <url>    Configure a remote URL
- *   /memory-repository unset        Remove the configured URL
- *   /memory-repository status       Show current URL + tail of push log
- *   /memory-repository push         Force a push now (useful after a failure)
- *   /memory-repository help         Show usage
+ *   /memory remote set <url>    Configure a remote URL
+ *   /memory remote unset        Remove the configured URL
+ *   /memory remote status       Show current URL + tail of push log
+ *   /memory remote push         Force a push now (useful after a failure)
+ *   /memory remote help         Show usage
  */
 
 import { getCurrentAgentId } from "@/agent/context";
@@ -64,7 +64,7 @@ Examples:
   /memory-repository set git@github.com:you/my-memory.git
   /memory-repository set https://github.com/you/my-memory.git
   /memory-repository status
-  /memory-repository unset`;
+  /memory remote unset`;
 
 /**
  * Normalize a user-provided URL. Accepts:
@@ -109,7 +109,7 @@ export async function handleMemoryRepositoryCommand(
   if (!agentId) {
     return {
       output:
-        "No agent is currently selected. Open an agent first, then run /memory-repository again.",
+        "No agent is currently selected. Open an agent first, then run /memory remote again.",
     };
   }
   const [subcommand, ...rest] = args;
@@ -118,11 +118,11 @@ export async function handleMemoryRepositoryCommand(
     case "set": {
       const rawUrl = rest.join(" ").trim();
       if (!rawUrl) {
-        return { output: "Usage: /memory-repository set <url>" };
+        return { output: "Usage: /memory remote set <url>" };
       }
       const url = normalizeRepositoryUrl(rawUrl);
       if (!url) {
-        return { output: "Usage: /memory-repository set <url>" };
+        return { output: "Usage: /memory remote set <url>" };
       }
       const displayUrl = redactUrl(url);
 
@@ -139,7 +139,7 @@ export async function handleMemoryRepositoryCommand(
       const push = await pushToMemoryRepositoryWithTimeout(agentId);
       if (push === "timeout") {
         return {
-          output: `Memory-repository URL set to ${displayUrl}.\nInitial push still running — check /memory-repository status for result.`,
+          output: `Memory-repository URL set to ${displayUrl}.\nInitial push still running — check /memory remote status for result.`,
         };
       }
       if (push.ok) {
@@ -148,7 +148,7 @@ export async function handleMemoryRepositoryCommand(
         };
       }
       return {
-        output: `Memory-repository URL set to ${displayUrl}.\nInitial push failed:\n${redactUrl(push.output)}\n\nFix the issue and run /memory-repository push to retry, or just wait for the next commit.`,
+        output: `Memory-repository URL set to ${displayUrl}.\nInitial push failed:\n${redactUrl(push.output)}\n\nFix the issue and run /memory remote push to retry, or just wait for the next commit.`,
       };
     }
 
@@ -171,7 +171,7 @@ export async function handleMemoryRepositoryCommand(
       if (!url) {
         return {
           output:
-            "No memory-repository URL configured.\nUse /memory-repository set <url> to configure one.",
+            "No memory-repository URL configured.\nUse /memory remote set <url> to configure one.",
         };
       }
       const log = redactUrl(readMemoryRepositoryPushLog(agentId, 20));

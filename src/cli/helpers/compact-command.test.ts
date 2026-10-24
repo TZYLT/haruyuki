@@ -180,7 +180,7 @@ describe("formatTopicTrimReceipt", () => {
     );
     expect(nothingToTrim).toContain("Nothing to trim");
     expect(nothingToTrim).not.toContain("kept:");
-    expect(nothingToTrim).toContain("Run /topics");
+    expect(nothingToTrim).toContain("Run /topic list");
 
     // The rate only lands on the start of the context when there is nothing it
     // can compress, so the copy is about length — not about a budget it fits in.
@@ -206,7 +206,7 @@ describe("formatTopicTrimReceipt", () => {
       formatTopicTrimReceipt(
         outcome({ executed: false, noopReason: "unknown_block" }),
       ),
-    ).toContain("Run /topics");
+    ).toContain("Run /topic list");
   });
 });
 

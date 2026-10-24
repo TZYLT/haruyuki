@@ -118,7 +118,7 @@ describe("command registry", () => {
     expect(await executeCommand("/system-reminders")).toMatchObject({
       success: true,
       output:
-        "System reminders are hidden. Use /system-reminders on to show them.",
+        "System reminders are hidden. Use /config system-reminders on to show them.",
     });
   });
 
@@ -144,13 +144,15 @@ describe("command registry", () => {
   test("rejects unsupported system reminder modes", async () => {
     expect(await executeCommand("/system-reminders maybe")).toMatchObject({
       success: true,
-      output: "Usage: /system-reminders [on|off|status] (default is off)",
+      output:
+        "Usage: /config system-reminders [on|off|status] (default is off)",
     });
     expect(
       await executeCommand("/system-reminders status extra"),
     ).toMatchObject({
       success: true,
-      output: "Usage: /system-reminders [on|off|status] (default is off)",
+      output:
+        "Usage: /config system-reminders [on|off|status] (default is off)",
     });
   });
 });

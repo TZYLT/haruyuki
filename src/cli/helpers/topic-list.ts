@@ -1,5 +1,5 @@
 /**
- * Copy and rows for the topic list (`/topics`, `/topics --all`).
+ * Copy and rows for the topic list (`/topic list`, `/topic list --all`).
  *
  * Pure functions on the backend's structured list so the table, the empty state,
  * and the "the agent's marking channel is off" variant are testable without a
@@ -12,14 +12,14 @@ import type {
 import type { TopicBlock } from "@/backend/local/topic-compaction";
 
 export const TOPICS_COMMAND_USAGE = [
-  "/topics [--all]",
+  "/topic list [--all]",
   "",
   "List the topic blocks of the current context, oldest first.",
   "",
   "USAGE",
-  "  /topics         — blocks that still define the current context",
-  "  /topics --all   — every marker in the conversation, including trimmed ones",
-  "  /topics help    — show this help",
+  "  /topic list         — blocks that still define the current context",
+  "  /topic list --all   — every marker in the conversation, including trimmed ones",
+  "  /topic list help    — show this help",
   "",
   "/compact <n> keeps block n and summarizes everything before it. The numbers in",
   "--all are marker positions, not block numbers.",
@@ -76,7 +76,7 @@ function pad(value: string, width: number): string {
 
 /**
  * How a block's first message was chosen, in one wording for both readers (the
- * `/topics` table and the picker's row description).
+ * `/topic list` table and the picker's row description).
  *
  * The boundary's author comes from the previous block's marker, which is the
  * marker that ends it. It matters because the agent marks topics on its own

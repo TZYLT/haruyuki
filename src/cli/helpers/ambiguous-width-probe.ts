@@ -185,7 +185,7 @@ export function claimAmbiguousWidthReply(payload: string): boolean {
   // scrolls the top of the alternate screen (the tab strip) away for good. The
   // session log shows the answer flipping `3 -> 2 -> 1` across resizes on a terminal
   // whose font nobody changed (2026-10-21), so a lone "narrower" reply is not
-  // evidence worth that risk. `narrow` stays reachable: `/font-width narrow` pins it.
+  // evidence worth that risk. `narrow` stays reachable: `/config font-width narrow` pins it.
   if (
     width < getAmbiguousWidth() &&
     getAmbiguousWidthSource() === "probe" &&
@@ -194,7 +194,7 @@ export function claimAmbiguousWidthReply(payload: string): boolean {
     repaintForAmbiguousWidth();
     debugLog(
       "char-width",
-      `probe: cursor column ${column} -> ${width} column(s), but ${getAmbiguousWidth()} is in force; keeping the wider answer (pin it with /font-width narrow)`,
+      `probe: cursor column ${column} -> ${width} column(s), but ${getAmbiguousWidth()} is in force; keeping the wider answer (pin it with /config font-width narrow)`,
     );
     return true;
   }

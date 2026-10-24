@@ -17,7 +17,7 @@ command will do to the machine.
 ## Entry points
 
 - `haruyuki` with no arguments resumes the last conversation for the current
-  directory, in the interactive terminal UI — `src/index.ts:111-116`.
+  directory, in the interactive terminal UI — `src/index.ts`.
 - `haruyuki -p "..."` runs one turn without a TTY, and
   `--output-format json|stream-json` changes what it prints —
   `src/cli/args.ts:116-120`, `src/cli/args.ts:150-158`.
@@ -28,7 +28,7 @@ Order of startup operations matters when reasoning about flags:
 `configureBackendMode("local")` runs first, then `--backend` is stripped, then
 subcommand dispatch happens, and only for a non-subcommand invocation are
 settings initialized and the rest of the flags parsed —
-`src/index.ts:499`, `src/index.ts:509-515`, `src/index.ts:536-557`.
+`src/index.ts:413-468`, `src/index.ts:474-502`.
 
 ## Flags worth knowing before the rest
 
@@ -39,7 +39,7 @@ settings initialized and the rest of the flags parsed —
   function rewrites `--conv` to `--conversation`.
 - `--help` exits 0; `--version` prints `<version> (Haruyuki)`; `--info` prints
   the working directory, skills directory, and pinned agents —
-  `src/cli/args.ts:27-41`, `src/index.ts:613-628`.
+  `src/cli/args.ts:27-41`, `src/index.ts:112-192`.
 - `--name <name>` resumes a pinned agent by name, case-insensitively —
   `src/cli/args.ts:72-80`.
 - `--skill-sources <csv>` takes `all,bundled,global,agent,project`, defaulting
@@ -47,7 +47,7 @@ settings initialized and the rest of the flags parsed —
 - `--no-memfs` and `--memfs-startup` are hidden compatibility no-ops retained
   for old parent processes — `src/cli/args.ts:257-280`.
 - Unknown flags fail with a pointer to `haruyuki --help` —
-  `src/index.ts:597-606`.
+  `src/index.ts:509-514`.
 
 The full catalog is `CLI_FLAG_CATALOG`, and `--help` is generated from it —
 `src/cli/args.ts:26`, `src/cli/args.ts:398-403`. A flag absent from that catalog
@@ -324,95 +324,141 @@ accepted for `--role` — `src/cli/subcommands/trajectories.ts:188-191`. `--root
 
 ## Slash commands
 
-The registry is `src/cli/commands/registry.ts:51-678`, with `hidden`, `order`,
-`noArgs`, and `args` semantics defined at
-`src/cli/commands/registry.ts:28-35`. Exact argument hints and descriptions are
-in the generated reference; this section covers what each one does and whether
-it takes over the screen.
+The interactive surface is organised as eight hubs plus a set of retained
+top-level commands. The hub table — subcommands, arguments, and the retired
+spellings — is `src/cli/commands/hubs.ts:48-391`; the registry they resolve into
+is `src/cli/commands/registry.ts`, with the hub entries starting at `:87`. A
+retired spelling is intercepted before dispatch and answered with the form that
+replaced it — `resolveHubInput`, `src/cli/commands/hubs.ts:422-478`.
+
+Exact argument hints and descriptions are in the generated reference; this
+section covers what each command does and whether it takes over the screen.
+
+### Hubs
+
+| Hub | Subcommands | What it owns |
+| --- | --- | --- |
+| `/agent` | `list`, `pin [name]`, `unpin`, `pinned`, `rename <name>`, `describe <text>`, `system`, `personality`, `toolset`, `subagents`, `ade`, `profile <save\|load\|delete\|usage> [name]` | agent identity, prompts, tools, and the agent browser |
+| `/session` | `rename <name>`, `logout` | the conversation's own name and saved credentials |
+| `/memory` | `recall`, `init`, `memfs`, `remote`, `palace`, `config` | memory view, initialisation, filesystem backend, git remote, palace, and reflection settings |
+| `/messages` | `history`, `clear` | the message history and the destructive full reset |
+| `/skill` | — or `list` | the available skills (the skills dialog) |
+| `/skill skill-creator [description]` | | entering skill-creation mode |
+| `/context` | `limit [tokens] [--override]`, `pending [full]` | the context window and unapplied prefix changes |
+| `/config` | `connect`, `mcp`, `hooks`, `secret`, `experiments`, `mods`, `statusline`, `title`, `terminal`, `font-width`, `console-font`, `stream`, `reasoning-tab`, `system-reminders` | providers, MCP, hooks, secrets, terminal, and appearance |
+| `/maintenance` | `feedback`, `bg`, `workflows`, `install-github-app` | low-frequency maintenance |
+
+Bare `/agent`, `/memory`, and `/context` run a default action — the agent
+browser, the memory view, and the context-usage display; the other hubs print
+their subcommand list. `/agent rename <name>` renames the agent and
+`/session rename <name>` renames the conversation; the old `/rename` command is
+gone, replaced by those two forms.
+
+Each subcommand runs an internal registry entry — `/agents` for `/agent list`,
+`/memfs` for `/memory memfs`, `/topics` for `/topic list`, `/sleeptime` for
+`/memory config` — so a missed rewrite degrades to a known command rather than
+being sent to the model as chat text. Those entries are marked `internal` and
+`hidden`, which keeps them out of autocomplete and out of the user-typed
+surface — `src/cli/commands/registry.ts:700-760`. Typing one directly is
+answered with the hub form, not executed.
 
 ### Overlays
 
-These open a full-screen selector instead of running in the transcript:
+These open a selector instead of running in the transcript:
 
 | Command | Opens | Source |
 | --- | --- | --- |
-| `/agents`, `/pinned`, `/profiles` | agent browser | `src/cli/app/submit-navigation-commands.ts:79-91` |
-| `/model` | model selector | `src/cli/app/use-submit-handler.ts:845-854` |
-| `/memory` | MemFS tree viewer, or the memory tab viewer | `src/cli/app/use-submit-handler.ts:1165-1172` |
-| `/search` | message search | `src/cli/app/submit-navigation-commands.ts:238-248` |
-| `/connect` | provider selector | `src/cli/app/submit-connection-commands.ts:105-112` |
-| `/skills` | skills dialog | `src/cli/app/use-submit-handler.ts:2352-2360` |
-| `/mcp` | MCP selector | `src/cli/app/submit-connection-commands.ts:61-68` |
-| `/subagents` | subagent manager | `src/cli/app/use-submit-handler.ts:1154-1161` |
-| `/hooks`, `/title`, `/statusline`, `/toolset`, `/system`, `/personality`, `/sleeptime`, `/compaction` | their respective selectors | `src/cli/app/use-submit-handler.ts:889-1269` |
-| `/resume` with no argument | conversation selector | `src/cli/app/submit-navigation-commands.ts:228-234` |
-| `/help` | help dialog | `src/cli/app/use-submit-handler.ts:1244-1251` |
+| `/agent`, `/agent list`, `/agent pinned` | agent browser | `src/cli/app/submit-navigation-commands.ts` |
+| `/model` | model selector | `src/cli/app/use-submit-handler.ts` |
+| `/memory` | MemFS tree viewer, or the memory tab viewer | `src/cli/app/use-submit-handler.ts` |
+| `/search` | message search | `src/cli/app/submit-navigation-commands.ts` |
+| `/config connect` | provider selector | `src/cli/app/submit-connection-commands.ts` |
+| `/skill list` | skills dialog (same as bare `/skill`) | `src/cli/app/use-submit-handler.ts` |
+| `/config mcp` | MCP selector | `src/cli/app/submit-connection-commands.ts` |
+| `/agent subagents` | subagent manager | `src/cli/app/use-submit-handler.ts` |
+| `/config hooks`, `/config title`, `/config statusline`, `/agent toolset`, `/agent system`, `/agent personality`, `/memory config`, `/compact config` | their respective selectors | `src/cli/app/use-submit-handler.ts`, `src/cli/app/use-configuration-handlers.ts` |
+| `/resume` with no argument | conversation selector | `src/cli/app/submit-navigation-commands.ts` |
+| `/help` | help dialog | `src/cli/app/use-submit-handler.ts` |
+| `/messages history` | message history (full-screen shell only) | `src/cli/app/shell-commands.ts:51-83` |
 
 ### Context and history
 
-- `/context` shows window usage; `/usage` shows session usage statistics, but
-  its "balance" half has no local source — see the `unsupported` document.
-- `/context-pending [full]` lists registered-but-unapplied prefix changes, and
+- `/context` shows window usage; `/usage` opens the Usage page (overview and
+  breakdown) in the full-screen shell. There is no balance read behind it — see
+  the `unsupported` document.
+- `/context pending [full]` lists registered-but-unapplied prefix changes, and
   `/recompile` applies them. See the `context-and-compaction` document for the
   details, including why the prefix is frozen in the first place.
-- `/compact [n|help]` compacts. Bare `/compact` opens the topic picker when
+- `/compact [n|help]` compacts: bare `/compact` opens the topic picker when
   there is more than one block and otherwise trims by the compression rate —
-  `src/cli/app/submit-compact-commands.ts:455-513`.
-- `/compaction` configures the mode and carries the editable **Compression
-  rate** row — `src/cli/components/CompactionSelector.tsx:145-164`.
-- `/topic <title> [summary]` marks a boundary, `/topics [--all]` lists blocks
-  and, with `--all`, every marker —
-  `src/cli/commands/registry.ts:616-625`.
-- `/clear` empties the in-context transcript; `/clear-messages` is hidden and
-  resets all of the agent's messages — `src/cli/commands/registry.ts:194-211`.
-- `/memfs [enable|disable|sync|reset]` and `/context-limit [tokens]
-  [--override]` — `src/cli/commands/registry.ts:159-176`.
+  `src/cli/app/submit-compact-commands.ts`.
+- `/compact config` opens the mode panel, where the **Compression rate** row is
+  editable — `src/cli/app/use-submit-handler.ts:718-729`.
+- `/topic <title> [summary]` marks a boundary; `/topic list [--all]` lists the
+  blocks and, with `--all`, every marker —
+  `src/cli/commands/registry.ts:645-657`.
+- `/clear` empties the in-context transcript; `/messages clear` resets all of
+  the agent's messages — `src/cli/commands/registry.ts:262-279`.
+- `/memory memfs [enable|disable|sync|reset]` manages the filesystem backend,
+  and `/context limit [tokens] [--override]` sets the max context window —
+  `src/cli/commands/registry.ts:227-244`.
 
 ### Session and agent
 
-`/new` starts a conversation that keeps memory, `/fork` branches the current
-one, `/btw <question>` asks a side question after forking, `/rename`, `/pin`,
-`/unpin`, `/description`, `/personality`, `/system`, `/toolset`, and
-`/subagents` are the rest of this group —
-`src/cli/commands/registry.ts:232-362`.
+`/new`, `/fork`, `/btw <question>`, `/resume [conversation_id]`, `/cd <path>`,
+and `/exit` stay top-level. Agent identity and presentation moved into
+`/agent`: `/agent pin [name]`, `/agent unpin`, `/agent rename <name>`,
+`/agent describe <text>`, `/agent personality`, `/agent system`,
+`/agent toolset`, and `/agent subagents`. The conversation's own name is
+`/session rename <name>`; `/session logout` clears saved credentials and exits.
+`/agent profile <save|load|delete|usage> [name]` manages local agent profiles.
 
 ### Reflection
 
 `/dream` and `/reflect` take `[--recent N | --conversation ID ... | --auto]
 [--instruction TEXT]` and require an active agent: without a scope they throw
-`Reflection requires an active agent.` —
-`src/cli/commands/registry.ts:37-49`,
-`src/cli/commands/registry.ts:88-99`. They are the only commands with that
-explicit assertion — `src/cli/commands/registry.ts:41`. Reflection itself is
-managed locally; see the `unsupported` document.
+`Reflection requires an active agent.` — `src/cli/commands/registry.ts`. There is
+no `/reflection` alias any more. Reflection itself is managed locally; see the
+`unsupported` document.
 
 ### Settings and maintenance
 
 `/reload` re-reads settings and local mods only — a busy agent refuses it —
-`src/cli/app/use-submit-handler.ts:1013-1019`. `/secret`, `/memory-repository`,
-`/system-reminders`, and `/mods` delegate to their command modules —
-`src/cli/commands/registry.ts:316-385`. `/terminal` installs a Shift+Enter
-keybinding and records `shiftEnterKeybindingInstalled` in settings —
-`src/cli/commands/registry.ts:482-546`. `/statusline [request]` and `/title`
-adjust presentation, `/reasoning-tab [on|off|status]` toggles a shortcut, and
-`/experiments` opens the experiments selector —
-`src/cli/commands/registry.ts:299-306`,
-`src/cli/commands/registry.ts:449-481`.
+`src/cli/app/use-submit-handler.ts`. `/config secret`, `/memory remote`,
+`/config system-reminders`, and `/config mods` delegate to their command
+modules — `src/cli/commands/registry.ts`. `/config terminal` installs a
+Shift+Enter keybinding and records `shiftEnterKeybindingInstalled` in settings —
+`src/cli/commands/config-commands.ts`. `/config statusline [request]` and
+`/config title` adjust presentation, `/config reasoning-tab [on|off|status]`
+toggles a shortcut, and `/config experiments` opens the experiments selector —
+`src/cli/app/use-configuration-handlers.ts`, `src/cli/app/experiments-command.ts`.
+`/config font-width auto|narrow|wide` and
+`/config console-font auto|off|<face>` control terminal appearance —
+`src/cli/commands/config-commands.ts`. `/maintenance feedback`,
+`/maintenance bg`, `/maintenance workflows`, and
+`/maintenance install-github-app` cover the low-frequency commands.
 
-### Hidden commands
+### Full-screen pages
 
-Hidden commands still work but are kept out of autocomplete —
-`src/cli/commands/registry.ts:32`. The set includes `/help`, `/reflection`,
-`/cd`, `/clear-messages`, `/set-max-context`, `/link`, `/unlink`, `/stream`,
-`/pinned`, and `/profiles` —
-`src/cli/commands/registry.ts:100-105`,
-`src/cli/commands/registry.ts:203-229`,
-`src/cli/commands/registry.ts:599-677`.
+`/usage`, `/tabs`, `/close`, `/settings`, and `/messages history` belong to the
+full-screen shell. In the append shell they only print a line saying pages need
+it — `src/cli/app/shell-commands.ts:51-83`.
 
-Argument handling is uniform: `noArgs` commands fail when given an argument,
-unknown commands report `Unknown command`, and a handler that throws is wrapped
-as `Error executing <command>: ...` —
-`src/cli/commands/registry.ts:722-739`.
+### Removed names
+
+Eight top-level names are gone; the surviving command does the job:
+`/chdir` → `/cd <path>`, `/reflection` → `/reflect`,
+`/set-max-context` → `/context limit`, `/profiles` → `/agent pinned`,
+`/link` and `/unlink` → `/agent toolset`, `/conversations` → `/resume`, and
+`/profile` → `/agent profile <save|load|delete|usage> [name]`.
+
+### Argument handling
+
+`noArgs` commands fail when given an argument, unknown commands report
+`Unknown command`, and a handler that throws is wrapped as
+`Error executing <command>: ...` — `src/cli/commands/registry.ts`. The registry's
+`hidden` flag now marks internal hub targets and nothing a user types; `/help`
+is an ordinary, visible command.
 
 ## What changes machine state
 
@@ -423,10 +469,10 @@ Useful when deciding whether a command is safe to run reflexively.
 | Scheduler state | `cron add`, `cron delete`, `cron delete --all` | `~/.haruyuki/crons.json` — `src/cron/cron-file.ts:140-145` |
 | Mods | `mods package/update/enable/disable/remove`, `install npm:…`, `install git:…` | the global mods root — `src/mods/paths.ts:18-34` |
 | Channels | `channels install/configure/route/pair/bind` | `~/.haruyuki/channels/<channel>/` — `src/channels/config.ts:56-73` |
-| Pins | `agents create --pinned`, `/pin`, `/unpin` | `~/.haruyuki/settings.json` — `src/cli/subcommands/agents.ts:181-183` |
+| Pins | `agents create --pinned`, `/agent pin`, `/agent unpin` | `~/.haruyuki/settings.json` — `src/cli/subcommands/agents.ts:181-183` |
 | Provider credentials | `connect <provider>` | `<storage>/providers/auth.json` — `src/backend/local/local-provider-auth-store.ts:89-91` |
 | Secrets | `secret set`, `secret unset` | `<storage>/secrets/local-agent-secrets.json` — `src/utils/secrets-store.ts:144-152` |
-| Agent memory | `skills install/delete`, `memory backup/restore/export`, `/personality`, `/topic` | the memory repository — `src/cli/subcommands/skills.ts:932-941`, `src/agent/personality.ts:358-456` |
+| Agent memory | `skills install/delete`, `memory backup/restore/export`, `/agent personality`, `/topic` | the memory repository — `src/cli/subcommands/skills.ts:932-941`, `src/agent/personality.ts:358-456` |
 | Local store rewrite | `local-backend migrate-transcripts` | `<storage>/**/messages.jsonl`, each backed up first — `src/cli/subcommands/local-backend.ts:26-27` |
 | Background processes | `server`, `channel-gateway`, `mcp tools/schema/search/call`, `skills install` from git, `channels install` | `src/cli/subcommands/app-server.ts:239`, `src/cli/subcommands/mcp.ts:491-503`, `src/cli/subcommands/skills.ts:483-488` |
 

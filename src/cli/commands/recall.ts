@@ -291,7 +291,7 @@ export function applyRecallSettingsChange(
   const updated = readRecallSettings();
   // The transcript reads its tier from the display store rather than from settings
   // on every render, so a change has to be pushed to it — the same thing
-  // `/system-reminders` does for its own toggle. A headless process never renders
+  // `/config system-reminders` does for its own toggle. A headless process never renders
   // it and the write is inert.
   setRecallDisplay(updated.display);
   return updated;

@@ -4,10 +4,10 @@ import { type KeyBinding, namedKeyChords } from "@/cli/helpers/input-keys";
 /**
  * Multi-step overlays: the return stack, and the two keys that leave a step.
  *
- * Six overlays in this tree walk a sequence of screens by hand — `/connect`'s
+ * Six overlays in this tree walk a sequence of screens by hand — `/config connect`'s
  * seven (`list`, `input`, `methodSelect`, `profileSelect`, `multiInput`,
- * `options`, `oauthNameInput`), `/hooks`'s six, `/recall`'s three, `/mcp`'s
- * three, `/compaction`'s two, `/pin`'s two — and every one of them re-derives
+ * `options`, `oauthNameInput`), `/config hooks`'s six, `/recall`'s three, `/config mcp`'s
+ * three, `/compact config`'s two, `/pin`'s two — and every one of them re-derives
  * the same two answers: *where does Escape go from here*, and *what does Escape
  * mean when there is nowhere left to go*. They were written as a ladder of
  * `if (screen === ...)` inside one `useInput`, which is exactly the shape that
@@ -21,7 +21,7 @@ import { type KeyBinding, namedKeyChords } from "@/cli/helpers/input-keys";
  * Two things are deliberately *not* here, because they were not uniform:
  *
  * - A face whose **root** step wants Escape to do something first (the
- *   `/connect` list clears its filter before it will cancel) passes that
+ *   `/config connect` list clears its filter before it will cancel) passes that
  *   binding in `extra`, at the head of the table, and lets it return
  *   `declined` — the router then falls through to the rule above. That is the
  *   same head-of-table seam `list-bindings.ts` documents, used for the same
@@ -72,7 +72,7 @@ export function wizardBack<Id extends string>(
 
 /**
  * Drop steps until `id` is on top again, keeping it. This is how a step that
- * *finishes* a sub-flow returns to where it started (`/hooks` adds a hook from
+ * *finishes* a sub-flow returns to where it started (`/config hooks` adds a hook from
  * a five-deep trail and lands back on the hook list, not on the root) without
  * collapsing the steps below it — the user's Escape from there still walks back
  * the way they came.
@@ -156,7 +156,7 @@ export interface WizardController<Id extends string> extends WizardTrail<Id> {
  * `goTo`/`back`/`popTo` are stable across renders and use the functional state
  * update, so a key handler closing over them cannot pop from a stale trail —
  * which matters here more than usual, because two of these faces walk several
- * steps inside one handler (`/hooks` lands on the hook list from four steps
+ * steps inside one handler (`/config hooks` lands on the hook list from four steps
  * deep when an add succeeds).
  *
  * It does **not** claim an input scope: this hook binds nothing. The face

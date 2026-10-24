@@ -51,7 +51,7 @@ export const TerminalTitleWriter = memo(function TerminalTitleWriter({
 }: TerminalTitleWriterProps) {
   const lastManagedTerminalTitleRef = useRef<string | null>(null);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: configRefreshKey changes after /title persists settings; recompute the config on close.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: configRefreshKey changes after /config title persists settings; recompute the config on close.
   const terminalTitleItems = useMemo(
     () => resolveWindowTitleConfig(projectDirectory),
     [projectDirectory, configRefreshKey],

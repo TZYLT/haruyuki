@@ -1,20 +1,22 @@
 import { resolveWorkingDirectory } from "@/helpers/working-directory";
 
-export const CHDIR_USAGE = "Usage: /chdir <path> (alias: /cd <path>)";
+export const CHDIR_USAGE = "Usage: /cd <path>";
 
 export function parseChdirCommand(input: string): {
-  command: "/chdir" | "/cd";
+  command: "/cd";
   pathArg: string | null;
 } | null {
-  const match = input.trim().match(/^(\/chdir|\/cd)(?:\s+(.*))?$/i);
+  // `/cd` was removed when the command surface was consolidated: the helper
+  // keeps the one name that survived, so a retired spelling cannot quietly
+  // still work through it.
+  const match = input.trim().match(/^(\/cd)(?:\s+(.*))?$/i);
   if (!match) {
     return null;
   }
 
-  const command = match[1]?.toLowerCase() === "/cd" ? "/cd" : "/chdir";
   const rawPath = match[2]?.trim();
   return {
-    command,
+    command: "/cd",
     pathArg: rawPath ? stripMatchingQuotes(rawPath) : null,
   };
 }

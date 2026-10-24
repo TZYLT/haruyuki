@@ -45,7 +45,7 @@ export type AmbiguousWidthMode = "auto" | "narrow" | "wide";
  *
  * `default` is the fallback (narrow, the width table's own answer), `mode` is a
  * value the user or the settings file fixed, `probe` is the terminal's own answer.
- * It exists so `/font-width` and the session log can say what is in force instead
+ * It exists so `/config font-width` and the session log can say what is in force instead
  * of the user having to guess.
  */
 export type AmbiguousWidthSource = "default" | "mode" | "probe";

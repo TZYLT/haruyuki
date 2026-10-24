@@ -85,7 +85,7 @@ export function stampFreezeMetadata(
  *
  * The live values are always computed, so "the client stopped sending tools"
  * is an observation (an empty set) rather than an absence of information. An
- * observation that matches the frozen value is CLEARED: otherwise `/context-pending`
+ * observation that matches the frozen value is CLEARED: otherwise `/context pending`
  * would keep reporting drift that has since reverted.
  */
 export function establishFrozenCollections(input: {

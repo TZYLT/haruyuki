@@ -17,7 +17,7 @@ import { resolveUiV2Once } from "@/experiments/ui-v2";
  * uses for `alternateScreen`, so the shell and the buffer it draws into cannot
  * disagree. It is deliberately *not* re-read per render: the committed transcript
  * goes through an Ink `<Static>`, which re-prints on remount, so flipping the
- * shell mid-session would repaint history. `/experiments` and `HARUYUKI_UI_V2`
+ * shell mid-session would repaint history. `/config experiments` and `HARUYUKI_UI_V2`
  * therefore take effect on the next start; live switching belongs with the
  * panel/viewport work.
  */

@@ -12,7 +12,7 @@
 > - **可能出错**：AI 生成的内容可能包含**逻辑错误、过时信息、安全缺陷等风险**。本项目按 **"AS IS"** 提供，使用或再分发前请自行审查、测试与评估风险，开发者不对代码因本项目逻辑错误等产生的数据损失负责。
 > - **转述与再利用**：若你所在司法辖区或平台要求标注 AI 生成内容，请在转述、截图或再利用本项目内容时**保留本声明**。
 > - **不是官方发行**：本项目非 Letta, Inc. 官方产品，未经其审阅、测试或背书（详见 [八](#八许可与法律声明)）。
-> - **如果您发现了问题**：请在本项目 Haruyuki 的 [issue tracker](https://github.com/TZYLT/haruyuki/issues) 提交问题；会话内用 `/feedback` 写的报告只落本地日志，不会自动发到那里。
+> - **如果您发现了问题**：请在本项目 Haruyuki 的 [issue tracker](https://github.com/TZYLT/haruyuki/issues) 提交问题；会话内用 `/maintenance feedback` 写的报告只落本地日志，不会自动发到那里。
 > - 目前我（暂时的唯一的开发者）正在尽力人工把每一处代码审查修整清楚，但是能力和时间有限也请谅解，如果您有兴趣贡献本项目，请在 Github 提交 PR ，谢谢。
 
 本分支与 Letta, Inc. **无关联、未获其赞助或背书**，所有名称 "Letta" / "Letta Code" **仅用于指称代码来源**，一律不使用、不分发相关品牌符号名称。法律声明见 [NOTICE](NOTICE)，第三方组件许可见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)；侵权联系渠道见 [权利通知与侵权联系](#无关联声明权利通知与侵权联系)。
@@ -44,14 +44,14 @@ Haruyuki 把 agent 的记忆、身份与行为当作**可以长期演进的资�
 
 | 特色 | 说明 |
 |---|---|
-| **前缀冻结** | 提示/工具/记忆的改动**不会静默改写已发出的上下文**，不会让你不知不觉得到超级吓人的账单；`/context-pending` 看待应用项，`/recompile` 显式应用 |
-| **话题裁切** | `/topic`、`/topics`、`/compact` —— 按你选的话题边界裁上下文，而不是默认按比例丢尾巴 |
+| **前缀冻结** | 提示/工具/记忆的改动**不会静默改写已发出的上下文**，不会让你不知不觉得到超级吓人的账单；`/context pending` 看待应用项，`/recompile` 显式应用 |
+| **话题裁切** | `/topic`、`/topic list`、`/compact` —— 按你选的话题边界裁上下文，而不是默认按比例丢尾巴 |
 | **记忆即文件树** | MemFS：全部上下文（含记忆块）由 git 跟踪，可 diff、可回滚、可推到自己的远端仓库 |
-| **被动记忆** | 反思代理与你并行运行，自己整理记忆；有 `/reflect`、`/dream`、`/sleeptime` 控制触发方式 |
+| **被动记忆** | 反思代理与你并行运行，自己整理记忆；有 `/reflect`、`/dream`、`/memory config` 控制触发方式 |
 | **本地后端** | 单一后端模式（`--backend local`）：agent、会话、记忆、transcript 全在本机 |
 | **多 agent** | 任意 agent 可作为另一个 agent 的 subagent（含 fork、recall 等内置 subagent） |
 | **渠道与本地服务** | `haruyuki server` 提供本地 app-server ＋ WebSocket ＋ Slack/Telegram 渠道 |
-| **完全本地诊断** | 无遥测；崩溃与边界错误、`/feedback` 都只写本地日志 |
+| **完全本地诊断** | 无遥测；崩溃与边界错误、`/maintenance feedback` 都只写本地日志 |
 
 
 ## 二、相对上游改了什么
@@ -114,7 +114,7 @@ npm install -g haruyuki@beta    # 预发布版
 
 ```bash
 haruyuki connect openai        # 或 anthropic / z.ai 等，按提示填 API key
-# 也可以直接在会话里用 /connect
+# 也可以直接在会话里用 /config connect
 ```
 
 - 启动项目
@@ -126,7 +126,7 @@ haruyuki --new                                # 新建会话（保留 agent 记�
 haruyuki -p "用一句话说明你自己" --output-format json   # headless，带统计
 ```
 
-交互会话里先试这几条：`/help`、`/init`（初始化记忆）、`/model`（换模型）、`/skills`、`/doctor`。
+交互会话里先试这几条：`/help`、`/memory init`（初始化记忆）、`/model`（换模型）、`/skill`（列技能）、`/doctor`。
 
 **想学会怎么用**：直接让 agent 使用内置技能 `haruyuki-guide`，它会照着随包发布的参考文档，把软件的使用方法与基本原理讲给你听（而不是凭记忆编）。
 
@@ -138,7 +138,7 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 
 | 项 | 说明 |
 |---|---|
-| Windows | **自动反思默认关闭**（包含已保存的 `/sleeptime` 设置）；手动 `/reflect`、`/dream` 可用。要打开自动反思，在启动 Haruyuki 的进程里设 `HARUYUKI_ENABLE_WINDOWS_AUTO_REFLECTION=1` |
+| Windows | **自动反思默认关闭**（包含已保存的 `/memory config` 设置）；手动 `/reflect`、`/dream` 可用。要打开自动反思，在启动 Haruyuki 的进程里设 `HARUYUKI_ENABLE_WINDOWS_AUTO_REFLECTION=1` |
 | 沙箱 | 内核级文件沙箱只在 macOS（seatbelt）与 Linux（bwrap）可用；**Windows 没有内核后端**（代码事实，见 `src/sandbox/availability.ts`），跨 agent 记忆围栏退回到静态路径守卫 |
 | 遗留接口 | `--computer`、`--no-wait`、`--memfs-startup` 等参数仍在帮助里（上游兼容面），本分支不承诺其云端语义可用 |
 | 多平台验证缺失 | 本项目在 Windows 平台上开发，暂时没有其他系统的机器以供测试，如果您发现了问题，欢迎提交 issue |
@@ -148,7 +148,7 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 
 请关掉全屏外壳（指的是有标签页和鼠标点击的新TUI），或回退到旧版本。
 
-想用回旧的**追加式**外壳：使用 `/experiments` 命令，把 **full-screen TUI** 选项关掉。**下一次启动**生效。关掉之后是**兼容模式**：命令集、键位、输出语义与引入新外壳之前一致，只是没有上面那些新面。
+想用回旧的**追加式**外壳：使用 `/config experiments` 命令，把 **full-screen TUI** 选项关掉。**下一次启动**生效。关掉之后是**兼容模式**：命令集、键位、输出语义与引入新外壳之前一致，只是没有上面那些新面。
 
 如果你无法运行新版本的兼容模式，请整版回退，装回旧版本。配置、记忆与会话都在 `~/.haruyuki` 无需移动，安装 `0.2.1` 版本即可。如果您愿意可以提交 issue 帮助我们优化兼容问题，
 
@@ -195,7 +195,7 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 ## 七、关于您的数据、日志与隐私
 
 - 所有 agent 状态、记忆与 transcript 都在 `~/.haruyuki`（或 `HARUYUKI_HOME` 指向的位置）与你自己的 provider 账号里；本项目**绝不上报遥测**，也绝不把诊断内容发给第三方。
-- 崩溃/边界错误日志、`/feedback` 报告都写本地文件（`~/.haruyuki/logs/`）。
+- 崩溃/边界错误日志、`/maintenance feedback` 报告都写本地文件（`~/.haruyuki/logs/`）。
 - `haruyuki memory backup` 可在动记忆前留快照；记忆目录本身是 git 仓，任何改动都有提交记录，详见 [常用命令参考](https://github.com/TZYLT/haruyuki/blob/main/docs/commands.zh-CN.md)。
 - 与上游共用的 8 个 `LETTA_*` 环境变量只影响**本地路径与 provider 凭据**的读取，不产生出站调用。
 

@@ -224,7 +224,7 @@ export function reportPendingRecallNotice(ctx: CompactCommandContext): void {
 /**
  * Does this message belong to `/compact`? The command is intercepted before the
  * registry so the TUI can own the selector; every other channel still reaches
- * the registry entry. `/compaction` (mode settings) must not match.
+ * the registry entry. `/compact config` (mode settings) must not match.
  */
 export function isCompactCommand(message: string): boolean {
   return /^\/compact(\s|$)/.test(message.trim());
@@ -460,7 +460,7 @@ async function compactLocal(
       return fail(
         ctx,
         input,
-        `There is no topic block ${request.index}: this context has ${count}. Run /topics to list them, or /compact with no number to compress by the rate.`,
+        `There is no topic block ${request.index}: this context has ${count}. Run /topic list to list them, or /compact with no number to compress by the rate.`,
       );
     }
     return runTrim(

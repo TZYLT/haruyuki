@@ -1,7 +1,7 @@
 /**
  * What the diff face is showing, and nothing about how it looks.
  *
- * The face has three doors — `/experiments diffs`, the shell's `Ctrl+X d`, and a
+ * The face has three doors — `/config experiments diffs`, the shell's `Ctrl+X d`, and a
  * pending approval's `O` — and two of them are not inside the component that draws
  * it. The payload therefore lives in a module store: a door fills it in, the face
  * reads it, and no door has to thread props through the shell to reach a face it

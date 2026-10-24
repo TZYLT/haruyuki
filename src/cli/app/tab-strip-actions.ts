@@ -30,7 +30,7 @@ import { clearSelection } from "./viewport-selection";
  *
  * - **Select** either focuses a page (a view over a conversation that stays
  *   loaded) or switches conversations. While a turn is running the switch is
- *   *deferred* through the queued-action machinery `/agents` already uses, so the
+ *   *deferred* through the queued-action machinery `/agent list` already uses, so the
  *   click survives the turn. P0 ships that deferral; the shell's policy replaces
  *   it where the shell refuses instead.
  * - **Close** drops a view. A background conversation tab is just a handle, so

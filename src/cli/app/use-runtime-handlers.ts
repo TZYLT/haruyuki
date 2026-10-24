@@ -12,7 +12,7 @@ import { settingsManager } from "@/settings-manager";
  *
  * Two of the settings are not stored values but **running state**: `tokenStreaming`
  * and the reasoning Tab cycle live in `AppCoordinator`'s state, and their slash
- * commands (`/stream`, `/reasoning-tab`) flip the state *and* persist the
+ * commands (`/config stream`, `/config reasoning-tab`) flip the state *and* persist the
  * preference in the same move. A page that only wrote the file would show a value
  * the process is not using until the next start — the exact trap 《38》§12.1e 3
  * names — and it cannot reach the setters itself, because a page is a child of the

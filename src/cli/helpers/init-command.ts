@@ -1,5 +1,5 @@
 /**
- * Helpers for the /init slash command.
+ * Helpers for the /memory init slash command.
  *
  * Pure functions live here; App.tsx keeps the orchestration
  * (commandRunner, processConversation, setCommandRunning, etc.)

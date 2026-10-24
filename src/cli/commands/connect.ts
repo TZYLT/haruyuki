@@ -124,22 +124,22 @@ function parseArgs(msg: string): string[] {
 
 function formatConnectUsage(): string {
   return [
-    "Usage: /connect <provider> [options]",
+    "Usage: /config connect <provider> [options]",
     "",
     "Available providers:",
     `  • ${listConnectProvidersForHelp().join("\n  • ")}`,
     "",
     "Examples:",
-    "  /connect chatgpt",
-    "  /connect chatgpt --name chatgpt-work",
-    "  /connect grok",
-    "  /connect codex",
-    "  /connect anthropic <api_key>",
-    "  /connect openai <api_key>",
-    "  /connect openai-compatible --base-url http://localhost:8000/v1 [--api-key <api_key>]",
-    "  /connect lmstudio --base-url http://127.0.0.1:1234/v1 --timeout 600s",
-    "  /connect bedrock iam --access-key <id> --secret-key <key> --region <region>",
-    "  /connect bedrock profile --profile <name> --region <region>",
+    "  /config connect chatgpt",
+    "  /config connect chatgpt --name chatgpt-work",
+    "  /config connect grok",
+    "  /config connect codex",
+    "  /config connect anthropic <api_key>",
+    "  /config connect openai <api_key>",
+    "  /config connect openai-compatible --base-url http://localhost:8000/v1 [--api-key <api_key>]",
+    "  /config connect lmstudio --base-url http://127.0.0.1:1234/v1 --timeout 600s",
+    "  /config connect bedrock iam --access-key <id> --secret-key <key> --region <region>",
+    "  /config connect bedrock profile --profile <name> --region <region>",
   ].join("\n");
 }
 
@@ -151,7 +151,7 @@ function formatUnknownProviderError(
     `Error: Unknown provider "${provider}"`,
     "",
     `Available providers: ${listConnectProviderTokens(target).join(", ")}`,
-    "Usage: /connect <provider> [options]",
+    "Usage: /config connect <provider> [options]",
   ].join("\n");
 }
 
@@ -211,22 +211,22 @@ function parseBedrockFlags(args: string[]): {
 
 function formatBedrockUsage(): string {
   return [
-    "Usage: /connect bedrock <method> [options]",
+    "Usage: /config connect bedrock <method> [options]",
     "",
     "Methods:",
     "  iam     --access-key <id> --secret-key <key> --region <region>",
     "  profile --profile <name> --region <region>",
     "",
     "Examples:",
-    "  /connect bedrock iam --access-key AKIA... --secret-key ... --region us-east-1",
-    "  /connect bedrock profile --profile default --region us-east-1",
+    "  /config connect bedrock iam --access-key AKIA... --secret-key ... --region us-east-1",
+    "  /config connect bedrock profile --profile default --region us-east-1",
   ].join("\n");
 }
 
 function formatApiKeyUsage(provider: ResolvedConnectProvider): string {
   if (defaultConnectApiKey(provider)) {
     return [
-      `Usage: /connect ${provider.canonical} [api_key]`,
+      `Usage: /config connect ${provider.canonical} [api_key]`,
       "",
       `Connect to ${provider.byokProvider.displayName}. API key is optional for this local provider.`,
       isConnectBaseURLRequired(provider)
@@ -235,7 +235,7 @@ function formatApiKeyUsage(provider: ResolvedConnectProvider): string {
     ].join("\n");
   }
   return [
-    `Usage: /connect ${provider.canonical} <api_key>`,
+    `Usage: /config connect ${provider.canonical} <api_key>`,
     "",
     `Connect to ${provider.byokProvider.displayName} by providing your API key.`,
     "Optional: --base-url <url> --timeout <ms|duration|false>",
@@ -383,8 +383,8 @@ function formatZaiCodingPlanPrompt(apiKey?: string): string {
     "",
     "Do you have a Z.ai Coding plan?",
     "",
-    `  • Coding plan:  /connect zai-coding${keyHint}`,
-    `  • Regular API:  /connect zai${keyHint}`,
+    `  • Coding plan:  /config connect zai-coding${keyHint}`,
+    `  • Regular API:  /config connect zai${keyHint}`,
   ].join("\n");
 }
 
@@ -402,7 +402,7 @@ async function handleConnectChatGPT(
       ctx.buffersRef,
       ctx.refreshDerived,
       msg,
-      `Already connected to ChatGPT via OAuth as '${providerName}'.\n\nOpen /connect and select ChatGPT / Codex plan in the current tab to disconnect or re-authenticate.`,
+      `Already connected to ChatGPT via OAuth as '${providerName}'.\n\nOpen /config connect and select ChatGPT / Codex plan in the current tab to disconnect or re-authenticate.`,
       false,
     );
     return;
@@ -496,7 +496,7 @@ async function handleConnectLocalOAuthProvider(
       ctx.buffersRef,
       ctx.refreshDerived,
       msg,
-      `Already connected to ${provider.byokProvider.displayName}.\n\nOpen /connect and select it in the Local tab to disconnect or re-authenticate.`,
+      `Already connected to ${provider.byokProvider.displayName}.\n\nOpen /config connect and select it in the Local tab to disconnect or re-authenticate.`,
       false,
     );
     return;
@@ -580,7 +580,7 @@ async function handleConnectCloudOAuthProvider(
       ctx.buffersRef,
       ctx.refreshDerived,
       msg,
-      `Already connected to ${provider.byokProvider.displayName}. Open /connect to disconnect or re-authenticate.`,
+      `Already connected to ${provider.byokProvider.displayName}. Open /config connect to disconnect or re-authenticate.`,
       false,
     );
     return;
@@ -904,7 +904,7 @@ export async function handleConnect(
           ctx.buffersRef,
           ctx.refreshDerived,
           msg,
-          `${parsed.error}\n\nUsage: /connect chatgpt [--name <provider-name>]`,
+          `${parsed.error}\n\nUsage: /config connect chatgpt [--name <provider-name>]`,
           false,
         );
         return;

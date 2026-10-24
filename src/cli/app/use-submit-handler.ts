@@ -109,9 +109,9 @@ import { debugWarn } from "@/utils/debug";
 import { detectShellContext } from "@/utils/shell-context";
 import { extractTaskNotificationsForDisplay } from "@/utils/task-notifications";
 import { switchCurrentRuntimeWorkingDirectory } from "@/websocket/listener/cwd-change";
-
 import {
-  aliasBareExitCommand,
+  reportRoutedInputError,
+  routeSlashCommandInput,
   shouldSlashCommandBypassQueue,
 } from "./command-routing";
 import { buildTextParts } from "./content-parts";
@@ -269,7 +269,15 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
       const { notifications: taskNotifications, cleanedText } =
         extractTaskNotificationsForDisplay(msg);
       const userTextForInput = cleanedText.trim();
-      const routedUserText = aliasBareExitCommand(userTextForInput);
+      // Hubs resolve here, before anything looks at the command again: the
+      // queue-bypass rules and the dispatch chain below then see the internal
+      // form, and a retired spelling stops with the command that replaced it.
+      const routed = routeSlashCommandInput(userTextForInput);
+      if (routed.kind === "error") {
+        const { message } = routed;
+        return reportRoutedInputError(commandRunner, userTextForInput, message);
+      }
+      const routedUserText = routed.text;
       const isSystemOnly =
         taskNotifications.length > 0 && userTextForInput.length === 0;
       const clientPreferences = tuiSubmitClientPreferences(
@@ -405,7 +413,13 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
         });
 
       if (isAgentBusy() && isSlashCommand && !shouldBypassQueue) {
-        const attemptedCommand = routedUserText.split(/\s+/)[0] || "/";
+        // Name what the user typed, not the internal target the hub resolved to:
+        // "/logout is disabled" would be a name they cannot find in the docs.
+        const attemptedCommand =
+          userTextForInput.trim().split(/\s+/)[0] ||
+          "" ||
+          routedUserText.split(/\s+/)[0] ||
+          "/";
         const disabledMessage = `'${attemptedCommand}' is disabled while the agent is running.`;
         const cmd = commandRunner.start(routedUserText, disabledMessage);
         cmd.fail(disabledMessage);
@@ -628,8 +642,8 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
               },
             );
             const request = args
-              ? `The user ran \`/mods generate-env ${args}\`. Use the loaded skill to help them generate, review, validate, or improve a mod learning env JSON.`
-              : "The user ran `/mods generate-env` without arguments. Use the loaded skill's bare behavior for mod learning env generation.";
+              ? `The user ran \`/config mods generate-env ${args}\`. Use the loaded skill to help them generate, review, validate, or improve a mod learning env JSON.`
+              : "The user ran `/config mods generate-env` without arguments. Use the loaded skill's bare behavior for mod learning env generation.";
 
             cmd.finish("Running mod env generation...", true);
             await processConversationWithQueuedApprovals([
@@ -644,7 +658,9 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
             ]);
           } catch (error) {
             const errorDetails = formatErrorDetails(error, agentId);
-            cmd.fail(`Failed to run /mods generate-env: ${errorDetails}`);
+            cmd.fail(
+              `Failed to run /config mods generate-env: ${errorDetails}`,
+            );
           } finally {
             setCommandRunning(false);
           }
@@ -699,11 +715,13 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           return { submitted: true };
         }
 
-        // Special handling for /compaction command - opens compaction mode settings
-        if (trimmed === "/compaction") {
+        // Compaction settings. The user-facing form is `/compact config`; the
+        // internal `/compaction` name is what that resolves to (hubs.ts), and it
+        // stays reachable so the branch does not depend on the rewrite.
+        if (trimmed === "/compaction" || trimmed === "/compact config") {
           openOverlay(
             "compaction",
-            "/compaction",
+            trimmed,
             "Opening compaction settings...",
             "Compaction settings dismissed",
           );
@@ -1093,8 +1111,8 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
               },
             );
             const request = args
-              ? `The user ran \`/statusline ${args}\`. Use the loaded skill to help them create, edit, or migrate their Haruyuki statusline mod.`
-              : "The user ran `/statusline` without arguments. Use the loaded skill's bare `/statusline` behavior.";
+              ? `The user ran \`/config statusline ${args}\`. Use the loaded skill to help them create, edit, or migrate their Haruyuki statusline mod.`
+              : "The user ran `/config statusline` without arguments. Use the loaded skill's bare `/config statusline` behavior.";
 
             cmd.finish("Running statusline setup...", true);
             await processConversationWithQueuedApprovals([
@@ -1331,7 +1349,7 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
         }
 
         // Special handling for /stream command - toggle and save
-        if (msg.trim() === "/stream") {
+        if (trimmed === "/stream") {
           const newValue = !tokenStreamingEnabled;
 
           // Immediately add command to transcript with "running" phase and loading message
@@ -1712,38 +1730,25 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           return await handleCompactCommand(msg, ctx);
         }
 
-        // Special handling for /rename command - rename agent or conversation
-        if (msg.trim().startsWith("/rename")) {
-          const parts = msg.trim().split(/\s+/);
+        // Special handling for /rename command - rename agent or conversation.
+        // Reached as `/agent rename` and `/session rename`; `/rename` itself is
+        // retired at the routing boundary.
+        if (trimmed.startsWith("/rename")) {
+          const parts = trimmed.split(/\s+/);
           const subcommand = parts[1]?.toLowerCase();
           const cmd = commandRunner.start(msg.trim(), "Processing rename...");
-
-          if (subcommand === "help") {
-            const output = [
-              "/rename help",
-              "",
-              "Rename the current agent or conversation.",
-              "",
-              "USAGE",
-              "  /rename agent [name]      — rename the agent",
-              "  /rename convo [name]      — rename a non-default convo, or auto-generate when omitted",
-              "  /rename help              — show this help",
-            ].join("\n");
-            cmd.finish(output, true);
-            return { submitted: true };
-          }
 
           if (
             !subcommand ||
             (subcommand !== "agent" && subcommand !== "convo")
           ) {
-            cmd.fail("Usage: /rename agent [name] or /rename convo [name]");
+            cmd.fail("Usage: /agent rename <name> (or /session rename <name>)");
             return { submitted: true };
           }
 
           const newValue = parts.slice(2).join(" ");
           if (subcommand === "agent" && !newValue) {
-            cmd.fail("Please provide a name: /rename agent <name>");
+            cmd.fail("Please provide a name: /agent rename <name>");
             return { submitted: true };
           }
 
@@ -1826,8 +1831,8 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
         }
 
         // Special handling for /description command - update agent description
-        if (msg.trim().startsWith("/description")) {
-          const parts = msg.trim().split(/\s+/);
+        if (trimmed.startsWith("/description")) {
+          const parts = trimmed.split(/\s+/);
           const newDescription = parts.slice(1).join(" ");
           const cmd = commandRunner.start(
             msg.trim(),
@@ -1921,7 +1926,7 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
         }
 
         // Special handling for /bg command - show background shell processes
-        if (msg.trim() === "/bg") {
+        if (trimmed === "/bg") {
           const { backgroundProcesses } = await import(
             "@/tools/impl/process_manager"
           );
@@ -1986,7 +1991,7 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
               output = `Memory filesystem is enabled.\nPath: ${memoryDir}`;
             } else {
               output =
-                "Memory filesystem is disabled. Run `/memfs enable` to enable.";
+                "Memory filesystem is disabled. Run `/memory memfs enable` to enable.";
             }
             cmd.finish(output, true);
             return { submitted: true };
@@ -2033,7 +2038,7 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
             // Check if memfs is enabled for this agent
             if (!isActiveMemfsEnabled(agentId)) {
               cmd.fail(
-                "Memory filesystem is disabled. Run `/memfs enable` first.",
+                "Memory filesystem is disabled. Run `/memory memfs enable` first.",
               );
               return { submitted: true };
             }
@@ -2133,7 +2138,7 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
                 cmdId,
                 getBackend().capabilities.localMemfs
                   ? `Memory filesystem reset.\nBackup moved to ${backupDir}\nInitialized a fresh local MemFS repo.`
-                  : `Memory filesystem reset.\nBackup moved to ${backupDir}\nRun \`/memfs sync\` to repopulate from API.`,
+                  : `Memory filesystem reset.\nBackup moved to ${backupDir}\nRun \`/memory memfs sync\` to repopulate from API.`,
                 true,
                 msg,
               );
@@ -2155,16 +2160,16 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
 
           // Unknown subcommand
           cmd.fail(
-            `Unknown subcommand: "${subcommand}". Run /memfs help for usage.`,
+            `Unknown subcommand: "${subcommand}". Run /memory memfs help for usage.`,
           );
           return { submitted: true };
         }
 
-        // /skills - browse available skills overlay
+        // The frame names what the user typed; the hub rewrites `/skill` here.
         if (trimmed === "/skills") {
           openOverlay(
             "skills",
-            "/skills",
+            msg.trim() || "/skill",
             "Opening skills browser...",
             "Skills browser dismissed",
           );

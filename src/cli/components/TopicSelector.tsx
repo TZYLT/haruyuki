@@ -7,7 +7,7 @@
  * "Cancel". Every block is selectable, including the first one: the compression
  * rate caps what any cut may keep, so "keep everything" resolves to the rate's
  * own cut instead of being a dead row. The row copy itself comes from
- * `helpers/topic-list.ts` so the picker and `/topics` describe a boundary the
+ * `helpers/topic-list.ts` so the picker and `/topic list` describe a boundary the
  * same way.
  */
 import { memo, useCallback, useMemo, useRef } from "react";

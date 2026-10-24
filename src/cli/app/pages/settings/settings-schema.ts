@@ -45,8 +45,8 @@ import type {
  *   knobs go through `persistReflectionSettingsForAgent`, which writes both the
  *   local-project and global layers and mirrors the legacy key.
  * - **Entries with no safe writer are listed read-only with the command that has
- *   one** (`/title`, `/toolset`, `/system`, `/context-limit`, `/compaction`,
- *   `/memfs`). They belong in a page whose job is "one place to see every value"
+ *   one** (`/config title`, `/agent toolset`, `/system`, `/context limit`, `/compact config`,
+ *   `/memory memfs`). They belong in a page whose job is "one place to see every value"
  *   (§12.1b), and a row that says *why* it cannot be changed is information, not
  *   noise.
  * - **Nothing is invented.** A value that cannot be read synchronously is not
@@ -54,7 +54,7 @@ import type {
  *
  * The one thing deliberately absent is the compaction pair (`mode`, `percentage`):
  * both need the agent's backend record and an `updateAgent` round trip, and a
- * read-only pair of "(unreadable)" rows would be worse than the `/compaction` face that
+ * read-only pair of "(unreadable)" rows would be worse than the `/compact config` face that
  * already owns them.
  */
 
@@ -287,7 +287,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
           ),
       ),
     // The runtime flag is the composer's, not the page's: the shell flips it and
-    // persists it together, exactly as `/reasoning-tab` does (`use-submit-handler`).
+    // persists it together, exactly as `/config reasoning-tab` does (`use-submit-handler`).
     write: (ctx, value) => {
       if (ctx.setRuntimeFlag)
         ctx.setRuntimeFlag("reasoningTabCycle", value === "true");

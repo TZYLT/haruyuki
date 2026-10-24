@@ -764,7 +764,7 @@ export function formatErrorDetails(
     }
 
     if (hasErrorReason(e, "model-unknown", reasons)) {
-      return `The selected model is not currently available for this account or provider. Run /model and press R to refresh available models, then choose an available model or connect a provider with /connect.`;
+      return `The selected model is not currently available for this account or provider. Run /model and press R to refresh available models, then choose an available model or connect a provider with /config connect.`;
     }
 
     if (hasErrorReason(e, "context-window-size-not-supported", reasons)) {

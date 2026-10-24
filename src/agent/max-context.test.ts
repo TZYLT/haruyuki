@@ -39,7 +39,7 @@ describe("max context command helpers", () => {
       "Unknown option: --force",
     );
     expect(() => parseSetMaxContextArgs("10000 20000")).toThrow(
-      "Usage: /context-limit [tokens] [--override]",
+      "Usage: /context limit [tokens] [--override]",
     );
   });
 
@@ -179,7 +179,7 @@ describe("max context command helpers", () => {
           currentContextWindow: 131_072,
         }),
       ).rejects.toThrow(
-        "No catalog default for model custom/model, so reset is unavailable. Pass an explicit value: /context-limit 131072.",
+        "No catalog default for model custom/model, so reset is unavailable. Pass an explicit value: /context limit 131072.",
       );
 
       const explicitResult = await applySetMaxContext({

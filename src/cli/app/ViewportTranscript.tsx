@@ -176,7 +176,7 @@ export function ViewportTranscript(props: ViewportTranscriptProps) {
   // asks for more rows than are left, and the pinned frame makes Yoga take them back
   // from the band. Everything inside the band — the clip rectangle, the rail's rows,
   // and the window itself — has to follow the *laid-out* box, or it paints below the
-  // band's real bottom: the machine photographed a `/font-width` help line inside the
+  // band's real bottom: the machine photographed a `/config font-width` help line inside the
   // input row, with the rail's divider running down the composer beside it.
   //
   // The measurement is a frame behind like the chrome's, but it **publishes**, so the

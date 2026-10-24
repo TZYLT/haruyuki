@@ -247,7 +247,7 @@ export function ProviderSelector({
    * Escape from a step that has somewhere to go back to: this face's own fields
    * are cleared first (the wizard's stack only knows the path, not what a step
    * holds), then the trail is popped. The conditional escapes the hand-written
-   * ladder had — `/connect`'s multi-field step returns to the method picker only
+   * ladder had — `/config connect`'s multi-field step returns to the method picker only
    * when it was the picker that opened it — are gone: the trail *is* the path
    * that was taken.
    */

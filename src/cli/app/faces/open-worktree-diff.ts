@@ -6,7 +6,7 @@ import { resolveUiV2Once } from "@/experiments/ui-v2";
 import { setDiffFaceSource } from "./diff-face-store";
 
 /**
- * The diff face's first door: `/experiments diffs` picked a worktree.
+ * The diff face's first door: `/config experiments diffs` picked a worktree.
  *
  * The face opens **before** git answers, with the command row saying what is being
  * read — a worktree diff can take a second on a large repository, and a face that
@@ -37,7 +37,7 @@ export async function openWorktreeDiffFace(
     /**
      * The row the caller already started for this request, if any.
      *
-     * The worktree selector's own row (`/experiments diffs`) is the one that must
+     * The worktree selector's own row (`/config experiments diffs`) is the one that must
      * carry the result in both shells: starting a second row would print two lines
      * for one command, which the compatibility mode must not do (《33》§12: legacy
      * stays frozen).
@@ -57,7 +57,7 @@ export async function openWorktreeDiffFace(
   setDiffFaceSource(null);
   const command = deps.openOverlay(
     "diff",
-    "/experiments diffs",
+    "/config experiments diffs",
     `Reading the diff of ${label}…`,
     "Diff closed",
   );

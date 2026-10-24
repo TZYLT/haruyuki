@@ -8,6 +8,12 @@ import {
 import { renderWorkflowTree } from "@/cli/helpers/workflow-display";
 import { resolveUiV2Once } from "@/experiments/ui-v2";
 import { listWorkflowExecutions } from "@/tools/workflow/execution-registry";
+import {
+  handleConsoleFontCommand,
+  handleFontWidthCommand,
+  handleTerminalCommand,
+} from "./config-commands";
+import { formatHubHelpFor } from "./hubs";
 import { handleMemoryRepositoryCommand } from "./memory-repository";
 import { handleRecallCommand } from "./recall";
 import { handleSecretCommand } from "./secret";
@@ -54,6 +60,13 @@ interface Command {
   hidden?: boolean; // Hidden commands don't show in autocomplete but still work
   order?: number; // Lower numbers appear first in autocomplete (default: 100)
   noArgs?: boolean; // If true, reject any arguments passed to this command
+  /**
+   * The command is the internal target of a hub subcommand, not something a user
+   * types (`/agent pin` runs `/pin`). Kept so a missed rewrite degrades to a
+   * known command instead of being sent to the model as chat text; never listed.
+   * `HUB_TARGET_COMMANDS` below is the single place that sets it.
+   */
+  internal?: boolean;
 }
 
 async function handleReflectionCommand(
@@ -71,6 +84,48 @@ async function handleReflectionCommand(
 }
 
 export const commands: Record<string, Command> = {
+  // === Hubs (《42-1》 §2–§8) ===
+  // A hub handler never runs the action: `resolveHubInput` (hubs.ts) rewrites the
+  // invocation to its internal target before dispatch. The handler answers the
+  // subcommand list, which is what a bare hub, an unknown subcommand and a
+  // direct `executeCommand("/agent")` all need it for.
+  "/agent": {
+    desc: "Agent: browse, pin, rename, describe, system, personality, tools",
+    args: "<list|pin|unpin|pinned|rename|describe|system|personality|toolset|subagents|ade|profile>",
+    order: 10,
+    handler: () => formatHubHelpFor("/agent"),
+  },
+  "/session": {
+    desc: "Session: rename this conversation, log out",
+    args: "<rename|logout>",
+    order: 20.5,
+    handler: () => formatHubHelpFor("/session"),
+  },
+  "/messages": {
+    desc: "Messages: history, clear",
+    args: "<history|clear>",
+    order: 32.85,
+    handler: () => formatHubHelpFor("/messages"),
+  },
+  "/skill": {
+    desc: "Skill: list the available skills, or create a new one",
+    args: "<list|skill-creator>",
+    order: 28.5,
+    handler: () => formatHubHelpFor("/skill"),
+  },
+  "/config": {
+    desc: "Config: providers, MCP, hooks, secrets, terminal, appearance",
+    args: "<connect|mcp|hooks|secret|experiments|mods|statusline|title|terminal|font-width|console-font|stream|reasoning-tab|system-reminders>",
+    order: 32.6,
+    handler: () => formatHubHelpFor("/config"),
+  },
+  "/maintenance": {
+    desc: "Maintenance: feedback, background shells, workflows, GitHub app",
+    args: "<feedback|bg|workflows|install-github-app>",
+    order: 36,
+    handler: () => formatHubHelpFor("/maintenance"),
+  },
+
   // === Page 1: Most commonly used (order 10-19) ===
   "/agents": {
     desc: "Browse agents (pinned, Haruyuki, all)",
@@ -119,12 +174,6 @@ export const commands: Record<string, Command> = {
     order: 50,
     handler: handleReflectionCommand,
   },
-  "/reflection": {
-    desc: "Alias for /reflect",
-    args: "[--recent N | --conversation ID ... | --auto] [--instruction TEXT]",
-    hidden: true,
-    handler: handleReflectionCommand,
-  },
   "/skills": {
     desc: "Browse available skills",
     order: 28,
@@ -143,13 +192,10 @@ export const commands: Record<string, Command> = {
     },
   },
   "/memory": {
-    desc: "View your agent's memory",
+    desc: "Memory: view, init, filesystem backend, remote, palace, recall",
+    args: "<recall|init|memfs|remote|palace|config>",
     order: 15,
-    noArgs: true,
-    handler: () => {
-      // Handled specially in App.tsx to open memory viewer
-      return "Opening memory viewer...";
-    },
+    handler: () => formatHubHelpFor("/memory"),
   },
   "/palace": {
     desc: "Open the Memory Palace in your browser",
@@ -231,19 +277,10 @@ export const commands: Record<string, Command> = {
       return "Resetting agent messages...";
     },
   },
-  "/chdir": {
-    desc: "Change working directory for this TUI session (/chdir <path>)",
+  "/cd": {
+    desc: "Change working directory for this TUI session (/cd <path>)",
     args: "<path>",
     order: 18.5,
-    handler: () => {
-      // Handled specially in App.tsx to switch local cwd
-      return "Changing working directory...";
-    },
-  },
-  "/cd": {
-    desc: "Alias for /chdir",
-    args: "<path>",
-    hidden: true,
     handler: () => {
       // Handled specially in App.tsx to switch local cwd
       return "Changing working directory...";
@@ -436,13 +473,10 @@ export const commands: Record<string, Command> = {
     handler: () => pageCommandAnswer("Opening settings..."),
   },
   "/context": {
-    desc: "Show context window usage",
+    desc: "Context: usage, limit, pending prefix changes",
+    args: "<limit|pending>",
     order: 33.5,
-    noArgs: true,
-    handler: () => {
-      // Handled specially in App.tsx to display context usage
-      return "Fetching context usage...";
-    },
+    handler: () => formatHubHelpFor("/context"),
   },
   "/recompile": {
     desc: "Recompile current agent + conversation (warning: this will evict the cache and increase costs)",
@@ -473,7 +507,6 @@ export const commands: Record<string, Command> = {
   "/help": {
     desc: "Show available commands",
     order: 35,
-    hidden: true, // Redundant with improved autocomplete, but still works if typed
     noArgs: true,
     handler: () => {
       // Handled specially in App.tsx to open help dialog
@@ -524,229 +557,21 @@ export const commands: Record<string, Command> = {
   },
   "/terminal": {
     desc: "Setup terminal shortcuts [--revert]",
+    args: "[--revert]",
     order: 37,
-    handler: async (args: string[]) => {
-      if (args.includes("help")) {
-        return [
-          "/terminal help",
-          "",
-          "Setup terminal keyboard shortcuts.",
-          "",
-          "USAGE",
-          "  /terminal            — install Shift+Enter keybinding",
-          "  /terminal --revert   — remove keybinding",
-          "  /terminal help       — show this help",
-        ].join("\n");
-      }
-
-      const {
-        detectTerminalType,
-        getKeybindingsPath,
-        installKeybinding,
-        removeKeybinding,
-      } = await import("@/cli/utils/terminal-keybinding-installer");
-      const { updateSettings } = await import("@/settings");
-
-      const isRevert = args.includes("--revert") || args.includes("--remove");
-      const terminal = detectTerminalType();
-
-      if (!terminal) {
-        return "Not running in a VS Code-like terminal. Shift+Enter keybinding is not needed.";
-      }
-
-      const terminalName = {
-        vscode: "VS Code",
-        cursor: "Cursor",
-        windsurf: "Windsurf",
-      }[terminal];
-
-      const keybindingsPath = getKeybindingsPath(terminal);
-      if (!keybindingsPath) {
-        return `Could not determine keybindings.json path for ${terminalName}`;
-      }
-
-      if (isRevert) {
-        const result = removeKeybinding(keybindingsPath);
-        if (!result.success) {
-          return `Failed to remove keybinding: ${result.error}`;
-        }
-        await updateSettings({ shiftEnterKeybindingInstalled: false });
-        return `Removed Shift+Enter keybinding from ${terminalName}`;
-      }
-
-      const result = installKeybinding(keybindingsPath);
-      if (!result.success) {
-        return `Failed to install keybinding: ${result.error}`;
-      }
-
-      if (result.alreadyExists) {
-        return `Shift+Enter keybinding already exists in ${terminalName}`;
-      }
-
-      await updateSettings({ shiftEnterKeybindingInstalled: true });
-      return `Installed Shift+Enter keybinding for ${terminalName}\nLocation: ${keybindingsPath}`;
-    },
+    handler: (args: string[]) => handleTerminalCommand(args),
   },
   "/font-width": {
     desc: "How wide this terminal draws ambiguous characters (auto probes it)",
     args: "auto|narrow|wide",
     order: 38,
-    handler: async (args: string[]) => {
-      const requested = (args[0] ?? "").toLowerCase();
-      const {
-        getAmbiguousWidth,
-        getAmbiguousWidthMode,
-        getAmbiguousWidthSource,
-        setAmbiguousWidthMode,
-      } = await import("@/cli/helpers/char-width");
-      // Every answer starts with what is in force. The machine's report was
-      // "changing the font width has no visible effect": a one-column difference in a
-      // dozen rows of prose is not something an eye can confirm, so the command has to
-      // say the number rather than let the frame be the evidence.
-      const source =
-        getAmbiguousWidthSource() === "probe"
-          ? "the terminal's own answer"
-          : getAmbiguousWidthSource() === "mode"
-            ? "pinned by this command"
-            : "the width table's default";
-      const inForce = `In force: ${getAmbiguousWidth()} column(s) — ${source}${getAmbiguousWidthMode() === "auto" ? " (auto)" : ` (${getAmbiguousWidthMode()})`}.`;
-      if (
-        requested !== "auto" &&
-        requested !== "narrow" &&
-        requested !== "wide"
-      ) {
-        return [
-          inForce,
-          "",
-          "/font-width auto | narrow | wide",
-          "",
-          "Unicode calls `— … ≥ → · “ ”` *ambiguous*: a Western monospace font draws",
-          "them one column, a CJK font (or a CJK fallback) draws them two. The app",
-          "asks the terminal at startup and after each resize; this command pins the",
-          "answer for a terminal that is wrong or will not reply.",
-          "",
-          "  auto    — ask the terminal (the default)",
-          "  narrow  — one column, e.g. Consolas",
-          "  wide    — two columns, e.g. 等宽楷体",
-        ].join("\n");
-      }
-      const { startAmbiguousWidthProbe } = await import(
-        "@/cli/helpers/ambiguous-width-probe"
-      );
-      const previous = getAmbiguousWidth();
-      setAmbiguousWidthMode(requested);
-      try {
-        // The same writer `/terminal` uses: read-merge-write of
-        // `~/.haruyuki/settings.json`, so keys this module does not model survive.
-        const { updateSettings } = await import("@/settings");
-        await updateSettings({ ambiguousCharWidth: requested });
-      } catch {
-        // An unreadable settings file still leaves the session value in force.
-      }
-      if (requested === "auto") {
-        const started = startAmbiguousWidthProbe();
-        return started.kind === "armed"
-          ? `${inForce}\nProbing the terminal… (rows and selections follow its answer)`
-          : `${inForce}\nNo terminal to ask; keeping the width table's answer.`;
-      }
-      const now = getAmbiguousWidth();
-      const change =
-        now === previous
-          ? "unchanged"
-          : `was ${previous}, so every row is being laid out again`;
-      return `${inForce}\n${requested}: ${now} column(s) — ${change}; saved to settings.`;
-    },
+    handler: (args: string[]) => handleFontWidthCommand(args),
   },
   "/console-font": {
     desc: "Hold the Windows console font at the configured face",
     args: "auto|off|<face>",
     order: 38.5,
-    handler: async (args: string[]) => {
-      const { parseConsoleFontMode } = await import(
-        "@/cli/helpers/console-font"
-      );
-      const {
-        getConsoleFontGuardStatus,
-        restartConsoleFontGuardRuntime,
-        stopConsoleFontGuardRuntime,
-      } = await import("@/cli/helpers/console-font-bun");
-
-      const describe = (
-        status: ReturnType<typeof getConsoleFontGuardStatus>,
-      ): string[] => {
-        const mode =
-          typeof status.mode === "object"
-            ? status.mode.pinnedFace
-            : status.mode;
-        const standing =
-          status.mode === "off"
-            ? " (off)"
-            : status.running
-              ? ` — restoring ${status.targetFace}`
-              : ` — not running (${status.reason ?? "not started"})`;
-        // The command answers with what is in force first, the way `/font-width`
-        // does: a repair that happened once is invisible on screen, so the state
-        // has to be written down rather than left to the frame.
-        const lines = [`In force: ${mode}${standing}`];
-        if (status.baseline !== null) {
-          lines.push(
-            `This session started on: ${status.baseline.face} ${status.baseline.cellWidth}x${status.baseline.cellHeight}.`,
-          );
-        }
-        lines.push(`Repairs this session: ${status.repairs}.`);
-        return lines;
-      };
-
-      const requested = (args[0] ?? "").trim();
-      if (requested === "") {
-        return [
-          ...describe(getConsoleFontGuardStatus()),
-          "",
-          "/console-font auto | off | <face>",
-          "",
-          "Classic Windows `conhost.exe` changes a live window's font by itself —",
-          "`Consolas` → `宋体` around startup (the console's saved default being",
-          "re-applied), `Consolas` → `Terminal` 8×12 mid-turn (the smallest raster face,",
-          "which has none of the block or ambiguous glyphs this UI is drawn with) — and",
-          "keeps it until the window's properties are changed by hand. No escape",
-          "sequence selects a font, so the only way to keep the font still is to hold",
-          "it: the guard asks the console what it is drawing with four times a second",
-          "and writes the target face back.",
-          "",
-          "Runtime: classic Windows console host (`conhost.exe`) only — under Bun the",
-          "guard calls Win32 in-process, under Node a PowerShell helper attached to the",
-          "same console does. Windows Terminal / VS Code own their terminal's font, so",
-          "the guard stands down there.",
-          "",
-          "  (unset)  — the preset, `Consolas`",
-          "  auto     — whatever face this session started with",
-          "  off      — stop watching",
-          "  <face>   — draw with that face, e.g. 霞鹜文楷等宽",
-        ].join("\n");
-      }
-
-      const mode = parseConsoleFontMode(requested);
-      try {
-        const { updateSettings } = await import("@/settings");
-        await updateSettings({
-          consoleFont: typeof mode === "object" ? mode.pinnedFace : mode,
-        });
-      } catch {
-        // An unreadable settings file still leaves the session value in force.
-      }
-      if (mode === "off") {
-        stopConsoleFontGuardRuntime();
-        return [
-          ...describe(getConsoleFontGuardStatus()),
-          "Stopped; saved to settings.",
-        ].join("\n");
-      }
-      await restartConsoleFontGuardRuntime();
-      return [
-        ...describe(getConsoleFontGuardStatus()),
-        "Saved to settings.",
-      ].join("\n");
-    },
+    handler: (args: string[]) => handleConsoleFontCommand(args),
   },
   "/install-github-app": {
     desc: "Setup Haruyuki GitHub Action in this repo",
@@ -818,9 +643,12 @@ export const commands: Record<string, Command> = {
     },
   },
   "/topic": {
-    desc: "Mark a topic boundary in this conversation",
-    args: "<title> [summary]",
-    handler: (args, scope) => handleTopicCommand(args, scope),
+    desc: "Mark a topic boundary, or list the topic blocks (/topic list [--all])",
+    args: "<title> [summary] | list [--all]",
+    handler: (args, scope) =>
+      args[0] === "list"
+        ? handleTopicsCommand(args.slice(1), scope)
+        : handleTopicCommand(args, scope),
   },
   "/topics": {
     desc: "List the topic blocks of the current context",
@@ -830,34 +658,8 @@ export const commands: Record<string, Command> = {
   "/recall": {
     desc: "Configure passive recall of earlier conversations and memory",
     args: "[setting] [value]",
+    order: 15.4,
     handler: (args, scope) => handleRecallCommand(args, scope),
-  },
-  "/set-max-context": {
-    desc: "Alias for /context-limit",
-    args: "[tokens] [--override]",
-    hidden: true,
-    handler: () => {
-      // Handled specially in App.tsx
-      return "Setting max context window...";
-    },
-  },
-  "/link": {
-    desc: "Attach all Haruyuki tools to agent (deprecated, use /toolset instead)",
-    hidden: true,
-    noArgs: true,
-    handler: () => {
-      // Handled specially in App.tsx to access agent ID and client
-      return "Linking tools...";
-    },
-  },
-  "/unlink": {
-    desc: "Remove all Haruyuki tools from agent (deprecated, use /toolset instead)",
-    hidden: true,
-    noArgs: true,
-    handler: () => {
-      // Handled specially in App.tsx to access agent ID and client
-      return "Unlinking tools...";
-    },
   },
   "/resume": {
     desc: "Resume a previous conversation",
@@ -869,22 +671,95 @@ export const commands: Record<string, Command> = {
     },
   },
   "/pinned": {
-    desc: "Browse pinned agents",
-    hidden: true, // Alias for /agents (opens to Pinned tab)
+    desc: "Browse agents, opened on the pinned tab",
     noArgs: true,
     handler: () => {
+      // Handled by the navigation branch: the agent browser on its pinned tab.
       return "Opening agent browser...";
     },
   },
-  "/profiles": {
-    desc: "Browse pinned agents",
-    hidden: true, // Alias for /agents (opens to Pinned tab)
-    noArgs: true,
+  "/profile": {
+    desc: "Save, load or delete a local agent profile",
+    args: "<save|load|delete|usage> [name]",
     handler: () => {
-      return "Opening agent browser...";
+      // Handled by the profile branch in the submit handler, which needs the
+      // agent browser and the settings writer. No longer a top-level name:
+      // `/agent profile` is the entry point.
+      return "Running profile command...";
     },
   },
 };
+
+/**
+ * The internal forms the hubs run. Each one is still a working command — the
+ * point is that nobody types it: `resolveHubInput` rewrites the hub invocation
+ * to this string, and `MOVED_COMMANDS` in `hubs.ts` stops a user who types it
+ * directly. Listing them here rather than editing forty entries keeps the rule
+ * in one place, and the array doubles as the check that every target exists.
+ */
+export const HUB_TARGET_COMMANDS: readonly string[] = [
+  // /agent
+  "/agents",
+  "/pin",
+  "/unpin",
+  "/pinned",
+  "/rename",
+  "/description",
+  "/system",
+  "/personality",
+  "/toolset",
+  "/subagents",
+  "/ade",
+  "/profile",
+  // /session
+  "/logout",
+  // /memory
+  "/memfs",
+  "/memory-repository",
+  "/palace",
+  "/init",
+  "/sleeptime",
+  // /messages
+  "/message-history",
+  "/clear-messages",
+  // /skill
+  "/skills",
+  "/skill-creator",
+  // /context
+  "/context-limit",
+  "/context-pending",
+  "/compaction",
+  // /topic
+  "/topics",
+  // /config
+  "/experiments",
+  "/mods",
+  "/statusline",
+  "/title",
+  "/terminal",
+  "/font-width",
+  "/console-font",
+  "/stream",
+  "/reasoning-tab",
+  "/system-reminders",
+  "/mcp",
+  "/hooks",
+  "/secret",
+  "/connect",
+  // /maintenance
+  "/feedback",
+  "/bg",
+  "/workflows",
+  "/install-github-app",
+];
+
+for (const name of HUB_TARGET_COMMANDS) {
+  const command = commands[name];
+  if (command) {
+    command.internal = true;
+    command.hidden = true;
+  }
+}
 
 export interface CommandExecutionResult {
   success: boolean;

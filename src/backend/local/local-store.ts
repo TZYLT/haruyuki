@@ -562,7 +562,7 @@ export class LocalStore {
     this.persistAgent(agentId);
     // An `agent.system` change (personality preset, prompt-version upgrade) is
     // only REGISTERED here. The frozen prefix is never rewritten by an agent
-    // edit; `/context-pending` reports it and the next application point
+    // edit; `/context pending` reports it and the next application point
     // (new conversation, compaction, `/recompile`) applies it.
     return this.projectAgent(updated);
   }

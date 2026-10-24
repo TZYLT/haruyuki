@@ -106,7 +106,7 @@ export function parseSetMaxContextArgs(
   }
 
   if (values.length > 1) {
-    throw new Error("Usage: /context-limit [tokens] [--override]");
+    throw new Error("Usage: /context limit [tokens] [--override]");
   }
 
   if (values.length === 0) {
@@ -246,7 +246,7 @@ function formatMissingContextWindowDefaultError(params: {
     params.currentContextWindow > 0
       ? String(params.currentContextWindow)
       : "<tokens>";
-  return `No catalog default for ${modelDescription}, so reset is unavailable. Pass an explicit value: /context-limit ${suggestedValue}.`;
+  return `No catalog default for ${modelDescription}, so reset is unavailable. Pass an explicit value: /context limit ${suggestedValue}.`;
 }
 
 export async function applySetMaxContext(params: {

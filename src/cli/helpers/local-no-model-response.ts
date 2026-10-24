@@ -9,7 +9,7 @@ const LOCAL_NO_MODEL_RESPONSE = [
   "It looks like we're in local mode, but we don't have any models available yet.",
   "",
   "to get set up, you can either:",
-  "- run `/connect` to add a provider from inside haruyuki code",
+  "- run `/config connect` to add a provider from inside haruyuki code",
   "- export a provider key in your env and restart `haruyuki`, for example `export OPENAI_API_KEY=...`",
   "",
   "once one of those is set up, send your message again and we can get started.",

@@ -276,7 +276,7 @@ export function useReasoningCycle(ctx: ReasoningCycleContext) {
           // agent sync doesn't snap back.
           const isDefaultConversation = conversationIdRef.current === "default";
           // Reasoning changes preserve the current context window (keeps 1M
-          // dual-listing variants and custom /context-limit values intact) by
+          // dual-listing variants and custom /context limit values intact) by
           // RE-SENDING it explicitly via contextWindowOverride — omitting the
           // field would make the server re-derive it from the handle and
           // clamp it to a legacy global default (128k). A current value that

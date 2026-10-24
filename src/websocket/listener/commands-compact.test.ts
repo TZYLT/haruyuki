@@ -196,7 +196,7 @@ describe("listener compact command", () => {
     const output = await runCompact(fixture);
 
     expect(output).toContain(
-      "Choosing a cut point needs a terminal. Run /topics to list the blocks",
+      "Choosing a cut point needs a terminal. Run /topic list to list the blocks",
     );
     expect(output).toContain("/compact <n>");
   });

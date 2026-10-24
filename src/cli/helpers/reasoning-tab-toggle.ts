@@ -6,7 +6,7 @@ export type ReasoningTabToggleResolution =
 const ENABLE_ARGS = new Set(["on", "enable", "enabled", "true", "1"]);
 const DISABLE_ARGS = new Set(["off", "disable", "disabled", "false", "0"]);
 
-const USAGE = "Usage: /reasoning-tab [on|off|status] (default is off)";
+const USAGE = "Usage: /config reasoning-tab [on|off|status] (default is off)";
 
 export function resolveReasoningTabToggleCommand(
   trimmedInput: string,
@@ -23,7 +23,7 @@ export function resolveReasoningTabToggleCommand(
       kind: "status",
       message: currentlyEnabled
         ? "Reasoning Tab shortcut is enabled. Tab now cycles reasoning tiers."
-        : "Reasoning Tab shortcut is disabled. Use /reasoning-tab on to enable it.",
+        : "Reasoning Tab shortcut is disabled. Use /config reasoning-tab on to enable it.",
     };
   }
 

@@ -337,7 +337,7 @@ export async function startConsoleFontGuardRuntime(): Promise<void> {
   // A default that is not installed is a repair conhost accepts and does not take,
   // which ends the guard after two tries. Ask the inventory first when the port can
   // answer, and hold a face that exists. Only the preset is reassigned this way: an
-  // explicit `/console-font <face>` is the user's call and must be tried verbatim.
+  // explicit `/config console-font <face>` is the user's call and must be tried verbatim.
   if (!resolved.explicit) {
     const faces = (await port.listFaces?.()) ?? null;
     const chosen = chooseConsoleFace(DEFAULT_CONSOLE_FONT.face, faces);

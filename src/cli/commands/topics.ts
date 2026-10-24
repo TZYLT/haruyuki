@@ -1,5 +1,5 @@
 /**
- * `/topics [--all]` — read-only view of the topic blocks (feature ③).
+ * `/topic list [--all]` — read-only view of the topic blocks (feature ③).
  *
  * Local-only for the same reason `/topic` is: blocks are derived from transcript
  * markers, and the cloud backend manages context server-side. The command never

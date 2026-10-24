@@ -464,7 +464,7 @@ export class LocalBackend extends HeadlessBackend {
 
   /**
    * Local-only: describe the prefix changes that are registered but not yet
-   * applied, for the `/context-pending` command. Read-only — never rewrites the
+   * applied, for the `/context pending` command. Read-only — never rewrites the
    * frozen prefix (requirement §6, `buildContextPendingReport`).
    */
   async getContextPending(
@@ -613,7 +613,7 @@ export class LocalBackend extends HeadlessBackend {
   /**
    * Local-only: the topic blocks of the current context, cut at each marker's
    * *effective* boundary, plus every marker in the transcript for
-   * `/topics --all`. Read-only — a list never rewrites anything.
+   * `/topic list --all`. Read-only — a list never rewrites anything.
    */
   listTopics(
     conversationId: string,

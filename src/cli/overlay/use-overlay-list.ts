@@ -78,7 +78,7 @@ export interface UseOverlayListOptions {
   /**
    * Whether Home/End jump to the ends of the list. On by default.
    *
-   * Off is for a list whose neighbour is a live editor — `/connect`'s filter is
+   * Off is for a list whose neighbour is a live editor — `/config connect`'s filter is
    * the one. `list-bindings.ts` states the rule; this is the same switch, for a
    * face that goes through this hook rather than building the table itself.
    */

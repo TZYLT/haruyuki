@@ -55,7 +55,7 @@ export function envAmbiguousWidthMode(
  * **Three sources, in order:** the environment, the stored setting, the terminal
  * itself. The stored value arrives asynchronously (the settings file is a promise
  * on this path), so it is applied only when nothing has resolved the width yet — a
- * `/font-width` run before it lands must not be overwritten by the file it just
+ * `/config font-width` run before it lands must not be overwritten by the file it just
  * wrote.
  *
  * The value is read through a store rather than state: the frames that measure with

@@ -1,7 +1,7 @@
 /**
  * Shared formatting for workflow execution statistics. Lives in the tools
  * layer so both the tool (completion notification summary) and the CLI
- * (/workflows) print identical numbers.
+ * (/maintenance workflows) print identical numbers.
  */
 
 /** 500 → "500", 5200 → "5.2k", 167200 → "167.2k", 2_400_000 → "2.4M". */

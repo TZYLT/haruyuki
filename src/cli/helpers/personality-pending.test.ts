@@ -11,7 +11,7 @@ describe("formatPersonalitySwappedMessage", () => {
   test("says the change is registered but not applied", () => {
     const message = formatPersonalitySwappedMessage("Coach");
     expect(message).toContain("registered but not applied");
-    expect(message).toContain("/context-pending");
+    expect(message).toContain("/context pending");
     expect(message).toContain("/recompile");
   });
 

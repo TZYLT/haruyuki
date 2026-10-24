@@ -13,7 +13,7 @@
  *
  * Opening the face already clears the count. This module adds an entry, never a
  * second clearing rule: it calls the same opener the chord
- * (`use-message-history.ts`) and the `/message-history` command reach, so
+ * (`use-message-history.ts`) and the `/messages history` command reach, so
  * clicking the badge and pressing `Ctrl+X h` cannot diverge.
  */
 export type MessageHistoryOpener = () => void;

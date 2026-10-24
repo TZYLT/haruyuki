@@ -113,7 +113,7 @@ async function withTemporaryHome(run: () => Promise<void>): Promise<void> {
 describe("handleTopicsCommand", () => {
   test("help documents both forms and how a trim is picked", async () => {
     const output = await handleTopicsCommand(["help"]);
-    expect(output).toContain("/topics --all");
+    expect(output).toContain("/topic list --all");
     expect(output).toContain("/compact <n>");
   });
 

@@ -236,7 +236,7 @@ export async function handleNavigationCommand(
 ): Promise<SubmitCommandResult | null> {
   const { commandRunner, conversationId, setSearchQuery, openOverlay } = ctx;
 
-  // Special handling for /agents command - show agent browser
+  // Special handling for /agent list command - show agent browser
   if (
     trimmed === "/agents" ||
     trimmed === "/pinned" ||

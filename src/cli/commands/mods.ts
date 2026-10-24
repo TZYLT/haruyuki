@@ -95,9 +95,9 @@ function formatModsUsage(error?: string): string {
   const lines = [
     ...(error ? [`Error: ${error}`, ""] : []),
     "Usage:",
-    "  /mods learn [memory-citations] [options]",
-    "  /mods learn --env <path> [options]",
-    "  /mods generate-env [request]",
+    "  /config mods learn [memory-citations] [options]",
+    "  /config mods learn --env <path> [options]",
+    "  /config mods generate-env [request]",
     "",
     "Options:",
     "  --model <handle>              Model for generation and eval (default: auto)",

@@ -12,7 +12,7 @@ import type { PageRow } from "@/cli/app/pages/page-model";
  *
  * - **`read` / `write` are the entry** (§12.2). A setting is not listed unless the
  *   page can read its effective value and change it through the path its own slash
- *   command uses — `/stream` both flips the runtime flag and persists the
+ *   command uses — `/config stream` both flips the runtime flag and persists the
  *   preference, so a page that only wrote the file would show a value that has no
  *   effect until restart. Entries with no safe write path are `editable: false`
  *   with a `reason`, never silently missing (§12.1e class C).

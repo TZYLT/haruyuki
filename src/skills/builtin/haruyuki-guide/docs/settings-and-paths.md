@@ -46,7 +46,7 @@ finds these:
 | `~/.haruyuki/workflows/executions/` | `src/tools/workflow/journal.ts:41` |
 | `~/.haruyuki/cache/` (model catalog) | `src/agent/remote-model-catalog.ts:49` |
 | `~/.haruyuki/bin/` (fd, ripgrep) | `src/cli/helpers/file-autocomplete.ts:277`, `src/tools/impl/ripgrep-manager.ts:75` |
-| `~/.haruyuki/settings.json` (second implementation) | `src/settings.ts:36` |
+| `~/.haruyuki/settings.json` (second implementation) | `src/settings.ts:57` |
 
 Several of those are module-level constants, so they are also resolved at import
 time rather than per call. When a question is "where did this file go", check
@@ -90,7 +90,7 @@ Transcripts are a third case: `LETTA_TRANSCRIPT_ROOT` overrides them, otherwise
 | Global | `~/.haruyuki/settings.json` | `src/settings-manager.ts:976-979` |
 | Project | `<repo>/.haruyuki/settings.json` | `src/settings-manager.ts:981-983` |
 | Local | `<repo>/.haruyuki/settings.local.json` | `src/settings-manager.ts:994-996` |
-| Legacy | `~/.haruyuki/settings.json` and `./.haruyuki/settings.local.json` via a second implementation | `src/settings.ts:36`, `src/settings.ts:105-106` |
+| Legacy | `~/.haruyuki/settings.json` and `./.haruyuki/settings.local.json` via a second implementation | `src/settings.ts:57`, `src/settings.ts:127` |
 
 The three files are **not** automatically merged into one object. What each
 loader does:
@@ -200,7 +200,7 @@ things and nothing else:
    `src/backend/backend.ts:356-372`.
 
 `configureBackendMode("local")` is what sets it, and the CLI calls that on
-startup — `src/backend/backend.ts:379-383`, `src/index.ts:499`. Clearing it
+startup — `src/backend/backend.ts:379-383`, `src/index.ts:410-413`. Clearing it
 routes local pins, per-agent settings, and memory files into the legacy
 namespace instead. It is also the only switch that decides whether
 `LETTA_LOCAL_BACKEND_DIR` has any effect at all —
@@ -233,9 +233,9 @@ dependency-side name.
 - Memory tree: `<storageDir>/memfs/<agentId>/memory` —
   `src/backend/local/paths.ts:48-53`; the cross-agent boundary is
   `<storageDir>/memfs` — `src/utils/local-backend-paths.ts:36-39`.
-- Other records: `agents/<id>.json` — `src/backend/local/local-store.ts:501` —
+- Other records: `agents/<id>.json` — `src/backend/local/local-store.ts:484` —
   `conversations/<key>/conversation.json` —
-  `src/backend/local/local-store.ts:2595-2596` — and
+  `src/backend/local/local-store.ts:2607` — and
   `conversations/<key>/messages.jsonl` —
   `src/backend/local/local-transcript.ts:87`.
 

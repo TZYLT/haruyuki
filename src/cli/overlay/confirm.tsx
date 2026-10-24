@@ -13,8 +13,8 @@ import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
  * words of one particular deletion and stay with the face doing the confirming.
  *
  * **One shape, since P7.** Until then this component carried the tree's one
- * *deliberate* inconsistency: `/mcp` drew `> ` and bolded the whole selected row,
- * `/hooks` drew U+276F and bolded nothing, and the difference was an M4 ruling
+ * *deliberate* inconsistency: `/config mcp` drew `> ` and bolded the whole selected row,
+ * `/config hooks` drew U+276F and bolded nothing, and the difference was an M4 ruling
  * ("both were already shipping"). 《38》§11.8 ④ overrode it, for a reason that is
  * not aesthetic: U+276F is missing from some fonts, and the one glyph a
  * confirmation cannot lose is the one that says which row Enter fires on. So the
@@ -25,7 +25,7 @@ import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
  *
  * The **type-to-confirm** prompt used to live here too (`TypedConfirmPrompt`: the
  * value, or the placeholder while it was empty). It is gone: the one caller was
- * `/agents`'s delete confirmation, whose draft was a hand-rolled appender, so the
+ * `/agent list`'s delete confirmation, whose draft was a hand-rolled appender, so the
  * row could not receive a paste and could not show a caret. That row is the
  * toolkit's text sub-view now (`text-view.tsx`), which is a *real* editor — there
  * is one implementation of a `> ` prompt row in this tree, and it is not this one.

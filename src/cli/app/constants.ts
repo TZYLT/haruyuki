@@ -25,11 +25,11 @@ export const CONVERSATION_BUSY_MAX_RETRIES = 3; // 10s -> 20s -> 40s
 
 // Message shown when user interrupts the stream
 export const INTERRUPT_MESSAGE =
-  "Interrupted – tell the agent what to do differently. Something went wrong? Use /feedback to report issues.";
+  "Interrupted – tell the agent what to do differently. Something went wrong? Use /maintenance feedback to report issues.";
 
 // Hint shown after errors to encourage feedback
 export const ERROR_FEEDBACK_HINT =
-  "Something went wrong? Use /feedback to report issues.";
+  "Something went wrong? Use /maintenance feedback to report issues.";
 
 // Status page URLs for known providers
 export const PROVIDER_STATUS_PAGES: Record<

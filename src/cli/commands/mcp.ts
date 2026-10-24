@@ -122,7 +122,7 @@ function parseCommandArgs(commandStr: string): string[] {
   return args;
 }
 
-// Parse /mcp add args
+// Parse /config mcp add args
 interface McpAddArgs {
   transport: "http" | "sse" | "stdio";
   name: string;
@@ -235,7 +235,7 @@ function parseMcpAddArgs(parts: string[]): McpAddArgs | null {
   };
 }
 
-// /mcp add --transport <type> <name> <url/command> [options]
+// /config mcp add --transport <type> <name> <url/command> [options]
 export async function handleMcpAdd(
   ctx: McpCommandContext,
   msg: string,
@@ -250,7 +250,7 @@ export async function handleMcpAdd(
       ctx.buffersRef,
       ctx.refreshDerived,
       msg,
-      'Usage: /mcp add --transport <http|sse|stdio> <name> <url|command> [--header "key: value"] [--auth-env TOKEN_ENV_VAR]\n\nExamples:\n  /mcp add --transport http notion https://mcp.notion.com/mcp\n  /mcp add --transport http secure-api https://api.example.com/mcp --auth-env MCP_API_TOKEN',
+      'Usage: /config mcp add --transport <http|sse|stdio> <name> <url|command> [--header "key: value"] [--auth-env TOKEN_ENV_VAR]\n\nExamples:\n  /config mcp add --transport http notion https://mcp.notion.com/mcp\n  /config mcp add --transport http secure-api https://api.example.com/mcp --auth-env MCP_API_TOKEN',
       false,
     );
     return;
@@ -353,18 +353,18 @@ export async function handleMcpAdd(
 
 export function mcpHelpText(): string {
   return [
-    "/mcp help",
+    "/config mcp help",
     "",
     "Manage MCP servers for the current agent. OAuth-protected remote servers open a browser automatically.",
     "",
-    "The /mcp manager lists both client-local servers (run on this machine) and server-side servers registered on the haruyuki server. Server-side servers are configured via the ADE or API; use /mcp to enable or disable their tools for this agent — enabled tools execute on the haruyuki server.",
+    "The /config mcp manager lists both client-local servers (run on this machine) and server-side servers registered on the haruyuki server. Server-side servers are configured via the ADE or API; use /config mcp to enable or disable their tools for this agent — enabled tools execute on the haruyuki server.",
     "",
     "USAGE",
-    "  /mcp              — open the MCP manager (local + server-side)",
-    "  /mcp add ...      — add a client-local server",
-    "  /mcp help         — show this help",
+    "  /config mcp              — open the MCP manager (local + server-side)",
+    "  /config mcp add ...      — add a client-local server",
+    "  /config mcp help         — show this help",
     "",
-    "OPTIONS FOR /mcp add",
+    "OPTIONS FOR /config mcp add",
     "  --transport <stdio|http|sse>",
     '  --header "Name: value"       repeatable HTTP/SSE header',
     "  --auth-env TOKEN_ENV_VAR     bearer token from the environment",
@@ -372,9 +372,9 @@ export function mcpHelpText(): string {
     "  --env KEY=VALUE              repeatable stdio environment variable",
     "",
     "EXAMPLES",
-    "  /mcp add --transport stdio filesystem npx -y @modelcontextprotocol/server-filesystem .",
-    "  /mcp add --transport http notion https://mcp.notion.com/mcp",
-    "  /mcp add --transport http private https://mcp.example.com/mcp --auth-env MCP_API_TOKEN",
+    "  /config mcp add --transport stdio filesystem npx -y @modelcontextprotocol/server-filesystem .",
+    "  /config mcp add --transport http notion https://mcp.notion.com/mcp",
+    "  /config mcp add --transport http private https://mcp.example.com/mcp --auth-env MCP_API_TOKEN",
   ].join("\n");
 }
 

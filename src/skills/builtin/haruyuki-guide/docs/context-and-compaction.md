@@ -25,18 +25,18 @@ What is frozen:
   `src/backend/local/prefix-freeze.ts:134-170`.
 - The freeze is persisted, not recomputed per turn. The private
   `compileAndMaybePersistSystemPrompt` writes it —
-  `src/backend/local/local-backend.ts:958-996`.
+  `src/backend/local/local-backend.ts:989-1026`.
 
 Where the freeze is allowed to be rewritten (the "application points"):
 
 | Point | Reason recorded | Source |
 | --- | --- | --- |
-| `createAgent` | — | `src/backend/local/local-backend.ts:319-322` |
-| `createConversation` | `conversation_created` | `src/backend/local/local-backend.ts:393-397` |
-| `/recompile` | `manual_recompile` | `src/backend/local/local-backend.ts:426-433` |
-| after a topic trim | `compaction` | `src/backend/local/local-backend.ts:641-644` |
-| after a compaction | `compaction` | `src/backend/local/local-backend.ts:876-879` |
-| ordinary turn compile | `conversation_created` | `src/backend/local/local-backend.ts:951-955` |
+| `createAgent` | `conversation_created` | `src/backend/local/local-backend.ts:325-328` |
+| `createConversation` | `conversation_created` | `src/backend/local/local-backend.ts:395-403` |
+| `/recompile` | `manual_recompile` | `src/backend/local/local-backend.ts:423-441` |
+| after a topic trim | `compaction` | `src/backend/local/local-backend.ts:672-676` |
+| after a compaction | `compaction` | `src/backend/local/local-backend.ts:907-911` |
+| ordinary turn compile | `conversation_created` | `src/backend/local/local-backend.ts:982-986` |
 
 - A fork inherits its parent's freeze, recorded as `fork_inherited`, and only
   within the same agent — `src/backend/local/local-store.ts:905-918`.
@@ -62,11 +62,11 @@ names still say `rawSystemHash`; that is a leftover name, not a second field —
 `src/backend/local/prefix-freeze.ts:263-264`,
 `src/backend/local/prefix-freeze.ts:403-404`.
 
-## `/context-pending` reports drift; `/recompile` resolves it
+## `/context pending` reports drift; `/recompile` resolves it
 
-`/context-pending` is read-only: it lists changes that are **registered but not
+`/context pending` is read-only: it lists changes that are **registered but not
 yet applied** — `src/cli/helpers/context-pending.ts:4-8`,
-`src/backend/local/local-backend.ts:459-462`. Its report carries
+`src/backend/local/local-backend.ts:465-474`. Its report carries
 `hasSnapshot`, `memory`, `systemChanged`, `skillsChanged`, `tools`, `model`,
 `modelSettingsChanged`, `dirty`, and `hasPending` —
 `src/backend/local/prefix-freeze.ts:243-253`.
@@ -91,14 +91,14 @@ this recompile just applied" — and then rewrites the prefix, always ending wit
 the cache-eviction warning — `src/cli/helpers/recompile-command.ts:13-40`. The
 call chain is `recompileAgentSystemPrompt` →
 `LocalBackend.recompileConversation` with `reason: "manual_recompile"` —
-`src/agent/modify.ts:695-732`, `src/backend/local/local-backend.ts:417-435`.
+`src/agent/modify.ts:695-732`, `src/backend/local/local-backend.ts:423-441`.
 That capability is advertised as `promptRecompile`, true for the local backend —
-`src/backend/local/local-backend.ts:142`.
+`src/backend/local/local-backend.ts:148`.
 
 ## Topic markers
 
 A marker is metadata. It does not modify the transcript and does not modify the
-frozen prefix — `src/backend/local/local-backend.ts:492-499`,
+frozen prefix — `src/backend/local/local-backend.ts:498-506`,
 `src/cli/commands/topic.ts:98-100`. What it does is draw a boundary that
 compaction can cut at.
 
@@ -130,10 +130,10 @@ compaction can cut at.
   so a settings change to it lands at the next application point —
   `src/backend/local/system-prompt-compilation.ts:500-504`.
 
-`/topics` prints the block table, marking trimmable blocks with `*` —
-`src/cli/commands/topics.ts:23-51`. `/topics --all` instead lists every marker,
-and says plainly that those numbers are marker positions, not the block numbers
-`/compact` takes — `src/cli/helpers/topic-list.ts:178-211`.
+`/topic list` prints the block table, marking trimmable blocks with `*` —
+`src/cli/commands/topics.ts:23-51`. `/topic list --all` instead lists every
+marker, and says plainly that those numbers are marker positions, not the block
+numbers `/compact` takes — `src/cli/helpers/topic-list.ts:178-211`.
 
 ## Compaction: the rate is a compression rate
 
@@ -173,10 +173,10 @@ The same formula drives the listener path as `goalTokens` —
 
 | Invocation | Behavior | Source |
 | --- | --- | --- |
-| bare `/compact` | Resolves to `{ kind: "auto" }`. With two or more blocks it opens the topic picker and trims nothing yet; with a single block it trims by the compression rate and explains why | `src/cli/helpers/compact-command.ts:221-225`, `src/cli/app/submit-compact-commands.ts:455-513` |
-| `/compact <n>` | Requires a positive integer; out of range is refused by name with the block count. Sends `{ kind: "topic", index: n }` | `src/cli/helpers/compact-command.ts:236-239`, `src/cli/app/submit-compact-commands.ts:438-453` |
+| bare `/compact` | Resolves to `{ kind: "auto" }`. With two or more blocks it opens the topic picker and trims nothing yet; with a single block it trims by the compression rate and explains why | `src/cli/helpers/compact-command.ts:221-225`, `src/cli/app/submit-compact-commands.ts:477-531` |
+| `/compact <n>` | Requires a positive integer; out of range is refused by name with the block count. Sends `{ kind: "topic", index: n }` | `src/cli/helpers/compact-command.ts:236-239`, `src/cli/app/submit-compact-commands.ts:456-471` |
 | `/compact help` | Prints usage | `src/cli/helpers/compact-command.ts:226-232` |
-| `/compaction` | Opens the mode panel, where the **Compression rate** row is editable | `src/cli/commands/registry.ts:150-158`, `src/cli/components/CompactionSelector.tsx:145-164` |
+| `/compact config` | Opens the mode panel, where the **Compression rate** row is editable | `src/cli/app/use-submit-handler.ts:718-729`, `src/cli/components/CompactionSelector.tsx:145-164` |
 
 Two further facts worth knowing:
 
@@ -189,10 +189,10 @@ Two further facts worth knowing:
 - **The picker's first row is selectable.** All rows, including the first, go
   through the same cap — `src/cli/components/TopicSelector.tsx:7-9`. The footer
   says that anything keeping more than the rate allows will be cut to the rate —
-  `src/cli/components/TopicSelector.tsx:115`.
+  `src/cli/components/TopicSelector.tsx:128`.
 
-`/compaction`'s editable rate accepts an integer percentage from 1 to 100 and
-stores it divided by 100 in the agent's
+`/compact config`'s editable rate accepts an integer percentage from 1 to 100
+and stores it divided by 100 in the agent's
 `compaction_settings.sliding_window_percentage` —
 `src/cli/components/CompactionSelector.tsx:100-122`,
 `src/cli/app/compaction-settings.ts:35-46`. Only changed fields are reported,
@@ -214,14 +214,13 @@ explicit rather than merely absent:
 - An overflow is terminal: `the local backend no longer rewrites history to make
   room` — `src/backend/dev/pi-stream-adapter.ts:731-737`.
 - A turn applies the prefix and never rewrites it —
-  `src/backend/local/local-backend.ts:942-950`.
+  `src/backend/local/local-backend.ts:967-986`.
 - When no block is selectable, the pre-send interception warns rather than
   trimming: trimming without the user choosing would be exactly the automatic
   rewrite this feature removed — `src/cli/app/submit-compact-commands.ts:96-100`.
 - The only callers that rewrite history are user commands: TUI `/compact` —
-  `src/cli/app/submit-compact-commands.ts:265`,
-  `src/cli/app/submit-compact-commands.ts:392` — the listener's `/compact` —
-  `src/websocket/listener/commands.ts:446` — and the `conversation_compact`
+  `src/cli/app/submit-compact-commands.ts:411` — the listener's `/compact` —
+  `src/websocket/listener/commands.ts:462` — and the `conversation_compact`
   protocol command —
   `src/websocket/listener/commands/agents-conversations.ts:548-553`.
 

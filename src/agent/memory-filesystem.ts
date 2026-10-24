@@ -490,10 +490,10 @@ async function seedDefaultPersonalityFiles(
 }
 
 /**
- * Apply the --memfs CLI flag (or /memfs enable) to an agent.
+ * Apply the --memfs CLI flag (or /memory memfs enable) to an agent.
  *
  * Shared between interactive (index.ts), headless (headless.ts), and
- * the /memfs enable command (App.tsx) to avoid duplicating the setup logic.
+ * the /memory memfs enable command (App.tsx) to avoid duplicating the setup logic.
  *
  * MemFS cannot be disabled: agents are memfs-enabled from creation on
  * memfs-capable backends, and this function only enables or syncs.

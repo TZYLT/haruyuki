@@ -9,13 +9,13 @@ import type { ActiveOverlay, TabStripProjection } from "./types";
  * The faces that need nothing but "close me" and an agent id.
  *
  * `AppView` mounts a dozen overlays, and most of them take their data from state
- * that lives there. These five do not: `/help` and `/hooks` are self-contained
+ * that lives there. These five do not: `/help` and `/config hooks` are self-contained
  * readers, `/skills` needs the agent, `/tabs` needs the strip's actions, and the
  * message history reads its own store. Grouping them keeps that fact visible —
  * "these are the ones with no wiring" — and keeps the view's render body about the
  * overlays that *do* have wiring.
  *
- * `/message-history` is reachable only from the full-screen shell (the shell
+ * `/messages history` is reachable only from the full-screen shell (the shell
  * registers both its leader chord and its command), so being mounted here does not
  * give the append shell a face it cannot open.
  */

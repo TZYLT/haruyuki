@@ -1,14 +1,14 @@
 import type { AuthMethod, ByokProvider } from "@/providers/byok-providers";
 
 /**
- * `/connect`'s steps, and what each one renders from.
+ * `/config connect`'s steps, and what each one renders from.
  *
  * The overlay is a wizard's trail of step names plus **one** payload: the
  * provider the current step is about, and the auth method the multi-field step
  * was opened with. One payload is enough because every step below the list is a
  * view of the provider the user just picked — the trail is what remembers the
  * path, which is why the conditional escapes the hand-written ladder had
- * (`/connect`'s multi-field step returns to the method picker only when it was
+ * (`/config connect`'s multi-field step returns to the method picker only when it was
  * the picker that opened it) are gone: the path *is* what was taken.
  *
  * Kept out of the component so the state a step renders from is a value with a

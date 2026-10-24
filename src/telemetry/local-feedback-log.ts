@@ -3,7 +3,7 @@ import { APP_DIR_NAME, APP_SUBDIRS } from "@/utils/app-paths";
  * Local JSONL log for user feedback and channel error reports.
  *
  * These payloads used to be POSTed to `https://api.letta.com/v1/metadata/
- * feedback` — from the TUI `/feedback` command, from channel feedback, from a
+ * feedback` — from the TUI `/maintenance feedback` command, from channel feedback, from a
  * channel lifecycle error report, and from the reflection-threshold alert. This
  * fork has no Cloud backend, so that endpoint is unreachable by design and the
  * submissions were the last remaining egress of user content.

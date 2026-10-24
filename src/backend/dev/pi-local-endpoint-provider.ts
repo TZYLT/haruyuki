@@ -154,7 +154,7 @@ export function createLocalEndpointPiProvider(
   ): LocalEndpointModel {
     // Engine catalogs mix loaded runtime windows with architectural maxima.
     // Publish a conservative harness default either way; an explicit
-    // /context-limit setting can still clone the Model with a larger window.
+    // /context limit setting can still clone the Model with a larger window.
     const contextWindow = Math.min(
       metadata.contextLength ?? LOCAL_ENDPOINT_DEFAULT_CONTEXT_WINDOW,
       LOCAL_ENDPOINT_DEFAULT_CONTEXT_WINDOW,

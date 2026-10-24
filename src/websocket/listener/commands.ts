@@ -122,6 +122,10 @@ export async function handleExecuteCommand(
         });
         break;
 
+      // `clear-messages` is a retained wire id: desktop clients still send it,
+      // while the current TUI form is `/messages clear` (the hub mapping in
+      // src/cli/commands/hubs.ts rewrites the old name to it). Keep the case so
+      // a client that has not followed the rename keeps working.
       case "clear-messages":
         output = await handleClearCommand(socket, conversationRuntime, {
           ...opts,
@@ -181,6 +185,9 @@ export async function handleExecuteCommand(
 
       case "dream":
       case "reflect":
+      // `reflection` is a retained wire id as well: the current TUI form is
+      // `/reflect` (`/dream` kept its own name). Both dispatch here, so an old
+      // client sending `reflection` gets the same behaviour as `/reflect`.
       case "reflection":
         output = await handleReflectCommand(
           socket,
@@ -189,6 +196,15 @@ export async function handleExecuteCommand(
         );
         break;
 
+      // `context-limit` is the advertised wire id. `set-max-context` is the
+      // pre-rename id and intentionally stays dispatched but unadvertised: the
+      // advertised list is the desktop client's allowlist, so keeping the old
+      // name out of it stops new clients from rendering the retired name, while
+      // the shared case keeps a client that still sends the old id working.
+      // `listen-client-protocol.test.ts` pins that `set-max-context` is absent
+      // from SUPPORTED_REMOTE_COMMANDS, so it must not be added there without
+      // revisiting that client contract. Documented in
+      // UNADVERTISED_REMOTE_COMMAND_ALIASES (listener-constants.ts).
       case "context-limit":
       case "set-max-context":
         output = await handleSetMaxContextCommand(
@@ -415,7 +431,7 @@ function emitExecuteCommandResponse(
 
 /**
  * `/compact` has no interactive channel here: a local conversation must name the
- * block to keep, and the block list comes from `/topics`. The cloud backend keeps
+ * block to keep, and the block list comes from `/topic list`. The cloud backend keeps
  * its mode-based behaviour unchanged.
  */
 async function compactLocalFromListener(
@@ -430,16 +446,16 @@ async function compactLocalFromListener(
   if (request.kind === "block" && request.index > list.blocks.length) {
     const count = `${list.blocks.length} block${list.blocks.length === 1 ? "" : "s"}`;
     throw new Error(
-      `There is no topic block ${request.index}: this context has ${count}. Run /topics to list them, or /compact with no number to compress by the rate.`,
+      `There is no topic block ${request.index}: this context has ${count}. Run /topic list to list them, or /compact with no number to compress by the rate.`,
     );
   }
   // There is no interactive channel here, so a *choice* needs a number from
-  // /topics. When there is no choice to make — fewer than two blocks, exactly the
+  // /topic list. When there is no choice to make — fewer than two blocks, exactly the
   // state bare `/compact` finds on the TUI — the compression rate decides, which is
   // the same decision the TUI would have made without asking (H-2).
   if (request.kind === "auto" && hasSelectableTopicBlocks(list)) {
     throw new Error(
-      "Choosing a cut point needs a terminal. Run /topics to list the blocks, then /compact <n> with the block to keep.",
+      "Choosing a cut point needs a terminal. Run /topic list to list the blocks, then /compact <n> with the block to keep.",
     );
   }
 
@@ -645,7 +661,7 @@ async function handleClearCommand(
   }
 
   if (opts.resetAllAgentMessages && backend.capabilities.localModelCatalog) {
-    throw new Error("/clear-messages is not supported by the local backend.");
+    throw new Error("/messages clear is not supported by the local backend.");
   }
 
   // Hold detached results until this reset either commits or fails. A
@@ -653,7 +669,7 @@ async function handleClearCommand(
   const finishNotificationReset =
     beginExternalToolNotificationReset(conversationRuntime);
   try {
-    // /clear-messages always resets the API agent's message history.
+    // /messages clear always resets the API agent's message history.
     // /clear only resets when leaving the default API conversation.
     // Local/headless backends model /clear by switching to a fresh conversation.
     if (
@@ -696,9 +712,9 @@ async function handleClearCommand(
 }
 
 /**
- * /init — Initialize (or re-init) agent memory.
+ * /memory init — Initialize (or re-init) agent memory.
  *
- * Builds the init system-reminder message (same as the CLI /init)
+ * Builds the init system-reminder message (same as the CLI /memory init)
  * and feeds it through `handleIncomingMessage` so the agent runs a full
  * turn executing the `initializing-memory` skill.
  */
@@ -713,7 +729,7 @@ async function handleInitCommand(
   const agentId = conversationRuntime.agentId;
 
   if (!agentId) {
-    throw new Error("No agent ID available for /init command");
+    throw new Error("No agent ID available for /memory init command");
   }
 
   const { context: gitContext } = gatherInitGitContext();
@@ -747,14 +763,14 @@ async function handleInitCommand(
   return "Memory initialization completed";
 }
 
-/** /context-limit — Set or reset the active scope's max context window. */
+/** /context limit — Set or reset the active scope's max context window. */
 async function handleSetMaxContextCommand(
   conversationRuntime: ConversationRuntime,
   args: string | undefined,
 ): Promise<string> {
   const agentId = conversationRuntime.agentId;
   if (!agentId) {
-    throw new Error("No agent ID available for /context-limit command");
+    throw new Error("No agent ID available for /context limit command");
   }
 
   const result = await applySetMaxContext({

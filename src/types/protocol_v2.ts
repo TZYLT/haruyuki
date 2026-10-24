@@ -2287,7 +2287,7 @@ export interface CheckoutBranchResponse {
 /**
  * Refresh the local secrets cache from core and return the available
  * secrets. The modal needs the plaintext values to populate the form, so
- * this command intentionally exposes them. The CLI's `/secret list` uses a
+ * this command intentionally exposes them. The CLI's `/config secret list` uses a
  * separate code path that returns names only.
  */
 export interface SecretListCommand {

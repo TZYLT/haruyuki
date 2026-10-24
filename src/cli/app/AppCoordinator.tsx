@@ -927,7 +927,7 @@ export function App({
   const modAdapterRef = useRef<LocalModAdapter | null>(null);
 
   // Initialize chunk log for this agent + session (clears buffer, GCs old files).
-  // Re-runs when agentId changes (e.g. agent switch via /agents).
+  // Re-runs when agentId changes (e.g. agent switch via /agent list).
   useEffect(() => {
     if (agentId && agentId !== "loading") {
       chunkLog.init(agentId, telemetry.getSessionId());
@@ -3535,7 +3535,7 @@ export function App({
     processConversationRef.current = processConversation;
   }, [processConversation]);
 
-  // Reasoning tier cycling state shared by /model, /agents, and tab-cycling flows.
+  // Reasoning tier cycling state shared by /model, /agent list, and tab-cycling flows.
   const reasoningCycleDebounceMs = 500;
   const reasoningCycleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -3906,7 +3906,7 @@ export function App({
   });
 
   // Process queued overlay actions when streaming ends
-  // (commands like /agents or /model used while the agent was busy).
+  // (commands like /agent list or /model used while the agent was busy).
   useEffect(() => {
     if (
       !streaming &&

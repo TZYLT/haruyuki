@@ -1,3 +1,4 @@
+import { RETIRED_COMMAND_NAMES } from "@/cli/commands/hubs";
 import { commands as builtinCommands } from "@/cli/commands/registry";
 import type { CreateModAdapterOptions } from "@/mods/mod-adapter";
 import { createModAdapter as createModAdapterBase } from "@/mods/mod-adapter";
@@ -24,7 +25,11 @@ function stripSlash(command: string): string {
 }
 
 function getDefaultBuiltinCommandIds(): Set<string> {
-  return new Set(Object.keys(builtinCommands).map(stripSlash));
+  const ids = new Set(Object.keys(builtinCommands).map(stripSlash));
+  // Retired names stay reserved too. A user who just learned `/memfs` is gone
+  // must get the "moved to /memory memfs" answer, not somebody's mod command.
+  for (const name of RETIRED_COMMAND_NAMES) ids.add(name);
+  return ids;
 }
 
 function getDefaultReservedToolNames(): Set<string> {

@@ -1,6 +1,9 @@
 // Interactive slash commands that open overlays immediately (bypass queueing)
 // These commands let users browse/view while the agent is working
 // Any changes made in the overlay will be queued until end_turn
+
+import { isHubCommand, resolveHubInput } from "@/cli/commands/hubs";
+
 const INTERACTIVE_SLASH_COMMANDS = new Set([
   "/model",
   "/experiments",
@@ -15,12 +18,9 @@ const INTERACTIVE_SLASH_COMMANDS = new Set([
   "/agents",
   "/resume",
   "/pinned",
-  "/profiles",
   "/search",
   "/feedback",
   "/pin",
-  "/conversations",
-  "/profile",
 ]);
 
 // Non-state commands that should run immediately while the agent is busy
@@ -49,12 +49,51 @@ const NON_STATE_COMMANDS = new Set([
   "/reload", // runtime surface reload (has its own busy guard)
   "/dream", // Cloud admission or Code-managed background reflection
   "/reflect",
-  "/reflection",
 ]);
 
 export function aliasBareExitCommand(input: string): string {
   if (input === "exit" || input === "quit") return "/exit";
   return input;
+}
+
+export type RoutedSlashInput =
+  | { kind: "text"; text: string }
+  | { kind: "error"; message: string };
+
+/**
+ * The input boundary, in one place: the bare `exit`/`quit` alias, the hub
+ * rewrite, and the answer a retired name gets.
+ *
+ * The submit handler calls this before it looks at the command for anything
+ * else, so the queue-bypass rules, the custom/model lookup and the dispatch
+ * chain all see one spelling per command.
+ */
+export function routeSlashCommandInput(input: string): RoutedSlashInput {
+  const aliased = aliasBareExitCommand(input);
+  const resolution = resolveHubInput(aliased);
+  if (resolution.kind === "error") {
+    return { kind: "error", message: resolution.message };
+  }
+  if (resolution.kind === "command") {
+    return { kind: "text", text: resolution.text };
+  }
+  return { kind: "text", text: aliased };
+}
+
+/**
+ * Report a refused input the way every other command failure is reported, and
+ * tell the submit handler to clear the input box.
+ */
+export function reportRoutedInputError(
+  commandRunner: {
+    start(input: string, output: string): { fail(message: string): void };
+  },
+  input: string,
+  message: string,
+): { submitted: true } {
+  const cmd = commandRunner.start(input, message);
+  cmd.fail(message);
+  return { submitted: true };
 }
 
 // Check if a command is interactive (opens overlay, should not be queued)
@@ -66,7 +105,11 @@ export function isInteractiveCommand(msg: string): boolean {
   for (const cmd of INTERACTIVE_SLASH_COMMANDS) {
     if (trimmed.startsWith(`${cmd} `)) return true;
   }
-  return false;
+  // A hub is a menu: it either opens an overlay or prints its own subcommand
+  // list, so it must never wait in the queue behind a turn. Normally the input
+  // boundary has already rewritten it to an internal target (whose own flags
+  // decide), so this covers the call that still carries the hub name.
+  return isHubCommand(trimmed);
 }
 
 export function isNonStateCommand(msg: string): boolean {

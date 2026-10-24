@@ -3,7 +3,7 @@
 > 本文以**源码与 CLI 自带帮助为准**整理（`haruyuki --help` 与 `haruyuki <子命令> --help`），
 > 不是从上游文档抄来的。命令面随版本变化，以你手上的 `--help` 输出为最终依据。
 >
-> 标注说明：**`[隐藏]`** = 仍在注册表里可用但已从补全列表隐藏（多为别名或破坏性操作）。
+> 标注说明：旧名与 hub 的内部目标命令只作路由，不再列出；本版没有「可用但隐藏」的用户命令。
 
 ---
 
@@ -216,7 +216,7 @@ haruyuki connect ollama --base-url http://192.168.1.50:11434/v1
 haruyuki connect bedrock --method profile --profile <name> --region <region>
 ```
 
-会话内也可以直接用 `/connect`。
+会话内也可以直接用 `/config connect`。
 
 ### 密钥（`secret`）
 
@@ -340,100 +340,182 @@ haruyuki trajectories search <关键词> [--out <dir>] [--source <name>] \
 
 ## 三、会话内 slash 命令
 
-> 下面按用途分组。`[隐藏]` 表示仍可用但不在补全列表里。
+> 命令面已收拢成八个 hub：`/agent`、`/session`、`/memory`、`/messages`、`/skill`、`/context`、`/config`、`/maintenance`。
+> hub 不带子命令时会打印自己的子命令列表；`/agent`、`/memory`、`/context` 另有默认动作（见各节）。
+> 旧名不再直接运行：输入 `/memfs`、`/topics` 这类写法会被拦下，并提示新名字。
+> 其余顶层命令没有收进 hub，名字与用法保持不变。
 
-### 记忆与上下文（这是本分支的重点）
+### `/agent`（agent 管理）
 
-| 命令 | 作用 |
+不带子命令时打开 agent 浏览器（同 `/agent list`）。
+
+| 子命令 | 参数 | 说明 |
+|---|---|---|
+| `/agent list` | — | 浏览 agent（已固定 / Haruyuki / 全部） |
+| `/agent pin` | `[名字]` | 固定当前 agent |
+| `/agent unpin` | — | 取消固定当前 agent |
+| `/agent pinned` | — | 浏览已固定的 agent |
+| `/agent rename` | `<名字>` | 重命名当前 agent |
+| `/agent describe` | `<文本>` | 设置当前 agent 的描述 |
+| `/agent system` | — | 切换系统提示 |
+| `/agent personality` | — | 切换人格 |
+| `/agent toolset` | — | 切换工具集 |
+| `/agent subagents` | — | 管理自定义 subagent |
+| `/agent ade` | — | 在浏览器里打开该 agent 的 ADE |
+| `/agent profile` | `<save\|load\|delete\|usage> [名字]` | 保存 / 加载 / 删除本地 agent profile |
+
+### `/session`（会话）
+
+不带子命令时打印下面的子命令列表。
+
+| 子命令 | 参数 | 说明 |
+|---|---|---|
+| `/session rename` | `<名字>` | 重命名当前会话 |
+| `/session logout` | — | 清除已保存凭据并退出 |
+
+### `/memory`（记忆）
+
+不带子命令时查看当前 agent 的记忆。
+
+| 子命令 | 参数 | 说明 |
+|---|---|---|
+| `/memory recall` | `[设置] [值]` | 配置对早前会话与记忆的被动召回（顶层 `/recall` 仍可用） |
+| `/memory init` | — | 初始化（或重新初始化）agent 记忆 |
+| `/memory memfs` | `[enable\|disable\|sync\|reset]` | 管理文件系统记忆 |
+| `/memory remote` | `<set\|unset\|status\|push> [url]` | 把记忆仓推送到额外的 git 远端 |
+| `/memory palace` | — | 在浏览器里打开记忆查看器 |
+| `/memory config` | — | 睡眠期反思的触发与合并设置 |
+
+### `/messages`（消息）
+
+不带子命令时打印下面的子命令列表。
+
+| 子命令 | 参数 | 说明 |
+|---|---|---|
+| `/messages history` | — | 打开消息历史（快捷键 `Ctrl+X h`） |
+| `/messages clear` | — | 重置**全部** agent 消息（破坏性） |
+
+> 只想清**上下文内**消息用 `/clear`；`/messages clear` 清的是 agent 的全部消息。
+
+### `/skill`（技能）
+
+不带子命令时列出可用技能（同 `/skill list`）。
+
+| 子命令 | 参数 | 说明 |
+|---|---|---|
+| `/skill list` | — | 列出可用技能 |
+| `/skill skill-creator` | `[描述]` | 进入技能创建模式 |
+
+> 原来的 `/skills` 已收进本 hub：输入它会回答 `/skill list`，不再单独执行。
+
+### `/context`（上下文）
+
+不带子命令时查看上下文窗口占用。
+
+| 子命令 | 参数 | 说明 |
+|---|---|---|
+| `/context limit` | `[tokens] [--override]` | 设置或重置最大上下文窗口 |
+| `/context pending` | `[full]` | 查看已登记但**尚未应用**的前缀改动（记忆 / 系统提示 / 技能 / 工具 / 模型） |
+
+### `/config`（harness 配置）
+
+不带子命令时打印下面的子命令列表。
+
+| 子命令 | 参数 | 说明 |
+|---|---|---|
+| `/config connect` | — | 对接 LLM API 密钥 |
+| `/config mcp` | — | 管理 MCP 服务（添加、OAuth 连接） |
+| `/config hooks` | — | 管理 hooks 配置 |
+| `/config secret` | `<set\|list\|unset> [key] [value]` | 管理 shell 命令可用的密钥 |
+| `/config experiments` | — | 开关实验特性（含 `ui_v2` 全屏外壳）；改了**下一次启动**才生效 |
+| `/config mods` | `learn [memory-citations] [options] \| generate-env [请求]` | 运行 mod 学习目标 |
+| `/config statusline` | `[请求]` | 自定义底部状态栏 |
+| `/config title` | — | 配置终端窗口标题 |
+| `/config terminal` | `[--revert]` | 设置终端快捷键（`--revert` 撤销） |
+| `/config font-width` | `auto\|narrow\|wide` | 终端把「歧义宽度」字符画多宽（`auto` 会探测） |
+| `/config console-font` | `auto\|off\|<字体名>` | 把 Windows 控制台字体固定在指定字体 |
+| `/config stream` | — | 开关 token 流式输出 |
+| `/config reasoning-tab` | `[on\|off\|status]` | Tab 键切换推理档位 |
+| `/config system-reminders` | `[on\|off\|status]` | 显示 / 隐藏系统提醒 |
+
+### `/maintenance`（低频维护）
+
+不带子命令时打印下面的子命令列表。
+
+| 子命令 | 参数 | 说明 |
+|---|---|---|
+| `/maintenance feedback` | — | 把反馈写入**本地**日志（写 bug 请走 `github.com/TZYLT/haruyuki/issues`） |
+| `/maintenance bg` | — | 查看后台 shell 进程 |
+| `/maintenance workflows` | — | 查看 workflow 运行、其 agent 与 token 用量 |
+| `/maintenance install-github-app` | — | 在本仓库装 GitHub Action |
+
+> `/maintenance install-github-app` 装的是**上游**的 `letta-ai/letta-code-action`，本分支没有对应产物。
+
+### 顶层命令：记忆、话题与上下文
+
+| 命令 | 参数 | 说明 |
+|---|---|---|
+| `/compact` | `[n\|help]` | 在你选的话题边界裁掉较老的上下文 |
+| `/compact config` | — | 压缩模式设置（原 `/compaction`） |
+| `/topic` | `<标题> [摘要]` | 在当前会话标记一个话题边界 |
+| `/topic list` | `[--all]` | 列出当前上下文的话题块；`--all` 连历史标记一起看 |
+| `/clear` | — | 清空**上下文内**消息 |
+| `/recall` | `[设置] [值]` | 配置被动召回（同 `/memory recall`） |
+| `/recompile` | — | 重新编译当前 agent + 会话 —— **会使缓存失效，增加开销** |
+
+### 顶层命令：反思
+
+| 命令 | 参数 | 说明 |
+|---|---|---|
+| `/reflect` | `[--recent N \| --conversation ID … \| --auto] [--instruction TEXT]` | 触发反思 |
+| `/dream` | 同上 | `/reflect` 的别名 |
+
+### 顶层命令：模型
+
+| 命令 | 参数 | 说明 |
+|---|---|---|
+| `/model` | — | 切换模型 |
+
+> 技能相关入口都在 `/skill` hub 里（见上）；`/skills` 旧名已收进去。
+
+### 顶层命令：会话
+
+| 命令 | 参数 | 说明 |
+|---|---|---|
+| `/new` | — | 新建会话（保留记忆） |
+| `/fork` | — | 分叉当前会话 |
+| `/btw` | `<问题>` | 分叉会话并问一个旁支问题 |
+| `/resume` | `[conversation_id]` | 恢复历史会话 |
+| `/cd` | `<路径>` | 切换本 TUI 会话的工作目录 |
+| `/exit` | — | 退出会话 |
+
+### 顶层命令：检索、诊断、页与帮助
+
+| 命令 | 参数 | 说明 |
+|---|---|---|
+| `/search` | `[查询]` | 跨全部 agent 搜索消息 |
+| `/doctor` | `[症状]` | 在当前会话里排查某个 agent 问题 |
+| `/usage` | — | 打开用量页（总览 + 明细） |
+| `/tabs` | — | 列出打开的 tab（Enter 切换，D 关闭） |
+| `/close` | — | 关闭当前 tab |
+| `/settings` | — | 打开设置页 |
+| `/help` | — | 显示可用命令 |
+| `/reload` | — | 重载设置与本地 mod（**不会**重载 app 的 TypeScript 源码） |
+
+> `/usage`、`/tabs`、`/close`、`/settings` 是**全屏外壳**的页面命令；在追加式外壳里只回一行提示。切换外壳用 `/config experiments`。
+
+### 已删除的名字（改用右边写法）
+
+| 已删除 | 改用 |
 |---|---|
-| `/init` | 初始化（或重新初始化）agent 记忆 |
-| `/memory` | 查看 agent 记忆 |
-| `/palace` | 在浏览器里打开记忆查看器 |
-| `/memfs [enable\|disable\|sync\|reset]` | 管理文件系统记忆 |
-| `/memory-repository <set\|unset\|status\|push> [url]` | 把记忆仓推送到额外的 git 远端 |
-| `/topic <标题> [摘要]` | 在当前会话标记一个话题边界 |
-| `/topics [--all]` | 列出当前上下文的话题块 |
-| `/compact [n\|help]` | 在你选的话题边界裁掉较老的上下文 |
-| `/context` | 查看上下文窗口占用 |
-| `/context-limit [tokens] [--override]` | 设置或重置最大上下文窗口（`[隐藏]` 别名 `/set-max-context`） |
-| `/context-pending [full]` | 查看已登记但**尚未应用**的前缀改动（记忆 / 系统提示 / 技能 / 工具 / 模型） |
-| `/recompile` | 重新编译当前 agent + 会话 —— **会使缓存失效，增加开销** |
-| `/compaction` | 压缩模式设置 |
-
-### 反思（被动记忆）
-
-| 命令 | 作用 |
-|---|---|
-| `/reflect [--recent N \| --conversation ID … \| --auto] [--instruction TEXT]` | 触发反思 |
-| `/dream …` | `/reflect` 的别名 |
-| `[隐藏] /reflection …` | 同上 |
-| `/sleeptime` | 配置睡眠期反思的触发与合并设置 |
-
-### 模型与工具面
-
-| 命令 | 作用 |
-|---|---|
-| `/model` | 切换模型 |
-| `/system` | 切换系统提示 |
-| `/personality` | 切换人格 |
-| `/toolset` | 切换工具集（取代旧的 `/link`、`/unlink`） |
-| `[隐藏] /reasoning-tab [on\|off\|status]` | Tab 键切换推理档位 |
-| `[隐藏] /link` `[隐藏] /unlink` | 已废弃，请用 `/toolset` |
-| `/experiments` | 开关实验特性（含 `ui_v2` 全屏外壳）；改了**下一次启动**才生效 |
-
-### 技能、mod、MCP、密钥
-
-| 命令 | 作用 |
-|---|---|
-| `/skills` | 浏览可用技能 |
-| `/skill-creator [描述]` | 进入技能创建模式 |
-| `/mods learn [memory-citations] [options] \| generate-env [请求]` | 运行 mod 学习目标 |
-| `/hooks` | 管理 hooks 配置 |
-| `/mcp` | 管理 MCP 服务（添加、OAuth 连接） |
-| `/secret <set\|list\|unset> [key] [value]` | 管理 shell 命令可用的密钥 |
-| `/install-github-app` | 在本仓库装 GitHub Action |
-
-> `/install-github-app` 装的是**上游**的 `letta-ai/letta-code-action`，本分支没有对应产物。
-
-### 会话与 agent 管理
-
-| 命令 | 作用 |
-|---|---|
-| `/agents` | 浏览 agent（已固定 / Haruyuki / 全部） |
-| `/new` | 新建会话（保留记忆） |
-| `/fork` | 分叉当前会话 |
-| `/btw <问题>` | 分叉会话并问一个旁支问题 |
-| `/resume [conversation_id]` | 恢复历史会话 |
-| `/pin [名字]` / `/unpin` | 固定 / 取消固定当前 agent |
-| `[隐藏] /pinned` `[隐藏] /profiles` | 浏览已固定 agent |
-| `/rename agent [名字] \| convo [名字]` | 重命名 agent 或会话 |
-| `/description <文本>` | 更新 agent 描述 |
-| `/subagents` | 管理自定义 subagent |
-| `/clear` | 清空**上下文内**消息 |
-| `[隐藏] /clear-messages` | 重置**全部** agent 消息（破坏性） |
-| `/chdir <路径>` | 切换本 TUI 会话的工作目录（`[隐藏]` 别名 `/cd`） |
-
-### 检索、诊断与用量
-
-| 命令 | 作用 |
-|---|---|
-| `/search [查询]` | 跨全部 agent 搜索消息 |
-| `/doctor [症状]` | 在当前会话里排查某个 agent 问题 |
-| `/usage` | 本会话用量统计与余额 |
-| `/bg` | 查看后台 shell 进程 |
-| `/workflows` | 查看 workflow 运行、其 agent 与 token 用量 |
-| `/feedback` | 把反馈写入**本地**日志（写 bug 请走 `github.com/TZYLT/haruyuki/issues`） |
-| `/statusline [请求]` | 自定义底部状态栏 |
-| `/title` | 配置终端窗口标题 |
-| `/terminal` | 设置终端快捷键（`--revert` 撤销） |
-| `/ade` | 在 ADE 里打开 agent |
-| `[隐藏] /system-reminders [on\|off\|status]` | 显示 / 隐藏系统提醒 |
-| `[隐藏] /stream` | 开关 token 流式输出 |
-| `/reload` | 重载设置与本地 mod（**不会**重载 app 的 TypeScript 源码） |
-| `/connect` | 对接 LLM API 密钥 |
-| `/logout` | 清除已保存凭据并退出 |
-| `/exit` | 退出会话 |
-| `[隐藏] /help` | 显示可用命令 |
+| `/chdir` | `/cd <路径>` |
+| `/reflection` | `/reflect` |
+| `/set-max-context` | `/context limit` |
+| `/profiles` | `/agent pinned` |
+| `/link` | `/agent toolset` |
+| `/unlink` | `/agent toolset` |
+| `/conversations` | `/resume` |
+| `/profile` | `/agent profile <save\|load\|delete\|usage> [名字]` |
 
 ---
 
@@ -441,7 +523,7 @@ haruyuki trajectories search <关键词> [--out <dir>] [--source <name>] \
 
 1. **`--help` 是最终依据。** 本文按当前源码整理，命令面会变；有疑问就跑
    `haruyuki <子命令> --help`。
-2. **`/recompile` 会花钱。** 它使前缀缓存失效。想看有什么待应用，先 `/context-pending`。
+2. **`/recompile` 会花钱。** 它使前缀缓存失效。想看有什么待应用，先 `/context pending`。
 3. **改记忆前先 `haruyuki memory backup`。** 记忆是 git 仓，但快照比 `git reflog` 直观。
 4. **密钥别走 argv。** `haruyuki secret set KEY VALUE` 会把值暴露在进程列表里，用 `--stdin`。
 5. **`/reload` 救不了改源码。** 改了 app 的 TypeScript 文件必须重启进程；新增 slash 命令同理。

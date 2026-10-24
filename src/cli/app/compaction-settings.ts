@@ -1,5 +1,5 @@
 /**
- * Turning a `/compaction` selection into the settings patch the backend stores,
+ * Turning a `/compact config` selection into the settings patch the backend stores,
  * plus the receipt line the overlay reports.
  *
  * Kept out of `use-configuration-handlers.ts` for two reasons: that file is at
@@ -11,7 +11,7 @@ import type { CompactionSelection } from "@/cli/components/CompactionSelector";
 import { assertCompactionModeForBackend } from "@/cli/helpers/compaction-mode";
 
 /**
- * The concrete settings object `/compaction` writes. `AgentState` types the
+ * The concrete settings object `/compact config` writes. `AgentState` types the
  * stored value and its `mode` as optional, but this function always sets the
  * mode, so the patch narrows both.
  */

@@ -3,13 +3,13 @@
 /**
  * Does this input ask for the experiments selector?
  *
- * `/experiments diffs [path]` is a **different** command (the worktree diff face)
- * and is handled beside this one; everything else that starts with `/experiments`
+ * `/config experiments diffs [path]` is a **different** command (the worktree diff face)
+ * and is handled beside this one; everything else that starts with `/config experiments`
  * is the selector — no argument at all, or a name someone typed expecting it to
- * select that row (`/experiments ui_v2`).
+ * select that row (`/config experiments ui_v2`).
  *
  * That last case is why this is a function with a test. The handler only matched
- * the bare command, so `/experiments ui_v2` fell through to the registry, which
+ * the bare command, so `/config experiments ui_v2` fell through to the registry, which
  * answered "Opening experiments selector..." and opened nothing: the receipt
  * described an action nobody took. The maintainer hit it on 2026-10-23 and asked
  * for either a real open or a different sentence; opening it is the half that

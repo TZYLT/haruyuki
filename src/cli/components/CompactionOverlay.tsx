@@ -1,7 +1,7 @@
 /**
  * The "compaction" overlay slot, which is two selectors behind one name.
  *
- * `/compaction` configures the mode; `/compact` (with topic markers to choose
+ * `/compact config` configures the mode; `/compact` (with topic markers to choose
  * between) asks the submit handler for a cut point and parks a
  * {@link TopicTrimRequest} in `@/cli/helpers/topic-trim-request`. AppView renders
  * this component for both, so the picker needs no new props threaded through the
@@ -19,7 +19,7 @@ import { TopicSelector } from "./TopicSelector";
 export const CompactionOverlay = memo(function CompactionOverlay(
   props: CompactionSelectorProps,
 ) {
-  // Take the request once per mount: an overlay opened by `/compaction` finds
+  // Take the request once per mount: an overlay opened by `/compact config` finds
   // nothing here and falls through to the mode picker.
   const [request] = useState(() => takeTopicTrimRequest());
   if (request) {

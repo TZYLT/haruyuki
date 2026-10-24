@@ -7,10 +7,10 @@ import { Text } from "@/cli/components/Text";
 /**
  * The overlay toolkit's text sub-view: the labelled editor row.
  *
- * Ten overlays in this tree ask for one line of text — `/connect`'s filter, its
+ * Ten overlays in this tree ask for one line of text — `/config connect`'s filter, its
  * API key, its OAuth provider name and each of its `multiInput` fields,
- * `/hooks`'s matcher and command, `/recall`'s and `/compaction`'s value
- * editors, `/pin`'s agent name, `/sleeptime`'s two inline fields, `/feedback`'s
+ * `/config hooks`'s matcher and command, `/recall`'s and `/compact config`'s value
+ * editors, `/pin`'s agent name, `/memory config`'s two inline fields, `/maintenance feedback`'s
  * message — and nine of them asked for it by hand: a `useInput` that appended
  * `input` to a string and `slice(0, -1)` on Backspace, with the text painted as
  * a plain `<Text>`. That is why none of them had a caret, and why a paste into
@@ -20,11 +20,11 @@ import { Text } from "@/cli/components/Text";
  * So the row is here once, built on the editor the composer already uses: the
  * caret, the paste channel, the IME accumulation and the parent-drivable cursor
  * offset all come from `PasteAwareTextInput`, and this module only decides what
- * surrounds it — the marker before it and, for `/connect`, the status text
+ * surrounds it — the marker before it and, for `/config connect`, the status text
  * after it.
  *
  * **Optional on purpose.** `marker: null` is a field with no `> ` in front of
- * it (`/hooks` draws the editor inside its own rounded box, and `/connect`'s
+ * it (`/config hooks` draws the editor inside its own rounded box, and `/config connect`'s
  * in-place fields are labelled by the row they sit in); `focus` is what an
  * in-place field passes when it is not the row the cursor is on — with it off,
  * the editor declines every key, so a form can move over a text field without
@@ -44,14 +44,14 @@ export interface OverlayTextFieldProps {
   /**
    * What sits before the editor. A plain string is painted in `markerColor`;
    * anything else is drawn as it is, the way `OverlayFrame`'s `footer` works, so
-   * a face can hand over its own label (`/connect`'s dim `Filter: `, its
+   * a face can hand over its own label (`/config connect`'s dim `Filter: `, its
    * per-field `> Label:` runs). `null` draws nothing at all — which is not the
    * same as `""`, a marker that still takes its place in the row.
    */
   marker?: ReactNode;
   /**
    * The marker's colour. Defaults to the approval-header accent the value
-   * editors use; `/connect` and `/feedback` prompt in the selector accent
+   * editors use; `/config connect` and `/maintenance feedback` prompt in the selector accent
    * instead, and that difference is visible, so it stays a parameter.
    */
   markerColor?: string;

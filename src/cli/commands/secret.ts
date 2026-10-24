@@ -1,5 +1,5 @@
 /**
- * /secret command handler for managing secrets.
+ * /config secret command handler for managing secrets.
  * Secrets are stored per agent and can be referenced via $SECRET_NAME syntax
  * in shell commands.
  */
@@ -16,11 +16,11 @@ export interface SecretCommandResult {
 }
 
 /**
- * Handle the /secret command.
+ * Handle the /config secret command.
  * Usage:
- *   /secret set KEY value  - Set a secret
- *   /secret list           - List available secret names
- *   /secret unset KEY      - Unset a secret
+ *   /config secret set KEY value  - Set a secret
+ *   /config secret list           - List available secret names
+ *   /config secret unset KEY      - Unset a secret
  */
 export async function handleSecretCommand(
   args: string[],
@@ -30,12 +30,12 @@ export async function handleSecretCommand(
   switch (subcommand) {
     case "set": {
       if (!key) {
-        return { output: "Usage: /secret set KEY value" };
+        return { output: "Usage: /config secret set KEY value" };
       }
       if (!value) {
         return {
           output:
-            "Usage: /secret set KEY value\nProvide a value for the secret.",
+            "Usage: /config secret set KEY value\nProvide a value for the secret.",
         };
       }
 
@@ -75,7 +75,7 @@ export async function handleSecretCommand(
       if (names.length === 0) {
         return {
           output:
-            "No secrets stored.\nUse /secret set KEY value to add a secret.",
+            "No secrets stored.\nUse /config secret set KEY value to add a secret.",
         };
       }
 
@@ -90,7 +90,7 @@ export async function handleSecretCommand(
     case "remove":
     case "rm": {
       if (!key) {
-        return { output: "Usage: /secret unset KEY" };
+        return { output: "Usage: /config secret unset KEY" };
       }
 
       const normalizedKey = key.toUpperCase();
@@ -106,7 +106,7 @@ export async function handleSecretCommand(
         }
 
         return {
-          output: `Secret '$${normalizedKey}' not found.\nUse /secret list to see available secrets.`,
+          output: `Secret '$${normalizedKey}' not found.\nUse /config secret list to see available secrets.`,
         };
       } catch (error) {
         return {
@@ -133,7 +133,7 @@ Your agent can use $SECRET_NAME in shell commands and the value will be substitu
 
     default: {
       return {
-        output: `Unknown subcommand '${subcommand}'.\nUse /secret help for usage.`,
+        output: `Unknown subcommand '${subcommand}'.\nUse /config secret help for usage.`,
       };
     }
   }

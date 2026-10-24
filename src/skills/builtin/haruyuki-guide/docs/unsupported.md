@@ -19,7 +19,7 @@ document exists so those questions get a factual answer instead of a guess.
 - `--backend` documents a single value. The help text is literally
   `Backend mode: "local"` — `src/cli/args.ts:125-132`.
 - Startup configures the local backend unconditionally, with a comment saying it
-  is the only one — `src/index.ts:496-499`.
+  is the only one — `src/index.ts:410-413`.
 - The default server URL is a self-hosted address, `http://localhost:8283`, and
   the source states that Cloud is deliberately not a default anywhere —
   `src/backend/api/server-url.ts:12`, `src/backend/api/server-url.ts:31-33`.
@@ -69,35 +69,36 @@ Teleport, shared memory, and cloud computers were removed outright; the
 
 ## Feedback is written to a local file
 
-`/feedback` does not transmit anything. `submitFeedbackMetadata` appends the
-report to a JSONL log on disk so you can attach it to an issue yourself —
-`src/backend/api/metadata.ts:55-70`, and the sink is `appendLocalFeedback` from
-`src/telemetry/local-feedback-log.ts:53-57`. The file is
-`~/.haruyuki/logs/feedback.jsonl` and rotates at 10 MB with 10 files retained —
-`src/telemetry/local-feedback-log.ts:20-26`. Note that this path is built from
-the OS home directory rather than from the harness-root resolver, so it does
-**not** move when `HARUYUKI_HOME` is set —
+`/maintenance feedback` does not transmit anything. `submitFeedbackMetadata`
+appends the report to a JSONL log on disk so you can attach it to an issue
+yourself — `src/backend/api/metadata.ts:55-70`, and the sink is
+`appendLocalFeedback` from `src/telemetry/local-feedback-log.ts:53-57`. The file
+is `~/.haruyuki/logs/feedback.jsonl` and rotates at 10 MB with 10 files
+retained — `src/telemetry/local-feedback-log.ts:20-26`. Note that this path is
+built from the OS home directory rather than from the harness-root resolver, so
+it does **not** move when `HARUYUKI_HOME` is set —
 `src/telemetry/local-feedback-log.ts:16-20`.
 
 The command description points at this repository's own issue tracker instead of
-a hosted support channel — `src/cli/commands/registry.ts:422-428`. There is no
+a hosted support channel — `src/cli/commands/registry.ts:499-506`. There is no
 hosted status page and no support community for this build.
 
-## Flags and wording that survived a removal
+## Flags and wording around removals
 
-Two survive and are easy to misread. Both are covered here rather than in the
-command reference, because the honest answer is "this is what it says, this is
-what it does".
+One flag survives and is easy to misread; one piece of wording did not survive
+and is worth knowing about. Both are covered here rather than in the command
+reference, because the honest answer is "this is what it says, this is what it
+does".
 
 - **`--computer <selector>`** still exists and still describes routing a
   headless message to an environment connection "on the configured server" —
   `src/cli/args.ts:206-214`. With the default server URL that means your own
   `haruyuki server`; it is not a hosted fleet.
-- **`/usage`** is described as "session usage statistics and balance" —
-  `src/cli/commands/registry.ts:386-394`. The tier read behind it is a request
-  to the configured server (`GET /v1/metadata/balance` —
-  `src/backend/api/metadata.ts:38-53`) and it fails soft to `null`, so on a
-  local-only install there is no balance to show.
+
+`/usage` no longer carries the old "session usage statistics and balance"
+wording: it is an ordinary page command that opens the local Usage page
+(overview and breakdown) in the full-screen shell. No balance is read, so a
+local-only install has no balance to show.
 
 Some source strings still name hosted hosts, and none of them is a runtime
 route: the Slack presenter builds viewer links against the hosted chat host

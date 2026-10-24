@@ -66,7 +66,7 @@ export function refusesWhileBusy(): boolean {
 /**
  * Spend a switch request that arrived while a turn is running.
  *
- * One call for the three typed paths (`/resume`, `/search`, `/agents`) because the
+ * One call for the three typed paths (`/resume`, `/search`, `/agent list`) because the
  * shapes were identical: a command row that says "queued", an update to a running
  * phase, and a `setQueuedOverlayAction` for the turn's end. Under the refusing
  * policy the same row is failed instead, so the picker the user came from closes

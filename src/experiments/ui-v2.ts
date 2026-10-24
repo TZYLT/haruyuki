@@ -16,14 +16,14 @@ import { experimentManager } from "./manager";
  * a full-height frame into the primary buffer on every tick, where Ink cannot
  * incrementally erase it.
  *
- * The first read therefore wins for both. `/experiments` and `HARUYUKI_UI_V2`
+ * The first read therefore wins for both. `/config experiments` and `HARUYUKI_UI_V2`
  * take effect on the next start.
  *
  * **Runtime switching was ruled out (2026-10-23).** It cannot be made seamless:
  * the transcript is a committed `<Static>` in the append shell, so swapping the
  * shell mid-session re-prints history, and `alternateScreen` is a `render()`
  * option chosen once for the process. Rather than pretend, the switch now says
- * what it is — the settings row carries `restart` and `/experiments` carries a
+ * what it is — the settings row carries `restart` and `/config experiments` carries a
  * footer — and the resolution stays cache-once. Anything that made this value
  * changeable at runtime would have to answer both the `<Static>` identity and the
  * buffer question in the same keystroke.

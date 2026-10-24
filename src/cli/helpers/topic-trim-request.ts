@@ -10,7 +10,7 @@
  *
  * It is deliberately single-consumer and one-shot: `takeTopicTrimRequest`
  * hands the request to the picker and clears it, so the picker that mounts for
- * `/compaction` (mode settings) cannot render a stale topic list. Every
+ * `/compact config` (mode settings) cannot render a stale topic list. Every
  * `/compact` clears the slot before it decides, which covers the only remaining
  * case — a request parked by a run that never opened the overlay.
  */

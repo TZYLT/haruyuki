@@ -496,7 +496,9 @@ export async function generateAndOpenMemoryViewer(
   const repoDir = memoryRoot;
 
   if (!existsSync(join(repoDir, ".git"))) {
-    throw new Error("Memory viewer requires memfs. Run /memfs enable first.");
+    throw new Error(
+      "Memory viewer requires memfs. Run /memory memfs enable first.",
+    );
   }
 
   // 1. Collect data

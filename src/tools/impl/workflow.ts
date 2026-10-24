@@ -512,7 +512,7 @@ export async function workflow(args: WorkflowArgs): Promise<WorkflowResult> {
     if (processState.completionNotificationSuppressed) return;
     const durationMs = Date.now() - (processState.startTime?.getTime() ?? 0);
     // The summary is what the transcript shows for the notification, so it
-    // carries the same numbers as /workflows.
+    // carries the same numbers as /maintenance workflows.
     const summary = outcome.run
       ? `Workflow "${meta.description}" completed · ${formatWorkflowSummary({
           durationMs,

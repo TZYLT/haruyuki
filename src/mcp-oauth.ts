@@ -452,7 +452,7 @@ class PersistentMcpOAuthProvider implements OAuthClientProvider {
     this.assertOpen();
     if (!this.interactive) {
       throw new Error(
-        "MCP authentication requires user authorization. Open /mcp and press R to sign in.",
+        "MCP authentication requires user authorization. Open /config mcp and press R to sign in.",
       );
     }
     this.onStatus?.(

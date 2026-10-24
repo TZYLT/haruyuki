@@ -102,8 +102,8 @@ places, and both are this repository quoting itself:
    document that is wrong. The generated index additionally reproduces each
    subcommand's `--help` text because it captures it at runtime.
 2. **The phrase "Memory Palace" appears once**, inside the generated index, as
-   this repository's own description of the `/palace` command —
-   `src/cli/commands/registry.ts:132-140`. It is not used as an explanatory
+   this repository's own description of the `/memory palace` command —
+   `src/cli/commands/hubs.ts:149-152`. It is not used as an explanatory
    device anywhere in the hand-written documents; they describe what the command
    opens and cite the registry.
 

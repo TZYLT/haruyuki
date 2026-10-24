@@ -834,9 +834,11 @@ export function useConfigurationHandlers(ctx: ConfigurationHandlersContext) {
           overlayCommand ??
           commandRunner.start(
             "/personality",
-            "Memory filesystem is disabled. Run /memfs enable first.",
+            "Memory filesystem is disabled. Run /memory memfs enable first.",
           );
-        cmd.fail("Memory filesystem is disabled. Run `/memfs enable` first.");
+        cmd.fail(
+          "Memory filesystem is disabled. Run `/memory memfs enable` first.",
+        );
         return;
       }
 

@@ -250,14 +250,14 @@ describe("SlashCommandAutocomplete on the frame", () => {
     const rows = await frame("/");
 
     expect(rows.slice(0, 8)).toEqual([
-      "  /agents        Browse agents (pinned, Haruyuki, all)",
+      "  /agent         Agent: browse, pin, rename, describe, system, personality, tools",
       "  /model         Switch model",
-      "  /init          Initialize (or re-init) your agent's memory",
       "  /doctor        Investigate an agent issue in this conversation",
-      "  /memory        View your agent's memory",
+      "  /memory        Memory: view, init, filesystem backend, remote, palace, recall",
       "  /search        Search messages across all agents (/search [query])",
-      "  /sleeptime     Configure sleep-time reflection trigger and merge settings",
-      "  /compaction    Configure compaction mode settings",
+      "  /recall        Configure passive recall of earlier conversations and memory",
+      "  /clear         Clear in-context messages",
+      "  /cd            Change working directory for this TUI session (/cd <path>)",
     ]);
     expect(rows).toHaveLength(9);
     expect(rows[8]).toMatch(MORE_BELOW);

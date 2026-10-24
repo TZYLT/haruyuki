@@ -61,7 +61,7 @@
  * ## What the target face is
  *
  * `Consolas` — the face the user asked for, and the one the layout's default
- * ambiguous width assumes (`/font-width`). The hypothesis that conhost would
+ * ambiguous width assumes (`/config font-width`). The hypothesis that conhost would
  * *replace* it because Consolas carries no CJK glyphs was tested against a real
  * conhost on 2026-10-23: after forcing `Consolas` on a window and printing
  * Chinese, block glyphs and `—`, the console still reported `Consolas` 400 ms and
@@ -99,7 +99,7 @@ const TRUE_TYPE_FAMILY_FLAGS = 0x06;
  * The preset face: what to draw with when nothing else says otherwise.
  *
  * `Consolas` is the face this session is designed against: a Western monospace at
- * ~0.55 em, which is what makes ambiguous characters one column (`/font-width`),
+ * ~0.55 em, which is what makes ambiguous characters one column (`/config font-width`),
  * and it is what the user asked for by name. Its tiny cell (7×16 at the height
  * this machine's window uses) is the opposite of the complaint this guard exists
  * to answer.

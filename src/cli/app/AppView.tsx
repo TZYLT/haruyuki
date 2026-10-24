@@ -690,7 +690,7 @@ export function AppView(props: AppViewRenderProps) {
                   onSelect={(path) => {
                     setWorktreeDiffSelectorPending(null);
                     const overlayCommand = completeOverlay("worktree-diff");
-                    // The face, not the browser: `/experiments diffs` is the diff
+                    // The face, not the browser: `/config experiments diffs` is the diff
                     // face's first door (`docs/38` §16.2), and the HTML viewer is
                     // still reachable from inside it (`O`). The selector's own row is
                     // handed over so one command stays one line in either shell.
@@ -1251,7 +1251,7 @@ export function AppView(props: AppViewRenderProps) {
                       "Opening MCP server manager...",
                     );
                   cmd.finish(
-                    "Add a client-local server with `/mcp add --transport <stdio|http|sse> <name> <command|url> ...`.",
+                    "Add a client-local server with `/config mcp add --transport <stdio|http|sse> <name> <command|url> ...`.",
                     true,
                   );
                 }}

@@ -7,7 +7,7 @@ import { colors } from "./colors";
 import { Text } from "./Text";
 
 /**
- * The `/connect` manage step, as markup.
+ * The `/config connect` manage step, as markup.
  *
  * Split out of the face for the reason the size ratchet exists: what a connected
  * provider shows (its records, their usage rows when it is a ChatGPT OAuth

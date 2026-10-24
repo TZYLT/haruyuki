@@ -2,7 +2,7 @@
  * In-process registry of Workflow tool runs, kept for status reporting.
  *
  * The Workflow tool launches a run in the background and returns at once; the
- * run then reports progress here. The /workflows command, the status rows
+ * run then reports progress here. The /maintenance workflows command, the status rows
  * under the input, and the completion summary read from it; the TUI
  * subscribes to change notifications so nothing polls. Entries for finished
  * runs are retained for a short while so the final numbers stay visible.

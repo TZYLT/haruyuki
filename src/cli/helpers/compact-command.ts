@@ -44,7 +44,7 @@ export const COMPACT_COMMAND_USAGE = [
   "Every trim compresses this conversation's own history by the compression rate",
   "(sliding_window_percentage), and a cut may never keep more than that rate",
   "allows — so block 1, which keeps the whole context, is cut down to the rate's",
-  "own point. `/topics` lists the blocks, numbered oldest first.",
+  "own point. `/topic list` lists the blocks, numbered oldest first.",
 ].join("\n");
 
 /**
@@ -112,7 +112,7 @@ function formatTopicTrimRefusal(outcome: LocalTopicTrimOutcome): string {
     case "no_suggestion":
       return "There is nothing in this conversation's context to trim.";
     case "unknown_block":
-      return "That topic block does not exist. Run /topics to list the current blocks.";
+      return "That topic block does not exist. Run /topic list to list the current blocks.";
     default:
       // The cut point resolved to the start of the context. The rate only does
       // that when there is nothing it can compress (one message, or a length it
@@ -120,7 +120,7 @@ function formatTopicTrimRefusal(outcome: LocalTopicTrimOutcome): string {
       if (outcome.source === "ratio_suggestion") {
         return `Nothing to trim: this conversation is too short to compress — the cut point is the start of the context, so the summary would replace nothing. Nothing was written.`;
       }
-      return "Nothing to trim: that cut point is the start of the context, so everything in it is already kept. Run /topics to see the blocks you can cut at. Nothing was written.";
+      return "Nothing to trim: that cut point is the start of the context, so everything in it is already kept. Run /topic list to see the blocks you can cut at. Nothing was written.";
   }
 }
 

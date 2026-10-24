@@ -288,7 +288,7 @@ export const RecallOverlay = memo(function RecallOverlay({
    * face did before: their cancel binding consumes Escape *and* Ctrl+C, so
    * Ctrl+C on a sub-picker went back rather than out. That is preserved here on
    * purpose — the wizard's rule (Ctrl+C closes from anywhere) is the one
-   * `/connect` needed, and changing it under a face that never asked is not what
+   * `/config connect` needed, and changing it under a face that never asked is not what
    * this batch is for.
    */
   const leave = useCallback(() => {

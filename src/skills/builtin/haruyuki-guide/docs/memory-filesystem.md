@@ -155,7 +155,7 @@ Defaults live in one frozen object —
 - Memory commits go through `commitMemoryWrite`, which stages with
   `git add -A -- <pathspecs>`; with nothing staged it reports
   `{ committed: false }`, and a failed commit rolls the index back with
-  `git reset HEAD -- <pathspecs>` — `src/agent/memory-git.ts:1157-1232`.
+  `git reset HEAD -- <pathspecs>` — `src/agent/memory-git.ts:1234-1273`.
 - Author identity: the commit uses the agent's `authorName` (falling back to
   its id) and `authorEmail`, falling back to the operator's global identity —
   `src/agent/memory-git.ts:1198-1206`.
@@ -179,7 +179,7 @@ Defaults live in one frozen object —
 - `pullMemory` tries `git pull --ff-only` first. If the histories share no
   merge base it backs the old `HEAD` up under
   `refs/letta-backup/pre-sync-<timestamp>` and resets to the remote; otherwise
-  it falls back to `pull --rebase` — `src/agent/memory-git.ts:1588-1662`.
+  it falls back to `pull --rebase` — `src/agent/memory-git.ts:1588-1684`.
 
 ## Worktrees
 

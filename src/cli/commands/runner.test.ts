@@ -119,7 +119,7 @@ describe("command input preservation in handlers", () => {
         refreshDerived: () => {},
         setCommandRunning: () => {},
       },
-      "/mcp add",
+      "/config mcp add",
     );
     setActiveMcpCommandId(null);
 
@@ -130,7 +130,7 @@ describe("command input preservation in handlers", () => {
     });
     expect(line?.kind).toBe("command");
     if (line && line.kind === "command") {
-      expect(line.output).toContain("/mcp help");
+      expect(line.output).toContain("/config mcp help");
     }
   });
 

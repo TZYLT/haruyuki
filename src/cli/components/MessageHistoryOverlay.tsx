@@ -18,7 +18,7 @@ import { useOverlayList } from "@/cli/overlay/use-overlay-list";
 import { Text } from "./Text";
 
 /**
- * `/message-history` — what the shell told the user, and when (M6-P6).
+ * `/messages history` — what the shell told the user, and when (M6-P6).
  *
  * `docs/38` §15.2 renamed this from "history" on purpose: `history` reads as shell
  * history, and this is not that. It is the log behind the toast band — the rows a
@@ -29,7 +29,7 @@ import { Text } from "./Text";
  *
  * The only action is `C`, and it is the one action that can lose something, so it
  * asks first (the ruling says "需确认"): the confirmation replaces the list in the
- * same frame, the way `/hooks`' delete does, because that is this tree's shape for
+ * same frame, the way `/config hooks`' delete does, because that is this tree's shape for
  * a destructive step inside a face.
  *
  * Everything else is the toolkit: `useOverlayList` owns the cursor, the window

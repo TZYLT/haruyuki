@@ -426,11 +426,17 @@ function flagsInHelp(text) {
 
 // --- slash commands ---------------------------------------------------------
 
-function parseSlashCommands(source) {
+function parseSlashCommands(source, runtimeCommands) {
   const pattern = /^ {2}"(\/[a-z0-9-]+)": \{\n([\s\S]*?)^ {2}\},$/gm;
   const commands = [];
   for (const match of source.matchAll(pattern)) {
     const body = match[2];
+    // `internal` entries are the targets a hub rewrites to (e.g. `/memfs`
+    // behind `/memory memfs`). They are not a surface: the hub table below is
+    // where they are described, and a user who types one is answered with the
+    // move. The flag is read from the loaded registry because it is applied by
+    // a rule at the end of that file, not written into each entry.
+    if (runtimeCommands?.[match[1]]?.internal) continue;
     const args = /args:\s*"((?:[^"\\]|\\.)*)"/.exec(body);
     const description = /desc:\s*"((?:[^"\\]|\\.)*)"/.exec(body);
     commands.push({
@@ -447,6 +453,35 @@ function parseSlashCommands(source) {
     );
   }
   return commands;
+}
+
+/**
+ * The hub table, flattened to one row per invocation.
+ *
+ * Read from `src/cli/commands/hubs.ts` rather than parsed: the table is the
+ * source of truth, so the shipped reference cannot describe a subcommand the
+ * build does not have.
+ */
+async function collectHubSubcommands() {
+  const { HUBS } = await import("@/cli/commands/hubs");
+  const rows = [];
+  for (const hub of Object.values(HUBS)) {
+    if (hub.bare) {
+      rows.push({
+        command: hub.name,
+        args: null,
+        description: hub.bare.desc,
+      });
+    }
+    for (const sub of hub.subcommands) {
+      rows.push({
+        command: `${hub.name} ${sub.name}`,
+        args: sub.args ?? null,
+        description: sub.desc,
+      });
+    }
+  }
+  return rows;
 }
 
 // --- rendering --------------------------------------------------------------
@@ -497,7 +532,8 @@ function renderSubcommand(entry) {
 }
 
 function renderIndex(document) {
-  const { subcommands, slashCommands, generatedFrom } = document;
+  const { subcommands, slashCommands, hubSubcommands, generatedFrom } =
+    document;
   const parts = [];
 
   parts.push(
@@ -582,6 +618,22 @@ function renderIndex(document) {
     ),
   ].join("\n");
 
+  const hubTable = [
+    "| Invocation | Arguments | What it does |",
+    "| --- | --- | --- |",
+    ...hubSubcommands.map((entry) =>
+      [
+        `\`${entry.command}\``,
+        entry.args ? `\`${entry.args}\`` : "—",
+        entry.description,
+      ]
+        .map(escapeCell)
+        .join(" | ")
+        .replace(/^/, "| ")
+        .replace(/$/, " |"),
+    ),
+  ].join("\n");
+
   parts.push(
     [
       "## Slash commands",
@@ -591,6 +643,19 @@ function renderIndex(document) {
       "Commands marked hidden still work but are kept out of autocomplete.",
       "",
       slashTable,
+      "",
+    ].join("\n"),
+  );
+
+  parts.push(
+    [
+      "## Hub subcommands",
+      "",
+      "Derived from `src/cli/commands/hubs.ts`. A hub owns the subcommands below;",
+      "typing a former top-level name is answered with the hub form that replaced",
+      "it, so these are the only spellings that run.",
+      "",
+      hubTable,
       "",
     ].join("\n"),
   );
@@ -654,13 +719,15 @@ async function collectSubcommands(cache) {
 
 async function buildDocument() {
   const cache = new Map();
-  const [subcommands, registrySource] = await Promise.all([
+  const [subcommands, registrySource, registry] = await Promise.all([
     collectSubcommands(cache),
     readRepositoryFile(REGISTRY_PATH),
+    import("@/cli/commands/registry"),
   ]);
   const document = {
     subcommands,
-    slashCommands: parseSlashCommands(registrySource),
+    slashCommands: parseSlashCommands(registrySource, registry.commands),
+    hubSubcommands: await collectHubSubcommands(),
     generatedFrom: `\`${ROUTER_PATH}\` and \`${REGISTRY_PATH}\``,
   };
 
@@ -778,4 +845,9 @@ main()
     process.exitCode = 1;
   });
 
-export { parseSlashCommands, parseSubcommandCases, renderIndex, flagsInHelp };
+export {
+  parseSlashCommands,
+  parseSubcommandCases,
+  renderIndex,
+  flagsInHelp,
+};

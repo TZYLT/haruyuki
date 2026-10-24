@@ -72,7 +72,7 @@ export interface ListBindingHost {
   /**
    * Whether Home/End jump to the ends of the list. On by default.
    *
-   * Off is for a list whose neighbour is a **live text editor** — `/connect`'s
+   * Off is for a list whose neighbour is a **live text editor** — `/config connect`'s
    * filter is the one. The editor binds Home/End for the caret, and which of the
    * two claims the key is decided by binding **registration order**: a child that
    * is mounted once (the composer) registers before every face, but a child that

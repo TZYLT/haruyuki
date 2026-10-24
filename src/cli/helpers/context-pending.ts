@@ -2,7 +2,7 @@ import { getBackend } from "@/backend";
 import type { ContextPendingReport } from "@/backend/local/prefix-freeze";
 
 /**
- * `/context-pending` — show the prefix changes that have been registered but not
+ * `/context pending` — show the prefix changes that have been registered but not
  * yet applied. Read-only: it never rewrites the frozen prefix. Local-backend
  * only (cloud backends have no applied client-side snapshot to compare).
  */

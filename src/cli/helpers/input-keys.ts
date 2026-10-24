@@ -186,7 +186,7 @@ export function matchChord(chord: KeyChord, event: KeyEvent): boolean {
  * one line in the files the size ratchet pins. Three things are deliberately
  * outside it:
  *
- * - **Letters.** Case is the letter's own business (`/agents` wants `D` for its
+ * - **Letters.** Case is the letter's own business (`/agent list` wants `D` for its
  *   destructive delete and nothing for `d`), and a generated shift variant would
  *   make that decision for every face.
  * - **Keys a face genuinely splits.** `/search` gives Tab and Shift+Tab two

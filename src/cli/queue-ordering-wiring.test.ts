@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { readInteractiveAppSource } from "@/test-utils/read-interactive-app-source";
 
 function readAppSource(): string {
@@ -77,7 +78,7 @@ describe("queue ordering wiring", () => {
     );
   });
 
-  test("bare exit aliases before queue classification", () => {
+  test("input routing (exit alias, hub rewrite) precedes queue classification", () => {
     const source = readAppSource();
     const start = source.indexOf("const onSubmit = useCallback(");
     const end = source.indexOf("const shouldBypassQueue =");
@@ -86,15 +87,25 @@ describe("queue ordering wiring", () => {
     expect(end).toBeGreaterThan(start);
 
     const segment = source.slice(start, end);
-    const aliasIndex = segment.indexOf(
-      "const routedUserText = aliasBareExitCommand(userTextForInput)",
+    const routeIndex = segment.indexOf(
+      "const routed = routeSlashCommandInput(userTextForInput)",
     );
     const slashIndex = segment.indexOf(
       "const isSlashCommand = routedUserText.startsWith",
     );
 
-    expect(aliasIndex).toBeGreaterThan(-1);
-    expect(slashIndex).toBeGreaterThan(aliasIndex);
+    expect(routeIndex).toBeGreaterThan(-1);
+    expect(slashIndex).toBeGreaterThan(routeIndex);
+
+    // The alias lives in the routing helper now, so `/exit` is still aliased
+    // before anything classifies the command — the handler no longer spells it.
+    const routingSource = readFileSync(
+      fileURLToPath(new URL("./app/command-routing.ts", import.meta.url)),
+      "utf-8",
+    );
+    expect(routingSource).toContain(
+      "const aliased = aliasBareExitCommand(input)",
+    );
   });
 
   test("queued overlay effect only runs when idle and clears action before processing", () => {

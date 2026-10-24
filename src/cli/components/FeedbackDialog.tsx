@@ -16,7 +16,7 @@ interface FeedbackDialogProps {
 /**
  * One line of feedback, and the two keys out of it.
  *
- * The frame draws the header it always drew (`> /feedback`, the rule, a blank
+ * The frame draws the header it always drew (`> /maintenance feedback`, the rule, a blank
  * line), the prompt line is the body, and the field is the toolkit's editor —
  * so this dialog stops hand-rolling Escape and Ctrl+C and stops painting the
  * draft as a plain `<Text>`.

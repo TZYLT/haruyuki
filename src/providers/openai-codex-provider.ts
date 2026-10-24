@@ -115,7 +115,7 @@ export async function updateOpenAICodexProvider(
 
 /**
  * Create or update the ChatGPT OAuth provider
- * This is the main function called after successful /connect codex
+ * This is the main function called after successful /config connect codex
  *
  * In API mode the Letta backend will:
  * 1. Store the OAuth tokens securely

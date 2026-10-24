@@ -57,7 +57,7 @@ interface AgentSelectorProps {
 }
 
 /**
- * `/agents`'s two screens. The trail is the wizard's, so Escape backs out of the
+ * `/agent list`'s two screens. The trail is the wizard's, so Escape backs out of the
  * typed-name confirmation and cancels at the list — the two answers the face
  * used to write itself (`setViewState({ type: "list" })` versus `onCancel`).
  */
@@ -83,7 +83,7 @@ const DISPLAY_PAGE_SIZE = 5;
  * `if (key.upArrow) … else if` ladder that used to hold both screens' keys.
  *
  * Two lists rather than one, because Pinned and Local each keep their own cursor
- * across a tab switch — the shape `/hooks` has, for the same reason.
+ * across a tab switch — the shape `/config hooks` has, for the same reason.
  *
  * What changed visibly, and both were ruled on:
  *

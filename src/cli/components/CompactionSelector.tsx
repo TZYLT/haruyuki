@@ -1,6 +1,6 @@
 // Compaction settings overlay: the mode picker plus an editable compression rate.
 //
-// `/compaction` owns two settings that only work together. `sliding_window`
+// `/compact config` owns two settings that only work together. `sliding_window`
 // compresses `sliding_window_percentage` of the transcript every time it runs,
 // so the rate is a real setting the user must be able to read *and* change —
 // otherwise it can only be changed by editing the agent's settings by hand.

@@ -170,11 +170,11 @@ function getSourceLabel(source: SaveLocation): string {
 }
 
 /**
- * `/hooks` on the overlay toolkit.
+ * `/config hooks` on the overlay toolkit.
  *
  * The face was six screens behind one `useInput`, a `╭─╮` header it drew itself on
  * every one of them, and no test at all. Each piece is now the toolkit's: the frame
- * draws the header (`> /hooks`, with the count and `(disabled)` moved into its
+ * draws the header (`> /config hooks`, with the count and `(disabled)` moved into its
  * title), `useWizard` walks the six steps as one trail, the two lists are
  * `useOverlayList` tables, the two fields are `OverlayTextField`s — which is the
  * same `PasteAwareTextInput` this face already used, now the toolkit's labelled row

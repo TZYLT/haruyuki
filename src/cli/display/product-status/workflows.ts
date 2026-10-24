@@ -90,7 +90,7 @@ export function createWorkflowStatusPanel(
         });
       const hidden = executions.length - MAX_WORKFLOW_ROWS;
       if (hidden > 0) {
-        lines.push(ctx.chalk.dim(`  +${hidden} more · /workflows`));
+        lines.push(ctx.chalk.dim(`  +${hidden} more · /maintenance workflows`));
       }
       return lines;
     },
