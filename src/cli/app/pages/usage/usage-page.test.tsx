@@ -227,35 +227,43 @@ describe("the usage page", () => {
     expect((await tty.rows()).join("\n")).toContain("Usage / Overview");
   });
 
-  test("only the two screen words carry a target", () => {
-    const segments = usageHeaderSegments("overview", "2026-09-28 – 2026-10-22");
+  test("the screen word carries the other screen as its target", () => {
+    // The header draws one screen word (`Usage / Overview`), and that word is the
+    // switch: its target is the screen a click would open (2026-10-24).
+    const overview = usageHeaderSegments("overview", "2026-09-28 – 2026-10-22");
     expect(
-      segments.flatMap((segment) => (segment.target ? [segment.target] : [])),
-    ).toEqual(["overview", "detail"]);
-    // The page name, the gap, the date and the key hint are told, not aimed at.
-    expect(segments[0]?.target).toBeUndefined();
-    expect(segments[2]?.target).toBeUndefined();
-    expect(segments[4]?.target).toBeUndefined();
+      overview.flatMap((segment) => (segment.target ? [segment.target] : [])),
+    ).toEqual(["detail"]);
+    expect(overview[0]?.target).toBeUndefined();
+    expect(overview[2]?.target).toBeUndefined();
+
+    const detail = usageHeaderSegments("detail", "2026-09-28 – 2026-10-22");
+    expect(
+      detail.flatMap((segment) => (segment.target ? [segment.target] : [])),
+    ).toEqual(["overview"]);
   });
 
-  test("clicking a screen word switches, the same move Tab makes", async () => {
+  test("clicking the screen word switches, the same move Tab makes", async () => {
     // A page owns the main area, so a mouse user had no way to change screens
-    // without going back to the keyboard (2026-10-23). The header draws both
-    // words, so each is a target whatever screen is up.
+    // without going back to the keyboard (2026-10-23). The one word names the
+    // current screen and toggles to the other; the word is replaced, never added
+    // beside (2026-10-24).
     await homeWithLedger();
     const tty = mount(100);
     try {
       await settle();
       expect((await tty.rows())[0]).toContain("Usage / Overview");
+      expect((await tty.rows())[0]).not.toContain("Detail");
 
-      await clickAt(tty, 1, await headerColumn(tty, "Detail"));
+      await clickAt(tty, 1, await headerColumn(tty, "Overview"));
       const detail = (await tty.rows()).join("\n");
       expect(detail).toContain("Usage / Detail");
+      expect(detail).not.toContain("Overview");
       expect(detail).toContain("Cost (est. $ 1.00000)");
 
-      // The words swap places, and the one that now names the other screen is
-      // still a target: clicking it goes back.
-      await clickAt(tty, 1, await headerColumn(tty, "Overview"));
+      // The word that now names the other screen is still the target: clicking it
+      // goes back, and the header is one word again.
+      await clickAt(tty, 1, await headerColumn(tty, "Detail"));
       expect((await tty.rows()).join("\n")).toContain("Usage / Overview");
     } finally {
       tty.stop();

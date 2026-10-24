@@ -26,10 +26,10 @@ type LedgerState =
  * Two screens, one page: `Tab` switches between them (docs/38 §14.1 — the page
  * owns the keyboard, so `Tab` here is **not** the reasoning-level switch it is
  * in the app scope; the binding below is what makes that true, and there is a
- * test for the collision). The header's two screen words are the same switch for
- * the pointer, including the one you are already on: clicking a word sets that
- * screen, never toggles, so a stray click cannot drop you somewhere you did not
- * aim at.
+ * test for the collision). The header names the screen the page is on, and that
+ * one word is also the switch for the pointer: clicking it opens the other screen
+ * and the word becomes that screen's name. The two words are never drawn side by
+ * side (2026-10-24: "自切换不引入两个词同时显示").
  *
  * The ledger is read once when the page mounts. It is a JSONL file that only
  * grows at the end of a turn, so there is nothing to poll: switching screens is
@@ -132,13 +132,14 @@ const SCREEN_LABEL: Record<UsageScreen, string> = {
 };
 
 /**
- * The header's clickable words: the screen the page is on, and the other one.
+ * The header's clickable word: the screen the page is on.
  *
- * A page owns the main area, so `Tab` is the keyboard's switch and these words are
- * the pointer's. Both are drawn — the current one inside the breadcrumb, the other
- * beside it — because a pointer target that only appears while you are on the
- * *other* screen is a target you cannot see when you need it. Clicking either sets
- * that screen (never toggles), which is exactly what `Tab` does.
+ * A page owns the main area, so `Tab` is the keyboard's switch and this word is
+ * the pointer's. It names the current screen and opens the other one, so the
+ * header always reads `Usage / <screen>` — a second word beside it would be a
+ * target that changes place from under the pointer, and the user asked for the
+ * name itself to be the switch (2026-10-24). The result is exactly what `Tab`
+ * does, and the word the user clicked is replaced by the screen they landed on.
  *
  * The prefix, the date and the key hint are told, not aimed at: they carry no
  * target, so a click on them is spent on nothing rather than switching screens.
@@ -151,9 +152,8 @@ export function usageHeaderSegments(
   return [
     // The page's own name, not a destination.
     { label: "Usage / " },
-    { label: SCREEN_LABEL[screen], target: screen },
-    { label: "   " },
-    { label: SCREEN_LABEL[other], target: other },
+    // The current screen's name; clicking it opens the other screen.
+    { label: SCREEN_LABEL[screen], target: other },
     { label: `   ${range}   Tab switch · Esc` },
   ];
 }
@@ -168,20 +168,18 @@ function UsageHeader({
   onScreen: (screen: UsageScreen) => void;
 }) {
   const headerRef = useRef<DOMElement | null>(null);
-  const other: UsageScreen = screen === "overview" ? "detail" : "overview";
   useLineClicks<UsageScreen>({
     ref: headerRef,
     segments: usageHeaderSegments(screen, range),
     onSelect: (segment) => {
       if (segment.target) onScreen(segment.target);
     },
-    name: "usage-screen-words",
+    name: "usage-screen-word",
   });
 
   return (
     <Box ref={headerRef} flexDirection="row">
       <Text bold>{`Usage / ${SCREEN_LABEL[screen]}`}</Text>
-      <Text>{`   ${SCREEN_LABEL[other]}`}</Text>
       <Text dimColor>{`   ${range}   Tab switch · Esc`}</Text>
     </Box>
   );
