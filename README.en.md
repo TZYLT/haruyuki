@@ -35,7 +35,7 @@ contact me so we can resolve it.
 
 ## 1. What this project is
 
-**Haruyuki is a local-first, cost-conscious agent runtime — a heavily modified fork of `letta-code`.**
+**Haruyuki is a local-first, cost-conscious companion agent runtime — a heavily modified fork of `letta-code`.**
 
 Haruyuki is an agent runtime that runs on **your own machine**. It asks you to sign in to nothing and keeps
 no state anywhere else: everything is local and self-held.
@@ -219,8 +219,8 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
-| `0.4.0` | - | **Commands collapsed into eight hubs**: old names no longer run (they answer with what replaced them) and 30 top-level names remain; the first agent now uses the **companion** prompts, and a `coding` preset keeps the previous voice - the only breaking change |
-| `0.3.1` | + | **Fixes known TUI problems**: a user message showing the reminder text after a restart, blank space at the top of the transcript, and the input cursor sitting one row above the text; the usage page now switches screens by clicking the current screen's name (`Overview` → `Detail`) instead of showing both words |
+| `0.4.0` | + | **Prompt work and a collapsed command surface**: every command name now lives in a hub, and the agent prompts are specialised and tuned. The only **breaking change** in this version |
+| `0.3.1` | + | Fixes known TUI problems and improves the interactive experience. |
 | `0.3.0` | + | **A full TUI upgrade**: the TUI becomes a full-screen shell with mouse clicks and tabs, plus settings and usage pages |
 | `0.2.1` | + | Fixes known problems and updates the documentation |
 | `0.2.0` | + | **Passive recall**: every question searches your past conversations and memory files and brings the relevant passages into the current turn, so answers fit your history better; the effect on cost, short or long term, is not yet clear |
