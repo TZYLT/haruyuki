@@ -107,8 +107,8 @@ bun run build        # produces haruyuki.js at the repo root (gitignored)
 node ./haruyuki.js   # start the interactive UI
 ```
 
-> The build output is a **single-file bundle** (~13.6 MiB) with production dependencies inlined;
-> `--version` should print `0.3.0 (Haruyuki)`. The number comes from `package.json`'s `version`
+> The build output is a **single-file bundle** (~13.9 MiB) with production dependencies inlined;
+> `--version` should print `0.3.1 (Haruyuki)`. The number comes from `package.json`'s `version`
 > and is **inlined at build time**, so changing it requires a rebuild.
 
 ### Option 2 — the npm package (recommended)
@@ -219,6 +219,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
+| `0.3.1` | + | **Fixes known TUI problems**: a user message showing the reminder text after a restart, blank space at the top of the transcript, and the input cursor sitting one row above the text; the usage page now switches screens by clicking the current screen's name (`Overview` → `Detail`) instead of showing both words |
 | `0.3.0` | + | **A full TUI upgrade**: the TUI becomes a full-screen shell with mouse clicks and tabs, plus settings and usage pages |
 | `0.2.1` | + | Fixes known problems and updates the documentation |
 | `0.2.0` | + | **Passive recall**: every question searches your past conversations and memory files and brings the relevant passages into the current turn, so answers fit your history better; the effect on cost, short or long term, is not yet clear |
