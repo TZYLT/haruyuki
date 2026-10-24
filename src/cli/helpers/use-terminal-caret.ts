@@ -1,4 +1,4 @@
-import { type DOMElement, measureElement, useCursor } from "ink";
+import { type DOMElement, measureElement, useCursor, useStdout } from "ink";
 import {
   type RefObject,
   useEffect,
@@ -31,6 +31,10 @@ import { caretScreenCell } from "@/cli/helpers/caret-position";
  * - The **cell** must come from the same width the renderer wrapped at, so the caller
  *   passes `wrapWidth` in rather than the hook guessing it from the measured box: a
  *   box that hugs its text reports the text's width, not the space it had.
+ * - Ink's anchor arithmetic assumes the frame ends with a newline, which a
+ *   **full-height** frame does not (`renderInteractiveFrame` appends it only when
+ *   the frame is shorter than the terminal). The measured origin therefore carries
+ *   one extra row in that case — see `fullscreenAnchorOffset`.
  *
  * **Only the focused input may own the cursor.** The composer stays mounted behind
  * every overlay, and an unfocused input that publishes `undefined` would hide a cursor
@@ -65,24 +69,57 @@ interface TextOrigin {
   y: number;
 }
 
+/**
+ * The extra row a **full-height** frame needs, or 0.
+ *
+ * Ink's cursor anchor is written as "move up from the bottom of the frame"
+ * (`buildCursorSuffix`: `moveUp = visibleLineCount - y`), which assumes the
+ * terminal cursor sits one row **below** the last painted row — true for a frame
+ * written with a trailing newline. `renderInteractiveFrame` only appends that
+ * newline when the frame is shorter than the terminal (`isFullscreen ? output :
+ * output + "\n"`). The full-screen shell pins its root to the terminal's rows, so
+ * every frame it writes is exactly that case: the cursor is already ON the last
+ * row, and Ink's move-up overshoots by one — the IME candidate window opened one
+ * row above the composer (2026-10-24).
+ *
+ * The decision is made from the same two facts Ink uses: the root's laid-out
+ * height and the stream's row count. Walking to the root is what makes it a fact
+ * about the frame rather than a guess about which shell is running, so the append
+ * shell (shorter frame, newline appended) keeps an offset of 0 without asking.
+ */
+function fullscreenAnchorOffset(
+  node: DOMElement,
+  terminalRows: number,
+): number {
+  if (!(terminalRows > 0)) return 0;
+  let root: DOMElement = node;
+  while (root.parentNode) root = root.parentNode;
+  return measureElement(root).height >= terminalRows ? 1 : 0;
+}
+
 export function useTerminalCaret(options: TerminalCaretOptions): TerminalCaret {
   const { setCursorPosition } = useCursor();
+  const { stdout } = useStdout();
   const ref = useRef<DOMElement | null>(null);
   const [origin, setOrigin] = useState<TextOrigin | null>(null);
 
   useLayoutEffect(() => {
     const node = ref.current;
     const measured = node ? measureElement(node) : null;
-    if (!measured || !(measured.width > 0) || !(measured.height > 0)) {
+    if (!node || !measured || !(measured.width > 0) || !(measured.height > 0)) {
       // Not laid out yet (mounting) or no longer laid out (collapsed): hide rather
       // than place the cursor at a stale origin.
       setOrigin((prev) => (prev === null ? prev : null));
       return;
     }
+    const y =
+      stdout && stdout.isTTY
+        ? measured.y + fullscreenAnchorOffset(node, stdout.rows ?? 0)
+        : measured.y;
     setOrigin((prev) =>
-      prev && prev.x === measured.x && prev.y === measured.y
+      prev && prev.x === measured.x && prev.y === y
         ? prev
-        : { x: measured.x, y: measured.y },
+        : { x: measured.x, y },
     );
   });
 

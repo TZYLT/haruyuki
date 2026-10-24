@@ -257,6 +257,50 @@ describe("the composer's terminal cursor", () => {
     }
   });
 
+  test("a full-height frame does not lift the cursor a row", async () => {
+    // The full-screen shell pins its root to the terminal's rows, and Ink writes
+    // such a frame **without** the trailing newline every shorter frame gets.
+    // However, Ink's cursor anchor is computed from the bottom (`moveUp =
+    // frameRows - y`) as if that newline were there, so the published row has to
+    // account for its absence. The machine saw the IME candidate window one row
+    // above the input (2026-10-24).
+    const stdin = new FakeStdin();
+    const stdout = new CaptureStream();
+    const ROWS = 24;
+    const instance = render(
+      <Box height={ROWS} flexDirection="column">
+        <Box flexGrow={1} />
+        <Box flexDirection="row">
+          <Box width={PROMPT_COLUMNS} flexShrink={0}>
+            <Text>{"> "}</Text>
+          </Box>
+          <Box flexGrow={1} width={20}>
+            <TextInput value="abc" onChange={() => undefined} wrapWidth={20} />
+          </Box>
+        </Box>
+      </Box>,
+      {
+        stdin: stdin as unknown as NodeJS.ReadStream,
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        debug: false,
+        patchConsole: false,
+        exitOnCtrlC: false,
+      },
+    );
+    try {
+      await tick();
+      // The frame is 24 rows with the caret on the last one (23); after writing it
+      // the terminal cursor is already there, so no move up is correct.
+      expect(cursorAnchors(stdout.frame()).at(-1)).toEqual({
+        up: 0,
+        column: PROMPT_COLUMNS + 3 + 1,
+      });
+    } finally {
+      instance.unmount();
+      instance.cleanup();
+    }
+  });
+
   test("a keystroke's own frame carries the cursor", async () => {
     // The failing shape this guards: if the position were published from an effect
     // instead of during render, every keystroke would draw with the *previous*
