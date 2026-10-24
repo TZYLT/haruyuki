@@ -10,6 +10,65 @@
 
 ## [未发布]
 
+## [0.4.0] - 2026-10-25
+
+> ⚠️ **这一版收拢命令入口，旧命令名不再执行。** 73 条平铺命令收成 8 个 hub（`/agent` `/session`
+> `/memory` `/messages` `/skill` `/context` `/config` `/maintenance`），顶层只留 30 个名字。
+> 输入旧名不报错，也不执行，而是回一句"已改为 `/x y`"；完整对照见
+> [`docs/commands.zh-CN.md`](docs/commands.zh-CN.md)。
+>
+> 同一版还换了**首个 agent 的提示词**：新装的第一个 agent 是"陪伴版"——先问怎么称呼你，不先巡检目录。
+> 提示词改动只作用于**新建的 agent**，已存在的 agent 前缀是冻结的，不会自己变。
+>
+> 按语义化版本，`0.4.0` 是预发布期的次版本号，承载不兼容变动：**命令名**。
+
+### 变更（升级前先读这一条）
+
+- **旧命令名不再执行**：43 个名字收进 hub 子命令（`/memfs` → `/memory memfs`、`/rename` →
+  `/agent rename` 或 `/session rename`、`/topics` → `/topic list`、`/agents` → `/agent list`、
+  `/context-limit` → `/context limit`、`/sleeptime` → `/memory config`、`/compaction` →
+  `/compact config`、`/message-history` → `/messages history`、`/clear-messages` → `/messages clear`、
+  `/logout` → `/session logout`、`/skill-creator` → `/skill skill-creator`、
+  `/secret` → `/config secret`、`/mcp` → `/config mcp`、`/workflows` → `/maintenance workflows` …），
+  8 个名字删除（`/chdir` `/reflection` `/set-max-context` `/profiles` `/link` `/unlink`
+  `/conversations`）。脚本或肌肉记忆里写着旧名的改成新写法即可，语义不变，只是入口换了位置。
+- **`/skills` 并入 `/skill`**：`/skill`（不带参数）与 `/skill list` 都列出可用技能。
+- **保持顶层不变的**：`/close` `/exit` `/tabs` `/new` `/fork` `/btw` `/clear` `/compact` `/model`
+  `/recall` `/reflect` `/dream` `/resume` `/search` `/reload` `/recompile` `/help` `/doctor`
+  `/usage` `/settings` `/cd` `/topic`。
+- **desktop 的 `execute_command` 不受影响**：那是协议里的 wire id，不是 slash 命令名，
+  公告列表一条没动（`set-max-context` 仍作为未公告的兼容 case 保留）。
+
+### 新增
+
+- **命令 hub 面**：8 个 hub、44 条子命令，未知子命令回一张子命令表而不是静默失败；
+  旧名由同一张表回答"改成了什么"。hub 名不能再被 mod 命令占用。
+- **`/agent profile`**：本地 agent 档案的 `save`/`load`/`delete`/`usage` 本来有实现，
+  却从来没有登记过入口，这次补上（`/profile` 旧名收进 hub）。
+- **`/topic list [--all]`**：列话题块并入 `/topic`，不再需要一个平行的 `/topics`。
+- **首个 agent 是陪伴版**：`fresh-start` 从 `tutorial` 改为 `memo`，并带上首次见面的
+  引导（先问怎么称呼你，不承诺做不到的事，不先扫目录）。
+- **`coding` 预设**：把改写前的陪伴版文案原样保存成预设，做工程活时可以显式选回那套语气。
+- **memFS 提示词三处**：召回块只是**样本**不是清单；记忆**尽快写**而不是攒到最后；
+  **打招呼不等于允许巡检整个工作区**。
+- **参考索引多一张 Hub subcommands 表**：由 `hubs.ts` 直接生成，文档不可能写出构建里没有的子命令。
+
+### 修复
+
+- **`chalk` 从来没有被声明成依赖**：源码只用它的类型，解析一直靠 ink 的 5.6.2 被提升到根目录。
+  一次干净的 `bun install --frozen-lockfile` 会把 4.1.2 放到根上，`tsc` 随即报
+  `has no exported member 'ChalkInstance'`——全新 clone 会踩到、本地工作区反而不会。
+- **`/profile` 的命令漂移**：有 handler 没有 registry 条目，自动补全与帮助里都看不到它。
+- **`/cd` 不再自称 `/chdir` 的别名**：那个名字已经删除，帮助文本与解析器都只认 `/cd`。
+
+### 已知限制
+
+- **子命令补全没有做**：输入 `/agent` 后按空格，补全框会收起而不是列出子命令
+  （`extractSearchQuery` 在第一处空格结束匹配）。hub 本身的发现靠 `/help`、`/agent` 回车、
+  以及命令手册。
+- **聊天渠道的命令面没有跟着改名**：Slack/Telegram 侧 `/feedback`、`/reflection`、`/cancel`
+  是另一套入口，本轮不动。
+
 ## [0.3.1] - 2026-10-24
 
 > **修复 TUI 已知问题。** 2026-10-23 的 TUI 修复批：13 项（7 修复 ＋ 4 功能 ＋ 2 项项目/纪律）。逐项台账见内部《40》。
