@@ -447,6 +447,7 @@ haruyuki trajectories search <关键词> [--out <dir>] [--source <name>] \
 | `/maintenance feedback` | — | 把反馈写入**本地**日志（写 bug 请走 `github.com/TZYLT/haruyuki/issues`） |
 | `/maintenance bg` | — | 查看后台 shell 进程 |
 | `/maintenance workflows` | — | 查看 workflow 运行、其 agent 与 token 用量 |
+| `/maintenance sessions` | — | 打开隐藏会话只读查看器：列出后台/反思等隐藏会话，`Enter` 看详情、`d` 物理删除单条（二次确认）；只读，不进普通列表与搜索 |
 | `/maintenance install-github-app` | — | 在本仓库装 GitHub Action |
 
 > `/maintenance install-github-app` 装的是**上游**的 `letta-ai/letta-code-action`，本分支没有对应产物。

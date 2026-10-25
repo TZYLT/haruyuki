@@ -10,6 +10,36 @@
 
 ## [未发布]
 
+> 计划随 **0.4.1** 发布。按 `CONTRIBUTING.md` 的发布流程，`[未发布]` → `[0.4.1]` 的改名与
+> `package.json` 的 bump 一起落在发版提交里（还要重建 `haruyuki.js` 并核对两份 README 的版本字样）。
+>
+> 给后台隐藏会话一个只读入口：`/maintenance sessions` 能列、能看、能删单条。
+> 它们仍然不进 `/resume`、`/search`、召回与普通列表，`include_hidden` 默认仍是 false。
+
+### 新增
+
+- **`/maintenance sessions`**：全屏隐藏会话查看器。列表只取 `hidden === true`（默认当前 agent，
+  `a` 切全部 agent），三行行高、`/` 按摘要搜索、20 条一页；`Enter` 进只读详情，`d` 二次确认后
+  物理删除单条。
+- **详情按形态显示**：fork 默认只显示"最后一条继承消息 + 新增段"，顶部给出
+  `origin · parent · N inherited hidden · M new`；独立会话（`context_mode = standalone`）显示全部；
+  旧记录按时间戳推断边界，推断失败显示全部并标 `boundary unknown`，不猜测性隐藏。
+  `Enter` 展开单条、`r` 切 reasoning。
+- **会话形态字段**：`origin`、`parent_conversation_id`、`context_mode`、
+  `inherited_message_count`、`inherited_through_message_id`。fork 时写入，旧记录读作 `unknown`，
+  不做全库迁移。
+- **删除能力**：本地后端 `deleteConversation`，按会话 id 物理删除记录、消息日志、编译快照、
+  召回 sidecar 与会话级设置；先把目录移出 live 树再清内存，重启不复活；`default` 与普通会话拒绝。
+- **协议**：`conversation_list` 接受 `include_hidden` / `hidden_only`，回传上述形态字段与
+  `context_message_count`；新增 `conversation_delete`；`AppServerClient` 增加 `conversationDelete`。
+
+### 变更
+
+- `/maintenance` 的子命令表新增 `sessions`，摘要更新为 "feedback, background shells, workflows,
+  GitHub app, hidden sessions"。
+- `forkConversation` 现在写入形态字段；`/hidden-sessions` 是内部命令，只在全屏壳里打开，
+  兼容壳给"需要全屏壳"的提示。
+
 ## [0.4.0] - 2026-10-25
 
 > ⚠️ **这一版收拢命令入口，旧命令名不再执行。** 73 条平铺命令收成 8 个 hub（`/agent` `/session`

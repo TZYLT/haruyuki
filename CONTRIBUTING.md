@@ -186,6 +186,7 @@ node scripts/generate-tutor-avatar.cjs          # → assets/tutor-profile.png
 | **本地后端** | 单一后端模式（`--backend local`）：agent / 会话 / 记忆 / transcript 全在本机；MemFS 由 git 版本化 |
 | **工具与配置面** | `haruyuki model` 同时识别 `HARUYUKI_*` 与裸环境名（与 `cron`/`messages`/`memory` 对齐）；`app-paths` 的路径**调用期解析**（禁止模块级 `const` 快照） |
 | **测试工具** | 单测并行化：**~11–12 min → 162–180 s**（`HARUYUKI_TEST_PARALLEL` 可调，`=0` 走串行逃生舱） |
+| **隐藏会话与维护入口（0.4.1）** | `/maintenance sessions`：只列 `hidden === true` 的会话（`hidden_only`），只读详情按"最后一条继承 + 新增段"显示、旧记录标 `boundary unknown`，`d` 二次确认后按会话 id 物理删除单条；会话记录新增 `origin`／`parent_conversation_id`／`context_mode`／`inherited_message_count`／`inherited_through_message_id`；协议补 `conversation_delete` 与 `conversation_list` 的 `include_hidden`／`hidden_only`。需求编号 `44-1`（内部文档）。**替代方案**：无——这些后台会话此前没有任何入口，也不提供批量回收／撤销／转正。未改 `AppView`、设置面与 `/resume` |
 
 ### E. 文档、品牌素材与法务（⑮ 批次）
 

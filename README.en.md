@@ -108,7 +108,7 @@ node ./haruyuki.js   # start the interactive UI
 ```
 
 > The build output is a **single-file bundle** (~13.9 MiB) with production dependencies inlined;
-> `--version` should print `0.4.0 (Haruyuki)`. The number comes from `package.json`'s `version`
+> `--version` should print `0.4.1 (Haruyuki)`. The number comes from `package.json`'s `version`
 > and is **inlined at build time**, so changing it requires a rebuild.
 
 ### Option 2 — the npm package (recommended)
@@ -219,6 +219,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
+| `0.4.1` | - | **Hidden sessions**: sessions that run automatically are hidden automatically |
 | `0.4.0` | + | **Prompt work and a collapsed command surface**: every command name now lives in a hub, and the agent prompts are specialised and tuned. The only **breaking change** in this version |
 | `0.3.1` | + | Fixes known TUI problems and improves the interactive experience. |
 | `0.3.0` | + | **A full TUI upgrade**: the TUI becomes a full-screen shell with mouse clicks and tabs, plus settings and usage pages |
