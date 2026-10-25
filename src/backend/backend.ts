@@ -66,7 +66,17 @@ export type ConversationRetrieveOptions = ConversationRetrieveParams[1];
 export type ConversationListParams = Parameters<
   APIClient["conversations"]["list"]
 >;
-export type ConversationListBody = ConversationListParams[0];
+/**
+ * Local-only list filters. The SDK's `ConversationListParams` has neither, and
+ * the hosted API would ignore them anyway; the local backend reads them off the
+ * same body (requirements §5.7.1). `hidden_only` wins when both are true.
+ */
+export type ConversationListHiddenQuery = {
+  include_hidden?: boolean;
+  hidden_only?: boolean;
+};
+export type ConversationListBody = ConversationListParams[0] &
+  ConversationListHiddenQuery;
 
 export type ConversationCreateParams = Parameters<
   APIClient["conversations"]["create"]

@@ -648,6 +648,8 @@ export async function handleResponses(
         {
           agentId: agent.id,
           hidden: true,
+          // An external caller owns the lineage, not the console (§5.5.2).
+          origin: "external",
         },
       );
       conversationId = forked.id;

@@ -1,6 +1,7 @@
+import type { ConversationForkProvenance } from "@/types/conversation-provenance";
 import { apiRequest } from "./request";
 
-export interface ForkConversationOptions {
+export interface ForkConversationOptions extends ConversationForkProvenance {
   agentId?: string;
   hidden?: boolean;
   messageId?: string;

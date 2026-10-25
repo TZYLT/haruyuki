@@ -95,9 +95,16 @@ describe("forkParentConversation", () => {
     );
 
     // A fork inherits the parent's model and applied prefix; it never re-pins
-    // either, so the fork body carries no model/llm-config keys (D-C).
+    // either, so the fork body carries no model/llm-config keys (D-C). It does
+    // carry provenance — F-01 records background forks so the hidden-session
+    // viewer can tell a task fork from an external one.
     expect(body?.hidden).toBe(true);
-    expect(Object.keys(body ?? {}).sort()).toEqual(["hidden", "signal"]);
+    expect(body?.origin).toBe("background");
+    expect(Object.keys(body ?? {}).sort()).toEqual([
+      "hidden",
+      "origin",
+      "signal",
+    ]);
   });
 
   test("deletes the hidden fork when toolset inheritance fails", async () => {

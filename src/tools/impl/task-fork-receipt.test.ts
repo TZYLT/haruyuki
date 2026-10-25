@@ -335,6 +335,8 @@ describe("fork launch receipt", () => {
 
       expect(forkConversation).toHaveBeenCalledWith("conv-parent", {
         hidden: true,
+        // F-01 provenance: a task fork is a background producer.
+        origin: "background",
         signal: undefined,
       });
       expect(spawnProcess).toHaveBeenCalledTimes(1);

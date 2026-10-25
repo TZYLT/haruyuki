@@ -1,4 +1,5 @@
 import type { ConversationCreateBody, ConversationUpdateBody } from "@/backend";
+import { readConversationProvenance } from "@/types/conversation-provenance";
 import { isRecord } from "@/utils/type-guards";
 import {
   normalizeLocalModelHandle,
@@ -24,6 +25,10 @@ export function createLocalConversationRecord(
   const bodyRecord = body as Record<string, unknown>;
   const now = new Date().toISOString();
   const modelSettings = supportedConversationModelSettingsFromBody(bodyRecord);
+  // Creation carries provenance but never inheritance sizes: a conversation
+  // that copied nothing cannot claim an inherited segment. Forks write those
+  // two fields themselves (`LocalStore.forkConversation`).
+  const provenance = readConversationProvenance(bodyRecord);
   return {
     id: conversationId,
     agent_id: agentId,
@@ -51,6 +56,10 @@ export function createLocalConversationRecord(
       : {}),
     ...(typeof bodyRecord.hidden === "boolean"
       ? { hidden: bodyRecord.hidden }
+      : {}),
+    ...(provenance.origin !== "unknown" ? { origin: provenance.origin } : {}),
+    ...(provenance.context_mode !== undefined
+      ? { context_mode: provenance.context_mode }
       : {}),
     ...(isStringArray(bodyRecord.tags) ? { tags: bodyRecord.tags } : {}),
     ...(typeof bodyRecord.system === "string"

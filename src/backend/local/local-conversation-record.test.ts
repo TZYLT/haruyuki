@@ -21,6 +21,7 @@ import { join } from "node:path";
 import type { ConversationMessageCreateBody } from "@/backend";
 import { parsePersistedLocalConversation } from "@/backend/local/local-conversation-record";
 import { LocalStore } from "@/backend/local/local-store";
+import type { StoredConversation } from "@/backend/local/local-types";
 
 const temporaryDirectories: string[] = [];
 
@@ -149,6 +150,67 @@ describe("conversation record round-trip", () => {
     expect(after.context_management).toEqual({
       nudge_sent_for_streak: true,
     });
+  });
+});
+
+describe("createLocalConversationRecord provenance (F-01 §5.5)", () => {
+  test("writes origin and context mode from the create body", () => {
+    const store = new LocalStore(agentId);
+    const created = store.createConversation({
+      agent_id: agentId,
+      hidden: true,
+      origin: "external",
+      context_mode: "standalone",
+    } as never) as StoredConversation;
+
+    expect(created.origin).toBe("external");
+    expect(created.context_mode).toBe("standalone");
+    // A create copies nothing, so the inheritance fields stay absent.
+    expect(created.inherited_message_count).toBeUndefined();
+    expect(created.inherited_through_message_id).toBeUndefined();
+    expect(created.parent_conversation_id).toBeUndefined();
+  });
+
+  test("an ordinary create stays legacy-shaped (no provenance keys)", () => {
+    const store = new LocalStore(agentId);
+    const created = store.createConversation({
+      agent_id: agentId,
+    } as never) as StoredConversation;
+
+    expect(created.origin).toBeUndefined();
+    expect(created.context_mode).toBeUndefined();
+  });
+
+  test("drops an unrecognized origin instead of persisting it", () => {
+    const store = new LocalStore(agentId);
+    const created = store.createConversation({
+      agent_id: agentId,
+      origin: "sleeptime",
+      context_mode: "inherited-everything",
+    } as never) as StoredConversation;
+
+    expect(created.origin).toBeUndefined();
+    expect(created.context_mode).toBeUndefined();
+  });
+
+  test("round-trips through conversation.json", async () => {
+    const storageDir = await createStorageDirectory();
+    const store = new LocalStore(agentId, { storageDir });
+    const created = store.createConversation({
+      agent_id: agentId,
+      hidden: true,
+      origin: "dream",
+      context_mode: "standalone",
+    } as never);
+
+    const reopened = new LocalStore(agentId, { storageDir });
+    const record = reopened.retrieveConversation(
+      created.id,
+    ) as StoredConversation;
+
+    expect(record.hidden).toBe(true);
+    expect(record.origin).toBe("dream");
+    expect(record.context_mode).toBe("standalone");
   });
 });
 

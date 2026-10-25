@@ -185,6 +185,7 @@ import {
   setExternalToolExecutor,
 } from "./tools/manager";
 import { prepareToolExecutionContextForScope } from "./tools/toolset";
+import { hiddenStandaloneProvenance } from "./types/conversation-provenance";
 import type {
   BootstrapSessionStateRequest,
   CanUseToolControlRequest,
@@ -1407,10 +1408,11 @@ export async function handleHeadlessCommand(
     const createParams: ConversationCreateBody = {
       agent_id: agent.id,
       ...conversationModel,
+      // Agent-to-agent messaging creates a hidden conversation with no parent
+      // and no inherited segment (§5.5.2). The fields are local-only, so they
+      // ride the record body rather than the SDK's create type.
+      ...(fromAgentId ? hiddenStandaloneProvenance("external") : {}),
     };
-    if (fromAgentId) {
-      (createParams as { hidden?: boolean }).hidden = true;
-    }
     const conversation = await backend.createConversation(createParams);
     conversationId = conversation.id;
     conversationOpenReason = "new";

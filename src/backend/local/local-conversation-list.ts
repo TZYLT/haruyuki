@@ -1,5 +1,9 @@
 import type { Conversation } from "@letta-ai/letta-client/resources/conversations/conversations";
 import type { ConversationListBody } from "@/backend/backend";
+import {
+  type HiddenConversationSummary,
+  toHiddenConversationSummary,
+} from "@/types/conversation-provenance";
 
 type ListableLocalConversation = Conversation & {
   hidden?: boolean;
@@ -24,7 +28,7 @@ function matchesSummarySearch(
 export function listLocalConversations(
   source: Iterable<ListableLocalConversation>,
   body?: ConversationListBody,
-): Conversation[] {
+): HiddenConversationSummary[] {
   const bodyRecord = (body ?? {}) as Record<string, unknown>;
   const agentId = optionalString(bodyRecord.agent_id);
   const after = optionalString(bodyRecord.after);
@@ -32,10 +36,18 @@ export function listLocalConversations(
     ?.trim()
     .toLowerCase();
   const limit = typeof bodyRecord.limit === "number" ? bodyRecord.limit : 20;
+  // `hidden_only` is the viewer's filter; `include_hidden` is the older
+  // "show everything" escape hatch. When both are set, `hidden_only` wins
+  // (§5.7.1) — otherwise a delegated caller could silently get ordinary
+  // conversations in a hidden-session response.
+  const hiddenOnly = bodyRecord.hidden_only === true;
+  const includeHidden = bodyRecord.include_hidden === true;
   let conversations = [...source].filter(
     (conversation) =>
       conversation.id !== "default" &&
-      (bodyRecord.include_hidden === true || !conversation.hidden) &&
+      (hiddenOnly
+        ? conversation.hidden === true
+        : includeHidden || !conversation.hidden) &&
       (!agentId || conversation.agent_id === agentId) &&
       matchesSummarySearch(conversation, normalizedSearch),
   );
@@ -54,5 +66,5 @@ export function listLocalConversations(
     if (afterIndex >= 0) conversations = conversations.slice(afterIndex + 1);
   }
 
-  return conversations.slice(0, limit);
+  return conversations.slice(0, limit).map(toHiddenConversationSummary);
 }

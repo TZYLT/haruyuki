@@ -488,6 +488,33 @@ describe("app-server client", () => {
     ]);
   });
 
+  test("wraps conversation delete requests", async () => {
+    const { client, control } = createFakeClient();
+    control.open();
+    await client.connect();
+
+    const responsePromise = client.conversationDelete({
+      conversation_id: "conv-hidden-1",
+    });
+
+    expect(JSON.parse(control.sent[0] ?? "{}")).toMatchObject({
+      type: "conversation_delete",
+      request_id: "conversation-delete-1",
+      conversation_id: "conv-hidden-1",
+    });
+
+    control.receive({
+      type: "conversation_delete_response",
+      request_id: "conversation-delete-1",
+      success: true,
+      conversation_id: "conv-hidden-1",
+    });
+
+    const response = await responsePromise;
+    expect(response.success).toBe(true);
+    expect(response.conversation_id).toBe("conv-hidden-1");
+  });
+
   test("starts runtimes with external tools and responds to external tool calls", async () => {
     const { client, control } = createFakeClient();
     control.open();

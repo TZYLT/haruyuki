@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { ConversationMessageCreateBody } from "@/backend";
 import { LocalBackend } from "@/backend/local/local-backend";
 import { LocalStore } from "@/backend/local/local-store";
+import type { StoredConversation } from "@/backend/local/local-types";
 import type { LocalCompiledSystemPrompt } from "@/backend/local/system-prompt-compilation";
 
 describe("LocalBackend conversation forks", () => {
@@ -227,5 +228,171 @@ describe("LocalBackend conversation forks", () => {
       }),
     ).toThrow(`Message ${sourceMessageId}:assistant:999 not found`);
     expect(store.listConversations({ agent_id: agentId })).toHaveLength(1);
+  });
+});
+
+function storedConversation(
+  store: LocalStore,
+  conversationId: string,
+): StoredConversation {
+  return store.retrieveConversation(conversationId) as StoredConversation;
+}
+
+function projectedIds(store: LocalStore, conversationId: string): string[] {
+  return store
+    .listConversationMessages(conversationId, { order: "asc" } as never)
+    .map((message) => message.id);
+}
+
+describe("LocalStore fork provenance (F-01 §5.5)", () => {
+  test("records inherited-history, the source as parent, and the cloned size", () => {
+    const agentId = "agent-fork-provenance-default";
+    const store = new LocalStore(agentId);
+    const source = store.createConversation({ agent_id: agentId } as never);
+    store.appendTurnInput(source.id, {
+      agent_id: agentId,
+      messages: [
+        { role: "user", content: "first" },
+        { role: "user", content: "second" },
+      ],
+    } as unknown as ConversationMessageCreateBody);
+
+    const forked = store.forkConversation(source.id);
+    const record = storedConversation(store, forked.id);
+
+    expect(record.origin).toBe("unknown");
+    expect(record.context_mode).toBe("inherited-history");
+    expect(record.parent_conversation_id).toBe(source.id);
+    expect(record.inherited_message_count).toBe(2);
+    // The cursor is a stored (projected) message id, so the detail view can
+    // page the log from it directly.
+    expect(record.inherited_through_message_id).toBe(
+      projectedIds(store, forked.id).at(-1) ?? null,
+    );
+  });
+
+  test("an empty fork inherits zero messages and no cursor", () => {
+    const agentId = "agent-fork-provenance-empty";
+    const store = new LocalStore(agentId);
+    const source = store.createConversation({ agent_id: agentId } as never);
+
+    const forked = store.forkConversation(source.id);
+    const record = storedConversation(store, forked.id);
+
+    expect(record.inherited_message_count).toBe(0);
+    expect(record.inherited_through_message_id).toBeNull();
+    expect(record.parent_conversation_id).toBe(source.id);
+  });
+
+  test("counts projected rows, not local messages", () => {
+    const agentId = "agent-fork-provenance-projected";
+    const store = new LocalStore(agentId);
+    const source = store.createConversation({ agent_id: agentId } as never);
+    store.appendStreamChunk(source.id, agentId, {
+      message_type: "reasoning_message",
+      reasoning: "thinking before the answer",
+    } as never);
+    store.appendStreamChunk(source.id, agentId, {
+      message_type: "assistant_message",
+      content: [{ type: "text", text: "answer" }],
+    } as never);
+    expect(store.listLocalMessages(source.id, agentId)).toHaveLength(1);
+    const expectedProjected = projectedIds(store, source.id);
+
+    const forked = store.forkConversation(source.id);
+    const record = storedConversation(store, forked.id);
+
+    // One local assistant message projects to reasoning + text rows, so a count
+    // of local messages would understate what the viewer has to slice.
+    expect(record.inherited_message_count).toBe(expectedProjected.length);
+    expect(record.inherited_message_count).toBeGreaterThan(1);
+    expect(record.inherited_through_message_id).toBe(
+      projectedIds(store, forked.id).at(-1) ?? null,
+    );
+  });
+
+  test("passes origin and context mode through", () => {
+    const agentId = "agent-fork-provenance-origin";
+    const store = new LocalStore(agentId);
+    const source = store.createConversation({ agent_id: agentId } as never);
+
+    const forked = store.forkConversation(source.id, {
+      origin: "reflection",
+      contextMode: "inherited-history",
+    });
+
+    expect(storedConversation(store, forked.id).origin).toBe("reflection");
+  });
+
+  test("points at the direct source, not the original ancestor", () => {
+    const agentId = "agent-fork-provenance-chain";
+    const store = new LocalStore(agentId);
+    const source = store.createConversation({ agent_id: agentId } as never);
+    store.appendTurnInput(source.id, {
+      agent_id: agentId,
+      messages: [{ role: "user", content: "hello" }],
+    } as unknown as ConversationMessageCreateBody);
+
+    const middle = store.forkConversation(source.id, { hidden: true });
+    const grandchild = store.forkConversation(middle.id, { hidden: true });
+    const record = storedConversation(store, grandchild.id);
+
+    expect(record.parent_conversation_id).toBe(middle.id);
+    expect(record.parent_conversation_id).not.toBe(source.id);
+    // Re-derived from the middle conversation, not copied from its record.
+    expect(record.inherited_message_count).toBe(1);
+  });
+
+  test("rejects inherited-context before writing anything", () => {
+    const agentId = "agent-fork-provenance-inherited-context";
+    const store = new LocalStore(agentId);
+    const source = store.createConversation({ agent_id: agentId } as never);
+    store.appendTurnInput(source.id, {
+      agent_id: agentId,
+      messages: [{ role: "user", content: "hello" }],
+    } as unknown as ConversationMessageCreateBody);
+
+    expect(() =>
+      store.forkConversation(source.id, {
+        contextMode: "inherited-context",
+      }),
+    ).toThrow("not_supported: inherited-context requires F-03");
+    // A rejected fork leaves no half-created conversation behind.
+    expect(store.listConversations({ agent_id: agentId })).toHaveLength(1);
+  });
+
+  test("survives a conversation.json round-trip", async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), "local-fork-provenance-"));
+    try {
+      const agentId = "agent-fork-provenance-round-trip";
+      const store = new LocalStore(agentId, { storageDir });
+      const source = store.createConversation({ agent_id: agentId } as never);
+      store.appendTurnInput(source.id, {
+        agent_id: agentId,
+        messages: [{ role: "user", content: "hello" }],
+      } as unknown as ConversationMessageCreateBody);
+      const forked = store.forkConversation(source.id, {
+        hidden: true,
+        origin: "background",
+      });
+      const cursor = storedConversation(
+        store,
+        forked.id,
+      ).inherited_through_message_id;
+
+      const reopened = new LocalStore(agentId, { storageDir });
+      const record = reopened.retrieveConversation(
+        forked.id,
+      ) as StoredConversation;
+
+      expect(record.hidden).toBe(true);
+      expect(record.origin).toBe("background");
+      expect(record.context_mode).toBe("inherited-history");
+      expect(record.parent_conversation_id).toBe(source.id);
+      expect(record.inherited_message_count).toBe(1);
+      expect(record.inherited_through_message_id).toBe(cursor ?? null);
+    } finally {
+      await rm(storageDir, { recursive: true, force: true });
+    }
   });
 });

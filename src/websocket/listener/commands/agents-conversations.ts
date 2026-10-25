@@ -5,6 +5,7 @@ import {
   DEFAULT_CONVERSATION_MESSAGE_ORDER,
   getBackend,
 } from "@/backend";
+import { toHiddenConversationSummary } from "@/types/conversation-provenance";
 import type {
   AgentCreateCommand,
   AgentDeleteCommand,
@@ -13,8 +14,10 @@ import type {
   AgentUpdateCommand,
   ConversationCompactCommand,
   ConversationCreateCommand,
+  ConversationDeleteCommand,
   ConversationForkCommand,
   ConversationListCommand,
+  ConversationListEntry,
   ConversationMessagesListCommand,
   ConversationRecompileCommand,
   ConversationRetrieveCommand,
@@ -29,6 +32,7 @@ import {
   isAgentUpdateCommand,
   isConversationCompactCommand,
   isConversationCreateCommand,
+  isConversationDeleteCommand,
   isConversationListCommand,
   isConversationMessagesListCommand,
   isConversationRecompileCommand,
@@ -44,6 +48,7 @@ export type AgentConversationManagementCommand =
   | AgentUpdateCommand
   | AgentDeleteCommand
   | ConversationListCommand
+  | ConversationDeleteCommand
   | ConversationRetrieveCommand
   | ConversationCreateCommand
   | ConversationUpdateCommand
@@ -77,6 +82,79 @@ function getPageItems<T>(page: unknown): T[] {
     }
   }
   return [];
+}
+
+/**
+ * Find one conversation by exact id without `retrieveConversation`, which
+ * resolves across agents on the local backend. `summary_search` narrows the
+ * page; the id equality is what makes the answer exact.
+ */
+async function findConversationByExactId(
+  backend: Pick<Backend, "listConversations">,
+  conversationId: string,
+  filter: { hidden_only?: boolean; include_hidden?: boolean },
+): Promise<ConversationListEntry | undefined> {
+  const page = await backend.listConversations({
+    summary_search: conversationId,
+    limit: 20,
+    ...filter,
+  });
+  return getPageItems<ConversationListEntry>(page).find(
+    (conversation) => conversation.id === conversationId,
+  );
+}
+
+export type ConversationDeleteOutcome =
+  | { ok: true }
+  | {
+      ok: false;
+      error:
+        | "default_not_deletable"
+        | "not_supported"
+        | "conversation_not_found"
+        | "not_hidden";
+    };
+
+/**
+ * Delete one hidden conversation.
+ *
+ * The protocol surface never deletes an ordinary conversation or `default`, so
+ * both checks run before the backend is asked to do anything (§5.7.2). The
+ * backend method stays generic; this is a policy guard, not a second storage
+ * rule. Backend errors propagate so the caller can report them verbatim.
+ */
+export async function deleteHiddenConversation(
+  backend: Pick<Backend, "listConversations" | "deleteConversation">,
+  conversationId: string,
+): Promise<ConversationDeleteOutcome> {
+  if (conversationId === "default") {
+    return { ok: false, error: "default_not_deletable" };
+  }
+  if (typeof backend.deleteConversation !== "function") {
+    return { ok: false, error: "not_supported" };
+  }
+  const hidden = await findConversationByExactId(backend, conversationId, {
+    hidden_only: true,
+  });
+  if (!hidden) {
+    // Distinguish "not hidden" from "does not exist" only when the backend can
+    // answer for visible conversations too; a backend that ignores
+    // `include_hidden` reports `conversation_not_found`, which is still safe.
+    const visible = await findConversationByExactId(backend, conversationId, {
+      include_hidden: true,
+    });
+    return {
+      ok: false,
+      error: visible ? "not_hidden" : "conversation_not_found",
+    };
+  }
+  // Never trust the query flag alone: a backend that ignores `hidden_only`
+  // returns visible rows too, and deleting one of those would be unrecoverable.
+  if (hidden.hidden !== true) {
+    return { ok: false, error: "not_hidden" };
+  }
+  await backend.deleteConversation(conversationId);
+  return { ok: true };
 }
 
 type ConversationMessagePage = {
@@ -308,7 +386,9 @@ export async function handleAgentConversationManagementCommand(
           type: "conversation_list_response",
           request_id: parsed.request_id,
           success: true,
-          conversations: getPageItems(page),
+          conversations: getPageItems<ConversationListEntry>(page).map(
+            toHiddenConversationSummary,
+          ),
         },
         "listener_conversation_management_send_failed",
         "listener_conversation_management",
@@ -326,6 +406,31 @@ export async function handleAgentConversationManagementCommand(
         "listener_conversation_management_send_failed",
         "listener_conversation_management",
       );
+    }
+    return true;
+  }
+
+  if (parsed.type === "conversation_delete") {
+    const conversationId = parsed.conversation_id;
+    const respond = (success: boolean, error?: string) =>
+      safeSocketSend(
+        socket,
+        {
+          type: "conversation_delete_response",
+          request_id: parsed.request_id,
+          success,
+          conversation_id: conversationId,
+          ...(error ? { error } : {}),
+        },
+        "listener_conversation_management_send_failed",
+        "listener_conversation_management",
+      );
+
+    try {
+      const outcome = await deleteHiddenConversation(backend, conversationId);
+      respond(outcome.ok, outcome.ok ? undefined : outcome.error);
+    } catch (error) {
+      respond(false, getErrorMessage(error, "Failed to delete conversation"));
     }
     return true;
   }
@@ -476,6 +581,9 @@ export async function handleAgentConversationManagementCommand(
           ...(typeof parsed.body?.message_id === "string"
             ? { messageId: parsed.body.message_id }
             : {}),
+          // A fork requested over the protocol comes from an external client,
+          // not from a console or background producer (§5.5.2).
+          origin: "external",
         },
       );
       safeSocketSend(
@@ -595,6 +703,7 @@ export function handleAgentConversationManagementProtocolCommand(
     isAgentUpdateCommand(parsed) ||
     isAgentDeleteCommand(parsed) ||
     isConversationListCommand(parsed) ||
+    isConversationDeleteCommand(parsed) ||
     isConversationRetrieveCommand(parsed) ||
     isConversationCreateCommand(parsed) ||
     isConversationUpdateCommand(parsed) ||

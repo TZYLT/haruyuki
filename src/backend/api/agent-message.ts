@@ -1,5 +1,6 @@
 import type { MessageCreate } from "@letta-ai/letta-client/resources/agents/agents";
 import type { Backend } from "@/backend";
+import { hiddenStandaloneProvenance } from "@/types/conversation-provenance";
 
 /** Optional routing values share the same meaning in CLI and tool sends. */
 export function normalizeAgentMessageComputer(
@@ -91,8 +92,13 @@ export async function resolveAgentMessageDestination(
   }
   if (!agentId) throw new Error("The default conversation requires agent_id.");
   if (!conversationId) {
+    // An agent-to-agent message opens a hidden conversation of its own: it has
+    // no parent and inherits nothing (§5.5.2).
     const conversation = await backend.createConversation(
-      { agent_id: agentId, ...(input.senderAgentId ? { hidden: true } : {}) },
+      {
+        agent_id: agentId,
+        ...(input.senderAgentId ? hiddenStandaloneProvenance("external") : {}),
+      },
       options,
     );
     conversationId = conversation.id;

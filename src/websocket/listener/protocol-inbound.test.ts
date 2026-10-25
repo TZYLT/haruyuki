@@ -347,6 +347,16 @@ describe("agent/conversation management protocol-inbound validators", () => {
       query: { agent_id: "agent-1", limit: 10 },
     },
     {
+      type: "conversation_list",
+      request_id: "r6b",
+      query: { hidden_only: true, include_hidden: false },
+    },
+    {
+      type: "conversation_delete",
+      request_id: "r6c",
+      conversation_id: "conv-hidden-1",
+    },
+    {
       type: "conversation_retrieve",
       request_id: "r7",
       conversation_id: "conv-1",
@@ -481,6 +491,18 @@ describe("agent/conversation management protocol-inbound validators", () => {
     { type: "agent_update", request_id: "r4", agent_id: "agent-1" },
     { type: "agent_delete", request_id: "r5" },
     { type: "conversation_list", request_id: "r4", query: [] },
+    {
+      type: "conversation_list",
+      request_id: "r4b",
+      query: { hidden_only: "yes" },
+    },
+    {
+      type: "conversation_list",
+      request_id: "r4c",
+      query: { include_hidden: 1 },
+    },
+    { type: "conversation_delete", request_id: "r5d" },
+    { type: "conversation_delete", request_id: "r5e", conversation_id: "" },
     { type: "conversation_retrieve", request_id: "r5" },
     { type: "conversation_create", request_id: "r6", body: "bad" },
     { type: "conversation_update", request_id: "r7", body: {} },

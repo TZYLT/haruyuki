@@ -52,6 +52,9 @@ export async function forkParentConversation(
         ? { agentId: params.parentAgentId }
         : {}),
       hidden: true,
+      // Task/recall subagents own their context: the fork is a background
+      // producer and copied the full history (§5.5.2 write matrix).
+      origin: "background",
       signal: params.signal,
     },
   );

@@ -42,6 +42,7 @@ import type {
   CheckoutBranchCommand,
   ConversationCompactCommand,
   ConversationCreateCommand,
+  ConversationDeleteCommand,
   ConversationListCommand,
   ConversationMessagesListCommand,
   ConversationRecompileCommand,
@@ -1193,10 +1194,33 @@ export function isConversationListCommand(
     request_id?: unknown;
     query?: unknown;
   };
+  if (c.type !== "conversation_list" || typeof c.request_id !== "string") {
+    return false;
+  }
+  if (c.query === undefined) return true;
+  if (!isObjectRecord(c.query)) return false;
+  const query = c.query as { include_hidden?: unknown; hidden_only?: unknown };
   return (
-    c.type === "conversation_list" &&
+    (query.include_hidden === undefined ||
+      typeof query.include_hidden === "boolean") &&
+    (query.hidden_only === undefined || typeof query.hidden_only === "boolean")
+  );
+}
+
+export function isConversationDeleteCommand(
+  value: unknown,
+): value is ConversationDeleteCommand {
+  if (!value || typeof value !== "object") return false;
+  const c = value as {
+    type?: unknown;
+    request_id?: unknown;
+    conversation_id?: unknown;
+  };
+  return (
+    c.type === "conversation_delete" &&
     typeof c.request_id === "string" &&
-    (c.query === undefined || isObjectRecord(c.query))
+    typeof c.conversation_id === "string" &&
+    c.conversation_id.length > 0
   );
 }
 
@@ -1981,6 +2005,7 @@ export function parseServerMessage(
       isAgentUpdateCommand(parsed) ||
       isAgentDeleteCommand(parsed) ||
       isConversationListCommand(parsed) ||
+      isConversationDeleteCommand(parsed) ||
       isConversationRetrieveCommand(parsed) ||
       isConversationCreateCommand(parsed) ||
       isConversationUpdateCommand(parsed) ||

@@ -47,6 +47,7 @@ import type {
   DmPolicy,
 } from "./channel-account-protocol";
 import type { ConversationForkBody } from "./conversation-fork-protocol";
+import type { ConversationListRow } from "./conversation-provenance";
 import type * as CwdProtocol from "./cwd-protocol";
 import type {
   ExternalToolCallRequestMessage,
@@ -1583,12 +1584,43 @@ export interface AgentDeleteCommand {
   agent_id: string;
 }
 
+/**
+ * Local-only list filters for the hidden-session viewer. The SDK type carries
+ * neither, and a backend that does not understand them ignores them like any
+ * other unknown query key. `hidden_only` wins when both are true.
+ */
+export type ConversationListQuery = ConversationListParams & {
+  include_hidden?: boolean;
+  hidden_only?: boolean;
+};
+
+/**
+ * One row of `conversation_list`. Provenance and the context size are additive
+ * fields a local backend attaches; a backend that does not attach them simply
+ * omits them. The shape is shared with the TUI (`ConversationListRow`), so the
+ * wire and the viewer cannot disagree about the fields.
+ */
+export type ConversationListEntry = ConversationListRow;
+
 export interface ConversationListCommand {
   type: "conversation_list";
   /** Echoed back in the response for request correlation. */
   request_id: string;
   /** Query params forwarded to the Letta conversations list API. */
-  query?: ConversationListParams;
+  query?: ConversationListQuery;
+}
+
+/**
+ * Physically delete one conversation. The local backend implements it; a
+ * backend without `deleteConversation` answers `not_supported`. The protocol
+ * surface only accepts hidden conversations: an ordinary or `default`
+ * conversation is rejected before the backend is called.
+ */
+export interface ConversationDeleteCommand {
+  type: "conversation_delete";
+  /** Echoed back in the response for request correlation. */
+  request_id: string;
+  conversation_id: string;
 }
 
 export interface ConversationRetrieveCommand {
@@ -1912,7 +1944,15 @@ export interface ConversationListResponseMessage {
   type: "conversation_list_response";
   request_id: string;
   success: boolean;
-  conversations: Conversation[];
+  conversations: ConversationListEntry[];
+  error?: string;
+}
+
+export interface ConversationDeleteResponseMessage {
+  type: "conversation_delete_response";
+  request_id: string;
+  success: boolean;
+  conversation_id: string;
   error?: string;
 }
 
@@ -2385,6 +2425,7 @@ export type WsProtocolCommand =
   | AgentUpdateCommand
   | AgentDeleteCommand
   | ConversationListCommand
+  | ConversationDeleteCommand
   | ConversationRetrieveCommand
   | ConversationCreateCommand
   | ConversationUpdateCommand
@@ -2485,6 +2526,7 @@ export type WsProtocolMessage =
   | AgentUpdateResponseMessage
   | AgentDeleteResponseMessage
   | ConversationListResponseMessage
+  | ConversationDeleteResponseMessage
   | ConversationRetrieveResponseMessage
   | ConversationCreateResponseMessage
   | ConversationUpdateResponseMessage

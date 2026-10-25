@@ -47,6 +47,7 @@ import {
   validateLocalCompactionSettingsRecord,
 } from "./local-compaction-settings";
 import type { LocalTopicMarkerAppendResult } from "./local-context-rewrite";
+import { deleteLocalConversationSettings } from "./local-conversation-delete-settings";
 import {
   createLocalExecutor,
   type LocalBackendExecutionMode,
@@ -418,6 +419,26 @@ export class LocalBackend extends HeadlessBackend {
     return this.store.createEphemeralConversation(body) as unknown as Awaited<
       ReturnType<NonNullable<Backend["createEphemeralConversation"]>>
     >;
+  }
+
+  /**
+   * Physically delete a conversation (F-01 M2).
+   *
+   * The record is resolved first because the owning agent is what keys the
+   * conversation-scoped settings; after deletion it cannot be resolved anymore.
+   * The store performs the delete (directory out of the live tree, then memory,
+   * then the trash copy) and the settings cleanup runs afterwards, idempotently:
+   * a settings failure is logged and never resurrects the deleted row.
+   */
+  async deleteConversation(conversationId: string): Promise<void> {
+    const conversation =
+      this.store.resolveConversationRecordForDelete(conversationId);
+    this.store.deleteConversation(conversationId, conversation.agent_id);
+    await deleteLocalConversationSettings({
+      agentId: conversation.agent_id,
+      agentFree: conversation.agent_free === true,
+      conversationId,
+    });
   }
 
   override async recompileConversation(

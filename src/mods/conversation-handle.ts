@@ -38,6 +38,9 @@ export function createModConversationHandle(options: {
     async fork(forkOptions) {
       const forked = await requireBackend().forkConversation(conversationId, {
         ...(options.agentId ? { agentId: options.agentId } : {}),
+        // A mod forks in the background on the user's behalf — not an external
+        // client, not a reflection (§5.5.2).
+        origin: "background",
         ...forkOptions,
       });
       return createModConversationHandle({

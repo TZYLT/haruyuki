@@ -26,6 +26,7 @@ import type {
   ConversationUpdateBody,
 } from "@/backend/backend";
 import { INTERRUPTED_BY_USER } from "@/constants";
+import type { HiddenConversationSummary } from "@/types/conversation-provenance";
 import { isRecord } from "@/utils/type-guards";
 import {
   createDefaultAgentRecord,
@@ -40,8 +41,18 @@ import {
   LocalContextRewrites,
   type LocalTranscriptPersistOptions,
 } from "./local-context-rewrite";
+import {
+  deleteLocalConversation,
+  type LocalConversationDeleteState,
+  resolveConversationForDeletion,
+} from "./local-conversation-delete";
 import { selectLocalMessagesForFork } from "./local-conversation-fork";
 import { listLocalConversations } from "./local-conversation-list";
+import {
+  forkContextMode,
+  forkedConversationProvenance,
+  type LocalForkConversationOptions,
+} from "./local-conversation-provenance";
 import {
   agentFreeExecutionRecord,
   createLocalConversationRecord,
@@ -685,16 +696,98 @@ export class LocalStore {
       : conversation;
   }
 
-  listConversations(body?: ConversationListBody): Conversation[] {
+  listConversations(body?: ConversationListBody): HiddenConversationSummary[] {
     this.loadConversationRecordsFromStorage();
     this.refreshLoadedConversationRecordsFromStorage();
 
     return listLocalConversations(this.conversations.values(), body).map(
       (conversation) =>
         (conversation as StoredConversation).agent_free
-          ? ({ ...conversation, agent_id: null } as unknown as Conversation)
+          ? ({
+              ...conversation,
+              agent_id: null,
+            } as unknown as HiddenConversationSummary)
           : conversation,
     );
+  }
+
+  /**
+   * Physically delete one conversation (F-01 M2).
+   *
+   * The ordering — directory out of the live tree, then memory, then the
+   * trashed copy — lives in `deleteLocalConversation`, so every caller gets the
+   * same crash behaviour. `"default"` is rejected and an unknown id throws
+   * `LocalBackendNotFoundError`, never a silent success: the maintenance viewer
+   * must be able to say "this row is still here, deleting failed".
+   */
+  deleteConversation(conversationId: string, agentId?: string): void {
+    const conversation = this.resolveConversationRecordForDelete(
+      conversationId,
+      agentId,
+    );
+    deleteLocalConversation(this.conversationDeleteState(), conversation);
+  }
+
+  /**
+   * The record a deletion targets, resolved without deleting it.
+   *
+   * `LocalBackend.deleteConversation` needs the owning agent (for the
+   * conversation-scoped settings keys) *before* the record is gone.
+   */
+  resolveConversationRecordForDelete(
+    conversationId: string,
+    agentId?: string,
+  ): StoredConversation {
+    const conversation = resolveConversationForDeletion(
+      this.conversationDeleteState(),
+      conversationId,
+      agentId,
+    );
+    if (!conversation) {
+      throw new LocalBackendNotFoundError("Conversation", conversationId);
+    }
+    return conversation;
+  }
+
+  /**
+   * The state a deletion touches, handed to `deleteLocalConversation`.
+   *
+   * A new per-conversation cache must be added to `LocalConversationDeleteState`
+   * and here together, or deletion leaves it behind.
+   */
+  private conversationDeleteState(): LocalConversationDeleteState {
+    return {
+      storageDir: this.storageDir,
+      conversations: this.conversations,
+      localMessagesByConversationKey: this.localMessagesByConversationKey,
+      loadedConversationKeys: this.loadedConversationKeys,
+      tailResidentConversationKeys: this.tailResidentConversationKeys,
+      residentTailStartIndexByConversationKey:
+        this.residentTailStartIndexByConversationKey,
+      loadRepairedConversationKeys: this.loadRepairedConversationKeys,
+      unreadTranscriptHeadBytesByKey: this.unreadTranscriptHeadBytesByKey,
+      transcriptMetadataByConversationKey:
+        this.transcriptMetadataByConversationKey,
+      conversationRecordJsonByKey: this.conversationRecordJsonByKey,
+      sessionEntryIdsByConversationKey: this.sessionEntryIdsByConversationKey,
+      sessionEntryIdByMessageIdByConversationKey:
+        this.sessionEntryIdByMessageIdByConversationKey,
+      persistedMessageByMessageIdByConversationKey:
+        this.persistedMessageByMessageIdByConversationKey,
+      lastSessionEntryIdByConversationKey:
+        this.lastSessionEntryIdByConversationKey,
+      compiledSystemPromptByConversationKey:
+        this.compiledSystemPromptByConversationKey,
+      messagesById: this.messagesById,
+      settledLocalMessageIds: this.settledLocalMessageIds,
+      conversationKey: (id, ownerAgentId) =>
+        this.conversationKey(id, ownerAgentId),
+      conversationDir: (key) => this.conversationDirForKey(key),
+      encodeKey: encodePathSegment,
+      refreshConversationRecord: (key) =>
+        this.refreshConversationRecordFromStorage(key),
+      scanConversationRecords: () => this.loadConversationRecordsFromStorage(),
+    };
   }
 
   createConversation(body: ConversationCreateBody): Conversation {
@@ -836,8 +929,11 @@ export class LocalStore {
 
   forkConversation(
     conversationId: string,
-    options: { agentId?: string; hidden?: boolean; messageId?: string } = {},
+    options: LocalForkConversationOptions = {},
   ): { id: string } {
+    // A rejected context mode must not leave a half-created conversation
+    // behind, so the F-01 policy runs before any write.
+    const contextMode = forkContextMode(options.contextMode);
     const source = this.findConversation(
       conversationId,
       conversationId === "default" ? options.agentId : undefined,
@@ -878,6 +974,24 @@ export class LocalStore {
       this.cloneLocalMessageForConversation(message, forked.id, targetAgentId),
     );
     forked.in_context_message_ids = forkedMessages.map((message) => message.id);
+    // Written before the record is persisted so it round-trips through
+    // `conversation.json` like any other field. `updateIndex: false` keeps the
+    // fork's projection out of `messagesById` until something actually reads it.
+    Object.assign(
+      forked,
+      forkedConversationProvenance({
+        projectedMessages: this.projectLocalMessages(
+          forkedMessages,
+          targetAgentId,
+          forked.id,
+          { updateIndex: false },
+        ),
+        sourceConversationId: source.id,
+        parentConversationId: options.parentConversationId,
+        origin: options.origin,
+        contextMode,
+      }),
+    );
     const targetKey = this.conversationKey(forked.id, targetAgentId);
     this.conversations.set(targetKey, forked);
     this.localMessagesByConversationKey.set(targetKey, forkedMessages);
