@@ -107,7 +107,7 @@ bun run build        # produces haruyuki.js at the repo root (gitignored)
 node ./haruyuki.js   # start the interactive UI
 ```
 
-> The build output is a **single-file bundle** (~13.9 MiB) with production dependencies inlined;
+> The build output is a **single-file bundle** (~14.0 MiB) with production dependencies inlined;
 > `--version` should print `0.4.1 (Haruyuki)`. The number comes from `package.json`'s `version`
 > and is **inlined at build time**, so changing it requires a rebuild.
 
