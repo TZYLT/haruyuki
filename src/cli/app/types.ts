@@ -77,6 +77,7 @@ export type ActiveOverlay =
   | "window-title"
   | "tabs"
   | "message-history"
+  | "hidden-sessions"
   | "diff"
   | null;
 

@@ -93,4 +93,27 @@ describe("command routing", () => {
       });
     }
   });
+
+  test("the hidden-session viewer is usable while a turn runs", () => {
+    // `docs/44-1` §5.1.5: the face is read-only, so it must open during a turn
+    // instead of waiting in the queue — that is the whole point of auditing a
+    // background session while the agent is still working. Both spellings matter:
+    // the hub form is what a user types, and the internal form is what the input
+    // boundary hands to the queue gate.
+    expect(commands["/hidden-sessions"]?.internal).toBe(true);
+    expect(isNonStateCommand("/hidden-sessions")).toBe(true);
+    // Neither spelling queues: the internal form is a non-state command, and the
+    // hub form is a menu by definition (`isHubCommand`), which the input boundary
+    // rewrites to the internal one before the queue gate sees it.
+    for (const input of ["/hidden-sessions", "/maintenance sessions"]) {
+      expect({
+        input,
+        routed: routeSlashCommandInput(input),
+      }).toEqual({
+        input,
+        routed: { kind: "text", text: "/hidden-sessions" },
+      });
+      expect(shouldSlashCommandBypassQueue(input)).toBe(true);
+    }
+  });
 });

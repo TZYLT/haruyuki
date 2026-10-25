@@ -295,7 +295,7 @@ export const HUBS: Record<string, HubDefinition> = {
   },
   "/maintenance": {
     name: "/maintenance",
-    desc: "Maintenance: feedback, background shells, workflows, GitHub app",
+    desc: "Maintenance: feedback, background shells, workflows, GitHub app, hidden sessions",
     order: 36,
     subcommands: [
       {
@@ -317,6 +317,11 @@ export const HUBS: Record<string, HubDefinition> = {
         name: "install-github-app",
         desc: "Setup Haruyuki GitHub Action in this repo",
         command: "/install-github-app",
+      },
+      {
+        name: "sessions",
+        desc: "Browse hidden sessions (read-only)",
+        command: "/hidden-sessions",
       },
     ],
   },

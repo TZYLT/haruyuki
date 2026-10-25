@@ -741,7 +741,7 @@ Commands marked hidden still work but are kept out of autocomplete.
 | `/messages` | `<history\|clear>` | Messages: history, clear | `src/cli/commands/registry.ts:104` |
 | `/skill` | `<list\|skill-creator>` | Skill: list the available skills, or create a new one | `src/cli/commands/registry.ts:110` |
 | `/config` | `<connect\|mcp\|hooks\|secret\|experiments\|mods\|statusline\|title\|terminal\|font-width\|console-font\|stream\|reasoning-tab\|system-reminders>` | Config: providers, MCP, hooks, secrets, terminal, appearance | `src/cli/commands/registry.ts:116` |
-| `/maintenance` | `<feedback\|bg\|workflows\|install-github-app>` | Maintenance: feedback, background shells, workflows, GitHub app | `src/cli/commands/registry.ts:122` |
+| `/maintenance` | `<feedback\|bg\|workflows\|install-github-app\|sessions>` | Maintenance: feedback, background shells, workflows, GitHub app, hidden sessions | `src/cli/commands/registry.ts:122` |
 | `/model` | — | Switch model | `src/cli/commands/registry.ts:139` |
 | `/doctor` | `[symptom]` | Investigate an agent issue in this conversation | `src/cli/commands/registry.ts:156` |
 | `/dream` | `[--recent N \| --conversation ID ... \| --auto] [--instruction TEXT]` | Reflect on memory (alias for /reflect; Cloud reflects this conversation) | `src/cli/commands/registry.ts:165` |
@@ -756,16 +756,16 @@ Commands marked hidden still work but are kept out of autocomplete.
 | `/reload` | — | Reload settings and local mods | `src/cli/commands/registry.ts:366` |
 | `/usage` | — | Open the Usage page (overview + breakdown) | `src/cli/commands/registry.ts:445` |
 | `/tabs` | — | List open tabs (switch with Enter, close with D) | `src/cli/commands/registry.ts:451` |
-| `/close` | — | Close the current tab | `src/cli/commands/registry.ts:463` |
-| `/settings` | — | Open the Settings page | `src/cli/commands/registry.ts:469` |
-| `/context` | `<limit\|pending>` | Context: usage, limit, pending prefix changes | `src/cli/commands/registry.ts:475` |
-| `/recompile` | — | Recompile current agent + conversation (warning: this will evict the cache and increase costs) | `src/cli/commands/registry.ts:481` |
-| `/help` | — | Show available commands | `src/cli/commands/registry.ts:507` |
-| `/exit` | — | Exit this session | `src/cli/commands/registry.ts:608` |
-| `/compact` | `[n\|help]` | Trim older context at a topic boundary you pick | `src/cli/commands/registry.ts:637` |
-| `/topic` | `<title> [summary] \| list [--all]` | Mark a topic boundary, or list the topic blocks (/topic list [--all]) | `src/cli/commands/registry.ts:645` |
-| `/recall` | `[setting] [value]` | Configure passive recall of earlier conversations and memory | `src/cli/commands/registry.ts:658` |
-| `/resume` | `[conversation_id]` | Resume a previous conversation | `src/cli/commands/registry.ts:664` |
+| `/close` | — | Close the current tab | `src/cli/commands/registry.ts:469` |
+| `/settings` | — | Open the Settings page | `src/cli/commands/registry.ts:475` |
+| `/context` | `<limit\|pending>` | Context: usage, limit, pending prefix changes | `src/cli/commands/registry.ts:481` |
+| `/recompile` | — | Recompile current agent + conversation (warning: this will evict the cache and increase costs) | `src/cli/commands/registry.ts:487` |
+| `/help` | — | Show available commands | `src/cli/commands/registry.ts:513` |
+| `/exit` | — | Exit this session | `src/cli/commands/registry.ts:614` |
+| `/compact` | `[n\|help]` | Trim older context at a topic boundary you pick | `src/cli/commands/registry.ts:643` |
+| `/topic` | `<title> [summary] \| list [--all]` | Mark a topic boundary, or list the topic blocks (/topic list [--all]) | `src/cli/commands/registry.ts:651` |
+| `/recall` | `[setting] [value]` | Configure passive recall of earlier conversations and memory | `src/cli/commands/registry.ts:664` |
+| `/resume` | `[conversation_id]` | Resume a previous conversation | `src/cli/commands/registry.ts:670` |
 
 ## Hub subcommands
 
@@ -823,3 +823,4 @@ it, so these are the only spellings that run.
 | `/maintenance bg` | — | Show background shell processes |
 | `/maintenance workflows` | — | Show workflow runs, their agents, and token usage |
 | `/maintenance install-github-app` | — | Setup Haruyuki GitHub Action in this repo |
+| `/maintenance sessions` | — | Browse hidden sessions (read-only) |

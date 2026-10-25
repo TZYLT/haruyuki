@@ -7,17 +7,18 @@ import type { ActiveOverlay, TabStripProjection } from "./types";
 /**
  * The commands that belong to the full-screen shell's chrome.
  *
- * `/tabs`, `/close`, `/usage`, `/settings` and `/message-history` name the tab
- * strip, the two fixed pages and the notification faces. The append shell draws
- * none of them — so in legacy they are not commands at all, and the answer is the
- * registry's own one-line receipt rather than an action. That is not cosmetic:
+ * `/tabs`, `/close`, `/usage`, `/settings`, `/message-history` and
+ * `/hidden-sessions` name the tab strip, the two fixed pages and the read-only
+ * faces. The append shell draws none of them — so in legacy they are not commands
+ * at all, and the answer is the registry's own one-line receipt rather than an
+ * action. That is not cosmetic:
  * `/close` in the append shell operated a tab store whose rows the user cannot
  * see, and the switch that followed a close could land on the `"loading"`
  * placeholder tab, which then got persisted as the session ("Conversation loading
  * not found" on the next start).
  *
  * The split lives here, not in the submit handler, for the reason the size ratchet
- * exists: five branches and their comment are a module's worth of policy about
+ * exists: six branches and their comment are a module's worth of policy about
  * *which shell owns a command*, and the submit handler is the file that must not
  * keep growing.
  */
@@ -44,7 +45,7 @@ export type ShellCommandDeps = {
 /**
  * Run a shell command when this is one and the full-screen shell is active.
  *
- * Returns `false` for anything else — including all five in legacy — so the
+ * Returns `false` for anything else — including all six in legacy — so the
  * caller falls through to the command registry, which prints one line and does
  * nothing (the P2-12 contract: no crash, no frame change).
  */
@@ -63,6 +64,14 @@ export function runShellCommand(
         "/message-history",
         "Message history",
         "Message history closed",
+      );
+      return true;
+    case "/hidden-sessions":
+      deps.openOverlay(
+        "hidden-sessions",
+        "/maintenance sessions",
+        "Hidden sessions",
+        "Hidden sessions closed",
       );
       return true;
     case "/close":

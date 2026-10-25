@@ -1,4 +1,5 @@
 import { HelpDialog } from "@/cli/components/HelpDialog";
+import { HiddenSessionsOverlay } from "@/cli/components/HiddenSessionsOverlay";
 import { HooksManager } from "@/cli/components/HooksManager";
 import { MessageHistoryOverlay } from "@/cli/components/MessageHistoryOverlay";
 import { SkillsDialog } from "@/cli/components/SkillsDialog";
@@ -9,15 +10,16 @@ import type { ActiveOverlay, TabStripProjection } from "./types";
  * The faces that need nothing but "close me" and an agent id.
  *
  * `AppView` mounts a dozen overlays, and most of them take their data from state
- * that lives there. These five do not: `/help` and `/config hooks` are self-contained
- * readers, `/skills` needs the agent, `/tabs` needs the strip's actions, and the
- * message history reads its own store. Grouping them keeps that fact visible —
- * "these are the ones with no wiring" — and keeps the view's render body about the
- * overlays that *do* have wiring.
+ * that lives there. These six do not: `/help` and `/config hooks` are self-contained
+ * readers, `/skills` needs the agent, `/tabs` needs the strip's actions, the
+ * message history reads its own store, and `/maintenance sessions` pages the
+ * hidden-conversation list straight off the backend. Grouping them keeps that
+ * fact visible — "these are the ones with no wiring" — and keeps the view's
+ * render body about the overlays that *do* have wiring.
  *
- * `/messages history` is reachable only from the full-screen shell (the shell
- * registers both its leader chord and its command), so being mounted here does not
- * give the append shell a face it cannot open.
+ * `/messages history` and `/maintenance sessions` are reachable only from the
+ * full-screen shell (the shell registers their commands), so being mounted here
+ * does not give the append shell a face it cannot open.
  */
 export function SimpleOverlayRoutes({
   activeOverlay,
@@ -45,6 +47,10 @@ export function SimpleOverlayRoutes({
       {/* What the toast band announced, kept (`docs/38` §15.4): read-only. */}
       {activeOverlay === "message-history" && (
         <MessageHistoryOverlay onClose={onClose} />
+      )}
+      {/* Background sessions, read-only (`docs/44-1` §5.2): never a switch. */}
+      {activeOverlay === "hidden-sessions" && (
+        <HiddenSessionsOverlay agentId={agentId} onClose={onClose} />
       )}
     </>
   );

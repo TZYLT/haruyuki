@@ -120,8 +120,8 @@ export const commands: Record<string, Command> = {
     handler: () => formatHubHelpFor("/config"),
   },
   "/maintenance": {
-    desc: "Maintenance: feedback, background shells, workflows, GitHub app",
-    args: "<feedback|bg|workflows|install-github-app>",
+    desc: "Maintenance: feedback, background shells, workflows, GitHub app, hidden sessions",
+    args: "<feedback|bg|workflows|install-github-app|sessions>",
     order: 36,
     handler: () => formatHubHelpFor("/maintenance"),
   },
@@ -460,6 +460,12 @@ export const commands: Record<string, Command> = {
     noArgs: true,
     handler: () => pageCommandAnswer("Opening message history..."),
   },
+  "/hidden-sessions": {
+    desc: "Browse hidden sessions (read-only)",
+    order: 32.86,
+    noArgs: true,
+    handler: () => pageCommandAnswer("Opening hidden sessions..."),
+  },
   "/close": {
     desc: "Close the current tab",
     order: 32.8,
@@ -751,6 +757,7 @@ export const HUB_TARGET_COMMANDS: readonly string[] = [
   "/bg",
   "/workflows",
   "/install-github-app",
+  "/hidden-sessions",
 ];
 
 for (const name of HUB_TARGET_COMMANDS) {

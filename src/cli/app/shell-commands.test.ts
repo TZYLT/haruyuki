@@ -94,6 +94,7 @@ describe("chrome commands in the append shell", () => {
       "/settings",
       "/usage",
       "/message-history",
+      "/hidden-sessions",
     ]) {
       expect(runShellCommand(command, deps)).toBe(false);
     }
@@ -151,6 +152,19 @@ describe("chrome commands in the full-screen shell", () => {
     expect(getTabsState().activeId).toBe("conv-1");
   });
 
+  test("/hidden-sessions raises the hidden-session list without switching tabs", () => {
+    useFullScreenShell();
+    openConversationTab("conv-1", "M6 shell");
+    focusTab("conv-1");
+    const { seen, deps } = harness();
+
+    expect(runShellCommand("/hidden-sessions", deps)).toBe(true);
+    expect(seen.overlays).toEqual(["hidden-sessions"]);
+    // Read-only: the face never switches the conversation the shell is showing
+    // (`docs/44-1` §5.1.5).
+    expect(getTabsState().activeId).toBe("conv-1");
+  });
+
   test("the autocomplete's full-screen-only list is exactly these commands", () => {
     // Two lists say the same thing in different places — this switch decides
     // *which shell owns* a command, and `SlashCommandAutocomplete`'s set decides
@@ -165,7 +179,7 @@ describe("chrome commands in the full-screen shell", () => {
     const owned = [...source.matchAll(/case "(\/[^"]+)":/g)].map(
       (match) => match[1] ?? "",
     );
-    expect(owned.length).toBe(5);
+    expect(owned.length).toBe(6);
     expect([...FULL_SCREEN_ONLY_COMMANDS].sort()).toEqual([...owned].sort());
   });
 });

@@ -179,6 +179,7 @@ describe("hub resolution", () => {
     ["/maintenance bg", "/bg"],
     ["/maintenance workflows", "/workflows"],
     ["/maintenance install-github-app", "/install-github-app"],
+    ["/maintenance sessions", "/hidden-sessions"],
   ])("%s resolves to %s", (input, expected) => {
     expect(resolveHubInput(input)).toEqual({ kind: "command", text: expected });
   });
@@ -277,6 +278,15 @@ describe("hub help", () => {
     const help = formatHubHelpFor("/memory");
     expect(help).toContain("View your agent's memory");
     expect(help).toContain("/memory remote <set|unset|status|push> [url]");
+  });
+
+  test("/maintenance lists the hidden-session viewer", () => {
+    // The viewer has no top-level spelling (`docs/44-1` §5.1.2), so the help line
+    // is how a user finds it; the description names it too.
+    const help = formatHubHelpFor("/maintenance");
+    expect(help).toContain("/maintenance sessions");
+    expect(help).toContain("hidden sessions");
+    expect(HUBS["/maintenance"]?.desc).toContain("hidden sessions");
   });
 
   test("the registry answers a bare hub with that same list", async () => {

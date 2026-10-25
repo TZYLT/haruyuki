@@ -29,6 +29,7 @@ const NON_STATE_COMMANDS = new Set([
   "/ade",
   "/bg",
   "/workflows", // read-only view of background workflow runs
+  "/hidden-sessions", // read-only browse of hidden conversations (`docs/44-1` §5.1.5)
   "/btw",
   "/usage",
   "/tabs", // list open tabs: a view, not a state change

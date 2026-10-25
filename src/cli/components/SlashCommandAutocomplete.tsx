@@ -33,8 +33,9 @@ const BUILTIN_SKILL_ALIASES = new Set([
 /**
  * The commands that only mean something in the full-screen shell.
  *
- * `/tabs`, `/close`, `/settings`, `/usage` and `/message-history` name the tab
- * strip, the two fixed pages and the notification faces. The append shell draws
+ * `/tabs`, `/close`, `/settings`, `/usage`, `/message-history` and
+ * `/hidden-sessions` name the tab strip, the two fixed pages and the read-only
+ * faces. The append shell draws
  * none of them, so in legacy they are not offered at all — typing one still works
  * (the registry answers with one honest line), but a list that offers a command
  * the shell cannot perform is a list that lies.
@@ -53,6 +54,9 @@ export const FULL_SCREEN_ONLY_COMMANDS = new Set([
   // its one-line receipt) but the list kept offering it there — a suggestion for a
   // command the shell cannot perform, which is exactly what this set is for.
   "/message-history",
+  // Same contract, same reason: `/maintenance sessions` opens the hidden-session
+  // list, which only the full-screen shell can paint.
+  "/hidden-sessions",
 ]);
 
 // Compute filtered command list (excluding hidden commands), sorted by order
