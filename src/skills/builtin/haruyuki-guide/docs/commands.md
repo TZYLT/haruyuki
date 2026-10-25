@@ -322,6 +322,59 @@ accepted for `--role` — `src/cli/subcommands/trajectories.ts:188-191`. `--root
 `src/cli/subcommands/trajectories.ts:40`,
 `src/cli/subcommands/trajectories.ts:334`.
 
+### `haruyuki export` and `haruyuki import`
+
+One package, both directions. `export [--out <package>]` writes a whole-machine
+snapshot into a single `.hryk` file — a gzipped tar holding a root
+`manifest.json`, the managed app-home tree (`home/`), the local backend storage
+tree (`local-backend/`), an optional `project/` tree and `secrets.json`. Without
+`--out` the package is written to `./haruyuki-<hostname>-<YYYYMMDD-HHmmss>.hryk`
+in the current directory, with the hostname sanitized to a path-safe segment —
+`src/cli/subcommands/snapshot/cli.ts:527`. `import --from <package>` restores it:
+the package is validated first, then the managed data is replaced —
+`src/cli/subcommands/snapshot/cli.ts:614`. `--dry-run` reports the scope without
+writing anything, and `import --verify` validates the archive, manifest, schema
+version and every entry's size and SHA-256 without writing —
+`src/cli/subcommands/snapshot/cli.ts:116`,
+`src/cli/subcommands/snapshot/cli.ts:171`.
+
+Both commands read this machine's data roots, so the router selects the backend
+mode early and dispatches them before the TUI starts —
+`src/cli/subcommands/router.ts:45-46`,
+`src/cli/subcommands/router.ts:119-122`. The roots are the ones this process
+resolves (`HARUYUKI_HOME`, `LETTA_LOCAL_BACKEND_DIR`); neither command accepts a
+`--home` override.
+
+Neither command may hang waiting for input. `export` asks for the word `export`,
+`import` for `overwrite`; `--yes` skips both, and a non-interactive shell
+without `--yes` fails with exit code 2 instead of waiting —
+`src/cli/subcommands/snapshot/cli.ts:318`,
+`src/cli/subcommands/snapshot/cli.ts:560`. Import deliberately validates before
+asking, through the `RequireConfirm` callback it hands to the import pipeline, so
+a corrupt package never costs the user a confirmation word —
+`src/cli/subcommands/snapshot/cli.ts:656`,
+`src/cli/subcommands/snapshot/import.ts:33-40`.
+
+What it touches: export writes exactly the `--out` path (plus its `.partial`
+staging file, renamed on success) and never edits a source file. Import replaces
+the managed trees, writes `backups/pre-import.hryk` first and restores it when a
+later step fails; a failed restore keeps the backup and prints the manual
+command — `src/cli/subcommands/snapshot/report.ts:124`. Neither command edits
+`.gitignore`; the warning is printed instead.
+
+`--json` prints one object. Multi-word keys are snake_case — `not_remapped`,
+`failed_secrets`, `dry_run`, `duration_ms`, `backup_path` — and the per-entry
+list appears only with `--verbose` — `src/cli/subcommands/snapshot/report.ts:264`.
+Secret values are never printed, only names, not even in verbose output. There is
+no progress bar and no timer: the human output is stage lines from the pipeline's
+progress callback plus a summary — `src/cli/subcommands/snapshot/report.ts:156`.
+
+The package is a key to this machine: it carries plaintext credentials and
+private conversations, so treat it as sensitive, keep it out of git, and delete
+it when done. After an import, restart haruyuki; compiled prompt snapshots and
+recall indexes are rebuilt on first use, so the first conversation may be slower
+— `src/cli/subcommands/snapshot/cli.ts:105`.
+
 ## Slash commands
 
 The interactive surface is organised as eight hubs plus a set of retained
@@ -474,6 +527,7 @@ Useful when deciding whether a command is safe to run reflexively.
 | Secrets | `secret set`, `secret unset` | `<storage>/secrets/local-agent-secrets.json` — `src/utils/secrets-store.ts:144-152` |
 | Agent memory | `skills install/delete`, `memory backup/restore/export`, `/agent personality`, `/topic` | the memory repository — `src/cli/subcommands/skills.ts:932-941`, `src/agent/personality.ts:358-456` |
 | Local store rewrite | `local-backend migrate-transcripts` | `<storage>/**/messages.jsonl`, each backed up first — `src/cli/subcommands/local-backend.ts:26-27` |
+| Whole-machine snapshot | `export`, `import` | one `.hryk` package at `--out`; `import` replaces the managed trees after writing `backups/pre-import.hryk` — `src/cli/subcommands/snapshot/cli.ts:527`, `src/cli/subcommands/snapshot/cli.ts:614` |
 | Background processes | `server`, `channel-gateway`, `mcp tools/schema/search/call`, `skills install` from git, `channels install` | `src/cli/subcommands/app-server.ts:239`, `src/cli/subcommands/mcp.ts:491-503`, `src/cli/subcommands/skills.ts:483-488` |
 
 `memory restore` deserves its own warning: it deletes the memory root before

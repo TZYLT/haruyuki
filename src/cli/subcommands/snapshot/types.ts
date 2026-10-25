@@ -114,6 +114,12 @@ export interface SnapshotCounts {
   secrets: number;
 }
 
+/** Per-tree totals, used for the human summary's category line. */
+export interface SnapshotScopeCount {
+  files: number;
+  bytes: number;
+}
+
 /** An excluded path with the reason it was left out of the package. */
 export interface SnapshotExclusion {
   path: string;
@@ -188,6 +194,12 @@ export interface SnapshotReport {
   package?: string;
   dryRun: boolean;
   counts: SnapshotCounts;
+  /**
+   * Per-tree totals for the human summary (`home` / `local-backend` /
+   * `project` / `secrets`). Filled by the export and import pipelines; absent
+   * when a caller only has the aggregate counts.
+   */
+  byScope?: Partial<Record<SnapshotScope, SnapshotScopeCount>>;
   excluded: SnapshotExclusion[];
   remapped: SnapshotRemap[];
   notRemapped: SnapshotNotRemapped[];

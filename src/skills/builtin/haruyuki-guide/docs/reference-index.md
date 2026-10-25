@@ -48,6 +48,8 @@ running each subcommand's own `--help` inside this repository.
 | `haruyuki cron` | — | `--prompt`, `--every`, `--at`, `--once`, `--cron`, `--agent`, `--conversation`, `--all` | `src/cli/subcommands/cron.ts:42` |
 | `haruyuki channels` | — | `--channel`, `--account-id`, `--agent`, `--chat-id`, `--conversation`, `--code` | `src/cli/subcommands/channels.ts:55` |
 | `haruyuki local-backend` | — | — | `src/cli/subcommands/local-backend.ts:20` |
+| `haruyuki export` | — | `--out`, `--with-project`, `--dry-run`, `--json`, `--verbose`, `--yes`, `--help` | `src/cli/subcommands/router.ts:27` |
+| `haruyuki import` | — | `--from`, `--with-project`, `--verify`, `--json`, `--verbose`, `--yes`, `--help` | `src/cli/subcommands/router.ts:32` |
 | `haruyuki trajectories` | `trajectory` | `--out`, `--source`, `--root`, `--transcript`, `--deepagents`, `--project`, `--json`, `--help` | `src/cli/subcommands/trajectories.ts:21` |
 
 ### `haruyuki version`
@@ -677,6 +679,119 @@ Usage:
 Migrates unversioned experimental local backend transcripts to the
 versioned pi-ai transcript format. Each converted messages.jsonl is backed up
 before it is replaced.
+```
+
+### `haruyuki export`
+
+- Help source: `src/cli/subcommands/router.ts:27`
+
+```text
+Usage:
+  haruyuki export [--out <package>] [--with-project[=<dir>]] [--dry-run]
+                  [--json] [--verbose] [--yes]
+
+Write a complete snapshot of this machine's Haruyuki data into one .hryk file:
+a gzipped tar holding a manifest, the managed app-home and local-backend trees,
+and a secrets.json. The package is written atomically — a .partial file is
+renamed only after the archive and its manifest are on disk.
+
+Options:
+  --out <package>         Package path to write. Defaults to
+                          ./haruyuki-<hostname>-<YYYYMMDD-HHmmss>.hryk in the
+                          current directory. A relative path is resolved against
+                          the current directory; an existing file is overwritten
+                          after the confirmation word.
+  --with-project[=<dir>]  Also export project-level data. Without a value the
+                          current directory is used.
+  --dry-run               Report what would be packed (counts, bytes, exclusions
+                          and warnings) without writing or hashing anything.
+  --json                  Print one JSON object instead of the human summary.
+  --verbose               List every packed entry (secret names only, never
+                          values).
+  --yes                   Skip the confirmation word.
+  -h, --help              Show this help.
+
+Sensitive data warning:
+  The package contains PLAINTEXT credentials (settings tokens, per-agent
+  secrets, channel credentials) plus private conversations, reflection
+  transcripts and memory. Anyone who has the file has your data. Keep it
+  private, delete it when you are done; on POSIX it is written 0600 (Windows
+  offers no ACL guarantee).
+  Do not commit a .hryk package to git: this tool only warns, it never edits
+  your .gitignore.
+
+Consistency:
+  Haruyuki does not detect other running windows. Make sure no other haruyuki
+  window is running while you export, or the package may be inconsistent
+  (messages, memory commits, usage and cron can change underneath it).
+
+Confirmation:
+  Export asks you to type "export". --yes skips it. In a non-interactive shell
+  (no TTY) --yes is required, and the command refuses instead of waiting.
+
+Exit codes:
+  0 success; 1 runtime failure; 2 refused before anything was written.
+
+Examples:
+  haruyuki export --out ./work.hryk
+  haruyuki export --out ./work.hryk --with-project --dry-run
+  haruyuki export --out ./work.hryk --yes --json
+```
+
+### `haruyuki import`
+
+- Help source: `src/cli/subcommands/router.ts:32`
+
+```text
+Usage:
+  haruyuki import --from <package> [--with-project[=<dir>]] [--verify]
+                  [--json] [--verbose] [--yes]
+
+Restore a .hryk package onto this machine. The package is validated first
+(archive, manifest, schema version, every entry's size and SHA-256), then the
+managed data is replaced — this is a snapshot restore, not a merge. A backup of
+the current data is written to backups/pre-import.hryk before anything is
+cleared, and a failure after landing rolls that backup back automatically.
+
+Options:
+  --from <package>        Package path to read (required).
+  --with-project[=<dir>]  Restore project-level data to this directory. Without
+                          a value the current directory is used. Only takes
+                          effect when the package carries a project/ tree.
+  --verify                Validate the package and print what it would
+                          overwrite, without writing any data.
+  --json                  Print one JSON object instead of the human summary.
+  --verbose               List every restored entry (secret names only, never
+                          values).
+  --yes                   Skip the confirmation word.
+  -h, --help              Show this help.
+
+Sensitive data warning:
+  The package contains PLAINTEXT credentials (settings tokens, per-agent
+  secrets, channel credentials) plus private conversations, reflection
+  transcripts and memory. Keep it private, and do not commit it to git: this
+  tool only warns, it never edits your .gitignore.
+
+Confirmation:
+  Validation runs BEFORE the prompt, so a broken package never asks for the
+  word. Import then asks you to type "overwrite". --yes skips it. In a
+  non-interactive shell (no TTY) --yes is required, and the command refuses
+  instead of waiting.
+
+After a successful import:
+  Restart haruyuki. Compiled prompt snapshots and recall indexes are rebuilt on
+  first use, so the first conversation may be slower. When the rollback itself
+  fails, the backup path and the manual recovery command are printed.
+
+Exit codes:
+  0 success; 1 runtime failure (including a failed rollback); 2 refused before
+  anything was changed (corrupt package, unsupported version, no space, or a
+  missing --yes in a non-interactive shell).
+
+Examples:
+  haruyuki import --from ./work.hryk --verify
+  haruyuki import --from ./work.hryk
+  haruyuki import --from ./work.hryk --yes --json
 ```
 
 ### `haruyuki trajectories`

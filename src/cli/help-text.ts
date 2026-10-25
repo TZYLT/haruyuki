@@ -74,6 +74,8 @@ SUBCOMMANDS
   haruyuki recall status [--agent <id>]
   haruyuki recall now <query> [--agent <id>] [--conversation <id>]
   haruyuki local-backend migrate-transcripts [--storage-dir <path>] [--dry-run]
+  haruyuki export [--out <package>] [--with-project[=<dir>]] [--dry-run] [--json] [--verbose] [--yes]
+  haruyuki import --from <package> [--with-project[=<dir>]] [--verify] [--json] [--verbose] [--yes]
 
 BEHAVIOR
   On startup, Haruyuki checks for saved profiles:

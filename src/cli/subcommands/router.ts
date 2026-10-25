@@ -21,6 +21,19 @@ async function runVersionSubcommand(): Promise<number> {
   return 0;
 }
 
+// The snapshot commands are wrapped rather than imported: they pull in the
+// archive and import pipelines, and `--help` must stay cheap. Both read local
+// data roots, so they also appear in `subcommandNeedsEarlyBackendMode`.
+async function runSnapshotExportSubcommand(argv: string[]): Promise<number> {
+  const { runSnapshotExport } = await import("./snapshot/cli");
+  return runSnapshotExport(argv);
+}
+
+async function runSnapshotImportSubcommand(argv: string[]): Promise<number> {
+  const { runSnapshotImport } = await import("./snapshot/cli");
+  return runSnapshotImport(argv);
+}
+
 export function subcommandNeedsEarlyBackendMode(
   command: string | undefined,
 ): boolean {
@@ -29,6 +42,8 @@ export function subcommandNeedsEarlyBackendMode(
     case "channel-gateway":
     case "agents":
     case "connect":
+    case "export":
+    case "import":
     case "install":
     case "memfs":
     case "memory":
@@ -101,6 +116,10 @@ export async function runSubcommand(argv: string[]): Promise<number | null> {
     }
     case "local-backend":
       return runLocalBackendSubcommand(rest);
+    case "export":
+      return runSnapshotExportSubcommand(rest);
+    case "import":
+      return runSnapshotImportSubcommand(rest);
     case "trajectories":
     case "trajectory": // alias
       return runTrajectoriesSubcommand(rest);

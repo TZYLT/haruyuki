@@ -336,6 +336,49 @@ haruyuki trajectories search <关键词> [--out <dir>] [--source <name>] \
 （Claude Code、Codex、Hermes、Letta、OpenClaw、OpenHands、Deep Agents 及以后新增的）
 都会自动包含。默认输出目录 `/tmp/letta-trajectories`。
 
+### 全量导出与恢复（`export` / `import`）
+
+```bash
+haruyuki export [--out <包路径>] [--with-project[=<目录>]] [--dry-run] [--json] [--verbose] [--yes]
+haruyuki import --from <包路径> [--with-project[=<目录>]] [--verify] [--json] [--verbose] [--yes]
+```
+
+把本机的 Haruyuki 数据（用户级根 + 本地后端存储 + 可选项目级 + 密钥）打进**一个**
+`.hryk` 文件（tar.gz：根级 `manifest.json`、`home/`、`local-backend/`、可选 `project/`、
+`secrets.json`），再由另一条子命令整体恢复。恢复是**快照语义**：只替换受管数据，
+不与本机现有数据合并。
+
+| 参数 | 作用 |
+|---|---|
+| `export --out <包路径>` | 缺省 `./haruyuki-<主机名>-<YYYYMMDD-HHmmss>.hryk`（主机名里的路径分隔符、冒号、空格等会替换成 `-`）；目标已存在则覆盖（确认提示会写出该路径与「将被覆盖」） |
+| `--with-project[=<目录>]` | 导出附带 / 导入恢复项目级数据；省略值取当前目录；导入仅在包内有 `project/` 时生效 |
+| `export --dry-run` | 只列类别、条目数、字节与排除项，不落盘、不计算 SHA-256 |
+| `import --verify` | 只解包校验（tar、manifest、版本、逐条哈希与字节），**不写任何数据** |
+| `--json` / `--verbose` | 单个 JSON 对象 / 逐条列出条目（密钥只打 name，**永不打印值**） |
+| `--yes` | 跳过确认词 |
+
+- **确认词**：`export` 要手敲 `export`，`import` 要手敲 `overwrite`；`--yes` 跳过。
+  **非 TTY 且无 `--yes` 直接失败（退出码 2）**，不会挂起等输入。
+- **导入先校验、后要确认词**：包坏了不会让你白敲一次；校验通过才提示将要覆盖什么。
+- **导出前**打印固定提醒：**请确认没有其它 haruyuki 窗口正在运行**，否则包内可能不一致
+  （消息、记忆提交、usage、cron 都可能在别的进程里变化）。
+- **包等于钥匙**：内含**明文**密钥（settings 令牌、agent 密钥、渠道凭据）以及私人对话与
+  反思转写；POSIX 下按 `0600` 写出。**不要提交到 git**（本工具只提示，绝不改你的 `.gitignore`）。
+- 导入成功后**请重新启动 haruyuki**；编译快照与召回索引不在包里，会在首次使用时重建，
+  首次打开会话可能略慢。失败会自动回滚到导入前的备份（`backups/pre-import.hryk`，只留 1 份），
+  回滚也失败时给出备份绝对路径与手工恢复命令。
+- 根解析取**当前进程**的用户级根与存储根（`HARUYUKI_HOME`、`LETTA_LOCAL_BACKEND_DIR`
+  可改），不接受 `--home` 覆盖。
+- 退出码：`0` 成功；`1` 运行期失败（含回滚失败）；`2` 预检拒绝（包损坏 / 版本过高 /
+  磁盘不足 / 缺 `--yes`）。
+
+```bash
+haruyuki export --out ./work.hryk --dry-run          # 先看会打什么
+haruyuki export --out ./work.hryk --with-project     # 正式导出（手敲 export）
+haruyuki import --from ./work.hryk --verify          # 只校验，不写数据
+haruyuki import --from ./work.hryk                   # 正式恢复（手敲 overwrite）
+```
+
 ---
 
 ## 三、会话内 slash 命令

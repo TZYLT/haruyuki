@@ -157,6 +157,33 @@ describe("subcommand router", () => {
     expect(await runSubcommand(["sandbox", "--help"])).toBeNull();
   });
 
+  test("routes snapshot export and import help with early backend selection", async () => {
+    const messages: string[] = [];
+    const originalLog = console.log;
+    console.log = (message?: unknown) => {
+      messages.push(String(message));
+    };
+
+    try {
+      // Both read this machine's data roots, so the backend mode has to be
+      // resolved before they run — the same reason `memory` and `messages` are
+      // listed.
+      expect(subcommandNeedsEarlyBackendMode("export")).toBe(true);
+      expect(subcommandNeedsEarlyBackendMode("import")).toBe(true);
+
+      expect(await runSubcommand(["export", "--help"])).toBe(0);
+      expect(await runSubcommand(["import", "--help"])).toBe(0);
+
+      const output = messages.join("\n");
+      expect(output).toContain("haruyuki export [--out <package>]");
+      expect(output).toContain("haruyuki import --from <package>");
+      // The §5.4.6 sensitive-data warning ships with the help text.
+      expect(output).toContain("Do not commit a .hryk package to git");
+    } finally {
+      console.log = originalLog;
+    }
+  });
+
   test("identifies backend-aware subcommands for early backend selection", () => {
     expect(subcommandNeedsEarlyBackendMode("app-server")).toBe(true);
     expect(subcommandNeedsEarlyBackendMode("connect")).toBe(true);
