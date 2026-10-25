@@ -8,6 +8,42 @@
 > **版本号谱系说明**：本 fork 早期使用 `0.35.0-better` … `0.36.2-better` 命名；分家后**重起为 `0.1.0`**（见 `0.1.0` 条目）。
 > 因此语义化排序上 `0.36.x-better` 早于 `0.1.0`，这是**刻意的重编号**，不是版本回退。
 
+## [0.4.2] - 2026-10-26
+
+> 一台机器的数据带走，另一台一条命令放回去：`haruyuki export` / `haruyuki import`。
+> 包是快照而不是补丁——导入会先备份、再按包覆盖受管数据；坏了能自己退回导入前的状态。
+
+### 新增
+
+- **`haruyuki export [--out <包>] [--with-project[=<目录>]] [--dry-run] [--json] [--verbose] [--yes]`**：
+  把用户级根、本地后端存储、可选项目级与密钥打进**一个** `.hryk`（gzipped tar：根级 `manifest.json` +
+  `home/` + `local-backend/` + 可选 `project/` + `secrets.json`）。零新依赖、自研 ustar+gzip；
+  先写 `.partial` 再 fsync + 改名，任一条目读失败即中止并删掉半成品。
+- **`haruyuki import --from <包> [--verify] [--with-project[=<目录>]] [--json] [--verbose] [--yes]`**：
+  校验（tar / manifest / schemaVersion / 逐条 SHA-256 与字节 / 条目数）通过后才要确认词 `overwrite`；
+  先自动备份到 `backups/pre-import.hryk`（只留一份，可直接 `import --from` 回去），再按快照语义接管受管数据，
+  重写 `sessionsByServer` 桶键、写回密钥、清 cron 租约与记忆仓库 git lock、幂等重装 hook；
+  落位后任一步失败自动回滚，回滚也失败时给出备份绝对路径与手工命令。
+- **包自证**：`manifest.json` 记逐文件 SHA-256、字节数、条目数与排除规则表，写在归档**最后一条**，
+  读者先读它再逐条比对。
+- **密钥三分区**：settings 令牌、每 agent 密钥、渠道凭据各走独立的 `secrets.json`；包内 `settings.json`
+  是**净化副本**（不含明文令牌），源文件不动，任何输出只打密钥名字不打值。
+- **项目级是窄口径**：`--with-project` 只带 `.haruyuki/settings.json`、`.haruyuki/settings.local.json`、
+  `.haruyukiignore`、`.commands/`、`.agents/skills/` 与遗留 `.skills/`——源码、`.env`、`.git`、`node_modules`
+  都不进包，导入也只清这几项。
+
+### 变更
+
+- CLI 帮助新增两个子命令条目；`docs/commands.zh-CN.md` 增加「全量导出与恢复」一节。
+- 退出码：`0` 成功、`1` 运行期失败（含回滚失败）、`2` 预检拒绝（包损坏 / 版本过高 / 磁盘不足 / 缺 `--yes`）；
+  `--json` 的 `code` 覆盖 9 类失败。
+
+### 已知限制
+
+- 跨平台导入尽力而为：不还原 POSIX 权限位、属主、符号链接与可执行位；同平台往返是硬承诺。
+- 导入时包内带 `project/` 却未给 `--with-project`，会**警告并跳过**项目数据，不会写进你当前的目录。
+- 双机实机验收由维护者手动执行（本仓库无 CI）。
+
 ## [0.4.1] - 2026-10-25
 
 > 给后台隐藏会话一个只读入口：`/maintenance sessions` 能列、能看、能删单条。

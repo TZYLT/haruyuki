@@ -351,7 +351,7 @@ haruyuki import --from <包路径> [--with-project[=<目录>]] [--verify] [--jso
 | 参数 | 作用 |
 |---|---|
 | `export --out <包路径>` | 缺省 `./haruyuki-<主机名>-<YYYYMMDD-HHmmss>.hryk`（主机名里的路径分隔符、冒号、空格等会替换成 `-`）；目标已存在则覆盖（确认提示会写出该路径与「将被覆盖」） |
-| `--with-project[=<目录>]` | 导出附带 / 导入恢复项目级数据；省略值取当前目录；导入仅在包内有 `project/` 时生效 |
+| `--with-project[=<目录>]` | 导出附带 / 导入恢复项目级数据；省略值取当前目录。**只带项目级 harness 数据**：`.haruyuki/settings.json`、`.haruyuki/settings.local.json`、`.haruyukiignore`、`.commands/`、`.agents/skills/`、遗留 `.skills/`——源码、`.env`、`.git/`、`node_modules/` 一律不进包，导入也只清这几项 |
 | `export --dry-run` | 只列类别、条目数、字节与排除项，不落盘、不计算 SHA-256 |
 | `import --verify` | 只解包校验（tar、manifest、版本、逐条哈希与字节），**不写任何数据** |
 | `--json` / `--verbose` | 单个 JSON 对象 / 逐条列出条目（密钥只打 name，**永不打印值**） |
@@ -367,6 +367,7 @@ haruyuki import --from <包路径> [--with-project[=<目录>]] [--verify] [--jso
 - 导入成功后**请重新启动 haruyuki**；编译快照与召回索引不在包里，会在首次使用时重建，
   首次打开会话可能略慢。失败会自动回滚到导入前的备份（`backups/pre-import.hryk`，只留 1 份），
   回滚也失败时给出备份绝对路径与手工恢复命令。
+- 包内有 `project/`、但导入时没给 `--with-project`：**警告并跳过项目数据**，不会写进你当前的目录。
 - 根解析取**当前进程**的用户级根与存储根（`HARUYUKI_HOME`、`LETTA_LOCAL_BACKEND_DIR`
   可改），不接受 `--home` 覆盖。
 - 退出码：`0` 成功；`1` 运行期失败（含回滚失败）；`2` 预检拒绝（包损坏 / 版本过高 /

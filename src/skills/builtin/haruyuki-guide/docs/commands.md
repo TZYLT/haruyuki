@@ -375,6 +375,20 @@ it when done. After an import, restart haruyuki; compiled prompt snapshots and
 recall indexes are rebuilt on first use, so the first conversation may be slower
 — `src/cli/subcommands/snapshot/cli.ts:105`.
 
+`--with-project` carries project-level harness data only, never the project
+itself: `project/.haruyuki/settings.json`, `project/.haruyuki/settings.local.json`,
+`project/.haruyukiignore`, `project/.commands/**`, `project/.agents/skills/**` and
+the legacy `project/.skills/**` —
+`src/cli/subcommands/snapshot/scope.ts:188`,
+`src/cli/subcommands/snapshot/scope.ts:218`. Source files, `.env`, `.git` and
+`node_modules` stay out of the package, and an import clears only those same six
+paths. A package that carries `project/` but an import without `--with-project`
+warns and skips the project tree instead of writing into the current directory —
+`src/cli/subcommands/snapshot/import.ts:378`. Export also ships a lease-free copy
+of `crons.json` (`scheduler_owner` null, `scheduler_owners` empty) so the target
+machine never inherits the exporting machine's scheduler claim —
+`src/cli/subcommands/snapshot/export.ts:615`.
+
 ## Slash commands
 
 The interactive surface is organised as eight hubs plus a set of retained
