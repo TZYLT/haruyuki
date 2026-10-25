@@ -67,6 +67,29 @@ export type SnapshotPhase =
   | "secrets"
   | "done";
 
+/**
+ * Error that carries the report code it maps to. Every snapshot module throws
+ * this (never a bare Error) so the CLI can turn a failure into a report, a
+ * `--json` code and an exit code without parsing message text.
+ */
+export class SnapshotError extends Error {
+  readonly code: SnapshotErrorCode;
+
+  constructor(code: SnapshotErrorCode, message: string) {
+    super(message);
+    this.name = "SnapshotError";
+    this.code = code;
+  }
+}
+
+/** One-line throw helper: `throw snapshotError("path_conflict", "...")`. */
+export function snapshotError(
+  code: SnapshotErrorCode,
+  message: string,
+): SnapshotError {
+  return new SnapshotError(code, message);
+}
+
 /** One entry in `manifest.json`, and one verified entry in a report. */
 export interface SnapshotEntry {
   /** Package-relative path, `/`-separated, no drive letter and no `..`. */
