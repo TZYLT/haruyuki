@@ -2,9 +2,13 @@
  * Export scope: the one table that decides what goes into a package, plus the
  * traversal that turns it into entries.
  *
- * `SCOPE_RULES` is the contract: 21 include rows and 20 exclude rows, in the
- * order of the requirement doc's appendix B (docs/44-2 §5.3 + appendix B;
- * docs/45-2 §2.4). Explicit manifestations only — never iterate `APP_SUBDIRS`,
+ * `SCOPE_RULES` is the contract: 26 include rows and 20 exclude rows. The home
+ * and storage trees follow the requirement doc's appendix B line by line
+ * (docs/44-2 §5.3 A/B + appendix B; docs/45-2 §2.4). The project tree does NOT:
+ * the user ruled on 2026-10-26 that the narrow §5.3 C list wins over appendix B's
+ * whole-tree `project/**` row, because exporting the whole checkout would put
+ * source and `.env` files in the package and make an import clear the user's
+ * project directory. Explicit manifestations only — never iterate `APP_SUBDIRS`,
  * because a new app directory must not start being exported by accident.
  *
  * Two root families (docs/45-2 §1 "路径不一致"): everything under the home tree
@@ -13,7 +17,9 @@
  * WhatsApp session credentials live inside `channels/`, so those two entries
  * follow the literal root instead. A run that relocates only `HARUYUKI_HOME`
  * therefore still reads the channels and transcripts of the real home
- * directory — that split is intentional and covered by the tests.
+ * directory — that split is intentional and covered by the tests. Import has to
+ * make the same split, which is what `literalHomeBase` and `usesLiteralHomeRoot`
+ * are exported for.
  */
 
 import type { Dirent, Stats } from "node:fs";
@@ -175,12 +181,44 @@ export const SCOPE_RULES: ScopeRule[] = [
     reason: "provider API keys and OAuth tokens",
   },
 
-  // C. project tree (1 include row, only with --with-project)
+  // C. project tree (6 include rows, only with --with-project). Narrow form of
+  // the requirement's §5.3 C list, per the 2026-10-26 ruling: the project tree
+  // is not a mirror of the checkout, so source files and `.env` stay out.
   {
-    pattern: "project/**",
+    pattern: "project/.haruyuki/settings.json",
     scope: "project",
     include: true,
-    reason: "project-level data; only exported when --with-project is passed",
+    reason: "project-level settings that belong to this checkout",
+  },
+  {
+    pattern: "project/.haruyuki/settings.local.json",
+    scope: "project",
+    include: true,
+    reason: "project-level local settings, when present",
+  },
+  {
+    pattern: "project/.haruyukiignore",
+    scope: "project",
+    include: true,
+    reason: "the project's own ignore file, read by the harness",
+  },
+  {
+    pattern: "project/.commands/**",
+    scope: "project",
+    include: true,
+    reason: "project-level custom slash commands",
+  },
+  {
+    pattern: "project/.agents/skills/**",
+    scope: "project",
+    include: true,
+    reason: "project-level skills",
+  },
+  {
+    pattern: "project/.skills/**",
+    scope: "project",
+    include: true,
+    reason: "legacy project-level skills directory, when present",
   },
 
   // D. generated at pack time (1 include row, never walked from disk)
@@ -298,6 +336,11 @@ export const SCOPE_RULES: ScopeRule[] = [
     reason:
       "agent secret values travel in secrets.json; shipping the file too would create two copies",
   },
+  // Project exclusions are intent records, not live traversal guards: the six
+  // project include rows are literals or narrow sub-trees, so none of these
+  // three paths is ever reached. They stay listed because the import side reads
+  // the table to decide what must NOT be cleared (the whole point of the narrow
+  // project scope), and because §5.3 C names them.
   {
     pattern: "project/.haruyuki/worktrees/**",
     scope: "project",
@@ -401,6 +444,36 @@ export function resolveHomeRoots(deps?: SnapshotCliDeps): ScopeRoots {
     // Literal `homedir()` on purpose: this is the root that ignores HARUYUKI_HOME.
     homedirRoot: homedir(),
   };
+}
+
+/**
+ * Absolute base directory the literal-home entries live in:
+ * `<homedirRoot>/.haruyuki`.
+ *
+ * Exported for the import side. Placement maps every `home/` entry under
+ * `roots.home` (the app home root) by default, but `channels/` and `transcripts/`
+ * are written by the app through `homedir()`, so restoring them under a
+ * relocated `HARUYUKI_HOME` would put them where the app never looks. Import
+ * asks `usesLiteralHomeRoot(path)` first and lands those entries here instead.
+ * Resolution stays in this module so the export and import sides cannot drift.
+ */
+export function literalHomeBase(roots: ScopeRoots): string {
+  return join(roots.homedirRoot, APP_DIR_NAME);
+}
+
+/**
+ * True when a package-relative path belongs to the literal-home family, i.e.
+ * `home/channels/...` or `home/transcripts/...` (the WhatsApp auth files live
+ * inside `channels/`, so they inherit this). Everything else under `home/`
+ * resolves from the app home root.
+ *
+ * Works for include patterns too — they are `home/`-prefixed paths. Driven by
+ * the same `HOME_ROOT_FAMILY` table the walk uses, so the two can never name
+ * different directories.
+ */
+export function usesLiteralHomeRoot(archivePath: string): boolean {
+  const [scope, firstSegment = ""] = archivePath.split("/");
+  return scope === "home" && HOME_ROOT_FAMILY[firstSegment] === "homedir";
 }
 
 /* ------------------------------------------------------------------ */
@@ -821,9 +894,8 @@ function sourceRootForRule(
   if (rule.scope === "local-backend") return roots.storageDir;
   if (rule.scope === "project") return opts.project;
   if (rule.scope === "secrets") return undefined;
-  const firstSegment = rule.pattern.split("/")[1] ?? "";
-  return HOME_ROOT_FAMILY[firstSegment] === "homedir"
-    ? join(roots.homedirRoot, APP_DIR_NAME)
+  return usesLiteralHomeRoot(rule.pattern)
+    ? literalHomeBase(roots)
     : roots.appHome;
 }
 

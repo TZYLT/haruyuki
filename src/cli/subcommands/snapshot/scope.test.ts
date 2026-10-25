@@ -9,10 +9,12 @@ import type { CollectEntriesOptions, ScopeEntry, ScopeRoots } from "./scope";
 import {
   assertNoCaseCollision,
   collectEntries,
+  literalHomeBase,
   matchesScopePattern,
   resolveHomeRoots,
   SCOPE_RULES,
   scopeExclusions,
+  usesLiteralHomeRoot,
 } from "./scope";
 import type { SnapshotExclusion, SnapshotScope } from "./types";
 import { SnapshotError } from "./types";
@@ -152,10 +154,37 @@ const EXPECTED_INCLUDE: readonly ExpectedRule[] = [
     scope: "local-backend",
     reason: "provider API keys and OAuth tokens",
   },
+  // C. project tree: the narrow §5.3 C list (2026-10-26 ruling), NOT a mirror of
+  // the checkout — source files and `.env` must stay out.
   {
-    pattern: "project/**",
+    pattern: "project/.haruyuki/settings.json",
     scope: "project",
-    reason: "project-level data; only exported when --with-project is passed",
+    reason: "project-level settings that belong to this checkout",
+  },
+  {
+    pattern: "project/.haruyuki/settings.local.json",
+    scope: "project",
+    reason: "project-level local settings, when present",
+  },
+  {
+    pattern: "project/.haruyukiignore",
+    scope: "project",
+    reason: "the project's own ignore file, read by the harness",
+  },
+  {
+    pattern: "project/.commands/**",
+    scope: "project",
+    reason: "project-level custom slash commands",
+  },
+  {
+    pattern: "project/.agents/skills/**",
+    scope: "project",
+    reason: "project-level skills",
+  },
+  {
+    pattern: "project/.skills/**",
+    scope: "project",
+    reason: "legacy project-level skills directory, when present",
   },
   {
     pattern: "secrets.json",
@@ -289,7 +318,7 @@ function assertRuleTable(
   }
 }
 
-test("SCOPE_RULES: the 21 include rules, asserted one by one", () => {
+test("SCOPE_RULES: the 26 include rules, asserted one by one", () => {
   assertRuleTable(EXPECTED_INCLUDE, true);
 });
 
@@ -297,9 +326,9 @@ test("SCOPE_RULES: the 20 exclude rules, asserted one by one", () => {
   assertRuleTable(EXPECTED_EXCLUDE, false);
 });
 
-test("SCOPE_RULES: 41 unique rows, each filed under its own scope", () => {
-  expect(SCOPE_RULES).toHaveLength(41);
-  expect(new Set(SCOPE_RULES.map((rule) => rule.pattern)).size).toBe(41);
+test("SCOPE_RULES: 46 unique rows, each filed under its own scope", () => {
+  expect(SCOPE_RULES).toHaveLength(46);
+  expect(new Set(SCOPE_RULES.map((rule) => rule.pattern)).size).toBe(46);
   for (const rule of SCOPE_RULES) {
     const prefix = rule.scope === "secrets" ? "secrets.json" : rule.scope;
     expect(
@@ -476,7 +505,7 @@ function createFixture(): Fixture {
     '{"agent:1":"value"}',
   );
 
-  // C. project tree
+  // C. project tree: the six narrow §5.3 C items in, everything else out.
   writeFileAt(project, join(APP_DIR_NAME, "settings.json"), "{}");
   writeFileAt(project, join(APP_DIR_NAME, "settings.local.json"), "{}");
   writeFileAt(project, ".haruyukiignore", "ignored");
@@ -486,7 +515,10 @@ function createFixture(): Fixture {
     join(".agents", "skills", "project-skill", "SKILL.md"),
     "# skill",
   );
+  writeFileAt(project, join(".skills", "legacy-skill", "SKILL.md"), "# legacy");
+  // Never carried: source, secrets and the three excluded project paths.
   writeFileAt(project, join("src", "index.ts"), "export {};");
+  writeFileAt(project, ".env", "OPENAI_API_KEY=placeholder");
   writeFileAt(
     project,
     join(APP_DIR_NAME, "worktrees", "wt-1", "draft.md"),
@@ -578,6 +610,48 @@ test("resolveHomeRoots: deps override the roots independently and homedirRoot st
   // deps won over the ambient HARUYUKI_HOME.
   process.env.HARUYUKI_HOME = join(tree.path, "ambient-home");
   expect(resolveHomeRoots({ homeRoot: customHome }).appHome).toBe(customHome);
+});
+
+test("literalHomeBase: the channels/transcripts base, and never HARUYUKI_HOME", () => {
+  const tree = makeTree();
+  const roots: ScopeRoots = {
+    appHome: join(tree.path, "app-home"),
+    storageDir: join(tree.path, "storage"),
+    homedirRoot: join(tree.path, "home"),
+  };
+  expect(literalHomeBase(roots)).toBe(join(roots.homedirRoot, APP_DIR_NAME));
+  expect(literalHomeBase(roots).startsWith(roots.appHome)).toBe(false);
+
+  // Resolved live: the ambient override moves appHome and leaves this base put,
+  // which is exactly why the import side must not land channels there.
+  process.env.HARUYUKI_HOME = join(tree.path, "redirected-home");
+  const ambient = resolveHomeRoots();
+  expect(literalHomeBase(ambient)).toBe(join(homedir(), APP_DIR_NAME));
+  expect(ambient.appHome).not.toBe(literalHomeBase(ambient));
+});
+
+test("usesLiteralHomeRoot: exactly channels/ and transcripts/, driven by one table", () => {
+  expect(usesLiteralHomeRoot("home/channels")).toBe(true);
+  expect(
+    usesLiteralHomeRoot("home/channels/whatsapp/auth/acct-1/creds.json"),
+  ).toBe(true);
+  expect(usesLiteralHomeRoot("home/transcripts/background/bg.jsonl")).toBe(
+    true,
+  );
+  expect(usesLiteralHomeRoot("home/settings.json")).toBe(false);
+  expect(usesLiteralHomeRoot("home/logs/debug.log")).toBe(false);
+  // Case-sensitive: the app writes these two names in lower case.
+  expect(usesLiteralHomeRoot("home/Channels/whatsapp")).toBe(false);
+  expect(usesLiteralHomeRoot("local-backend/agents/agent-1.json")).toBe(false);
+  expect(usesLiteralHomeRoot("project/.haruyukiignore")).toBe(false);
+  expect(usesLiteralHomeRoot("home")).toBe(false);
+  expect(usesLiteralHomeRoot("")).toBe(false);
+
+  // The walk reads the same table: only those rows resolve from the literal base.
+  const literalRules = SCOPE_RULES.filter(
+    (rule) => rule.include && usesLiteralHomeRoot(rule.pattern),
+  ).map((rule) => rule.pattern);
+  expect(literalRules).toEqual(["home/transcripts/**", "home/channels/**"]);
 });
 
 /* ------------------------------------------------------------------ */
@@ -716,14 +790,23 @@ test("collectEntries: projects/ and backups/ never enter the package", async () 
   );
 });
 
-test("collectEntries: the project tree drops .git, node_modules and worktrees", async () => {
+test("collectEntries: the project tree carries the six narrow items only", async () => {
   const fixture = createFixture();
   const found = paths(
     await collectAll(fixture.roots, { project: fixture.project }),
   );
+  // The §5.3 C list, one assertion per row.
+  expect(found).toContain("project/.haruyuki/settings.json");
+  expect(found).toContain("project/.haruyuki/settings.local.json");
   expect(found).toContain("project/.haruyukiignore");
-  expect(found).toContain("project/src/index.ts");
+  expect(found).toContain("project/.commands/ship.md");
   expect(found).toContain("project/.agents/skills/project-skill/SKILL.md");
+  expect(found).toContain("project/.skills/legacy-skill/SKILL.md");
+  // Not a mirror of the checkout: source, `.env` and the excluded trees stay out,
+  // and the project root is not an entry of its own any more.
+  expect(found).not.toContain("project/src/index.ts");
+  expect(found).not.toContain("project/.env");
+  expect(found).not.toContain("project");
   expect(found.some((path) => path.startsWith("project/.git"))).toBe(false);
   expect(found.some((path) => path.startsWith("project/node_modules"))).toBe(
     false,
@@ -749,6 +832,35 @@ test("collectEntries: channels and transcripts come from the literal home root",
   // HARUYUKI_HOME still reads these two entries from the real home directory.
   expect(found).not.toContain("home/channels/decoy.json");
   expect(found).not.toContain("home/transcripts/decoy.jsonl");
+});
+
+test("collectEntries: each home entry resolves from the base its own rule names", async () => {
+  const fixture = createFixture();
+  // The fixture keeps homedirRoot and appHome disjoint, so a mismatch cannot hide.
+  expect(fixture.roots.homedirRoot).not.toBe(fixture.roots.appHome);
+  const base = literalHomeBase(fixture.roots);
+  const entries = await collectAll(fixture.roots, { project: fixture.project });
+  const homeEntries = entries.filter((entry) => entry.path.startsWith("home/"));
+  expect(homeEntries.length).toBeGreaterThan(0);
+
+  const literal = homeEntries.filter((entry) =>
+    usesLiteralHomeRoot(entry.path),
+  );
+  expect(literal.length).toBeGreaterThan(0);
+  for (const entry of homeEntries) {
+    if (usesLiteralHomeRoot(entry.path)) {
+      expect(
+        entry.absolutePath.startsWith(base),
+        `${entry.path} should come from ${base}`,
+      ).toBe(true);
+      expect(entry.absolutePath.startsWith(fixture.roots.appHome)).toBe(false);
+    } else {
+      expect(
+        entry.absolutePath.startsWith(fixture.roots.appHome),
+        `${entry.path} should come from ${fixture.roots.appHome}`,
+      ).toBe(true);
+    }
+  }
 });
 
 /* ------------------------------------------------------------------ */
