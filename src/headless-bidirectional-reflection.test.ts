@@ -10,12 +10,13 @@ import { createIsolatedCliTestEnv } from "@/test-utils/test-process-env";
 type JsonObject = Record<string, unknown>;
 
 interface ReflectionTranscriptState {
-  total_completed_steps?: number;
-  reflected_completed_steps?: number;
-  steps_since_last_successful_reflection?: number;
+  /** v4: user-message counting replaced completed-step counting (F-03 §5.5.2). */
+  version?: number;
+  total_user_messages?: number;
+  reflected_user_messages?: number;
+  messages_since_last_successful_reflection?: number;
   last_reflection_started_at?: string;
   last_reflection_succeeded_at?: string;
-  reflected_through_message_id?: string;
 }
 
 interface BidirectionalReflectionSummary {
@@ -53,6 +54,10 @@ afterAll(async () => {
       child.kill("SIGTERM");
     }
   }
+  if (process.env.KEEP_REFLECTION_E2E_ROOT === "1") {
+    console.error("kept temp roots:", tempRoots.join(", "));
+    return;
+  }
   await Promise.all(
     tempRoots.map((root) => rm(root, { recursive: true, force: true })),
   );
@@ -64,34 +69,49 @@ describe("headless bidirectional auto-reflection", () => {
 
     expect(summary.code, formatSummary(summary)).toBe(0);
     expect(summary.signal, formatSummary(summary)).toBeNull();
-    expect(summary.resultCount, formatSummary(summary)).toBe(3);
+    // A completed reflection enqueues one notification turn, so `result`
+    // envelopes are no longer a turn counter: three user turns plus their
+    // notifications. The transcript line count below is the stable check.
+    expect(summary.resultCount, formatSummary(summary)).toBeGreaterThanOrEqual(
+      3,
+    );
     expect(summary.agentId, formatSummary(summary)).toBeTruthy();
     expect(summary.conversationId, formatSummary(summary)).toBeTruthy();
     expect(summary.transcriptDir, formatSummary(summary)).toBeTruthy();
 
-    expect(summary.transcriptLines, formatSummary(summary)).toHaveLength(6);
+    // Three user turns plus three notification turns: assert the user turns by
+    // content instead of a total line count, which the notification channel
+    // legitimately grows.
+    expect(
+      summary.transcriptLines.length,
+      formatSummary(summary),
+    ).toBeGreaterThanOrEqual(6);
     expect(summary.transcriptLines[0]).toContain('"kind":"user"');
     expect(summary.transcriptLines[0]).toContain("hello one");
     expect(summary.transcriptLines[1]).toContain('"kind":"assistant"');
     expect(summary.transcriptLines[1]).toContain(
       '"source_message_id":"ui-msg-2"',
     );
+    for (const prompt of ["hello one", "hello two", "hello three"]) {
+      expect(
+        summary.transcriptLines.some(
+          (line) => line.includes('"kind":"user"') && line.includes(prompt),
+        ),
+        `missing user turn ${prompt}\n${formatSummary(summary)}`,
+      ).toBe(true);
+    }
 
-    // Reflection launches post-turn, so every completed turn gets reflected.
-    // The harness waits for each reflection cycle to finish before sending the
-    // next message, making the final state exact: any silent breakage in the
-    // trigger or launcher fails these assertions.
+    // Post-turn reflections, one per user message. A silent break in the
+    // trigger, the launcher or the settlement fails these assertions.
     expect(summary.reflectionLaunchCount, formatSummary(summary)).toBe(3);
-    expect(summary.payloadFiles.length, formatSummary(summary)).toBe(3);
-    expect(summary.state?.total_completed_steps, formatSummary(summary)).toBe(
+    // The payload path is retired (F-03 §5.13.1): the fork carries the context.
+    expect(summary.payloadFiles, formatSummary(summary)).toHaveLength(0);
+    expect(summary.state?.total_user_messages, formatSummary(summary)).toBe(3);
+    expect(summary.state?.reflected_user_messages, formatSummary(summary)).toBe(
       3,
     );
     expect(
-      summary.state?.reflected_completed_steps,
-      formatSummary(summary),
-    ).toBe(3);
-    expect(
-      summary.state?.steps_since_last_successful_reflection,
+      summary.state?.messages_since_last_successful_reflection,
       formatSummary(summary),
     ).toBe(0);
     expect(
@@ -102,10 +122,6 @@ describe("headless bidirectional auto-reflection", () => {
       summary.state?.last_reflection_succeeded_at,
       formatSummary(summary),
     ).toBeTruthy();
-    expect(
-      summary.state?.reflected_through_message_id,
-      formatSummary(summary),
-    ).toBe("ui-msg-6");
   }, 60_000);
 });
 
@@ -127,9 +143,13 @@ async function runBidirectionalReflectionScenario(): Promise<BidirectionalReflec
       {
         tokenStreaming: false,
         sessionContextEnabled: true,
-        memoryReminderInterval: 1,
-        reflectionTrigger: "step-count",
-        reflectionStepCount: 1,
+        // F-03 trigger surface: every user message starts one reflection. The
+        // fork is kept only by the run itself; success deletes it again, which
+        // is why the assertions below read the transcript state, not the fork.
+        reflectionOnCompaction: false,
+        reflectionEveryUserMessages: 1,
+        reflectionTimeoutMinutes: 3,
+        reflectionDeleteSessionOnSuccess: true,
         agents: [],
       },
       null,
@@ -188,7 +208,6 @@ async function runBidirectionalReflectionScenario(): Promise<BidirectionalReflec
   let pendingStdout = "";
   let sentFirstMessage = false;
   let resultCount = 0;
-  let closeScheduled = false;
   let agentId: string | null = null;
   let conversationId: string | null = null;
   const events: BidirectionalReflectionSummary["events"] = [];
@@ -203,18 +222,6 @@ async function runBidirectionalReflectionScenario(): Promise<BidirectionalReflec
     agentId && conversationId
       ? join(transcriptRoot, agentId, conversationId)
       : null;
-
-  const scheduleCloseAfterReflection = () => {
-    if (closeScheduled) return;
-    closeScheduled = true;
-    void waitForReflectionProgress(transcriptDir, {
-      reflectedCompletedSteps: 3,
-      payloadCount: 3,
-      timeoutMs: reflectionWaitTimeoutMs,
-    }).finally(() => {
-      child.stdin.end();
-    });
-  };
 
   child.stdout.on("data", (chunk) => {
     const text = chunk.toString();
@@ -253,33 +260,30 @@ async function runBidirectionalReflectionScenario(): Promise<BidirectionalReflec
         !sentFirstMessage
       ) {
         sentFirstMessage = true;
-        sendUser("hello one");
+        // Drive the scenario by state, not by result events: a completed
+        // reflection can itself enqueue a notification turn, so the number of
+        // `result` envelopes is not a stable turn counter any more.
+        void driveTurns();
       }
 
       if (parsed.type === "result") {
         resultCount += 1;
-        // Each turn's reflection launches post-turn. The next turn is allowed
-        // to start only after that background reflection finishes; otherwise
-        // the active-reflection guard correctly skips duplicate launches and
-        // the final counts would depend on timing instead of being exact.
-        if (resultCount === 1) {
-          void waitForReflectionProgress(transcriptDir, {
-            reflectedCompletedSteps: 1,
-            payloadCount: 1,
-            timeoutMs: reflectionWaitTimeoutMs,
-          }).finally(() => sendUser("hello two"));
-        } else if (resultCount === 2) {
-          void waitForReflectionProgress(transcriptDir, {
-            reflectedCompletedSteps: 2,
-            payloadCount: 2,
-            timeoutMs: reflectionWaitTimeoutMs,
-          }).finally(() => sendUser("hello three"));
-        } else if (resultCount === 3) {
-          scheduleCloseAfterReflection();
-        }
       }
     }
   });
+
+  /** Send each user line only after the previous reflection has settled. */
+  const driveTurns = async (): Promise<void> => {
+    const prompts = ["hello one", "hello two", "hello three"];
+    for (let index = 0; index < prompts.length; index += 1) {
+      sendUser(prompts[index] ?? "");
+      await waitForReflectionProgress(transcriptDir, {
+        reflectedUserMessages: index + 1,
+        timeoutMs: reflectionWaitTimeoutMs,
+      });
+    }
+    child.stdin.end();
+  };
 
   child.stderr.on("data", (chunk) => {
     stderr += chunk.toString();
@@ -320,7 +324,7 @@ async function runBidirectionalReflectionScenario(): Promise<BidirectionalReflec
     resultCount,
     reflectionLaunchCount: countOccurrences(
       stderr,
-      "Launched reflection subagent (step-count)",
+      "launched (user-messages) on fork",
     ),
     events,
     transcriptDir: finalTranscriptDir,
@@ -334,21 +338,14 @@ async function runBidirectionalReflectionScenario(): Promise<BidirectionalReflec
 
 async function waitForReflectionProgress(
   getTranscriptDir: () => string | null,
-  options: {
-    reflectedCompletedSteps: number;
-    payloadCount: number;
-    timeoutMs: number;
-  },
+  options: { reflectedUserMessages: number; timeoutMs: number },
 ): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < options.timeoutMs) {
     const dir = getTranscriptDir();
     const state = dir ? readReflectionState(dir) : null;
-    const payloadCount = dir ? readPayloadFiles(dir).length : 0;
     if (
-      (state?.reflected_completed_steps ?? 0) >=
-        options.reflectedCompletedSteps &&
-      payloadCount >= options.payloadCount
+      (state?.reflected_user_messages ?? 0) >= options.reflectedUserMessages
     ) {
       return;
     }

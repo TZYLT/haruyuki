@@ -63,7 +63,6 @@ import { spawnSubagentProcess } from "./subagent-process";
 import {
   describeSubagentExit,
   type ExecutionState,
-  hasSuccessfulToolCall,
   looksLikeTruncatedStreamJson,
   parseResultFromStdout,
   processStreamEvent,
@@ -621,11 +620,12 @@ async function executeSubagent(
 
     // Return captured result if available
     if (state.finalResult !== null) {
-      const toolFailureError =
-        type === "reflection" && !hasSuccessfulToolCall(state)
-          ? "Reflection could not complete because it did not finish a successful tool call."
-          : undefined;
-      const completionError = state.finalError ?? toolFailureError;
+      // A reflection turn that ran to completion is a success even when it made
+      // no tool call at all: "nothing worth registering" is a legitimate no-op
+      // (§5.10.2). The payload-era requirement that the child must prove it read
+      // a transcript file no longer applies — the fork already carries the
+      // conversation in its context.
+      const completionError = state.finalError ?? undefined;
       return withModel({
         agentId: state.agentId || "",
         conversationId: state.conversationId || undefined,
