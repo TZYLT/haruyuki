@@ -51,6 +51,24 @@ type ForkContextMode = "inherited-history" | "inherited-context";
 const DEFAULT_MODEL = "lmstudio/verify-fork-model";
 const TURN_TIMEOUT_MS = 120_000;
 
+/**
+ * Provider credentials that may be present in the operator's shell. The gate
+ * must not be able to reach a real endpoint even if one is configured; the
+ * explicit `--model` already fixes routing, this makes that a guarantee.
+ */
+const AMBIENT_PROVIDER_KEYS = [
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "GOOGLE_GENERATIVE_AI_API_KEY",
+  "GEMINI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "MISTRAL_API_KEY",
+  "XAI_API_KEY",
+  "GROQ_API_KEY",
+  "HARUYUKI_DISABLE_LOCAL_MODEL_DISCOVERY",
+] as const;
+
 const cliProcesses = new Set<ChildProcessWithoutNullStreams>();
 
 interface CliOptions {
@@ -543,6 +561,10 @@ async function runScenario(options: {
   // The conversation must persist so the fork can be created from it; the
   // shared test helper disables persistence for isolation.
   delete env.HARUYUKI_DISABLE_SESSION_PERSIST;
+  // "No credentials" must hold by construction, not by luck: the helper only
+  // strips LETTA_*/HARUYUKI_* names, so ambient provider keys from the operator's
+  // shell would otherwise ride along into the child.
+  for (const key of AMBIENT_PROVIDER_KEYS) delete env[key];
 
   const header = [
     `F-03 M0 · prefix fork byte gate`,
