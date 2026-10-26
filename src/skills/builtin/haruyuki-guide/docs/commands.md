@@ -482,11 +482,24 @@ and `/exit` stay top-level. Agent identity and presentation moved into
 
 ### Reflection
 
-`/dream` and `/reflect` take `[--recent N | --conversation ID ... | --auto]
-[--instruction TEXT]` and require an active agent: without a scope they throw
-`Reflection requires an active agent.` — `src/cli/commands/registry.ts`. There is
-no `/reflection` alias any more. Reflection itself is managed locally; see the
-`unsupported` document.
+`/dream` and `/reflect` take `[--instruction TEXT]` and require an active agent:
+without one they throw `Reflection requires an active agent.` —
+`src/cli/commands/registry.ts`. There is no `/reflection` alias any more, and the
+old cross-conversation flags (`--recent`, `--conversation`, `--auto`) are gone:
+passing one is an error that prints the current usage. Reflection only ever
+runs on the current conversation.
+
+Automatic triggers are two independent switches in `/memory config` (or the
+settings page): `reflectionOnCompaction` (default on) and
+`reflectionEveryUserMessages` (default 0 = off; 25 is the suggested threshold).
+A run is capped by `reflectionTimeoutMinutes` (default 3, range 1–60), and a
+successful run deletes its hidden fork when `reflectionDeleteSessionOnSuccess`
+is on (the default). The run itself is a hidden `inherited-context` fork of the
+conversation whose prefix is byte-identical to the parent turn; it writes the
+memory repository directly, so there is no worktree or merge step any more —
+`src/cli/helpers/reflection-launcher.ts`. See the `memory-filesystem` and
+`settings-and-paths` documents, and the `unsupported` document for the retired
+cloud reflection path.
 
 ### Settings and maintenance
 

@@ -428,7 +428,7 @@ haruyuki import --from ./work.hryk                   # 正式恢复（手敲 ove
 | `/memory memfs` | `[enable\|disable\|sync\|reset]` | 管理文件系统记忆 |
 | `/memory remote` | `<set\|unset\|status\|push> [url]` | 把记忆仓推送到额外的 git 远端 |
 | `/memory palace` | — | 在浏览器里打开记忆查看器 |
-| `/memory config` | — | 睡眠期反思的触发与合并设置 |
+| `/memory config` | — | 反思触发与时限设置（原「睡眠期」合并设置已删除；入口同 `/sleeptime`） |
 
 ### `/messages`（消息）
 
@@ -512,8 +512,12 @@ haruyuki import --from ./work.hryk                   # 正式恢复（手敲 ove
 
 | 命令 | 参数 | 说明 |
 |---|---|---|
-| `/reflect` | `[--recent N \| --conversation ID … \| --auto] [--instruction TEXT]` | 触发反思 |
+| `/reflect` | `[--instruction TEXT]` | 对**当前会话**触发一次反思（与自动触发同路径、同限时） |
 | `/dream` | 同上 | `/reflect` 的别名 |
+
+> 自动触发由两个独立开关控制，在 `/memory config`（或 `/settings`）里改：**压缩时**（`reflectionOnCompaction`，默认开）与**每 N 条用户消息**（`reflectionEveryUserMessages`，默认 0 = 关，开启建议 25）。
+> 时限 `reflectionTimeoutMinutes`（默认 3，范围 1–60）；成功后按 `reflectionDeleteSessionOnSuccess`（默认开）删除反思会话。
+> 旧参数 `--recent`、`--conversation`、`--auto` 已删除：输入会报错并给出现用写法；反思不再跨会话。
 
 ### 顶层命令：模型
 
@@ -540,7 +544,7 @@ haruyuki import --from ./work.hryk                   # 正式恢复（手敲 ove
 |---|---|---|
 | `/search` | `[查询]` | 跨全部 agent 搜索消息 |
 | `/doctor` | `[症状]` | 在当前会话里排查某个 agent 问题 |
-| `/usage` | — | 打开用量页（总览 + 明细） |
+| `/usage` | — | 打开用量页（总览 + 明细；明细含按来源分组的「Automated tasks」，反思等后台任务的成本在这里） |
 | `/tabs` | — | 列出打开的 tab（Enter 切换，D 关闭） |
 | `/close` | — | 关闭当前 tab |
 | `/settings` | — | 打开设置页 |

@@ -74,7 +74,7 @@ Transcripts are a third case: `LETTA_TRANSCRIPT_ROOT` overrides them, otherwise
 | `mods` | `mods/` | user mods (preferred over `extensions`) |
 | `plans` | `plans/` | declared but with no consumer in this repo |
 | `skills` | `skills/` | global skills |
-| `transcripts` | `transcripts/` | reflection transcripts |
+| `transcripts` | `transcripts/` | per-conversation transcript slices used by memory subagents and the reflection counter state (`state.json`) |
 | `viewers` | `viewers/` | generated HTML viewers |
 | `workflows` | `workflows/` | workflow execution journal |
 | `worktrees` | `worktrees/` | managed worktrees |
@@ -99,9 +99,9 @@ loader does:
   `src/settings-manager.ts:387-401` — and merges onto the defaults shallowly —
   `src/settings-manager.ts:428-431`. Writes persist the intersection of managed
   keys and dirty keys — `src/settings-manager.ts:906-924`.
-- The project file is read through a **field whitelist**: only `hooks` and
-  `windowTitle` are picked out of it —
-  `src/settings-manager.ts:797-800`. Adding a project-scoped setting means
+- The project file is read through a **field whitelist**: only `hooks`,
+  `windowTitle` and the four reflection keys are picked out of it —
+  `src/settings-manager.ts:875-889`. Adding a project-scoped setting means
   extending that whitelist.
 - The local file is read as-is — `src/settings-manager.ts:1001-1028`.
 - Local-over-global precedence is applied by the caller, not by the manager —
@@ -120,6 +120,27 @@ objects, the project whitelist, and `updateSettings` collision routing — the
 interfaces are at `src/settings-manager.ts:69-116`,
 `src/settings-manager.ts:143-146`, and `src/settings-manager.ts:148-164`; the
 defaults at `src/settings-manager.ts:175-198`.
+
+## Reflection settings
+
+Reflection is configured by four optional keys, plus a per-agent override:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `reflectionOnCompaction` | `true` | Run a reflection when a compaction completes |
+| `reflectionEveryUserMessages` | `0` (off) | Run after N user messages; 25 is the suggested value. Counted per conversation and only for real user submissions — not for task notifications, cron prompts or mod continuations |
+| `reflectionTimeoutMinutes` | `3` | Wall-clock cap, 1–60. At the deadline the run is marked `timeout`, given a 10-second grace, then aborted; uncommitted memory changes are backed up under `refs/letta-backup/` and discarded |
+| `reflectionDeleteSessionOnSuccess` | `true` | Delete the hidden fork after a successful run; failures and timeouts keep it |
+
+Precedence is global → project → local, then the per-agent entry in
+`reflectionSettingsByAgent` — `src/reflection-settings.ts`. Retired keys
+(`reflectionBehavior`, `reflectionMerge`, `reflectionMergeInstructions`,
+`enableSleeptime`, and the older `reflectionTrigger`/`reflectionStepCount`) are
+ignored on load and stripped on the next persist —
+`src/settings-manager.ts:187-196`; the legacy counting state restarts at zero
+under the v4 user-message counter. The user-facing entry point is
+`/memory config` (also reachable as `/sleeptime`) and the settings page;
+`/reflect` and `/dream` take `--instruction` only.
 
 ## `Settings.env` is not the secret store
 

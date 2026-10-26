@@ -185,16 +185,23 @@ Defaults live in one frozen object —
 
 - Memory worktrees live beside the repository, in `memory-worktrees/`, with
   branch names `haruyuki/<label>/<id>` —
-  `src/agent/memory-worktree.ts:136-167`. Reflection uses the label
-  `reflection` — `src/agent/memory-worktree.ts:142` — and the memory worker uses
-  `memory-worker` — `src/agent/subagents/memory-worker.ts:156-159`.
+  `src/agent/memory-worktree.ts:136-167`. The memory update worker uses the
+  label `memory-worker` — `src/agent/subagents/memory-worker.ts:156-159`.
+- **Reflection no longer uses a worktree.** Since the reflection rewrite it runs
+  on a hidden fork of the conversation and writes the memory repository
+  directly, so there is no branch to merge — `src/cli/helpers/reflection-launcher.ts`.
+  The default `reflection` label in `createReflectionMemoryWorktree` is
+  historical; a timed-out run instead preserves uncommitted work under
+  `refs/letta-backup/reflection-timeout-<ts>` plus a patch file —
+  `src/agent/reflection-run.ts:150`, `src/agent/reflection-run.ts:636`.
 - Integration removes the worktree and merges the branch with
   `git merge --no-edit -m "merge(memory): <branch>"`; a conflict aborts the
   merge and keeps the branch — `src/agent/memory-worktree.ts:690-748`.
-- A reflection is finalized as one of `merged`, `no_changes`, `parent_dirty`,
-  `merge_conflict`, `dirty_uncommitted`, or `failed` —
-  `src/agent/memory-worktree.ts:226-232`. Only `merged` and `no_changes`
-  consume the transcript — `src/agent/memory-worktree.ts:246-250`.
+- The retired reflection finalization states (`merged`, `no_changes`,
+  `parent_dirty`, `merge_conflict`, `dirty_uncommitted`, `failed`) no longer
+  describe a reflection run. A run now ends as `succeeded`, `failed`, `timeout`
+  or `cancelled`, recorded on the fork's conversation record —
+  `src/agent/reflection-run.ts:56-82`.
 - `enter-worktree` and `exit-worktree` do **not** touch the memory worktree:
   they act on the repository working directory and `.haruyuki/worktrees/` —
   `src/tools/impl/enter-worktree.ts:172`,
@@ -210,7 +217,7 @@ Defaults live in one frozen object —
 | `<dir>/MEMORY.md` | Index required for every directory that holds projected memory | `src/agent/memory-format.ts:33-40` |
 | `persona.md` / `human.md` | v2 root self and human blocks | `src/backend/local/system-prompt-compilation.ts` (v2 section), `src/agent/personality.ts:43-48` |
 | `system/persona.md` / `system/human.md` | v1 self and human blocks (legacy layout) | `src/agent/personality.ts:43-48`, `src/backend/local/system-prompt-compilation.ts:351-360` |
-| `ARCHIVE.md` | Where retired but still useful context is appended, dated; sensitive or wrong content is deleted instead | `src/agent/subagents/builtin/reflection.md:102`, `src/agent/subagents/builtin/reflection-v2.md:103` |
+| `ARCHIVE.md` | Where retired but still useful context is appended, dated; sensitive or wrong content is deleted instead | `src/agent/subagents/builtin/reflection-v3.md:133` |
 | `skills/<name>/SKILL.md` | Agent-installed skills; flat `.md` files are rejected | `src/tools/impl/skill.ts:72-88`, `src/agent/memory-git-hooks.ts:148-151` |
 | `reference/` | Supporting material; in v2 it needs its own index | `src/backend/local/system-prompt-compilation.ts:218-222` |
 | `profile.png` | Visual identity used by the local prompt | `src/agent/prompts/haruyuki_local_memfs.md:88` |
