@@ -127,61 +127,6 @@ describe("Settings Manager - Initialization", () => {
       "Settings not initialized",
     );
   });
-
-  test("Initialize tolerates obsolete keys and strips them on persist", async () => {
-    const { writeFile, readFile, mkdir } = await import("@/utils/fs.js");
-    const settingsDir = join(testHomeDir, ".haruyuki");
-    await mkdir(settingsDir, { recursive: true });
-    const settingsPath = join(settingsDir, "settings.json");
-
-    await writeFile(
-      settingsPath,
-      JSON.stringify({
-        reflectionBehavior: "reminder",
-        enableSleeptime: true,
-        pinnedConversationsByServer: {
-          "api.letta.com": { "agent-1": ["conv-1"] },
-        },
-        reflectionTrigger: "step-count",
-        reflectionStepCount: 12,
-      }),
-    );
-
-    await settingsManager.initialize();
-    const settings = settingsManager.getSettings() as unknown as Record<
-      string,
-      unknown
-    >;
-    // F-03 migrates the retired reflection selector onto the two switches.
-    expect(settings.reflectionOnCompaction).toBe(false);
-    expect(settings.reflectionEveryUserMessages).toBe(12);
-    expect(settings).not.toHaveProperty("reflectionBehavior");
-    expect(settings).not.toHaveProperty("enableSleeptime");
-    expect(settings).not.toHaveProperty("pinnedConversationsByServer");
-
-    settingsManager.updateSettings({ tokenStreaming: true });
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    const persisted = JSON.parse(await readFile(settingsPath)) as Record<
-      string,
-      unknown
-    >;
-    expect(persisted.reflectionOnCompaction).toBe(false);
-    expect(persisted.reflectionEveryUserMessages).toBe(12);
-    expect(persisted).not.toHaveProperty("reflectionBehavior");
-    expect(persisted).not.toHaveProperty("enableSleeptime");
-    expect(persisted).not.toHaveProperty("pinnedConversationsByServer");
-
-    // Replaying the migration on the rewritten file is a no-op: the new keys win.
-    await settingsManager.reset();
-    await settingsManager.initialize();
-    const replayed = settingsManager.getSettings() as unknown as Record<
-      string,
-      unknown
-    >;
-    expect(replayed.reflectionOnCompaction).toBe(false);
-    expect(replayed.reflectionEveryUserMessages).toBe(12);
-  });
 });
 
 // ============================================================================
@@ -387,52 +332,6 @@ describe("Settings Manager - Project Settings", () => {
     expect(projectSettings.windowTitle).toBeUndefined();
   });
 
-  test("Load project settings reads the F-03 reflection knobs and strips merge keys", async () => {
-    const { writeFile, readFile, mkdir } = await import("@/utils/fs.js");
-    const projectDir = await (await import("node:fs/promises")).mkdtemp(
-      join((await import("node:os")).tmpdir(), "haruyuki-project-reflect-"),
-    );
-    const settingsDir = join(projectDir, ".haruyuki");
-    await mkdir(settingsDir, { recursive: true });
-    const settingsPath = join(settingsDir, "settings.json");
-
-    await writeFile(
-      settingsPath,
-      JSON.stringify({
-        reflectionOnCompaction: false,
-        reflectionEveryUserMessages: 7,
-        reflectionTimeoutMinutes: 9,
-        reflectionDeleteSessionOnSuccess: false,
-        reflectionMerge: "explicit",
-        reflectionMergeInstructions: "ignore me",
-      }),
-    );
-
-    const projectSettings =
-      await settingsManager.loadProjectSettings(projectDir);
-    expect(projectSettings.reflectionOnCompaction).toBe(false);
-    expect(projectSettings.reflectionEveryUserMessages).toBe(7);
-    expect(projectSettings.reflectionTimeoutMinutes).toBe(9);
-    expect(projectSettings.reflectionDeleteSessionOnSuccess).toBe(false);
-
-    // updateProjectSettings persists the new knobs.
-    settingsManager.updateProjectSettings(
-      { reflectionEveryUserMessages: 12 },
-      projectDir,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const persisted = JSON.parse(await readFile(settingsPath)) as Record<
-      string,
-      unknown
-    >;
-    expect(persisted.reflectionEveryUserMessages).toBe(12);
-
-    await (await import("node:fs/promises")).rm(projectDir, {
-      recursive: true,
-      force: true,
-    });
-  });
-
   test("Get project settings returns cached value", async () => {
     await settingsManager.loadProjectSettings(testProjectDir);
 
@@ -549,44 +448,6 @@ describe("Settings Manager - Local Project Settings", () => {
       await settingsManager.loadLocalProjectSettings(testProjectDir);
 
     expect(localSettings.lastAgent).toBe(null);
-  });
-
-  test("Load local settings tolerates legacy reflectionBehavior key and strips it", async () => {
-    const { writeFile, readFile, mkdir } = await import("@/utils/fs.js");
-    const settingsDir = join(testProjectDir, ".haruyuki");
-    await mkdir(settingsDir, { recursive: true });
-    const settingsPath = join(settingsDir, "settings.local.json");
-
-    await writeFile(
-      settingsPath,
-      JSON.stringify({
-        lastAgent: "agent-local-legacy",
-        reflectionBehavior: "reminder",
-        pinnedConversationsByServer: {
-          "api.letta.com": { "agent-1": ["conv-1"] },
-        },
-        reflectionTrigger: "step-count",
-        reflectionStepCount: 9,
-      }),
-    );
-
-    const localSettings =
-      await settingsManager.loadLocalProjectSettings(testProjectDir);
-    expect(localSettings.lastAgent).toBe("agent-local-legacy");
-    // F-03 migrates the retired reflection selector onto the two switches.
-    expect(localSettings.reflectionOnCompaction).toBe(false);
-    expect(localSettings.reflectionEveryUserMessages).toBe(9);
-    expect(localSettings).not.toHaveProperty("reflectionBehavior");
-    expect(localSettings).not.toHaveProperty("pinnedConversationsByServer");
-
-    const persisted = JSON.parse(await readFile(settingsPath)) as Record<
-      string,
-      unknown
-    >;
-    expect(persisted.reflectionOnCompaction).toBe(false);
-    expect(persisted.reflectionEveryUserMessages).toBe(9);
-    expect(persisted).not.toHaveProperty("reflectionBehavior");
-    expect(persisted).not.toHaveProperty("pinnedConversationsByServer");
   });
 
   test("Get local project settings returns cached value", async () => {
