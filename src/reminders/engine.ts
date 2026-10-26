@@ -1,4 +1,10 @@
 import type { MessageCreate } from "@letta-ai/letta-client/resources/agents/agents";
+import { getScopedMemoryFilesystemRoot } from "@/agent/memory-filesystem";
+import {
+  getActiveReflectionRun,
+  getLastReflectionRunForAgent,
+  getReflectionRun,
+} from "@/agent/reflection-run";
 import type { SkillSource } from "@/agent/skills";
 import { buildAgentInfo } from "@/cli/helpers/agent-info";
 import { buildConversationBootstrapReminder } from "@/cli/helpers/conversation-bootstrap";
@@ -26,6 +32,7 @@ import {
 import { evaluateDiskSpaceReminder } from "./disk-space";
 import { formatRecallReminder } from "./recall-reminder";
 import { recallBreakerTripped, recordRecallDecision } from "./recall-runtime";
+import { formatReflectionRunNotice } from "./reflection-run";
 import type { SessionContextReason, SharedReminderState } from "./state";
 
 export interface AgentReminderContext {
@@ -346,6 +353,58 @@ async function buildMemoryGitSyncReminder(
     .join("\n\n");
 }
 
+/**
+ * The one start/end notice a reflection run leaves for the parent (F-03
+ * §5.7.1). The slot is consumed here, so a run can only ever produce one start
+ * and one end reminder however many turns it spans.
+ *
+ * The notice carries only the phase; the run controller — the authority on the
+ * outcome — fills in the run id, the outcome and the backup coordinates. When
+ * neither the active nor the last finished run is known the notice still
+ * renders: the phase alone decides whether the parent may write memory files.
+ *
+ * A run that is active but was never announced also produces its start notice
+ * here. That is a safety net for the seam: the post-turn trigger owns the
+ * explicit start notice, and this fallback keeps the parent informed (and the
+ * memory-write rejection explained) even if that hand-off is missed. It cannot
+ * double-notify — the announced run id is remembered and the explicit notice is
+ * consumed first.
+ */
+async function buildReflectionRunReminder(
+  context: SharedReminderContext,
+): Promise<string | null> {
+  const active = getActiveReflectionRun(context.agent.id);
+  let notice = context.state.pendingReflectionRunNotice;
+  if (!notice && active) {
+    const announcedRunId = context.state.lastReflectionRunStartNoticeRunId;
+    if (announcedRunId !== active.runId) {
+      notice = { phase: "start", runId: active.runId };
+    }
+  }
+  if (!notice) return null;
+  context.state.pendingReflectionRunNotice = null;
+
+  const run =
+    (notice.runId ? getReflectionRun(notice.runId) : undefined) ??
+    active ??
+    getLastReflectionRunForAgent(context.agent.id);
+  if (notice.phase === "start") {
+    context.state.lastReflectionRunStartNoticeRunId =
+      notice.runId ?? run?.runId ?? null;
+  } else {
+    context.state.lastReflectionRunStartNoticeRunId = null;
+  }
+
+  let memoryDir: string | undefined;
+  try {
+    memoryDir = getScopedMemoryFilesystemRoot(context.agent.id);
+  } catch {
+    memoryDir = undefined;
+  }
+
+  return formatReflectionRunNotice({ notice, run, memoryDir });
+}
+
 const MAX_COMMAND_REMINDERS_PER_TURN = 10;
 const MAX_TOOLSET_REMINDERS_PER_TURN = 5;
 const MAX_COMMAND_INPUT_CHARS = 2000;
@@ -594,6 +653,7 @@ export const sharedReminderProviders: Record<
   "session-context": buildSessionContextReminder,
   "permission-mode": buildPermissionModeReminder,
   "memory-git-sync": buildMemoryGitSyncReminder,
+  "reflection-run": buildReflectionRunReminder,
   "command-io": buildCommandIoReminder,
   "toolset-change": buildToolsetChangeReminder,
   "disk-space": buildDiskSpaceReminder,

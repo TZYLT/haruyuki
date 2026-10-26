@@ -1,6 +1,7 @@
 import type { ContextTracker } from "@/cli/helpers/context-tracker";
 import type { TopicNudgeNotice } from "@/cli/helpers/topic-nudge";
 import type { PermissionMode } from "@/permissions/mode";
+import type { PendingReflectionRunNotice } from "@/types/reflection-run-notice";
 import type { RecallNotice } from "./recall-runtime";
 
 const MAX_PENDING_INTERACTION_REMINDERS = 25;
@@ -45,6 +46,19 @@ export interface SharedReminderState {
   lastNotifiedPermissionMode: PermissionMode | null;
   turnCount: number;
   pendingReflectionTrigger: boolean;
+  /**
+   * The one soft reminder due for a reflection run (F-03 §5.7.1). Set by the
+   * post-turn trigger (`start`) and by the completion callbacks (`end`);
+   * whichever provider builds the next turn consumes it. The shape is the
+   * frozen seam in `types/reflection-run-notice.ts`.
+   */
+  pendingReflectionRunNotice: PendingReflectionRunNotice | null;
+  /**
+   * Run id whose "reflection running" notice the parent has already seen. The
+   * reminder provider sets it so an active run is announced once; an end notice
+   * clears it so the next run starts fresh.
+   */
+  lastReflectionRunStartNoticeRunId: string | null;
   pendingMemoryGitSyncReminders: MemoryGitSyncReminder[];
   pendingCommandIoReminders: CommandIoReminder[];
   pendingToolsetChangeReminders: ToolsetChangeReminder[];
@@ -83,6 +97,8 @@ export function createSharedReminderState(): SharedReminderState {
     lastNotifiedPermissionMode: null,
     turnCount: 0,
     pendingReflectionTrigger: false,
+    pendingReflectionRunNotice: null,
+    lastReflectionRunStartNoticeRunId: null,
     pendingMemoryGitSyncReminders: [],
     pendingCommandIoReminders: [],
     pendingToolsetChangeReminders: [],
@@ -144,6 +160,18 @@ export function enqueueMemoryGitSyncReminder(
   reminder: MemoryGitSyncReminder,
 ): void {
   pushBounded(state.pendingMemoryGitSyncReminders, reminder);
+}
+
+/**
+ * Park the one soft reminder due for a reflection run (F-03 §5.7.1). There is a
+ * single slot on purpose: a second start/end is noise, and the provider clears
+ * the slot as it builds the turn.
+ */
+export function setPendingReflectionRunNotice(
+  state: SharedReminderState,
+  notice: PendingReflectionRunNotice,
+): void {
+  state.pendingReflectionRunNotice = notice;
 }
 
 export function enqueueToolsetChangeReminder(

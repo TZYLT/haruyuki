@@ -149,6 +149,8 @@ export async function syncPendingMemoryCommitsAfterTurn(
       const postFailureConflictSummary =
         await getMemoryConflictSummary(memoryDir);
       if (postFailureConflictSummary) {
+        // A resolvable conflict stays in place for the repair worker; aborting
+        // here would throw away the only state it can repair.
         return {
           status: "conflict",
           summary: postFailureConflictSummary,
@@ -156,6 +158,10 @@ export async function syncPendingMemoryCommitsAfterTurn(
           localOnly,
         };
       }
+      // F-03 §5.9.5 (X-3): a rebase that died without leaving a resolvable
+      // conflict must not leave the checkout half-way. Abort it and report the
+      // original failure; the next turn retries from a clean state.
+      await runGit(memoryDir, ["rebase", "--abort"]).catch(() => undefined);
       return {
         status: "push_failed",
         summary:

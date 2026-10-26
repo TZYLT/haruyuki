@@ -33,6 +33,7 @@ import {
 import { isOwnMemoryWrite } from "./memory-write-allowance";
 import { permissionMode } from "./mode";
 import { isMemoryDirCommand, isReadOnlyShellCommand } from "./read-only-shell";
+import { checkReflectionWriteBlock } from "./reflection-write-guard";
 import { sessionPermissions } from "./session";
 import type {
   PermissionCheckResult,
@@ -309,6 +310,29 @@ function checkPermissionForEngine(
         decision: "deny",
         matchedRule: guardResult.matchedRule,
         reason: guardResult.reason,
+      },
+      trace,
+    };
+  }
+
+  // Reflection write guard — while a reflection run owns this agent's memory
+  // repository, its file-write tools are rejected. Deliberately *before* deny
+  // rules, mode overrides and the own-memory allowance: neither a permission
+  // mode nor an allow rule may bypass the single-writer contract (§5.7.5).
+  // Reads and Bash are never blocked (§5.7.3).
+  const reflectionBlock = checkReflectionWriteBlock({
+    toolName: permissionToolName,
+    toolArgs,
+    agentId: agentId ?? null,
+    workingDirectory,
+  });
+  if (reflectionBlock) {
+    traceEvent(trace, "reflection-write-guard", "Reflection run holds memory");
+    return {
+      result: {
+        decision: "deny",
+        matchedRule: "reflection run owns the memory repository",
+        reason: reflectionBlock.message,
       },
       trace,
     };

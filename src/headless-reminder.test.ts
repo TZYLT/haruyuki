@@ -75,9 +75,16 @@ describe("headless shared reminder wiring", () => {
 
     expect(source).toContain("const maybeLaunchReflectionSubagent = async (");
     expect(source).toContain("launchReflectionSubagent({");
-    expect(source).toContain("description: AUTO_REFLECTION_DESCRIPTION");
+    expect(source).toContain("reflectionSettings: launchSettings");
     expect(source).toContain("maybeLaunchPostTurnReflection({");
     expect(source).toContain("launch: maybeLaunchReflectionSubagent");
+    // F-03 §5.11.2: completions arrive on the run controller's terminal seam,
+    // not from an `onCompletionMessage` option (the launcher no longer has one).
+    expect(source).toContain("subscribeReflectionRunFinished(");
+    expect(source).not.toContain("onCompletionMessage");
+    // ...and headless delivers them as a queued task notification.
+    expect(source).toContain("formatReflectionRunFinishedNotification(event)");
+    expect(source).toContain('kind: "task_notification"');
   });
 
   test("bidirectional reflection delegates MemFS root resolution to launcher", () => {

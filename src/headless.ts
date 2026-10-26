@@ -10,6 +10,8 @@ import type {
 } from "@letta-ai/letta-client/resources/agents/messages";
 import type { StopReasonType } from "@letta-ai/letta-client/resources/runs/runs";
 import { loadPreloadedSkills } from "@/agent/preloaded-skills";
+import { subscribeReflectionRunFinished } from "@/agent/reflection-run";
+import { formatReflectionRunFinishedNotification } from "@/agent/reflection-run-notification";
 import { shouldLaunchThroughListener } from "@/agent/subagents/subagent-launcher";
 import { buildHeadlessSenderReminder } from "@/headless-message-sender";
 import { createHeadlessResponseState } from "@/headless-response-state";
@@ -21,6 +23,7 @@ import {
 import { extractTelemetryInputText } from "@/telemetry/input";
 import { installHeadlessStdoutGuard } from "@/utils/headless-stdout-guard";
 import {
+  addToMessageQueue,
   type QueuedMessage,
   setMessageQueueAdder,
 } from "@/utils/message-queue-bridge";
@@ -96,16 +99,16 @@ import {
 import { classifyApprovals } from "./cli/helpers/approval-classification";
 import { createContextTracker } from "./cli/helpers/context-tracker";
 import { formatErrorDetails } from "./cli/helpers/error-formatter";
-import type {
-  ReflectionSettings,
-  ReflectionTrigger,
-} from "./cli/helpers/memory-reminder";
-import { maybeLaunchPostTurnReflection } from "./cli/helpers/post-turn-reflection";
+import type { ReflectionSettings } from "./cli/helpers/memory-reminder";
 import {
-  AUTO_REFLECTION_DESCRIPTION,
-  launchReflectionSubagent,
-} from "./cli/helpers/reflection-launcher";
-import { appendTranscriptDeltaJsonl } from "./cli/helpers/reflection-transcript";
+  maybeLaunchPostTurnReflection,
+  type PostTurnReflectionTrigger,
+} from "./cli/helpers/post-turn-reflection";
+import { launchReflectionSubagent } from "./cli/helpers/reflection-launcher";
+import {
+  appendTranscriptDeltaJsonl,
+  recordReflectionUserMessage,
+} from "./cli/helpers/reflection-transcript";
 import {
   type DrainStreamHook,
   drainStreamWithResume,
@@ -161,6 +164,7 @@ import {
   mergeQueuedTurnInput,
   type QueuedTurnInput,
 } from "./queue/turn-queue-runtime";
+import { DEFAULT_REFLECTION_SETTINGS } from "./reflection-settings";
 import {
   buildSharedReminderParts,
   prependReminderPartsToContent,
@@ -174,6 +178,7 @@ import {
   createSharedReminderState,
   enqueueMemoryGitSyncReminder,
   type SharedReminderState,
+  setPendingReflectionRunNotice,
 } from "./reminders/state";
 import { getCurrentWorkingDirectory } from "./runtime-context";
 import { settingsManager, shouldPersistSessionState } from "./settings-manager";
@@ -1354,14 +1359,22 @@ export async function handleHeadlessCommand(
 
   try {
     if (ephemeralFlag) {
-      effectiveReflectionSettings = { trigger: "off", stepCount: 0 };
+      effectiveReflectionSettings = {
+        ...DEFAULT_REFLECTION_SETTINGS,
+        onCompaction: false,
+        everyUserMessages: 0,
+      };
     } else {
       const resolvedReflectionSettings = await applyHeadlessReflectionOverrides(
         agent.id,
         reflectionOverrides,
       );
       effectiveReflectionSettings = isStatelessSession
-        ? { ...resolvedReflectionSettings, trigger: "off" }
+        ? {
+            ...resolvedReflectionSettings,
+            onCompaction: false,
+            everyUserMessages: 0,
+          }
         : resolvedReflectionSettings;
     }
   } catch (error) {
@@ -1969,6 +1982,28 @@ export async function handleHeadlessCommand(
       otid: randomUUID(),
     },
   ];
+
+  // F-03 §5.5.2: the one-shot prompt is one user message for this conversation.
+  // Agent-launched prompts, subagent runs and listener-relayed environments are
+  // not the user's own submissions; the listener path counts its own input.
+  if (
+    !isSubagent &&
+    !usesRemoteEnvironment &&
+    !isAgentLaunch &&
+    !values["from-agent"] &&
+    prompt.trim().length > 0
+  ) {
+    try {
+      await recordReflectionUserMessage(agent.id, conversationId);
+    } catch (error) {
+      debugWarn(
+        "memory",
+        `Failed to record reflection user message: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
   const recoveredApprovalResults: ApprovalResult[] =
     queuedRecoveredApprovalResults ?? [];
   if (recoveredApprovalResults.length > 0) {
@@ -3180,6 +3215,7 @@ async function runBidirectionalMode(
       await telemetry.flush();
     } finally {
       headlessModAdapter.dispose();
+      unsubscribeReflectionNotifications();
       await shutdownBackgroundMemoryTasks(code);
     }
     return await flushAndExit(code);
@@ -3224,18 +3260,38 @@ async function runBidirectionalMode(
   const sharedReminderState = createSharedReminderState();
   const isSubagent = process.env.HARUYUKI_CODE_AGENT_ROLE === "subagent";
   const maybeLaunchReflectionSubagent = async (
-    triggerSource: Exclude<ReflectionTrigger, "off">,
+    triggerSource: PostTurnReflectionTrigger,
+    launchSettings: Pick<ReflectionSettings, "timeoutMinutes">,
   ): Promise<boolean> => {
     const result = await launchReflectionSubagent({
       agentId: agent.id,
       conversationId,
       memfsEnabled: settingsManager.isMemfsEnabled(agent.id),
       triggerSource,
-      reflectionSettings,
-      description: AUTO_REFLECTION_DESCRIPTION,
+      reflectionSettings: launchSettings,
     });
     return result.launched;
   };
+
+  // Reflection completions arrive through the run controller's single terminal
+  // seam (F-03 §5.11.2): headless has no transcript item to append, so the
+  // notification goes through the task-notification queue (the parent agent sees
+  // it on its next turn), and the end reminder lifts the memory-write block.
+  const unsubscribeReflectionNotifications = subscribeReflectionRunFinished(
+    (event) => {
+      setPendingReflectionRunNotice(sharedReminderState, {
+        phase: "end",
+        runId: event.runId,
+        ...(event.timedOut ? { timedOut: true } : {}),
+      });
+      addToMessageQueue({
+        kind: "task_notification",
+        text: formatReflectionRunFinishedNotification(event),
+        agentId: agent.id,
+        conversationId,
+      });
+    },
+  );
 
   // Resolve pending approvals for this conversation before retrying user input.
   const resolveAllPendingApprovals = async () => {
@@ -4053,6 +4109,29 @@ async function runBidirectionalMode(
       if (pendingInterrupt) {
         pendingInterrupt = false;
         currentAbortController.abort();
+      }
+      // F-03 §5.5.2: every user-typed line that starts a turn is one user
+      // message; cron prompts and task notifications are automated and excluded.
+      if (!isSubagent) {
+        const userMessageCount = queuedInputs.filter(
+          (input) => input.kind === "user",
+        ).length;
+        if (userMessageCount > 0) {
+          try {
+            await recordReflectionUserMessage(
+              agent.id,
+              conversationId,
+              userMessageCount,
+            );
+          } catch (error) {
+            debugWarn(
+              "memory",
+              `Failed to record reflection user message: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+        }
       }
       // Controller now exists — close the pre-controller race window.
       turnStarting = false;

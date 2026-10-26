@@ -172,6 +172,8 @@ export interface SpawnBackgroundSubagentTaskResult {
   taskId: string;
   outputFile: string;
   subagentId: string;
+  /** Stop the child (its whole process tree) without waiting for the turn. */
+  abort: () => void;
 }
 
 interface SpawnBackgroundSubagentTaskDeps {
@@ -620,7 +622,12 @@ export function spawnBackgroundSubagentTask(
     subagentType === "memory"
       ? taskLifecycle
       : subagentExecution.then(swallow, swallow);
-  return { taskId, outputFile, subagentId };
+  return {
+    taskId,
+    outputFile,
+    subagentId,
+    abort: () => abortController.abort(),
+  };
 }
 
 /** Launch through the same task lifecycle for tools and App Server commands. */

@@ -32,6 +32,8 @@ import {
 } from "@/agent/model";
 import type { PersonalityId } from "@/agent/personality-presets";
 import { shouldRecommendDefaultPrompt } from "@/agent/prompt-assets";
+import { subscribeReflectionRunFinished } from "@/agent/reflection-run";
+import { formatReflectionRunFinishedNotification } from "@/agent/reflection-run-notification";
 import { prefetchModelCatalog } from "@/agent/remote-model-catalog";
 import { recordSessionEnd } from "@/agent/session-history";
 import { SessionStats } from "@/agent/stats";
@@ -83,10 +85,7 @@ import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { getReflectionSettings } from "@/cli/helpers/memory-reminder";
 import type { ExecutionPhase } from "@/cli/helpers/phase-visuals";
 import { maybeLaunchPostTurnReflection } from "@/cli/helpers/post-turn-reflection";
-import {
-  AUTO_REFLECTION_DESCRIPTION,
-  launchReflectionSubagent,
-} from "@/cli/helpers/reflection-launcher";
+import { launchReflectionSubagent } from "@/cli/helpers/reflection-launcher";
 import { getStartupModelDisplayOverride } from "@/cli/helpers/startup-model-display";
 import type { ApprovalRequest } from "@/cli/helpers/stream";
 import {
@@ -155,6 +154,7 @@ import {
   enqueueToolsetChangeReminder,
   resetSharedReminderState,
   type SharedReminderState,
+  setPendingReflectionRunNotice,
 } from "@/reminders/state";
 import { getCurrentWorkingDirectory } from "@/runtime-context";
 import { settingsManager } from "@/settings-manager";
@@ -3220,16 +3220,6 @@ export function App({
             memfsEnabled: isActiveMemfsEnabled(reflectionAgentId),
             triggerSource,
             reflectionSettings,
-            description: AUTO_REFLECTION_DESCRIPTION,
-            completionConversationId: () => conversationIdRef.current,
-            onCompletionMessage: (completionMessage) => {
-              appendTaskNotificationEvents([completionMessage]);
-            },
-            feedbackContext: {
-              parentAgentName: agentName,
-              parentAgentDescription: agentDescription,
-              surface: "letta_code_tui",
-            },
           });
           return result.launched;
         },
@@ -3242,7 +3232,25 @@ export function App({
         }`,
       );
     }
-  }, [agentName, agentDescription, appendTaskNotificationEvents]);
+  }, []);
+
+  // Reflection run completions arrive through the controller's single terminal
+  // seam (F-03 §5.11.2): queue the task notification and lift the memory-write
+  // reminder for this conversation.
+  useEffect(
+    () =>
+      subscribeReflectionRunFinished((event) => {
+        setPendingReflectionRunNotice(sharedReminderStateRef.current, {
+          phase: "end",
+          runId: event.runId,
+          ...(event.timedOut ? { timedOut: true } : {}),
+        });
+        appendTaskNotificationEvents([
+          formatReflectionRunFinishedNotification(event),
+        ]);
+      }),
+    [appendTaskNotificationEvents],
+  );
 
   const processConversation = useConversationLoop({
     abortControllerRef,

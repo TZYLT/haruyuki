@@ -13,6 +13,7 @@ export type SharedReminderId =
   | "mcp-servers-info"
   | "permission-mode"
   | "memory-git-sync"
+  | "reflection-run"
   | "command-io"
   | "toolset-change"
   | "disk-space"
@@ -85,6 +86,20 @@ export const SHARED_REMINDER_CATALOG: ReadonlyArray<SharedReminderDefinition> =
     {
       id: "memory-git-sync",
       description: "Queued post-turn memory git sync status",
+      modes: [
+        "interactive",
+        "headless-one-shot",
+        "headless-bidirectional",
+        "listen",
+      ],
+    },
+    // One start notice and one end notice per reflection run (F-03 §5.7.1).
+    // No `subagent` mode: the reflection child is the writer the reminder is
+    // telling the parent to avoid, not its audience.
+    {
+      id: "reflection-run",
+      description:
+        "Reflection run start/end notice for the memory repository (F-03)",
       modes: [
         "interactive",
         "headless-one-shot",

@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -232,4 +233,89 @@ export async function clearMemoryConflictRepair(
   await transition(memoryDir, async (path, attempt) => {
     if (attempt.token === token) await rm(path, { force: true });
   });
+}
+
+export interface StaleRepairAttemptReap {
+  reaped: boolean;
+  /** What was found and what happened; safe to put in a recovery report. */
+  detail: string;
+  /**
+   * `true` when a record exists and is worth reporting even though nothing was
+   * removed (a live holder, or an owner that cannot be judged). A finished
+   * attempt is the normal "already tried" state and stays quiet.
+   */
+  noteworthy: boolean;
+}
+
+/**
+ * Reap a repair attempt a crash left in `launching` (F-03 §5.9.2): the record
+ * claims a worker is repairing this conflict, so every later turn skips the
+ * repair and the conflict stays stuck. Only a record whose process is provably
+ * gone is removed — a paused or slow worker keeps its claim — and the removal is
+ * a compare-and-set under the marker lock, so it cannot drop a newer claim.
+ */
+export async function reapStaleMemoryRepairAttempt(
+  memoryDir: string,
+): Promise<StaleRepairAttemptReap> {
+  let path: string;
+  try {
+    path = await attemptPath(memoryDir);
+  } catch {
+    return {
+      reaped: false,
+      detail: "no memory repository to inspect",
+      noteworthy: false,
+    };
+  }
+  if (!existsSync(path)) {
+    return {
+      reaped: false,
+      detail: "no repair attempt recorded",
+      noteworthy: false,
+    };
+  }
+  const attempt = await readAttempt(path);
+  if (attempt.state !== "launching") {
+    return {
+      reaped: false,
+      detail: "the repair attempt already finished",
+      noteworthy: false,
+    };
+  }
+  if (typeof attempt.pid !== "number") {
+    return {
+      reaped: false,
+      detail: "the repair attempt has no owner pid; left in place",
+      noteworthy: true,
+    };
+  }
+  const stillRunning = await isSameProcessRunning({
+    pid: attempt.pid,
+    ...(typeof attempt.started === "string" && { started: attempt.started }),
+  });
+  if (stillRunning) {
+    return {
+      reaped: false,
+      detail: `the repair attempt is still held by the running process ${attempt.pid}`,
+      noteworthy: true,
+    };
+  }
+  let reaped = false;
+  await updateAttempt(
+    path,
+    async (current) => {
+      if (current.state !== "launching") return;
+      if (current.token !== attempt.token) return;
+      await rm(path, { force: true });
+      reaped = true;
+    },
+    2_000,
+  );
+  return {
+    reaped,
+    detail: reaped
+      ? `removed a repair attempt left in "launching" by the dead process ${attempt.pid}`
+      : "the repair attempt changed before it could be reaped",
+    noteworthy: !reaped,
+  };
 }

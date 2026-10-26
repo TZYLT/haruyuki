@@ -1642,6 +1642,10 @@ export async function pullMemory(
       );
       return { updated: true, summary: (stdout + stderr).trim() };
     } catch (rebaseErr) {
+      // F-03 §5.9.5 (X-3): a failed rebase must not leave the checkout half-way.
+      // Abort first, so the recovery paths below start from a clean state rather
+      // than from a rebase in progress.
+      await runGit(dir, ["rebase", "--abort"]).catch(() => undefined);
       if (isRecoverableMemoryPullHistoryError(rebaseErr)) {
         try {
           const summary = await recoverMemoryPullByResettingToRemote(

@@ -17,6 +17,7 @@ import {
   setConversationId as setContextConversationId,
 } from "./agent/context";
 import type { AgentProvenance } from "./agent/create";
+import { scheduleStartupMemoryRecovery } from "./agent/memory-recovery";
 import {
   getModelPresetUpdateForAgent,
   getModelUpdateArgs,
@@ -472,6 +473,9 @@ async function main(): Promise<void> {
 
   // Everything below only runs for interactive/headless agent mode
   await settingsManager.initialize();
+  // F-03 §5.9.1: one memory-repository recovery pass per process start. Shared
+  // by the TUI and headless paths, never in a subagent, never blocking startup.
+  scheduleStartupMemoryRecovery();
   const settings = await settingsManager.getSettingsWithSecureTokens();
   markMilestone("SETTINGS_LOADED");
 

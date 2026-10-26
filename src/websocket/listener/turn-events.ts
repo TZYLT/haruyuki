@@ -3,24 +3,16 @@ import type {
   MessageCreate,
 } from "@letta-ai/letta-client/resources/agents/agents";
 import type { ApprovalCreate } from "@letta-ai/letta-client/resources/agents/messages";
-import type {
-  ReflectionSettings,
-  ReflectionTrigger,
-} from "@/cli/helpers/memory-reminder";
-import {
-  AUTO_REFLECTION_DESCRIPTION,
-  launchReflectionSubagent,
-} from "@/cli/helpers/reflection-launcher";
+import type { ReflectionSettings } from "@/cli/helpers/memory-reminder";
+import type { PostTurnReflectionTrigger } from "@/cli/helpers/post-turn-reflection";
+import { launchReflectionSubagent } from "@/cli/helpers/reflection-launcher";
 import { getTurnStartCancel } from "@/mods/turn-start-cancel";
 import { settingsManager } from "@/settings-manager";
-import { getListenerTelemetrySurface } from "@/telemetry";
-import type { StreamDelta } from "@/types/protocol_v2";
 import {
   createListenerModContext,
   createListenerModEvents,
   ensureListenerModAdaptersForAgent,
 } from "./mod-adapter";
-import { emitCanonicalMessageDelta } from "./protocol-outbound";
 import type { ListenerTransport } from "./transport";
 import type { ConversationRuntime, ListenerRuntime } from "./types";
 
@@ -142,50 +134,26 @@ export function buildMaybeLaunchReflectionSubagent(params: {
   agentId: string;
   conversationId: string;
   reflectionSettings?: ReflectionSettings;
-}): (triggerSource: Exclude<ReflectionTrigger, "off">) => Promise<boolean> {
-  return async (triggerSource) => {
-    const { runtime, socket, agentId, conversationId, reflectionSettings } =
-      params;
+}): (
+  triggerSource: PostTurnReflectionTrigger,
+  launchSettings: Pick<ReflectionSettings, "timeoutMinutes">,
+) => Promise<boolean> {
+  return async (triggerSource, launchSettings) => {
+    const { agentId, conversationId } = params;
 
     if (!agentId) {
       return false;
     }
 
+    // The completion notification is not sent from here: the listener registers
+    // one subscription on the run controller's terminal seam (app-server
+    // `getStartupReady`) and emits it to the subscribed clients there.
     const result = await launchReflectionSubagent({
       agentId,
       conversationId,
       memfsEnabled: settingsManager.isMemfsEnabled(agentId),
       triggerSource,
-      reflectionSettings,
-      description: AUTO_REFLECTION_DESCRIPTION,
-      feedbackContext: {
-        surface: getListenerTelemetrySurface(),
-      },
-      onCompletionMessage: async (completionMessage, reflectionResult) => {
-        const reflectionAgentIdTag = reflectionResult.reflectionAgentId
-          ? `<reflection-agent-id>${escapeTaskNotificationSummary(
-              reflectionResult.reflectionAgentId,
-            )}</reflection-agent-id>`
-          : "";
-        const notificationXml = `<task-notification><summary>${escapeTaskNotificationSummary(
-          completionMessage,
-        )}</summary>${reflectionAgentIdTag}</task-notification>`;
-        emitCanonicalMessageDelta(
-          socket,
-          runtime,
-          {
-            type: "message",
-            id: `user-msg-${crypto.randomUUID()}`,
-            date: new Date().toISOString(),
-            message_type: "user_message",
-            content: [{ type: "text", text: notificationXml }],
-          } as StreamDelta,
-          {
-            agent_id: agentId,
-            conversation_id: conversationId,
-          },
-        );
-      },
+      reflectionSettings: launchSettings,
     });
     return result.launched;
   };

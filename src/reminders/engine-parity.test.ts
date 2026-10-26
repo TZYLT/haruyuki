@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { SkillSource } from "@/agent/skills";
 import type { ReflectionSettings } from "@/cli/helpers/memory-reminder";
+import { DEFAULT_REFLECTION_SETTINGS } from "@/reflection-settings";
 import {
   SHARED_REMINDER_CATALOG,
   SHARED_REMINDER_IDS,
@@ -35,8 +36,9 @@ describe("shared reminder parity", () => {
     }
 
     const reflectionSettings: ReflectionSettings = {
-      trigger: "off",
-      stepCount: 25,
+      ...DEFAULT_REFLECTION_SETTINGS,
+      onCompaction: false,
+      everyUserMessages: 0,
     };
 
     const base = {

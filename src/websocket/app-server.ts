@@ -1,11 +1,20 @@
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { hostname } from "node:os";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
+import { scheduleStartupMemoryRecovery } from "@/agent/memory-recovery";
+import {
+  type ReflectionRunFinishedEvent,
+  subscribeReflectionRunFinished,
+} from "@/agent/reflection-run";
+import { formatReflectionRunFinishedNotification } from "@/agent/reflection-run-notification";
+import { setPendingReflectionRunNotice } from "@/reminders/state";
 import { settingsManager } from "@/settings-manager";
 import { getListenerTelemetrySurface, telemetry } from "@/telemetry";
 import { loadTools } from "@/tools/manager";
+import type { StreamDelta } from "@/types/protocol_v2";
 import {
   type AppServerWebsocketAuthSettings,
   authorizeUpgrade,
@@ -19,6 +28,7 @@ import {
 } from "@/websocket/app-server-openai";
 import { closeOpenAiBridgeRuntime } from "@/websocket/app-server-openai-turn";
 import { getAppServerInfoResponse } from "@/websocket/listener/commands/app-server-info";
+import { getOrCreateProcessTransport } from "@/websocket/listener/connection";
 import { createMissedPongWatchdog } from "@/websocket/listener/heartbeat";
 import {
   attachOpenListenerSocket,
@@ -26,10 +36,14 @@ import {
   stopRuntime,
 } from "@/websocket/listener/lifecycle";
 import { reloadListenerModAdapter } from "@/websocket/listener/mod-adapter";
+import { emitCanonicalMessageDelta } from "@/websocket/listener/protocol-outbound";
 import {
   getActiveRuntime,
+  getConversationRuntime,
+  getConversationRuntimeKey,
   setActiveRuntime,
 } from "@/websocket/listener/runtime";
+import { escapeTaskNotificationSummary } from "@/websocket/listener/turn-events";
 import type { ListenerRuntime } from "@/websocket/listener/types";
 
 const DEFAULT_LISTEN_URL = "ws://127.0.0.1:0";
@@ -43,6 +57,61 @@ const DEFAULT_WS_PATH = "/ws";
 // scoped cleanup without disturbing healthy peers.
 const APP_SERVER_HEARTBEAT_INTERVAL_MS = 30000;
 const APP_SERVER_PONG_TIMEOUT_MS = 90000;
+
+/**
+ * Deliver one finished reflection run to the clients watching its conversation
+ * (F-03 §5.11.2): the end reminder lifts the memory-write block on the next
+ * turn, and a task-notification delta puts the outcome in the transcript. This
+ * reuses the listener's existing background-service transport rather than
+ * opening a new notification channel.
+ */
+function notifyReflectionRunFinished(
+  runtime: ListenerRuntime,
+  event: ReflectionRunFinishedEvent,
+): void {
+  const conversationRuntime = getConversationRuntime(
+    runtime,
+    event.agentId,
+    event.parentConversationId,
+  );
+  const reminderState =
+    conversationRuntime?.reminderState ??
+    runtime.reminderStateByConversation.get(
+      getConversationRuntimeKey(event.agentId, event.parentConversationId),
+    );
+  if (reminderState) {
+    setPendingReflectionRunNotice(reminderState, {
+      phase: "end",
+      runId: event.runId,
+      ...(event.timedOut ? { timedOut: true } : {}),
+    });
+  }
+
+  const summary = escapeTaskNotificationSummary(
+    formatReflectionRunFinishedNotification(event),
+  );
+  const delta = {
+    type: "message",
+    id: `user-msg-${randomUUID()}`,
+    date: new Date().toISOString(),
+    message_type: "user_message",
+    content: [
+      {
+        type: "text",
+        text: `<task-notification><summary>${summary}</summary></task-notification>`,
+      },
+    ],
+  } as StreamDelta;
+  emitCanonicalMessageDelta(
+    getOrCreateProcessTransport(runtime),
+    runtime,
+    delta,
+    {
+      agent_id: event.agentId,
+      conversation_id: event.parentConversationId,
+    },
+  );
+}
 
 export interface StartAppServerOptions {
   listen?: string;
@@ -183,6 +252,21 @@ export async function startAppServer(
     runtime.connectionName = options.connectionName ?? hostname();
   }
   let startupReady: Promise<void> | null = null;
+  let unsubscribeReflectionRuns: (() => void) | null = null;
+  const subscribeReflectionNotifications = (): void => {
+    if (unsubscribeReflectionRuns) return;
+    unsubscribeReflectionRuns = subscribeReflectionRunFinished((event) => {
+      try {
+        notifyReflectionRunFinished(runtime, event);
+      } catch (error) {
+        options.onLog?.(
+          `Failed to deliver the reflection completion notification: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    });
+  };
   const getStartupReady = (): Promise<void> => {
     if (!ownsRuntime) {
       return Promise.resolve();
@@ -193,10 +277,15 @@ export async function startAppServer(
     const attempt = (async () => {
       if (options.initializeRuntime) {
         await options.initializeRuntime(runtime);
+        subscribeReflectionNotifications();
         return;
       }
       await reloadListenerModAdapter(runtime);
       await loadTools();
+      // F-03 §5.9.1 / M1e: repair stale locks and interrupted git states once
+      // per process start, before any client turn can touch memory.
+      scheduleStartupMemoryRecovery();
+      subscribeReflectionNotifications();
     })();
     startupReady = attempt;
     void attempt.catch(() => {
@@ -434,6 +523,8 @@ export async function startAppServer(
     ...resolvedInfo,
     close: async () => {
       clearInterval(heartbeatInterval);
+      unsubscribeReflectionRuns?.();
+      unsubscribeReflectionRuns = null;
       if (options.openaiApi) {
         closeOpenAiBridgeRuntime();
       }
