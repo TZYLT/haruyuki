@@ -12,7 +12,6 @@ describe("interactive reflection transcript wiring", () => {
     expect(source).toContain("const maybeRunPostTurnReflection = useCallback(");
     expect(source).toContain("maybeLaunchPostTurnReflection({");
     expect(source).toContain("launchReflectionSubagent({");
-    expect(source).toContain("description: AUTO_REFLECTION_DESCRIPTION");
   });
 
   test("conversation loop evaluates reflection after the transcript append on end_turn", () => {
@@ -74,7 +73,7 @@ describe("interactive reflection transcript wiring", () => {
     expect(afterDefinitionIndex).toBeLessThan(afterIndex);
     expect(tailCallIndex).toBeGreaterThan(afterDefinitionIndex);
     expect(reflectIndex).toBeGreaterThan(tailCallIndex);
-    expect(source).toContain('triggerSource: "compaction-event"');
+    expect(source).toContain('triggerSource: "compaction"');
 
     const tailSource = readFileSync(
       fileURLToPath(new URL("../helpers/post-compaction.ts", import.meta.url)),

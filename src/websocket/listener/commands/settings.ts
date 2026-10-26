@@ -4,6 +4,7 @@ import {
   persistReflectionSettingsForAgent,
 } from "@/cli/helpers/memory-reminder";
 import { experimentManager } from "@/experiments/manager";
+import { legacyTriggerToReflectionSwitches } from "@/reflection-settings";
 import type {
   GetExperimentsCommand,
   GetExperimentsResponseMessage,
@@ -196,15 +197,18 @@ export async function handleReflectionSettingsCommand(
 
   try {
     const currentSettings = getReflectionSettings(agentId, workingDirectory);
+    // F-03 §7.7: the wire still speaks the retired one-of-three selector and
+    // the merge knobs. The selector is migrated onto the two switches here; the
+    // merge fields are accepted and ignored.
+    const migratedSwitches = legacyTriggerToReflectionSwitches(
+      parsed.settings.trigger,
+      parsed.settings.step_count,
+    );
     await persistReflectionSettingsForAgent(
       agentId,
       {
-        trigger: parsed.settings.trigger,
-        stepCount: parsed.settings.step_count,
-        merge: parsed.settings.merge ?? currentSettings.merge,
-        mergeInstructions:
-          parsed.settings.merge_instructions ??
-          currentSettings.mergeInstructions,
+        ...currentSettings,
+        ...migratedSwitches,
       },
       {
         workingDirectory,

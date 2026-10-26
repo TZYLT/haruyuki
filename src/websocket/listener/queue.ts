@@ -1,4 +1,5 @@
 import type { AttributedMessageCreate } from "@/agent/message-attribution";
+import { recordReflectionUserMessage } from "@/cli/helpers/reflection-transcript";
 import type {
   DequeuedBatch,
   QueueBlockedReason,
@@ -50,6 +51,69 @@ export function getQueueItemScope(item?: QueueItem | null): {
     agent_id: item.agentId,
     conversation_id: item.conversationId,
   };
+}
+
+/**
+ * F-03 §5.5.2 counter, listener path: one count per submitted user message.
+ *
+ * Queued batches carry the real user submissions as `message` items; the other
+ * kinds (`task_notification`, `cron_prompt`, `mod_continue`) are automated and
+ * never count. Best-effort: a counter write must never block a turn.
+ */
+export async function recordListenerQueuedUserMessages(
+  runtime: ConversationRuntime,
+  batch: DequeuedBatch,
+): Promise<void> {
+  const agentId = runtime.agentId;
+  const conversationId = runtime.conversationId;
+  if (!agentId || !conversationId) {
+    return;
+  }
+  const count = batch.items.filter((item) => item.kind === "message").length;
+  if (count === 0) {
+    return;
+  }
+  try {
+    await recordReflectionUserMessage(agentId, conversationId, count);
+  } catch (error) {
+    debugWarn(
+      "memory",
+      `Failed to record reflection user message: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+/**
+ * The direct (idle) inbound path does not pass through the queue, so it counts
+ * here. A payload with no user content (no messages) is not a submission.
+ */
+export function countInboundUserMessages(incoming: IncomingMessage): number {
+  return incoming.messages.filter((message) => "content" in message).length;
+}
+
+/** Counter write for one direct inbound payload; best-effort like the queued one. */
+export async function recordListenerInboundUserMessages(
+  runtime: ConversationRuntime,
+  incoming: IncomingMessage,
+): Promise<void> {
+  const agentId = runtime.agentId;
+  const conversationId = runtime.conversationId;
+  const count = countInboundUserMessages(incoming);
+  if (!agentId || !conversationId || count === 0) {
+    return;
+  }
+  try {
+    await recordReflectionUserMessage(agentId, conversationId, count);
+  } catch (error) {
+    debugWarn(
+      "memory",
+      `Failed to record reflection user message: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
 
 export function getQueueItemsScope(items: QueueItem[]): {
@@ -438,6 +502,7 @@ async function drainQueuedMessages(
       }
 
       const { dequeuedBatch, queuedTurn } = consumedQueuedTurn;
+      await recordListenerQueuedUserMessages(runtime, dequeuedBatch);
       emitDequeuedUserMessage(
         turnTransport,
         runtime,

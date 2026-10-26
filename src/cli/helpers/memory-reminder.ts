@@ -1,18 +1,32 @@
-// Reflection (sleep-time) settings: resolution, persistence, merge policy,
-// and step-count trigger evaluation.
+// Reflection (sleep-time) settings: resolution across the three settings
+// layers, persistence, legacy migration, and the message-count trigger.
+//
+// F-03 replaced the old three-way `reflectionTrigger` selector and the merge
+// knobs with two independent switches. The chain below is the requirement's
+// order: global legacy (`memoryReminderInterval`) → global explicit → project →
+// local → per-agent (global then local). New keys always win; the retired keys
+// are only consulted when no new key exists.
 
-import type {
-  ReflectionMergeMode,
-  ReflectionTrigger,
+import {
+  DEFAULT_REFLECTION_SETTINGS,
+  DEFAULT_REFLECTION_STEP_COUNT,
+  migrateLegacyReflectionKeys,
+  normalizeReflectionDeleteSessionOnSuccess,
+  normalizeReflectionEveryUserMessages,
+  normalizeReflectionOnCompaction,
+  normalizeReflectionTimeoutMinutes,
+  type ReflectionMergeMode,
+  type ReflectionSettings,
+  type ReflectionTrigger,
+  type StoredReflectionSettings,
 } from "@/reflection-settings";
 import { settingsManager } from "@/settings-manager";
 
 export type {
   ReflectionMergeMode,
+  ReflectionSettings,
   ReflectionTrigger,
 } from "@/reflection-settings";
-
-const DEFAULT_STEP_COUNT = 25;
 
 export type MemoryReminderMode =
   | number
@@ -20,174 +34,108 @@ export type MemoryReminderMode =
   | "compaction"
   | "auto-compaction";
 
-export interface ReflectionSettings {
-  trigger: ReflectionTrigger;
-  stepCount: number;
-  merge?: ReflectionMergeMode;
-  mergeInstructions?: string;
-}
-
+/**
+ * The resolved reflection policy plus the retired aliases the mod surface and
+ * the app-server wire still read. The aliases are **derived**, never stored:
+ * `merge`/`mergeInstructions` are fixed legacy defaults because F-03 removed
+ * that policy, and `trigger`/`stepCount` collapse the two switches into the old
+ * one-of-three vocabulary for display only.
+ */
 export interface ResolvedReflectionSettings extends ReflectionSettings {
+  /** @deprecated Derived display alias; see {@link getReflectionSettings}. */
+  trigger: ReflectionTrigger;
+  /** @deprecated Derived display alias; see {@link getReflectionSettings}. */
+  stepCount: number;
+  /** @deprecated Always `"auto"`: the merge policy was retired. */
   merge: ReflectionMergeMode;
+  /** @deprecated Always `""`: the merge policy was retired. */
   mergeInstructions: string;
 }
 
-type PersistedReflectionSettings = {
-  trigger?: unknown;
-  stepCount?: unknown;
-  merge?: unknown;
-  mergeInstructions?: unknown;
-};
-
 interface ReflectionSettingsCarrier {
-  memoryReminderInterval?: MemoryReminderMode;
+  memoryReminderInterval?: unknown;
   reflectionTrigger?: unknown;
   reflectionStepCount?: unknown;
-  reflectionMerge?: unknown;
-  reflectionMergeInstructions?: unknown;
-  reflectionSettingsByAgent?: Record<string, PersistedReflectionSettings>;
+  reflectionOnCompaction?: unknown;
+  reflectionEveryUserMessages?: unknown;
+  reflectionTimeoutMinutes?: unknown;
+  reflectionDeleteSessionOnSuccess?: unknown;
+  reflectionSettingsByAgent?: Record<string, StoredReflectionSettings>;
 }
 
-const DEFAULT_REFLECTION_SETTINGS: ResolvedReflectionSettings = {
-  trigger: "compaction-event",
-  stepCount: DEFAULT_STEP_COUNT,
-  merge: "auto",
-  mergeInstructions: "",
-};
-
-function isValidStepCount(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isFinite(value) &&
-    Number.isInteger(value) &&
-    value > 0
-  );
-}
-
-function normalizeStepCount(value: unknown, fallback: number): number {
-  return isValidStepCount(value) ? value : fallback;
-}
-
-function normalizeTrigger(
-  value: unknown,
-  fallback: ReflectionTrigger,
-): ReflectionTrigger {
-  if (
-    value === "off" ||
-    value === "step-count" ||
-    value === "compaction-event"
-  ) {
-    return value;
-  }
-  return fallback;
-}
-
-function normalizeMerge(
-  value: unknown,
-  fallback: ReflectionMergeMode,
-): ReflectionMergeMode {
-  return value === "auto" || value === "explicit" ? value : fallback;
-}
-
-function normalizeMergeInstructions(value: unknown, fallback: string): string {
-  return typeof value === "string" ? value.trim() : fallback;
-}
-
-function applyExplicitReflectionOverrides(
-  base: ResolvedReflectionSettings,
-  raw: {
-    reflectionTrigger?: unknown;
-    reflectionStepCount?: unknown;
-    reflectionMerge?: unknown;
-    reflectionMergeInstructions?: unknown;
-  },
-): ResolvedReflectionSettings {
-  return {
-    trigger: normalizeTrigger(raw.reflectionTrigger, base.trigger),
-    stepCount: normalizeStepCount(raw.reflectionStepCount, base.stepCount),
-    merge: normalizeMerge(raw.reflectionMerge, base.merge),
-    mergeInstructions: normalizeMergeInstructions(
-      raw.reflectionMergeInstructions,
-      base.mergeInstructions,
-    ),
-  };
-}
-
-function applyPersistedAgentScopedSettings(
-  base: ResolvedReflectionSettings,
-  raw: PersistedReflectionSettings | undefined,
-): ResolvedReflectionSettings {
+function applyCarrierSettings(
+  base: ReflectionSettings,
+  raw: ReflectionSettingsCarrier | null | undefined,
+): ReflectionSettings {
   if (!raw) {
     return base;
   }
+  const patch = migrateLegacyReflectionKeys(
+    {
+      memoryReminderInterval: raw.memoryReminderInterval,
+      trigger: raw.reflectionTrigger,
+      stepCount: raw.reflectionStepCount,
+      onCompaction: raw.reflectionOnCompaction,
+      everyUserMessages: raw.reflectionEveryUserMessages,
+      timeoutMinutes: raw.reflectionTimeoutMinutes,
+      deleteSessionOnSuccess: raw.reflectionDeleteSessionOnSuccess,
+    },
+    base,
+  );
+  return { ...base, ...patch };
+}
 
+function applyPersistedAgentScopedSettings(
+  base: ReflectionSettings,
+  raw: StoredReflectionSettings | undefined,
+): ReflectionSettings {
+  if (!raw) {
+    return base;
+  }
+  const patch = migrateLegacyReflectionKeys(
+    {
+      trigger: raw.trigger,
+      stepCount: raw.stepCount,
+      onCompaction: raw.onCompaction,
+      everyUserMessages: raw.everyUserMessages,
+      timeoutMinutes: raw.timeoutMinutes,
+      deleteSessionOnSuccess: raw.deleteSessionOnSuccess,
+    },
+    base,
+  );
+  return { ...base, ...patch };
+}
+
+function deriveLegacyAliases(
+  settings: ReflectionSettings,
+): ResolvedReflectionSettings {
+  const everyUserMessages = normalizeReflectionEveryUserMessages(
+    settings.everyUserMessages,
+  );
+  let trigger: ReflectionTrigger;
+  if (settings.onCompaction) {
+    trigger = "compaction-event";
+  } else if (everyUserMessages > 0) {
+    trigger = "step-count";
+  } else {
+    trigger = "off";
+  }
   return {
-    trigger: normalizeTrigger(raw.trigger, base.trigger),
-    stepCount: normalizeStepCount(raw.stepCount, base.stepCount),
-    merge: normalizeMerge(raw.merge, base.merge),
-    mergeInstructions: normalizeMergeInstructions(
-      raw.mergeInstructions,
-      base.mergeInstructions,
-    ),
+    ...settings,
+    trigger,
+    stepCount:
+      everyUserMessages > 0 ? everyUserMessages : DEFAULT_REFLECTION_STEP_COUNT,
+    merge: "auto",
+    mergeInstructions: "",
   };
 }
 
-function legacyModeToReflectionSettings(
-  mode: MemoryReminderMode | undefined,
-): ResolvedReflectionSettings {
-  if (typeof mode === "number") {
-    return {
-      trigger: "step-count",
-      stepCount: normalizeStepCount(mode, DEFAULT_STEP_COUNT),
-      merge: DEFAULT_REFLECTION_SETTINGS.merge,
-      mergeInstructions: DEFAULT_REFLECTION_SETTINGS.mergeInstructions,
-    };
-  }
-
-  if (mode === null) {
-    return {
-      trigger: "off",
-      stepCount: DEFAULT_REFLECTION_SETTINGS.stepCount,
-      merge: DEFAULT_REFLECTION_SETTINGS.merge,
-      mergeInstructions: DEFAULT_REFLECTION_SETTINGS.mergeInstructions,
-    };
-  }
-
-  if (mode === "compaction") {
-    return {
-      trigger: "compaction-event",
-      stepCount: DEFAULT_REFLECTION_SETTINGS.stepCount,
-      merge: DEFAULT_REFLECTION_SETTINGS.merge,
-      mergeInstructions: DEFAULT_REFLECTION_SETTINGS.mergeInstructions,
-    };
-  }
-
-  if (mode === "auto-compaction") {
-    return {
-      trigger: "compaction-event",
-      stepCount: DEFAULT_REFLECTION_SETTINGS.stepCount,
-      merge: DEFAULT_REFLECTION_SETTINGS.merge,
-      mergeInstructions: DEFAULT_REFLECTION_SETTINGS.mergeInstructions,
-    };
-  }
-
-  return { ...DEFAULT_REFLECTION_SETTINGS };
-}
-
-export function reflectionSettingsToLegacyMode(
-  settings: ReflectionSettings,
-): MemoryReminderMode {
-  if (settings.trigger === "off") {
-    return null;
-  }
-  if (settings.trigger === "compaction-event") {
-    return "auto-compaction";
-  }
-  return normalizeStepCount(settings.stepCount, DEFAULT_STEP_COUNT);
-}
-
 /**
- * Get effective reflection settings (local overrides global with legacy fallback).
+ * Get effective reflection settings (global → project → local → per-agent).
+ *
+ * Never throws for an unloaded project/local scope: the settings page and the
+ * trigger run before either load on some startup paths, and the global layer is
+ * always available.
  */
 export function getReflectionSettings(
   agentId?: string,
@@ -195,8 +143,17 @@ export function getReflectionSettings(
 ): ResolvedReflectionSettings {
   const globalSettings =
     settingsManager.getSettings() as unknown as ReflectionSettingsCarrier;
-  let localSettings: ReflectionSettingsCarrier | null = null;
 
+  let projectSettings: ReflectionSettingsCarrier | null = null;
+  try {
+    projectSettings = settingsManager.getProjectSettings(
+      workingDirectory,
+    ) as unknown as ReflectionSettingsCarrier;
+  } catch {
+    projectSettings = null;
+  }
+
+  let localSettings: ReflectionSettingsCarrier | null = null;
   try {
     localSettings = settingsManager.getLocalProjectSettings(
       workingDirectory,
@@ -205,19 +162,12 @@ export function getReflectionSettings(
     localSettings = null;
   }
 
-  let resolved = legacyModeToReflectionSettings(
-    globalSettings.memoryReminderInterval,
+  let resolved = applyCarrierSettings(
+    { ...DEFAULT_REFLECTION_SETTINGS },
+    globalSettings,
   );
-  resolved = applyExplicitReflectionOverrides(resolved, globalSettings);
-
-  if (localSettings) {
-    if (localSettings.memoryReminderInterval !== undefined) {
-      resolved = legacyModeToReflectionSettings(
-        localSettings.memoryReminderInterval,
-      );
-    }
-    resolved = applyExplicitReflectionOverrides(resolved, localSettings);
-  }
+  resolved = applyCarrierSettings(resolved, projectSettings);
+  resolved = applyCarrierSettings(resolved, localSettings);
 
   if (agentId) {
     resolved = applyPersistedAgentScopedSettings(
@@ -226,22 +176,31 @@ export function getReflectionSettings(
     );
     resolved = applyPersistedAgentScopedSettings(
       resolved,
+      projectSettings?.reflectionSettingsByAgent?.[agentId],
+    );
+    resolved = applyPersistedAgentScopedSettings(
+      resolved,
       localSettings?.reflectionSettingsByAgent?.[agentId],
     );
   }
 
-  return resolved;
+  return deriveLegacyAliases(resolved);
 }
 
-export function shouldFireStepCountTrigger(
-  stepsSinceLastSuccessfulReflection: number,
+/**
+ * The message-counter trigger: fires when at least `everyUserMessages` user
+ * messages have arrived since the last reflected mark. Zero means off.
+ */
+export function shouldFireUserMessageTrigger(
+  messagesSinceLastReflection: number,
   settings: ReflectionSettings = getReflectionSettings(),
 ): boolean {
-  if (settings.trigger !== "step-count") {
-    return false;
-  }
-  const stepCount = normalizeStepCount(settings.stepCount, DEFAULT_STEP_COUNT);
-  return stepsSinceLastSuccessfulReflection >= stepCount;
+  const everyUserMessages = normalizeReflectionEveryUserMessages(
+    settings.everyUserMessages,
+  );
+  return (
+    everyUserMessages > 0 && messagesSinceLastReflection >= everyUserMessages
+  );
 }
 
 type PersistReflectionSettingsOptions = {
@@ -250,6 +209,35 @@ type PersistReflectionSettingsOptions = {
   persistGlobal?: boolean;
 };
 
+function toStoredReflectionSettings(
+  settings: ReflectionSettings,
+): Required<
+  Pick<
+    StoredReflectionSettings,
+    | "onCompaction"
+    | "everyUserMessages"
+    | "timeoutMinutes"
+    | "deleteSessionOnSuccess"
+  >
+> {
+  return {
+    onCompaction: normalizeReflectionOnCompaction(settings.onCompaction),
+    everyUserMessages: normalizeReflectionEveryUserMessages(
+      settings.everyUserMessages,
+    ),
+    timeoutMinutes: normalizeReflectionTimeoutMinutes(settings.timeoutMinutes),
+    deleteSessionOnSuccess: normalizeReflectionDeleteSessionOnSuccess(
+      settings.deleteSessionOnSuccess,
+    ),
+  };
+}
+
+/**
+ * Persist the reflection policy to the local project and/or global settings.
+ * Only the new keys are written; the retired keys are left to the load-time
+ * migration (which never rewrites them) so an older binary still reads a
+ * consistent file.
+ */
 export async function persistReflectionSettingsForAgent(
   agentId: string,
   settings: ReflectionSettings,
@@ -260,15 +248,7 @@ export async function persistReflectionSettingsForAgent(
     persistLocalProject = true,
     persistGlobal = true,
   } = options;
-  const merge = normalizeMerge(
-    settings.merge,
-    DEFAULT_REFLECTION_SETTINGS.merge,
-  );
-  const mergeInstructions = normalizeMergeInstructions(
-    settings.mergeInstructions,
-    DEFAULT_REFLECTION_SETTINGS.mergeInstructions,
-  );
-  const legacyMode = reflectionSettingsToLegacyMode(settings);
+  const stored = toStoredReflectionSettings(settings);
 
   if (persistLocalProject) {
     try {
@@ -281,19 +261,13 @@ export async function persistReflectionSettingsForAgent(
       settingsManager.getLocalProjectSettings(workingDirectory);
     settingsManager.updateLocalProjectSettings(
       {
-        memoryReminderInterval: legacyMode,
-        reflectionTrigger: settings.trigger,
-        reflectionStepCount: settings.stepCount,
-        reflectionMerge: merge,
-        reflectionMergeInstructions: mergeInstructions,
+        reflectionOnCompaction: stored.onCompaction,
+        reflectionEveryUserMessages: stored.everyUserMessages,
+        reflectionTimeoutMinutes: stored.timeoutMinutes,
+        reflectionDeleteSessionOnSuccess: stored.deleteSessionOnSuccess,
         reflectionSettingsByAgent: {
           ...(localSettings.reflectionSettingsByAgent ?? {}),
-          [agentId]: {
-            trigger: settings.trigger,
-            stepCount: settings.stepCount,
-            merge,
-            mergeInstructions,
-          },
+          [agentId]: stored,
         },
       },
       workingDirectory,
@@ -303,19 +277,13 @@ export async function persistReflectionSettingsForAgent(
   if (persistGlobal) {
     const globalSettings = settingsManager.getSettings();
     settingsManager.updateSettings({
-      memoryReminderInterval: legacyMode,
-      reflectionTrigger: settings.trigger,
-      reflectionStepCount: settings.stepCount,
-      reflectionMerge: merge,
-      reflectionMergeInstructions: mergeInstructions,
+      reflectionOnCompaction: stored.onCompaction,
+      reflectionEveryUserMessages: stored.everyUserMessages,
+      reflectionTimeoutMinutes: stored.timeoutMinutes,
+      reflectionDeleteSessionOnSuccess: stored.deleteSessionOnSuccess,
       reflectionSettingsByAgent: {
         ...(globalSettings.reflectionSettingsByAgent ?? {}),
-        [agentId]: {
-          trigger: settings.trigger,
-          stepCount: settings.stepCount,
-          merge,
-          mergeInstructions,
-        },
+        [agentId]: stored,
       },
     });
   }

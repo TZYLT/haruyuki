@@ -2133,8 +2133,10 @@ describe("listen-client multi-worker concurrency", () => {
     );
 
     const state = await getReflectionTranscriptState(agentId, conversationId);
-    expect(state.total_completed_steps).toBe(0);
-    expect(state.steps_since_last_successful_reflection).toBe(0);
+    // F-03 counts CLI-layer submissions, not transcript rows: this call enters
+    // through handleIncomingMessage directly, so nothing counted it.
+    expect(state.total_user_messages).toBe(0);
+    expect(state.messages_since_last_successful_reflection).toBe(0);
 
     const paths = getReflectionTranscriptPaths(agentId, conversationId);
     const transcriptRows = (await readFile(paths.transcriptPath, "utf-8"))

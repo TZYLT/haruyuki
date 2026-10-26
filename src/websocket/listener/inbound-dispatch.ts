@@ -6,6 +6,7 @@ import {
   getInboundClientMessageId,
 } from "./inbound-queue";
 import {
+  recordListenerInboundUserMessages,
   scheduleQueuePump,
   shouldProcessInboundMessageDirectly,
   shouldQueueInboundMessage,
@@ -160,6 +161,9 @@ export function dispatchInboundMessageWhenReady(params: {
       );
       rememberAcceptedInputDisposition(runtime, clientMessageId, "started");
       acknowledgeInput({ accepted: true, disposition: "started" });
+      // F-03 §5.5.2: this direct turn is a user submission. Count it before the
+      // turn runs so the post-turn trigger sees it.
+      await recordListenerInboundUserMessages(runtime, incoming);
       await processIncomingMessage(
         incoming,
         getOrCreateProcessTransport(listener),

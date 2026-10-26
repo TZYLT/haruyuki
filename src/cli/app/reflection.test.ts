@@ -2,23 +2,34 @@ import { describe, expect, test } from "bun:test";
 import { formatReflectionSettings } from "@/cli/app/reflection";
 
 describe("formatReflectionSettings", () => {
-  test("includes the reflection merge policy", () => {
+  test("prints the two switches and the run policy", () => {
     expect(
       formatReflectionSettings({
-        trigger: "compaction-event",
-        stepCount: 25,
-        merge: "explicit",
+        onCompaction: true,
+        everyUserMessages: 0,
+        timeoutMinutes: 3,
+        deleteSessionOnSuccess: true,
       }),
-    ).toBe("On compaction, agent reviews before applying");
-    expect(formatReflectionSettings({ trigger: "off", stepCount: 25 })).toBe(
-      "Off, apply automatically",
+    ).toBe("on compaction; timeout 3 min; delete session on success");
+
+    expect(
+      formatReflectionSettings({
+        onCompaction: false,
+        everyUserMessages: 0,
+        timeoutMinutes: 5,
+        deleteSessionOnSuccess: false,
+      }),
+    ).toBe("off; timeout 5 min; keep session on success");
+
+    expect(
+      formatReflectionSettings({
+        onCompaction: true,
+        everyUserMessages: 25,
+        timeoutMinutes: 3,
+        deleteSessionOnSuccess: true,
+      }),
+    ).toBe(
+      "on compaction + every 25 user messages; timeout 3 min; delete session on success",
     );
-    expect(
-      formatReflectionSettings({
-        trigger: "step-count",
-        stepCount: 10,
-        merge: "auto",
-      }),
-    ).toBe("Every 10 steps, apply automatically");
   });
 });

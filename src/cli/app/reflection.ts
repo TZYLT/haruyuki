@@ -1,15 +1,17 @@
 import type { ReflectionSettings } from "@/cli/helpers/memory-reminder";
 
 export function formatReflectionSettings(settings: ReflectionSettings): string {
-  const memoryUpdates =
-    settings.merge === "explicit"
-      ? "agent reviews before applying"
-      : "apply automatically";
-  if (settings.trigger === "off") {
-    return `Off, ${memoryUpdates}`;
+  const triggers: string[] = [];
+  if (settings.onCompaction) {
+    triggers.push("on compaction");
   }
-  if (settings.trigger === "compaction-event") {
-    return `On compaction, ${memoryUpdates}`;
+  if (settings.everyUserMessages > 0) {
+    triggers.push(`every ${settings.everyUserMessages} user messages`);
   }
-  return `Every ${settings.stepCount} steps, ${memoryUpdates}`;
+  const triggerText = triggers.length > 0 ? triggers.join(" + ") : "off";
+  return `${triggerText}; timeout ${settings.timeoutMinutes} min; ${
+    settings.deleteSessionOnSuccess
+      ? "delete session on success"
+      : "keep session on success"
+  }`;
 }

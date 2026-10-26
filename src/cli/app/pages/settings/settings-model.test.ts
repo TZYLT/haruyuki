@@ -256,9 +256,7 @@ describe("values", () => {
   });
 
   test("a text row does not cycle: it needs the editor", () => {
-    const text = SETTINGS_ITEMS.find(
-      (item) => item.id === "reflectionMergeInstructions",
-    );
+    const text = SETTINGS_ITEMS.find((item) => item.id === "currentModel");
     if (!text) throw new Error("text fixture missing");
     expect(cycleValue({ item: text, raw: "x", direction: 1 })).toBeNull();
   });

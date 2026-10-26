@@ -67,7 +67,12 @@ describe("headless mod adapter", () => {
       conversationId: "conversation-1",
       lastRunId: "run-1",
       permissionMode: "unrestricted",
-      reflectionSettings: { trigger: "step-count", stepCount: 3 },
+      reflectionSettings: {
+        onCompaction: false,
+        everyUserMessages: 3,
+        timeoutMinutes: 3,
+        deleteSessionOnSuccess: true,
+      },
     });
 
     expect(context.agent).toEqual({ id: "agent-1", name: "Amelia" });

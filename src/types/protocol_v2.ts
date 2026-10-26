@@ -199,13 +199,17 @@ export interface PendingControlRequest {
 }
 
 export type ReflectionTriggerMode = "off" | "step-count" | "compaction-event";
+/** @deprecated Retired by F-03; the field stays on the wire and is ignored. */
 export type ReflectionMergeMode = "auto" | "explicit";
 export type ReflectionSettingsScope = "local_project" | "global" | "both";
 export interface ReflectionSettingsSnapshot {
   agent_id: string;
+  /** Derived view of the two switches; kept for older app-server clients. */
   trigger: ReflectionTriggerMode;
   step_count: number;
+  /** @deprecated Retired by F-03 (§7.7): retained for wire compatibility. */
   merge: ReflectionMergeMode;
+  /** @deprecated Retired by F-03 (§7.7): retained for wire compatibility. */
   merge_instructions: string;
 }
 export type ChannelId = string;
@@ -1712,7 +1716,9 @@ export interface SetReflectionSettingsCommand {
   settings: {
     trigger: ReflectionTriggerMode;
     step_count: number;
+    /** @deprecated Retired by F-03 (§7.7): accepted and ignored. */
     merge?: ReflectionMergeMode;
+    /** @deprecated Retired by F-03 (§7.7): accepted and ignored. */
     merge_instructions?: string;
   };
   scope?: ReflectionSettingsScope;

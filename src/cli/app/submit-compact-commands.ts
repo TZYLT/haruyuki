@@ -39,11 +39,11 @@ import {
 import type { ContextTracker } from "@/cli/helpers/context-tracker";
 import { formatErrorDetails } from "@/cli/helpers/error-formatter";
 import { getReflectionSettings } from "@/cli/helpers/memory-reminder";
-import { runPostCompactionTail } from "@/cli/helpers/post-compaction";
 import {
-  AUTO_REFLECTION_DESCRIPTION,
-  launchReflectionSubagent,
-} from "@/cli/helpers/reflection-launcher";
+  consumePendingCompactionTrigger,
+  runPostCompactionTail,
+} from "@/cli/helpers/post-compaction";
+import { launchReflectionSubagent } from "@/cli/helpers/reflection-launcher";
 import { formatTopicNudgeHint } from "@/cli/helpers/topic-nudge";
 import {
   clearTopicTrimRequest,
@@ -329,31 +329,30 @@ async function afterCompaction(
   ctx: CompactCommandContext,
   conversationId: string,
 ): Promise<void> {
+  // F-03: this compaction is the trigger. Consume the pending flag first so the
+  // turn-end check does not launch a second reflection for it.
+  consumePendingCompactionTrigger({
+    reminderState: ctx.sharedReminderStateRef.current,
+    contextTracker: ctx.contextTrackerRef.current,
+  });
   runPostCompactionTail({
     reminderState: ctx.sharedReminderStateRef.current,
     reflect: () => {
+      const reflectionSettings = getReflectionSettings(ctx.agentId);
       if (
-        getReflectionSettings(ctx.agentId).trigger !== "compaction-event" ||
+        !reflectionSettings.onCompaction ||
         !isActiveMemfsEnabled(ctx.agentId)
       ) {
         return;
       }
-      const feedbackContext = {
-        parentAgentName: ctx.agentName,
-        parentAgentDescription: ctx.agentDescription,
-        surface: "letta_code_tui",
-      };
       void launchReflectionSubagent({
         agentId: ctx.agentId,
         conversationId,
         memfsEnabled: isActiveMemfsEnabled(ctx.agentId),
-        triggerSource: "compaction-event",
-        description: AUTO_REFLECTION_DESCRIPTION,
-        completionConversationId: () => ctx.conversationIdRef.current,
-        onCompletionMessage: (completionMessage) => {
-          ctx.appendTaskNotificationEvents([completionMessage]);
+        triggerSource: "compaction",
+        reflectionSettings: {
+          timeoutMinutes: reflectionSettings.timeoutMinutes,
         },
-        feedbackContext,
       });
     },
     regenerateDescription: () => {

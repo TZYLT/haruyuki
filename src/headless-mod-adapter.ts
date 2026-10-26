@@ -115,8 +115,16 @@ export function createHeadlessModContext(options: {
       totalLinesRemoved: null,
     },
     reflection: {
-      mode: options.reflectionSettings?.trigger ?? null,
-      stepCount: options.reflectionSettings?.stepCount ?? 0,
+      // F-03 replaced the one-of-three selector with two independent switches.
+      // The mod context keeps its legacy shape, derived from them.
+      mode: options.reflectionSettings
+        ? options.reflectionSettings.onCompaction
+          ? "compaction-event"
+          : options.reflectionSettings.everyUserMessages > 0
+            ? "step-count"
+            : "off"
+        : null,
+      stepCount: options.reflectionSettings?.everyUserMessages ?? 0,
     },
     memfs: {
       enabled: memfsEnabled,

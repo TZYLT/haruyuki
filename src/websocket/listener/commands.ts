@@ -25,7 +25,10 @@ import {
   gatherInitGitContext,
 } from "@/cli/helpers/init-command";
 import { getReflectionSettings } from "@/cli/helpers/memory-reminder";
-import { runPostCompactionTail } from "@/cli/helpers/post-compaction";
+import {
+  consumePendingCompactionTrigger,
+  runPostCompactionTail,
+} from "@/cli/helpers/post-compaction";
 import { parseReflectCommandArgs } from "@/cli/helpers/reflect-command";
 import { launchReflectionSubagent } from "@/cli/helpers/reflection-launcher";
 import { buildModCommandPrompt } from "@/cli/mods/command-runtime";
@@ -63,10 +66,7 @@ import {
   invalidateSecretsCacheForAgent,
 } from "./secrets-sync";
 import { handleIncomingMessage } from "./turn";
-import {
-  buildMaybeLaunchReflectionSubagent,
-  escapeTaskNotificationSummary,
-} from "./turn-events";
+import { buildMaybeLaunchReflectionSubagent } from "./turn-events";
 import type { ConversationRuntime, StartListenerOptions } from "./types";
 
 export { SUPPORTED_REMOTE_COMMANDS } from "./listener-constants";
@@ -469,6 +469,12 @@ async function compactLocalFromListener(
   });
   if (!outcome.executed) return formatTopicTrimReceipt(outcome);
 
+  // F-03: this compaction is the trigger. Consume the pending flag so the
+  // turn-end check does not launch a second reflection for it.
+  consumePendingCompactionTrigger({
+    reminderState: conversationRuntime.reminderState,
+    contextTracker: conversationRuntime.contextTracker,
+  });
   runPostCompactionTail({
     reminderState: conversationRuntime.reminderState,
     reflect: () => {
@@ -481,7 +487,7 @@ async function compactLocalFromListener(
         ),
       );
       if (
-        reflectionSettings.trigger !== "compaction-event" ||
+        !reflectionSettings.onCompaction ||
         !settingsManager.isMemfsEnabled(agentId)
       ) {
         return;
@@ -491,7 +497,10 @@ async function compactLocalFromListener(
         socket,
         agentId,
         conversationId,
-      })("compaction-event");
+        reflectionSettings,
+      })("compaction", {
+        timeoutMinutes: reflectionSettings.timeoutMinutes,
+      });
     },
     regenerateDescription: () => {
       void regenerateConversationDescription(conversationId);
@@ -577,6 +586,11 @@ async function handleCompactCommand(
     );
     // The same tail the TUI runs: reminders first, reflection best-effort, then a
     // fresh description. A cloud failure keeps its classified message (M-2).
+    // F-03: consume the pending flag first — this compaction is the trigger.
+    consumePendingCompactionTrigger({
+      reminderState: conversationRuntime.reminderState,
+      contextTracker: conversationRuntime.contextTracker,
+    });
     runPostCompactionTail({
       reminderState: conversationRuntime.reminderState,
       reflect: () => {
@@ -589,7 +603,7 @@ async function handleCompactCommand(
           ),
         );
         if (
-          reflectionSettings.trigger !== "compaction-event" ||
+          !reflectionSettings.onCompaction ||
           !settingsManager.isMemfsEnabled(agentId)
         ) {
           return;
@@ -599,7 +613,10 @@ async function handleCompactCommand(
           socket,
           agentId,
           conversationId: conversationRuntime.conversationId,
-        })("compaction-event");
+          reflectionSettings,
+        })("compaction", {
+          timeoutMinutes: reflectionSettings.timeoutMinutes,
+        });
       },
       regenerateDescription: () => {
         void regenerateConversationDescription(
@@ -821,7 +838,7 @@ async function handleChannelsCommand(
 }
 
 async function handleReflectCommand(
-  socket: WebSocket,
+  _socket: WebSocket,
   conversationRuntime: ConversationRuntime,
   args = "",
 ): Promise<string> {
@@ -833,59 +850,41 @@ async function handleReflectCommand(
     args,
   );
   if (output !== null) return output;
+  // F-03: one parameter, always this conversation. Retired flags throw with the
+  // current usage before any launch work happens.
   const parsed = parseReflectCommandArgs(`/reflect ${args}`);
-  if (parsed.kind !== "single") {
-    throw new Error(
-      "The remote listener supports only the current conversation and --instruction. Use the TUI for --recent, --conversation, or --auto with Code-managed reflection.",
-    );
-  }
-  const result = await launchReflectionSubagent(
-    {
-      instruction: parsed.instruction,
+  const reflectionSettings = getReflectionSettings(
+    agentId,
+    getConversationWorkingDirectory(
+      conversationRuntime.listener,
       agentId,
       conversationId,
-      memfsEnabled: settingsManager.isMemfsEnabled(agentId),
-      triggerSource: "manual",
-      description: "Reflecting on conversation",
-      onCompletionMessage: async (completionMessage, reflectionResult) => {
-        const reflectionAgentIdTag = reflectionResult.reflectionAgentId
-          ? `<reflection-agent-id>${escapeTaskNotificationSummary(reflectionResult.reflectionAgentId)}</reflection-agent-id>`
-          : "";
-        emitCanonicalMessageDelta(
-          socket,
-          conversationRuntime,
-          {
-            type: "message",
-            id: `user-msg-${crypto.randomUUID()}`,
-            date: new Date().toISOString(),
-            message_type: "user_message",
-            content: [
-              {
-                type: "text",
-                text: `<task-notification><summary>${escapeTaskNotificationSummary(completionMessage)}</summary>${reflectionAgentIdTag}</task-notification>`,
-              },
-            ],
-          } as StreamDelta,
-          { agent_id: agentId, conversation_id: conversationId },
-        );
-      },
-    },
-    { isCutover: async () => false },
-  ); // Ownership was resolved with the acting user above.
-  if (result.launched)
+    ),
+  );
+  const result = await launchReflectionSubagent({
+    agentId,
+    conversationId,
+    memfsEnabled: settingsManager.isMemfsEnabled(agentId),
+    triggerSource: "manual",
+    instruction: parsed.instruction,
+    reflectionSettings: { timeoutMinutes: reflectionSettings.timeoutMinutes },
+  });
+  if (result.launched) {
     return "Started a reflection pass for this conversation.";
-  if (result.reason === "memfs_disabled") {
-    return "Reflection needs the memory filesystem to be enabled for this agent.";
   }
-  if (result.reason === "already_active") {
-    return "A reflection agent is already running for this conversation.";
+  switch (result.reason) {
+    case "memfs_disabled":
+      return "Reflection needs the memory filesystem to be enabled for this agent.";
+    case "lock_busy":
+    case "already_active":
+      return "A reflection agent is already running for this conversation.";
+    case "retry_backoff":
+      return "Reflection is backing off after a recent failure. Try again later.";
+    case "configuration_error":
+      return "Reflection is paused because of a configuration error.";
+    case "fork_failed":
+      return "Could not create the reflection session.";
+    default:
+      return `Failed to start reflection: ${result.reason}`;
   }
-  if (result.reason === "no_payload") {
-    return "No new transcript content to reflect on for this conversation.";
-  }
-  return `Failed to start reflection: ${
-    result.error instanceof Error
-      ? result.error.message
-      : String(result.error ?? "Unknown error")
-  }`;
 }

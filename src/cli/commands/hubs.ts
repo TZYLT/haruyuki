@@ -152,7 +152,7 @@ export const HUBS: Record<string, HubDefinition> = {
       },
       {
         name: "config",
-        desc: "Sleep-time reflection trigger and merge settings",
+        desc: "Sleep-time reflection triggers and limits",
         command: "/sleeptime",
       },
     ],

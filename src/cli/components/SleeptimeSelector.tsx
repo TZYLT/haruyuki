@@ -7,27 +7,21 @@ import {
   useState,
 } from "react";
 import { namedKeyChords } from "@/cli/helpers/input-keys";
-import type {
-  ReflectionMergeMode,
-  ReflectionSettings,
-  ReflectionTrigger,
-} from "@/cli/helpers/memory-reminder";
+import type { ReflectionSettings } from "@/cli/helpers/memory-reminder";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { OverlayFrame } from "@/cli/overlay/frame";
 import { OverlayTextField } from "@/cli/overlay/text-view";
 import { wizardBindings } from "@/cli/overlay/wizard";
+import {
+  DEFAULT_REFLECTION_TIMEOUT_MINUTES,
+  MAX_REFLECTION_TIMEOUT_MINUTES,
+  MIN_REFLECTION_TIMEOUT_MINUTES,
+  SUGGESTED_REFLECTION_EVERY_USER_MESSAGES,
+} from "@/reflection-settings";
 import { colors } from "./colors";
 import { Text } from "./Text";
 
-const DEFAULT_STEP_COUNT = "25";
-
-type FocusRow =
-  | "trigger-off"
-  | "trigger-step-count"
-  | "trigger-compaction"
-  | "merge-auto"
-  | "merge-explicit"
-  | "merge-instructions";
+type FocusRow = "on-compaction" | "every" | "timeout" | "delete";
 
 interface SleeptimeSelectorProps {
   initialSettings: ReflectionSettings;
@@ -36,27 +30,12 @@ interface SleeptimeSelectorProps {
   onCancel: () => void;
 }
 
-const TRIGGER_OPTIONS: readonly ReflectionTrigger[] = [
-  "off",
-  "step-count",
-  "compaction-event",
+const FOCUS_ROWS: readonly FocusRow[] = [
+  "on-compaction",
+  "every",
+  "timeout",
+  "delete",
 ];
-const MERGE_OPTIONS: readonly ReflectionMergeMode[] = ["auto", "explicit"];
-
-function triggerFocusRow(trigger: ReflectionTrigger): FocusRow {
-  switch (trigger) {
-    case "off":
-      return "trigger-off";
-    case "step-count":
-      return "trigger-step-count";
-    case "compaction-event":
-      return "trigger-compaction";
-  }
-}
-
-function mergeFocusRow(merge: ReflectionMergeMode): FocusRow {
-  return merge === "explicit" ? "merge-explicit" : "merge-auto";
-}
 
 function ChoiceRow(props: {
   focused: boolean;
@@ -78,63 +57,51 @@ function ChoiceRow(props: {
   );
 }
 
-function cycleOption<T extends string>(
-  options: readonly T[],
-  current: T,
-  direction: -1 | 1,
-): T {
-  if (options.length === 0) {
-    return current;
-  }
-  const currentIndex = options.indexOf(current);
-  const safeIndex = currentIndex >= 0 ? currentIndex : 0;
-  const nextIndex = (safeIndex + direction + options.length) % options.length;
-  return options[nextIndex] ?? current;
-}
-
-function parseInitialState(initialSettings: ReflectionSettings): {
-  trigger: ReflectionTrigger;
-  stepCount: string;
-  merge: ReflectionMergeMode;
-  mergeInstructions: string;
-} {
-  return {
-    trigger:
-      initialSettings.trigger === "off" ||
-      initialSettings.trigger === "step-count" ||
-      initialSettings.trigger === "compaction-event"
-        ? initialSettings.trigger
-        : "step-count",
-    stepCount: String(
-      Number.isInteger(initialSettings.stepCount) &&
-        initialSettings.stepCount > 0
-        ? initialSettings.stepCount
-        : Number(DEFAULT_STEP_COUNT),
-    ),
-    merge: initialSettings.merge === "explicit" ? "explicit" : "auto",
-    mergeInstructions: initialSettings.mergeInstructions ?? "",
-  };
-}
-
-function parseStepCount(raw: string): number | null {
+function parseNonNegativeInteger(raw: string): number | null {
   const trimmed = raw.trim();
   if (!/^\d+$/.test(trimmed)) return null;
   const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isInteger(parsed) || parsed <= 0) return null;
-  return parsed;
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function parseTimeout(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const parsed = Number.parseInt(trimmed, 10);
+  return parsed >= MIN_REFLECTION_TIMEOUT_MINUTES &&
+    parsed <= MAX_REFLECTION_TIMEOUT_MINUTES
+    ? parsed
+    : null;
+}
+
+function parseInitialState(initialSettings: ReflectionSettings): {
+  onCompaction: boolean;
+  everyUserMessages: string;
+  timeoutMinutes: string;
+  deleteSessionOnSuccess: boolean;
+} {
+  const every = Number.isInteger(initialSettings.everyUserMessages)
+    ? initialSettings.everyUserMessages
+    : 0;
+  const timeout = Number.isInteger(initialSettings.timeoutMinutes)
+    ? initialSettings.timeoutMinutes
+    : DEFAULT_REFLECTION_TIMEOUT_MINUTES;
+  return {
+    onCompaction: initialSettings.onCompaction === true,
+    everyUserMessages: String(Math.max(0, every)),
+    timeoutMinutes: String(timeout),
+    deleteSessionOnSuccess: initialSettings.deleteSessionOnSuccess === true,
+  };
 }
 
 /**
- * `/memory config`'s form.
+ * `/sleeptime` (and `/memory config`)'s form.
  *
- * It is the tree's one self-drawn form: a radio group over two sections with two
- * fields edited **in place** rather than in a sub-view, which is what it was
- * signed off to keep. What changed is the two fields: they are the toolkit's
- * editors now, so they carry a caret and accept a paste where the hand-rolled
- * row only appended characters and painted a `█`. While a field has the cursor,
- * the arrows and Home/End belong to the caret; ←/→ still cycle the option on the
- * rows that are not fields, and ↑↓/Tab still walk the form, which is the split
- * the face was signed off for.
+ * F-03 replaced the old one-of-three trigger + merge block with two independent
+ * switches and the run policy. The two numeric knobs are edited **in place**
+ * with the toolkit's editors, which is the split this face was signed off for:
+ * while a field has the cursor the arrows and Home/End belong to the caret,
+ * ←/→ toggles the switch rows, and ↑↓/Tab walk the form.
  */
 export function SleeptimeSelector({
   initialSettings,
@@ -147,107 +114,77 @@ export function SleeptimeSelector({
     [initialSettings],
   );
 
-  const [trigger, setTrigger] = useState<ReflectionTrigger>(
-    initialState.trigger,
+  const [onCompaction, setOnCompaction] = useState(initialState.onCompaction);
+  const [everyInput, setEveryInput] = useState(initialState.everyUserMessages);
+  const [timeoutInput, setTimeoutInput] = useState(initialState.timeoutMinutes);
+  const [deleteOnSuccess, setDeleteOnSuccess] = useState(
+    initialState.deleteSessionOnSuccess,
   );
-  const [stepCountInput, setStepCountInput] = useState(initialState.stepCount);
-  const [merge, setMerge] = useState<ReflectionMergeMode>(initialState.merge);
-  const [mergeInstructions, setMergeInstructions] = useState(
-    initialState.mergeInstructions,
-  );
-  const [focusRow, setFocusRow] = useState<FocusRow>(() =>
-    triggerFocusRow(initialState.trigger),
-  );
+  const [focusRow, setFocusRow] = useState<FocusRow>("on-compaction");
   const [validationError, setValidationError] = useState<string | null>(null);
-  const visibleRows = useMemo(() => {
-    const rows: FocusRow[] = [
-      "trigger-off",
-      "trigger-step-count",
-      "trigger-compaction",
-      "merge-auto",
-      "merge-explicit",
-    ];
-    if (merge === "explicit") {
-      rows.push("merge-instructions");
-    }
-    return rows;
-  }, [merge]);
-  const isEditingStepCount = focusRow === "trigger-step-count";
-  const isEditingMergeInstructions =
-    focusRow === "merge-instructions" && merge === "explicit";
-  const isFieldFocused = isEditingStepCount || isEditingMergeInstructions;
+
+  const isEditingEvery = focusRow === "every";
+  const isEditingTimeout = focusRow === "timeout";
+  const isFieldFocused = isEditingEvery || isEditingTimeout;
 
   useEffect(() => {
-    if (!visibleRows.includes(focusRow)) {
-      setFocusRow(visibleRows[visibleRows.length - 1] ?? "trigger-off");
+    if (!FOCUS_ROWS.includes(focusRow)) {
+      setFocusRow("on-compaction");
     }
-  }, [focusRow, visibleRows]);
+  }, [focusRow]);
 
   const saveSelection = useCallback(() => {
-    if (trigger === "step-count") {
-      const stepCount = parseStepCount(stepCountInput);
-      if (stepCount === null) {
-        setValidationError("must be a positive integer");
-        return;
-      }
-      onSave({ trigger, stepCount, merge, mergeInstructions });
+    const everyUserMessages = parseNonNegativeInteger(everyInput);
+    if (everyUserMessages === null) {
+      setValidationError("must be a non-negative integer (0 = off)");
       return;
     }
-
-    const fallbackStepCount =
-      parseStepCount(stepCountInput) ?? Number(DEFAULT_STEP_COUNT);
+    const timeoutMinutes = parseTimeout(timeoutInput);
+    if (timeoutMinutes === null) {
+      setValidationError(
+        `must be between ${MIN_REFLECTION_TIMEOUT_MINUTES} and ${MAX_REFLECTION_TIMEOUT_MINUTES}`,
+      );
+      return;
+    }
     onSave({
-      trigger,
-      stepCount: fallbackStepCount,
-      merge,
-      mergeInstructions,
+      onCompaction,
+      everyUserMessages,
+      timeoutMinutes,
+      deleteSessionOnSuccess: deleteOnSuccess,
     });
-  }, [merge, mergeInstructions, onSave, stepCountInput, trigger]);
+  }, [deleteOnSuccess, everyInput, onCompaction, onSave, timeoutInput]);
 
-  const selectFocusedOption = () => {
+  const toggleFocusedSwitch = () => {
+    setValidationError(null);
     switch (focusRow) {
-      case "trigger-off":
-        setTrigger("off");
+      case "on-compaction":
+        setOnCompaction((value) => !value);
         break;
-      case "trigger-step-count":
-        setTrigger("step-count");
+      case "delete":
+        setDeleteOnSuccess((value) => !value);
         break;
-      case "trigger-compaction":
-        setTrigger("compaction-event");
-        break;
-      case "merge-auto":
-        setMerge("auto");
-        break;
-      case "merge-explicit":
-        setMerge("explicit");
-        break;
-      case "merge-instructions":
+      case "every":
+      case "timeout":
+        // A field's own editor owns the key, including Space.
         break;
     }
-    setValidationError(null);
   };
 
   const moveFocus = (direction: -1 | 1) => {
-    if (visibleRows.length === 0) return;
     setValidationError(null);
-    const currentIndex = visibleRows.indexOf(focusRow);
+    const currentIndex = FOCUS_ROWS.indexOf(focusRow);
     const safeIndex = currentIndex >= 0 ? currentIndex : 0;
     const nextIndex =
-      (safeIndex + direction + visibleRows.length) % visibleRows.length;
-    setFocusRow(visibleRows[nextIndex] ?? "trigger-off");
+      (safeIndex + direction + FOCUS_ROWS.length) % FOCUS_ROWS.length;
+    setFocusRow(FOCUS_ROWS[nextIndex] ?? "on-compaction");
   };
 
-  const cycleFocusedGroup = (direction: -1 | 1) => {
-    setValidationError(null);
-    if (focusRow.startsWith("trigger-")) {
-      const nextTrigger = cycleOption(TRIGGER_OPTIONS, trigger, direction);
-      setTrigger(nextTrigger);
-      setFocusRow(triggerFocusRow(nextTrigger));
-    } else if (focusRow.startsWith("merge-")) {
-      const nextMerge = cycleOption(MERGE_OPTIONS, merge, direction);
-      setMerge(nextMerge);
-      setFocusRow(mergeFocusRow(nextMerge));
-    }
+  const cycleFocusedSwitch = (direction: -1 | 1) => {
+    // Only the switch rows cycle; while a field has the cursor the arrows are
+    // the caret's.
+    if (isFieldFocused) return;
+    void direction;
+    toggleFocusedSwitch();
   };
 
   useKeyBindings("sleeptime-selector", [
@@ -274,9 +211,8 @@ export function SleeptimeSelector({
           id: "sleeptime-selector.cycle-next",
           chords: namedKeyChords("rightArrow"),
           run: () => {
-            // A field's caret owns the arrows while it has the cursor.
             if (isFieldFocused) return "declined";
-            cycleFocusedGroup(1);
+            cycleFocusedSwitch(1);
             return "consumed";
           },
         },
@@ -285,7 +221,7 @@ export function SleeptimeSelector({
           chords: namedKeyChords("leftArrow"),
           run: () => {
             if (isFieldFocused) return "declined";
-            cycleFocusedGroup(-1);
+            cycleFocusedSwitch(-1);
             return "consumed";
           },
         },
@@ -293,10 +229,8 @@ export function SleeptimeSelector({
           id: "sleeptime-selector.select",
           chords: namedKeyChords("space"),
           run: () => {
-            // The instructions field is text, so a space there is a space; the
-            // step count is a number, and space has always meant "select".
-            if (isEditingMergeInstructions) return "declined";
-            selectFocusedOption();
+            if (isFieldFocused) return "declined";
+            toggleFocusedSwitch();
             return "consumed";
           },
         },
@@ -332,106 +266,78 @@ export function SleeptimeSelector({
       {memfsEnabled ? (
         <>
           <ChoiceRow
-            focused={focusRow === "trigger-off"}
-            selected={trigger === "off"}
+            focused={focusRow === "on-compaction"}
+            selected={onCompaction}
           >
-            {" Off "}
+            {" On compaction "}
           </ChoiceRow>
           <Box flexDirection="row">
-            <Text>{isEditingStepCount ? "> " : "  "}</Text>
+            <Text>{isEditingEvery ? "> " : "  "}</Text>
             <Text
               backgroundColor={
-                trigger === "step-count"
-                  ? colors.selector.itemHighlighted
-                  : undefined
+                everyInput !== "0" ? colors.selector.itemHighlighted : undefined
               }
-              color={trigger === "step-count" ? "black" : undefined}
-              bold={trigger === "step-count"}
+              color={everyInput !== "0" ? "black" : undefined}
+              bold={everyInput !== "0"}
             >
               {" Every ["}
             </Text>
             <OverlayTextField
               marker={null}
-              value={stepCountInput}
+              value={everyInput}
               onChange={(value) => {
-                setTrigger("step-count");
-                setStepCountInput(value);
+                setEveryInput(value);
                 setValidationError(null);
               }}
               // Enter in the field is the form's save: the `return` binding
               // declines while a field has the cursor, so this is the only path.
               onSubmit={saveSelection}
-              focus={isEditingStepCount}
+              focus={isEditingEvery}
             />
             <Text
               backgroundColor={
-                trigger === "step-count"
-                  ? colors.selector.itemHighlighted
-                  : undefined
+                everyInput !== "0" ? colors.selector.itemHighlighted : undefined
               }
-              color={trigger === "step-count" ? "black" : undefined}
-              bold={trigger === "step-count"}
+              color={everyInput !== "0" ? "black" : undefined}
+              bold={everyInput !== "0"}
             >
-              {"] steps "}
+              {`] user messages (0 = off, suggest ${SUGGESTED_REFLECTION_EVERY_USER_MESSAGES})`}
             </Text>
           </Box>
+
+          <Box height={1} />
+          <Text bold color={colors.selector.title}>
+            Run policy
+          </Text>
+          <Box height={1} />
+          <Box flexDirection="row">
+            <Text>{isEditingTimeout ? "> " : "  "}</Text>
+            <Text>{" Timeout ["}</Text>
+            <OverlayTextField
+              marker={null}
+              value={timeoutInput}
+              onChange={(value) => {
+                setTimeoutInput(value);
+                setValidationError(null);
+              }}
+              onSubmit={saveSelection}
+              focus={isEditingTimeout}
+            />
+            <Text>{"] minutes"}</Text>
+          </Box>
+          <ChoiceRow focused={focusRow === "delete"} selected={deleteOnSuccess}>
+            {" Delete session on success "}
+          </ChoiceRow>
+
           {validationError && (
             <Text color={colors.error.text}>
               {`    Error: ${validationError}`}
             </Text>
           )}
-          <ChoiceRow
-            focused={focusRow === "trigger-compaction"}
-            selected={trigger === "compaction-event"}
-          >
-            {" On compaction "}
-          </ChoiceRow>
-
-          <Box height={1} />
-          <Text bold color={colors.selector.title}>
-            Memory updates
-          </Text>
-          <Box height={1} />
-          <ChoiceRow
-            focused={focusRow === "merge-auto"}
-            selected={merge === "auto"}
-          >
-            {" Apply automatically "}
-          </ChoiceRow>
-          <ChoiceRow
-            focused={focusRow === "merge-explicit"}
-            selected={merge === "explicit"}
-          >
-            {" Agent reviews before applying "}
-          </ChoiceRow>
-
-          {merge === "explicit" && (
-            <>
-              <Box height={1} />
-              <Text bold>{"  Review instructions"}</Text>
-              <Box flexDirection="row">
-                <Text>{isEditingMergeInstructions ? "> " : "  "}</Text>
-                <Text>{"["}</Text>
-                <OverlayTextField
-                  marker={null}
-                  value={mergeInstructions}
-                  onChange={(value) => {
-                    setMergeInstructions(value);
-                    setValidationError(null);
-                  }}
-                  onSubmit={saveSelection}
-                  focus={isEditingMergeInstructions}
-                />
-                <Text>{"]"}</Text>
-              </Box>
-            </>
-          )}
 
           <Box height={1} />
           <Text dimColor>
-            {
-              "  Enter save · ↑↓/Tab move · Space select · ←→ options · Esc cancel"
-            }
+            {"  Enter save · ↑↓/Tab move · Space/←→ toggle · Esc cancel"}
           </Text>
         </>
       ) : (

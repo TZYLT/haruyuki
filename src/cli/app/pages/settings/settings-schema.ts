@@ -105,17 +105,6 @@ const RECALL_DISPLAY = [
   { value: "full", label: "full" },
 ] as const;
 
-const REFLECTION_TRIGGER = [
-  { value: "off", label: "off" },
-  { value: "step-count", label: "step-count" },
-  { value: "compaction-event", label: "compaction-event" },
-] as const;
-
-const REFLECTION_MERGE = [
-  { value: "auto", label: "auto" },
-  { value: "explicit", label: "explicit" },
-] as const;
-
 const WIDTH_MODES = [
   { value: "auto", label: "auto (probe terminal)" },
   { value: "narrow", label: "narrow (1 column)" },
@@ -443,77 +432,89 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
       writeRecall({ recallDisplay: value as "silent" | "summary" | "full" });
     },
   },
+  // ---------------------------------------------------------------- Reflection
+  // F-03 §5.5.1/§5.14.1: two independent triggers plus the run policy. The old
+  // one-of-three selector and the merge knobs are gone from the page; their
+  // stored keys are migrated on load.
   {
-    id: "reflectionTrigger",
+    id: "reflectionOnCompaction",
     section: "memory",
     group: "reflection",
-    label: "Reflection trigger",
-    kind: "select",
-    options: REFLECTION_TRIGGER,
+    label: "Reflection on compaction",
+    kind: "toggle",
     scope: "agent",
     editable: true,
     read: (ctx) =>
-      readSetting(
-        () => getReflectionSettings(ctx.agentId, ctx.projectDirectory).trigger,
+      booleanOrNull(
+        readSetting(
+          () =>
+            getReflectionSettings(ctx.agentId, ctx.projectDirectory)
+              .onCompaction,
+        ),
       ),
     write: async (ctx, value) => {
-      await writeReflection(ctx, {
-        trigger: value as "off" | "step-count" | "compaction-event",
-      });
+      await writeReflection(ctx, { onCompaction: value === "true" });
     },
   },
   {
-    id: "reflectionStepCount",
+    id: "reflectionEveryUserMessages",
     section: "memory",
     group: "reflection",
-    label: "Reflection steps",
+    label: "Reflection every N user messages (0 = off)",
     kind: "number",
-    min: 1,
+    min: 0,
     scope: "agent",
     editable: true,
     read: (ctx) =>
       readSetting(() =>
         String(
-          getReflectionSettings(ctx.agentId, ctx.projectDirectory).stepCount,
+          getReflectionSettings(ctx.agentId, ctx.projectDirectory)
+            .everyUserMessages,
         ),
       ),
     write: async (ctx, value) => {
-      await writeReflection(ctx, { stepCount: Number(value) });
+      await writeReflection(ctx, { everyUserMessages: Number(value) });
     },
   },
   {
-    id: "reflectionMerge",
+    id: "reflectionTimeoutMinutes",
     section: "memory",
     group: "reflection",
-    label: "Merge mode",
-    kind: "select",
-    options: REFLECTION_MERGE,
+    label: "Reflection timeout (minutes)",
+    kind: "number",
+    min: 1,
+    max: 60,
     scope: "agent",
     editable: true,
     read: (ctx) =>
-      readSetting(
-        () => getReflectionSettings(ctx.agentId, ctx.projectDirectory).merge,
-      ),
-    write: async (ctx, value) => {
-      await writeReflection(ctx, { merge: value as "auto" | "explicit" });
-    },
-  },
-  {
-    id: "reflectionMergeInstructions",
-    section: "memory",
-    group: "reflection",
-    label: "Merge instructions",
-    kind: "text",
-    scope: "agent",
-    editable: true,
-    read: (ctx) =>
-      readSetting(
-        () =>
+      readSetting(() =>
+        String(
           getReflectionSettings(ctx.agentId, ctx.projectDirectory)
-            .mergeInstructions,
+            .timeoutMinutes,
+        ),
       ),
     write: async (ctx, value) => {
-      await writeReflection(ctx, { mergeInstructions: value });
+      await writeReflection(ctx, { timeoutMinutes: Number(value) });
+    },
+  },
+  {
+    id: "reflectionDeleteSessionOnSuccess",
+    section: "memory",
+    group: "reflection",
+    label: "Delete reflection session on success",
+    kind: "toggle",
+    scope: "agent",
+    editable: true,
+    read: (ctx) =>
+      booleanOrNull(
+        readSetting(
+          () =>
+            getReflectionSettings(ctx.agentId, ctx.projectDirectory)
+              .deleteSessionOnSuccess,
+        ),
+      ),
+    write: async (ctx, value) => {
+      await writeReflection(ctx, { deleteSessionOnSuccess: value === "true" });
     },
   },
   {

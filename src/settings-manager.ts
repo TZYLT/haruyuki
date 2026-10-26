@@ -32,10 +32,14 @@ import type { ExperimentId } from "./experiments/types";
 import type { HooksConfig } from "./hooks/types";
 import type { McpServerConfig } from "./mcp-client";
 import type { PermissionRules } from "./permissions/types";
-import type {
-  ReflectionMergeMode,
-  ReflectionTrigger,
-  StoredReflectionSettings,
+import {
+  DEFAULT_REFLECTION_DELETE_SESSION_ON_SUCCESS,
+  DEFAULT_REFLECTION_EVERY_USER_MESSAGES,
+  DEFAULT_REFLECTION_ON_COMPACTION,
+  DEFAULT_REFLECTION_TIMEOUT_MINUTES,
+  migrateLegacyReflectionKeys,
+  type ReflectionTrigger,
+  type StoredReflectionSettings,
 } from "./reflection-settings";
 import { getRuntimeContext } from "./runtime-context";
 import { trackBoundaryError } from "./telemetry/error-reporting";
@@ -81,11 +85,18 @@ export interface Settings {
   channelCredentialsStore?: "file" | "keyring" | "auto"; // Where channel/connection tokens are persisted
   recentModels: string[]; // Recently used model IDs (most recent first, max 10)
   memoryReminderInterval: number | null | "compaction" | "auto-compaction"; // DEPRECATED: use reflection* fields
-  reflectionTrigger: ReflectionTrigger;
-  reflectionStepCount: number;
-  // Controls whether reflection changes merge immediately or through primary-agent integration.
-  reflectionMerge: ReflectionMergeMode;
-  reflectionMergeInstructions: string;
+  /** @deprecated Migrated onto `reflectionOnCompaction`/`reflectionEveryUserMessages`. */
+  reflectionTrigger?: ReflectionTrigger;
+  /** @deprecated Migrated onto `reflectionEveryUserMessages`. */
+  reflectionStepCount?: number;
+  /** Run reflection after every completed compaction (F-03 §5.14.1). */
+  reflectionOnCompaction?: boolean;
+  /** Run reflection every N user messages; 0 disables the counter. */
+  reflectionEveryUserMessages?: number;
+  /** Wall-clock cap for one reflection run, in minutes (1–60). */
+  reflectionTimeoutMinutes?: number;
+  /** Delete the reflection session once it succeeds (including no-op). */
+  reflectionDeleteSessionOnSuccess?: boolean;
   reflectionSettingsByAgent?: Record<string, StoredReflectionSettings>;
   conversationSwitchAlertEnabled: boolean; // Send system-reminder when switching conversations/agents
   profiles?: Record<string, string>; // DEPRECATED: old format, kept for migration
@@ -143,6 +154,12 @@ export interface WorktreeProjectConfig {
 export interface ProjectSettings {
   hooks?: HooksConfig; // Project-specific hook commands (checked in)
   windowTitle?: WindowTitleConfig; // Project-specific terminal window title
+  // F-03 §5.14.2: reflection policy is a three-layer setting. The project layer
+  // is checked in, so only the explicit knobs live here (never per-agent).
+  reflectionOnCompaction?: boolean;
+  reflectionEveryUserMessages?: number;
+  reflectionTimeoutMinutes?: number;
+  reflectionDeleteSessionOnSuccess?: boolean;
 }
 
 export interface LocalProjectSettings {
@@ -153,10 +170,14 @@ export interface LocalProjectSettings {
   windowTitle?: WindowTitleConfig; // Local project-specific terminal window title
   profiles?: Record<string, string>; // DEPRECATED: old format, kept for migration
   memoryReminderInterval?: number | null | "compaction" | "auto-compaction"; // DEPRECATED: use reflection* fields
+  /** @deprecated Migrated onto `reflectionOnCompaction`/`reflectionEveryUserMessages`. */
   reflectionTrigger?: ReflectionTrigger;
+  /** @deprecated Migrated onto `reflectionEveryUserMessages`. */
   reflectionStepCount?: number;
-  reflectionMerge?: ReflectionMergeMode;
-  reflectionMergeInstructions?: string;
+  reflectionOnCompaction?: boolean;
+  reflectionEveryUserMessages?: number;
+  reflectionTimeoutMinutes?: number;
+  reflectionDeleteSessionOnSuccess?: boolean;
   reflectionSettingsByAgent?: Record<string, StoredReflectionSettings>;
   // Server-indexed settings (agent IDs are server-specific)
   sessionsByServer?: Record<string, SessionRef>; // key = normalized base URL
@@ -166,6 +187,8 @@ export interface LocalProjectSettings {
 // Hard-deprecated keys: ignored on load and stripped from disk on persist.
 const OBSOLETE_SETTINGS_KEYS = [
   "reflectionBehavior",
+  "reflectionMerge",
+  "reflectionMergeInstructions",
   "enableSleeptime",
   "pinnedAgents",
   "pinnedAgentsByServer",
@@ -184,11 +207,12 @@ const DEFAULT_SETTINGS: Settings = {
   includeWorktreeTool: true,
   topicMarkingEnabled: true,
   recentModels: [],
-  memoryReminderInterval: 25, // DEPRECATED: use reflection* fields
-  reflectionTrigger: "step-count",
-  reflectionStepCount: 25,
-  reflectionMerge: "auto",
-  reflectionMergeInstructions: "",
+  memoryReminderInterval: 0, // DEPRECATED: use reflection* fields
+  reflectionOnCompaction: DEFAULT_REFLECTION_ON_COMPACTION,
+  reflectionEveryUserMessages: DEFAULT_REFLECTION_EVERY_USER_MESSAGES,
+  reflectionTimeoutMinutes: DEFAULT_REFLECTION_TIMEOUT_MINUTES,
+  reflectionDeleteSessionOnSuccess:
+    DEFAULT_REFLECTION_DELETE_SESSION_ON_SUCCESS,
 };
 
 const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {};
@@ -202,6 +226,39 @@ const SETTINGS_BASE_URL_ENV = "HARUYUKI_SETTINGS_BASE_URL";
 
 function isSubagentProcess(): boolean {
   return process.env.HARUYUKI_CODE_AGENT_ROLE === "subagent";
+}
+
+/**
+ * F-03 §5.14.3: fold the retired reflection keys onto the two switches.
+ *
+ * Runs on the raw object read from disk (not on defaults), so "absent" still
+ * means "not configured". New keys always win, which makes the migration
+ * idempotent across restarts and lets a replayed file produce the same result.
+ * Returns whether anything changed, so the load path can persist the result.
+ */
+function migrateLegacyReflectionKeysInPlace(
+  raw: Record<string, unknown>,
+): boolean {
+  const migrated = migrateLegacyReflectionKeys({
+    memoryReminderInterval: raw.memoryReminderInterval,
+    trigger: raw.reflectionTrigger,
+    stepCount: raw.reflectionStepCount,
+  });
+  const storedKeys: Record<string, string> = {
+    onCompaction: "reflectionOnCompaction",
+    everyUserMessages: "reflectionEveryUserMessages",
+    timeoutMinutes: "reflectionTimeoutMinutes",
+    deleteSessionOnSuccess: "reflectionDeleteSessionOnSuccess",
+  };
+  let changed = false;
+  for (const [key, value] of Object.entries(migrated)) {
+    const storedKey = storedKeys[key];
+    if (storedKey && raw[storedKey] === undefined) {
+      raw[storedKey] = value;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 export function shouldPersistSessionState(): boolean {
@@ -389,6 +446,7 @@ class SettingsManager {
 
     const settingsPath = this.getSettingsPath();
     let shouldRollbackAutoConversationTitles = false;
+    const migratedReflectionKeys: string[] = [];
 
     try {
       // Check if settings file exists
@@ -424,6 +482,21 @@ class SettingsManager {
             "autoConversationTitlesRollbackApplied",
           );
         }
+        // F-03: retire `reflectionTrigger`/`reflectionStepCount` by migrating
+        // them onto the two switches before anything resolves settings.
+        if (migrateLegacyReflectionKeysInPlace(loadedSettingsRaw)) {
+          for (const key of [
+            "reflectionOnCompaction",
+            "reflectionEveryUserMessages",
+            "reflectionTimeoutMinutes",
+            "reflectionDeleteSessionOnSuccess",
+          ]) {
+            if (loadedSettingsRaw[key] !== undefined) {
+              migratedReflectionKeys.push(key);
+            }
+          }
+          this.markDirty(...migratedReflectionKeys);
+        }
         // Merge with defaults in case new fields were added
         this.settings = {
           ...DEFAULT_SETTINGS,
@@ -436,7 +509,10 @@ class SettingsManager {
 
       this.initialized = true;
 
-      if (shouldRollbackAutoConversationTitles) {
+      if (
+        shouldRollbackAutoConversationTitles ||
+        migratedReflectionKeys.length
+      ) {
         try {
           await this.persistSettings();
         } catch {
@@ -793,13 +869,33 @@ class SettingsManager {
 
       const content = await readFile(settingsPath);
       const rawSettings = JSON.parse(content) as Record<string, unknown>;
+      const migratedReflectionKeys =
+        migrateLegacyReflectionKeysInPlace(rawSettings);
 
       const projectSettings: ProjectSettings = {
         hooks: rawSettings.hooks as HooksConfig | undefined,
         windowTitle: rawSettings.windowTitle as WindowTitleConfig | undefined,
+        reflectionOnCompaction: rawSettings.reflectionOnCompaction as
+          | boolean
+          | undefined,
+        reflectionEveryUserMessages: rawSettings.reflectionEveryUserMessages as
+          | number
+          | undefined,
+        reflectionTimeoutMinutes: rawSettings.reflectionTimeoutMinutes as
+          | number
+          | undefined,
+        reflectionDeleteSessionOnSuccess:
+          rawSettings.reflectionDeleteSessionOnSuccess as boolean | undefined,
       };
 
       this.projectSettings.set(workingDirectory, projectSettings);
+      if (migratedReflectionKeys) {
+        try {
+          await this.persistProjectSettings(workingDirectory);
+        } catch {
+          // Best-effort migration write only; do not fail the load path.
+        }
+      }
       return { ...projectSettings };
     } catch (error) {
       console.error("Error loading project settings, using defaults:", error);
@@ -840,6 +936,21 @@ class SettingsManager {
       }
       if ("windowTitle" in updates) {
         globalUpdates.windowTitle = updates.windowTitle;
+      }
+      if ("reflectionOnCompaction" in updates) {
+        globalUpdates.reflectionOnCompaction = updates.reflectionOnCompaction;
+      }
+      if ("reflectionEveryUserMessages" in updates) {
+        globalUpdates.reflectionEveryUserMessages =
+          updates.reflectionEveryUserMessages;
+      }
+      if ("reflectionTimeoutMinutes" in updates) {
+        globalUpdates.reflectionTimeoutMinutes =
+          updates.reflectionTimeoutMinutes;
+      }
+      if ("reflectionDeleteSessionOnSuccess" in updates) {
+        globalUpdates.reflectionDeleteSessionOnSuccess =
+          updates.reflectionDeleteSessionOnSuccess;
       }
       if (Object.keys(globalUpdates).length > 0) {
         this.updateSettings(globalUpdates);
@@ -1025,10 +1136,13 @@ class SettingsManager {
       for (const key of OBSOLETE_SETTINGS_KEYS) {
         delete localSettingsRaw[key];
       }
+      // F-03: migrate retired reflection keys before this object is used.
+      const migratedReflectionKeys =
+        migrateLegacyReflectionKeysInPlace(localSettingsRaw);
       const localSettings = localSettingsRaw as unknown as LocalProjectSettings;
 
       this.localProjectSettings.set(workingDirectory, localSettings);
-      if (hadLegacyKeys) {
+      if (hadLegacyKeys || migratedReflectionKeys) {
         try {
           await this.persistLocalProjectSettings(workingDirectory);
         } catch {

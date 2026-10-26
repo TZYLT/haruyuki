@@ -1,21 +1,32 @@
 import { parseModCommandArgv } from "@/cli/mods/command-runtime";
 
-type ReflectCommandArgs =
-  | { instruction?: string; kind: "single" }
-  | { instruction?: string; kind: "recent"; limit: number }
-  | { conversationIds: string[]; instruction?: string; kind: "conversations" }
-  | { instruction?: string; kind: "auto" };
+/**
+ * `/reflect` (and its `/dream` and `/reflection` spellings) accepts one
+ * parameter. F-03 removed the cross-conversation modes — reflection always
+ * reflects the current conversation — so the retired flags fail loudly with
+ * the current usage instead of silently reflecting the wrong thing.
+ */
+export interface ReflectCommandArgs {
+  instruction?: string;
+}
 
-function isReflectCommandFlag(value: string): boolean {
+export const REFLECT_COMMAND_USAGE = "Usage: /reflect [--instruction TEXT]";
+
+function isFlagToken(value: string): boolean {
   return (
-    value === "--" ||
-    value === "--auto" ||
-    value === "--conversation" ||
     value === "--instruction" ||
-    value === "--instructions" ||
-    value === "--recent" ||
     value === "-i" ||
-    value.startsWith("--instruction=")
+    value.startsWith("--instruction=") ||
+    value === "--auto" ||
+    value === "--recent" ||
+    value === "--conversation" ||
+    value === "--instructions"
+  );
+}
+
+function rejectRetiredFlag(flag: string): never {
+  throw new Error(
+    `${flag} is no longer supported: reflection always reflects the current conversation. ${REFLECT_COMMAND_USAGE}`,
   );
 }
 
@@ -24,100 +35,52 @@ export function parseReflectCommandArgs(input: string): ReflectCommandArgs {
   const command = trimmed.split(/\s+/, 1)[0] ?? "/reflect";
   const parts = parseModCommandArgv(trimmed.slice(command.length).trim());
   if (parts.length === 0) {
-    return { kind: "single" };
+    return {};
   }
 
-  let recentLimit: number | null = null;
-  const conversationIds: string[] = [];
   const instructions: string[] = [];
-  let auto = false;
   for (let index = 0; index < parts.length; index += 1) {
     const part = parts[index];
     if (!part) continue;
-    if (
-      part === "--instruction" ||
-      part === "--instructions" ||
-      part === "-i"
-    ) {
-      let instructionEnd = index + 1;
-      while (instructionEnd < parts.length) {
-        const instructionPart = parts[instructionEnd];
-        if (!instructionPart || isReflectCommandFlag(instructionPart)) break;
-        instructionEnd += 1;
+    if (part === "--instruction" || part === "-i") {
+      // The instruction runs to the next flag, so it keeps spaces without
+      // requiring quotes.
+      let end = index + 1;
+      while (end < parts.length) {
+        const next = parts[end];
+        if (!next || isFlagToken(next)) break;
+        end += 1;
       }
       const instruction = parts
-        .slice(index + 1, instructionEnd)
+        .slice(index + 1, end)
         .join(" ")
         .trim();
       if (!instruction) {
-        throw new Error("Usage: /reflect --instruction <instruction>");
+        throw new Error(REFLECT_COMMAND_USAGE);
       }
       instructions.push(instruction);
-      index = instructionEnd - 1;
+      index = end - 1;
       continue;
     }
     if (part.startsWith("--instruction=")) {
       const instruction = part.slice("--instruction=".length).trim();
       if (!instruction) {
-        throw new Error("Usage: /reflect --instruction <instruction>");
+        throw new Error(REFLECT_COMMAND_USAGE);
       }
       instructions.push(instruction);
       continue;
     }
-    if (part === "--") {
-      const instruction = parts
-        .slice(index + 1)
-        .join(" ")
-        .trim();
-      if (!instruction) {
-        throw new Error("Usage: /reflect -- <instruction>");
-      }
-      instructions.push(instruction);
-      break;
+    if (
+      part === "--auto" ||
+      part === "--recent" ||
+      part === "--conversation" ||
+      part === "--instructions"
+    ) {
+      rejectRetiredFlag(part);
     }
-    if (part === "--auto") {
-      auto = true;
-      continue;
-    }
-    if (part === "--recent") {
-      const raw = parts[index + 1];
-      const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
-      if (!Number.isFinite(parsed) || parsed <= 0) {
-        throw new Error("Usage: /reflect --recent <positive integer>");
-      }
-      recentLimit = parsed;
-      index += 1;
-      continue;
-    }
-    if (part === "--conversation") {
-      const conversationId = parts[index + 1];
-      if (!conversationId) {
-        throw new Error("Usage: /reflect --conversation <conversation-id>");
-      }
-      conversationIds.push(conversationId);
-      index += 1;
-      continue;
-    }
-    throw new Error(
-      "Usage: /reflect [--recent N | --conversation <id> ... | --auto] [--instruction <instruction>]",
-    );
+    throw new Error(`Unexpected argument "${part}". ${REFLECT_COMMAND_USAGE}`);
   }
 
   const instruction = instructions.join("\n").trim() || undefined;
-  const modes = [recentLimit !== null, conversationIds.length > 0, auto].filter(
-    Boolean,
-  ).length;
-  if (modes > 1) {
-    throw new Error("Use only one of --recent, --conversation, or --auto.");
-  }
-  if (auto) {
-    return { instruction, kind: "auto" };
-  }
-  if (recentLimit !== null) {
-    return { instruction, kind: "recent", limit: recentLimit };
-  }
-  if (conversationIds.length > 0) {
-    return { conversationIds, instruction, kind: "conversations" };
-  }
-  return { instruction, kind: "single" };
+  return { instruction };
 }

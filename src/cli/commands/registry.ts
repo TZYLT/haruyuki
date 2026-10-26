@@ -163,14 +163,14 @@ export const commands: Record<string, Command> = {
     },
   },
   "/dream": {
-    desc: "Reflect on memory (alias for /reflect; Cloud reflects this conversation)",
+    desc: "Reflect on this conversation's memory (alias for /reflect)",
     order: 49,
-    args: "[--recent N | --conversation ID ... | --auto] [--instruction TEXT]",
+    args: "[--instruction TEXT]",
     handler: handleReflectionCommand,
   },
   "/reflect": {
-    desc: "Launch reflection (/reflect [--recent N | --conversation ID ... | --auto] [--instruction TEXT])",
-    args: "[--recent N | --conversation ID ... | --auto] [--instruction TEXT]",
+    desc: "Launch reflection on this conversation (/reflect [--instruction TEXT])",
+    args: "[--instruction TEXT]",
     order: 50,
     handler: handleReflectionCommand,
   },
@@ -207,7 +207,7 @@ export const commands: Record<string, Command> = {
     },
   },
   "/sleeptime": {
-    desc: "Configure sleep-time reflection trigger and merge settings",
+    desc: "Configure sleep-time reflection triggers and limits",
     order: 15.5,
     noArgs: true,
     handler: () => {

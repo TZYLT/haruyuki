@@ -22,7 +22,6 @@ import {
   isActiveMemfsEnabled,
   isLocalMemfsActive,
 } from "@/agent/memory-runtime";
-import { buildReflectionMemoryScope } from "@/agent/memory-worktree";
 import { sendMessageStreamWithBackend } from "@/agent/message";
 import {
   detectPersonalityFromPersonaFile,
@@ -53,29 +52,15 @@ import {
   gatherInitGitContext,
 } from "@/cli/helpers/init-command";
 import { buildLogoutSuccessMessage } from "@/cli/helpers/logout-message";
+import { getReflectionSettings } from "@/cli/helpers/memory-reminder";
 import {
   buildMessageContentFromDisplay,
   clearPlaceholdersInText,
 } from "@/cli/helpers/paste-registry";
 import { resolveReasoningTabToggleCommand } from "@/cli/helpers/reasoning-tab-toggle";
 import { parseReflectCommandArgs } from "@/cli/helpers/reflect-command";
-import { finalizeMultiReflectionCompletion } from "@/cli/helpers/reflection-completion";
-import {
-  AUTO_REFLECTION_DESCRIPTION,
-  finalizeReflectionMemoryWorktreeLaunch,
-  getReflectionLaunchSkippedMessage,
-  getReflectionMergeLaunchOptions,
-  launchReflectionSubagent,
-  prepareReflectionMemoryWorktreeLaunch,
-  releaseReflectionLaunch,
-  tryReserveReflectionLaunch,
-} from "@/cli/helpers/reflection-launcher";
-import {
-  buildMultiReflectionPayload,
-  buildReflectionAutoPayload,
-  buildReflectionSelectorPrompt,
-  readReflectionAutoSelection,
-} from "@/cli/helpers/reflection-transcript";
+import { launchReflectionSubagent } from "@/cli/helpers/reflection-launcher";
+import { recordReflectionUserMessage } from "@/cli/helpers/reflection-transcript";
 import {
   estimateSystemTokens,
   setSystemPromptDoctorState,
@@ -145,6 +130,29 @@ async function findCustomCommandByName(
 ): Promise<CustomCommand | undefined> {
   const { findCustomCommand } = await import("@/cli/commands/custom.js");
   return findCustomCommand(commandName);
+}
+
+/**
+ * F-03's frozen launcher skip reasons, in the user's words. A skipped manual
+ * launch is a result, not an error: the input was valid, reflection just could
+ * not start right now.
+ */
+function formatReflectionLaunchFailure(reason: string): string {
+  switch (reason) {
+    case "memfs_disabled":
+      return "Reflection needs the memory filesystem to be enabled for this agent.";
+    case "lock_busy":
+    case "already_active":
+      return "A reflection is already running for this agent.";
+    case "retry_backoff":
+      return "Reflection is backing off after a recent failure. Try again later.";
+    case "configuration_error":
+      return "Reflection is paused because of a configuration error.";
+    case "fork_failed":
+      return "Could not create the reflection session.";
+    default:
+      return `Failed to start reflection agent: ${reason}`;
+  }
 }
 
 export function useSubmitHandler(ctx: SubmitHandlerContext) {
@@ -2239,21 +2247,12 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           return { submitted: true };
         }
 
-        // All manual aliases resolve ownership before entering any legacy mode.
+        // F-03: reflection is manual or trigger-driven, and always reflects
+        // this conversation. The cross-conversation modes were removed, so the
+        // parser rejects them (with the current usage) before any launch work.
         if (/^\/(dream|reflect|reflection)(?:\s|$)/.test(trimmed)) {
           const agentId = commandScope.agentId;
           const cmd = commandRunner.start(msg, "Starting reflection...");
-          const reflectionConversationId =
-            commandScope.conversationId ?? "default";
-
-          let reflectionReserved = false;
-          let reflectionReservationDelegated = false;
-          const releaseReflectionReservation = () => {
-            if (!reflectionReserved) return;
-            releaseReflectionLaunch(agentId);
-            reflectionReserved = false;
-          };
-
           try {
             const output = await requestCloudReflectionRun(
               commandScope,
@@ -2263,324 +2262,30 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
               cmd.finish(output, true);
               return { submitted: true };
             }
-            if (!isActiveMemfsEnabled(commandScope.agentId)) {
+            // Parse first: a retired flag must report the new usage even when
+            // MemFS happens to be disabled for this agent.
+            const reflectArgs = parseReflectCommandArgs(trimmed);
+            if (!isActiveMemfsEnabled(agentId)) {
               cmd.fail("Memory filesystem is not enabled.");
               return { submitted: true };
             }
-            const reflectArgs = parseReflectCommandArgs(trimmed);
-
-            if (reflectArgs.kind === "single") {
-              const result = await launchReflectionSubagent(
-                {
-                  agentId,
-                  conversationId: reflectionConversationId,
-                  memfsEnabled: isActiveMemfsEnabled(agentId),
-                  triggerSource: "manual",
-                  description: AUTO_REFLECTION_DESCRIPTION,
-                  instruction: reflectArgs.instruction,
-                  completionConversationId: () => conversationIdRef.current,
-                  onCompletionMessage: (completionMessage) => {
-                    appendTaskNotificationEvents([completionMessage]);
-                  },
-                  feedbackContext: {
-                    parentAgentName: agentName,
-                    parentAgentDescription: agentDescription,
-                    surface: "letta_code_tui",
-                  },
-                },
-                { isCutover: async () => false },
-              ); // Use the captured ownership decision.
-
-              if (!result.launched) {
-                const skippedMessage = getReflectionLaunchSkippedMessage(
-                  result.reason,
-                );
-                if (skippedMessage) {
-                  cmd.fail(skippedMessage);
-                } else {
-                  const errorDetails = formatErrorDetails(
-                    result.error ?? "Unknown error",
-                    agentId,
-                  );
-                  cmd.fail(`Failed to start reflection agent: ${errorDetails}`);
-                }
-                return { submitted: true };
-              }
-
-              cmd.finish(
-                `Reflecting on the recent conversation. View the transcript here: ${result.payloadPath}`,
-                true,
-              );
-              return { submitted: true };
-            }
-
-            if (!tryReserveReflectionLaunch(agentId)) {
-              cmd.fail(
-                "A reflection agent is already running in the background.",
-              );
-              return { submitted: true };
-            }
-            reflectionReserved = true;
-
-            if (reflectArgs.kind === "auto") {
-              const autoPayload = await buildReflectionAutoPayload({
-                agentId,
-                currentConversationId: reflectionConversationId,
-                instruction: reflectArgs.instruction,
-              });
-              if (!autoPayload) {
-                releaseReflectionReservation();
-                cmd.fail("No transcript candidates found for auto selection.");
-                return { submitted: true };
-              }
-
-              const { spawnBackgroundSubagentTask } = await import(
-                "@/tools/impl/task"
-              );
-              const { subagentId: selectorSubagentId } =
-                spawnBackgroundSubagentTask({
-                  subagentType: "reflection",
-                  prompt: buildReflectionSelectorPrompt({
-                    instruction: reflectArgs.instruction,
-                  }),
-                  description: "Selecting reflection transcripts",
-                  silentCompletion: true,
-                  transcriptPath: autoPayload.candidatesPath,
-                  parentScope: {
-                    agentId,
-                    conversationId: reflectionConversationId,
-                  },
-                  onComplete: async ({ success, error, report }) => {
-                    if (!success) {
-                      releaseReflectionReservation();
-                      appendTaskNotificationEvents([
-                        `Automatic reflection selection failed: ${error ?? "selector failed"}`,
-                      ]);
-                      return;
-                    }
-
-                    let finalReflectionSpawned = false;
-                    try {
-                      const selectedConversations =
-                        await readReflectionAutoSelection({
-                          selectionReport: report,
-                          candidates: autoPayload.candidates,
-                        });
-                      if (selectedConversations.length === 0) {
-                        releaseReflectionReservation();
-                        appendTaskNotificationEvents([
-                          "Automatic reflection selected no transcript candidates.",
-                        ]);
-                        return;
-                      }
-
-                      const autoReflectionPayload =
-                        await buildMultiReflectionPayload({
-                          agentId,
-                          selectionPolicy: {
-                            mode: "auto-selected",
-                            selectedConversations,
-                            candidatesPath: autoPayload.candidatesPath,
-                          },
-                          instruction: reflectArgs.instruction,
-                        });
-                      if (!autoReflectionPayload) {
-                        releaseReflectionReservation();
-                        appendTaskNotificationEvents([
-                          "Automatic reflection selected transcript candidates, but no transcript content was available.",
-                        ]);
-                        return;
-                      }
-
-                      const { worktree, reflectionPrompt } =
-                        await prepareReflectionMemoryWorktreeLaunch({
-                          agentId,
-                          instruction: reflectArgs.instruction,
-                        });
-
-                      spawnBackgroundSubagentTask({
-                        subagentType: "reflection",
-                        prompt: reflectionPrompt,
-                        description: "Reflecting on auto-selected transcripts",
-                        silentCompletion: true,
-                        transcriptPath: autoReflectionPayload.payloadPath,
-                        memoryScope: buildReflectionMemoryScope(worktree),
-                        parentScope: {
-                          agentId,
-                          conversationId: reflectionConversationId,
-                        },
-                        onComplete: async ({
-                          success: reflectionSuccess,
-                          error: reflectionError,
-                          agentId: reflectionAgentId,
-                          model: reflectionModel,
-                        }) => {
-                          try {
-                            telemetry.trackReflectionEnd(
-                              "manual",
-                              reflectionSuccess,
-                              {
-                                subagentId: reflectionAgentId ?? undefined,
-                                conversationId: reflectionConversationId,
-                                error: reflectionError,
-                                model: reflectionModel,
-                              },
-                            );
-                            const { completionSuccess, completionMessage } =
-                              await finalizeReflectionMemoryWorktreeLaunch({
-                                worktree,
-                                subagentSuccess: reflectionSuccess,
-                                subagentError: reflectionError,
-                                agentId,
-                                conversationId: conversationIdRef.current,
-                                subagentAgentId: reflectionAgentId ?? undefined,
-                                model: reflectionModel,
-                                ...getReflectionMergeLaunchOptions(agentId),
-                                telemetryContext: { triggerSource: "manual" },
-                              });
-                            await finalizeMultiReflectionCompletion(
-                              agentId,
-                              autoReflectionPayload.manifest,
-                              completionSuccess,
-                            );
-                            appendTaskNotificationEvents([completionMessage]);
-                          } finally {
-                            releaseReflectionReservation();
-                          }
-                        },
-                      });
-                      reflectionReservationDelegated = true;
-                      finalReflectionSpawned = true;
-                      telemetry.trackReflectionStart("manual", {
-                        conversationId: reflectionConversationId,
-                        startMessageId: autoReflectionPayload.startMessageId,
-                        endMessageId: autoReflectionPayload.endMessageId,
-                      });
-                      appendTaskNotificationEvents([
-                        `Automatic reflection selected ${selectedConversations.length} transcript(s); launched reflection. Payload: ${autoReflectionPayload.payloadPath}`,
-                      ]);
-                    } catch (selectionError) {
-                      if (!finalReflectionSpawned) {
-                        releaseReflectionReservation();
-                      }
-                      const errorDetails = formatErrorDetails(
-                        selectionError,
-                        agentId,
-                      );
-                      appendTaskNotificationEvents([
-                        `Automatic reflection failed after selection: ${errorDetails}`,
-                      ]);
-                    }
-                  },
-                });
-              reflectionReservationDelegated = true;
-
-              telemetry.trackReflectionStart("manual", {
-                subagentId: selectorSubagentId,
-                conversationId: reflectionConversationId,
-              });
-              cmd.finish(
-                `Reviewing ${autoPayload.candidates.candidates.length} candidate transcript(s) for reflection. View the transcript candidates here: ${autoPayload.candidatesPath}`,
-                true,
-              );
-              return { submitted: true };
-            }
-
-            const reflectionPayload = await buildMultiReflectionPayload({
+            const reflectionSettings = getReflectionSettings(agentId);
+            const result = await launchReflectionSubagent({
               agentId,
-              selectionPolicy:
-                reflectArgs.kind === "recent"
-                  ? { mode: "recent", limit: reflectArgs.limit }
-                  : {
-                      mode: "explicit-conversations",
-                      conversationIds: reflectArgs.conversationIds,
-                    },
+              conversationId: commandScope.conversationId ?? "default",
+              memfsEnabled: isActiveMemfsEnabled(agentId),
+              triggerSource: "manual",
               instruction: reflectArgs.instruction,
+              reflectionSettings: {
+                timeoutMinutes: reflectionSettings.timeoutMinutes,
+              },
             });
-
-            if (!reflectionPayload) {
-              releaseReflectionReservation();
-              cmd.fail(
-                "No transcript content found for the selected conversations.",
-              );
+            if (!result.launched) {
+              cmd.fail(formatReflectionLaunchFailure(result.reason));
               return { submitted: true };
             }
-
-            const { worktree, reflectionPrompt } =
-              await prepareReflectionMemoryWorktreeLaunch({
-                agentId,
-                instruction: reflectArgs.instruction,
-              });
-            const {
-              spawnBackgroundSubagentTask,
-              waitForBackgroundSubagentAgentId,
-            } = await import("@/tools/impl/task");
-            const { subagentId } = spawnBackgroundSubagentTask({
-              subagentType: "reflection",
-              prompt: reflectionPrompt,
-              description: "Reflecting on conversation",
-              silentCompletion: true,
-              transcriptPath: reflectionPayload.payloadPath,
-              memoryScope: buildReflectionMemoryScope(worktree),
-              parentScope: {
-                agentId,
-                conversationId: reflectionConversationId,
-              },
-              onComplete: async ({
-                success,
-                error,
-                agentId: reflectionAgentId,
-                model: reflectionModel,
-              }) => {
-                try {
-                  telemetry.trackReflectionEnd("manual", success, {
-                    subagentId: reflectionAgentId ?? undefined,
-                    conversationId: reflectionConversationId,
-                    error,
-                    model: reflectionModel,
-                  });
-                  const { completionSuccess, completionMessage } =
-                    await finalizeReflectionMemoryWorktreeLaunch({
-                      worktree,
-                      subagentSuccess: success,
-                      subagentError: error,
-                      agentId,
-                      conversationId: conversationIdRef.current,
-                      subagentAgentId: reflectionAgentId ?? undefined,
-                      model: reflectionModel,
-                      ...getReflectionMergeLaunchOptions(agentId),
-                      telemetryContext: { triggerSource: "manual" },
-                    });
-                  await finalizeMultiReflectionCompletion(
-                    agentId,
-                    reflectionPayload.manifest,
-                    completionSuccess,
-                  );
-                  appendTaskNotificationEvents([completionMessage]);
-                } finally {
-                  releaseReflectionReservation();
-                }
-              },
-            });
-            reflectionReservationDelegated = true;
-            const reflectionAgentId = await waitForBackgroundSubagentAgentId(
-              subagentId,
-              1000,
-            );
-            telemetry.trackReflectionStart("manual", {
-              subagentId: reflectionAgentId ?? undefined,
-              conversationId: reflectionConversationId,
-              startMessageId: reflectionPayload.startMessageId,
-              endMessageId: reflectionPayload.endMessageId,
-            });
-            cmd.finish(
-              `Reflecting on ${reflectionPayload.manifest.transcripts.length} transcript(s). View the payload here: ${reflectionPayload.payloadPath}`,
-              true,
-            );
+            cmd.finish("Reflection started for this conversation.", true);
           } catch (error) {
-            if (!reflectionReservationDelegated) {
-              releaseReflectionReservation();
-            }
             const errorDetails = formatErrorDetails(error, agentId);
             cmd.fail(`Failed to start reflection agent: ${errorDetails}`);
           }
@@ -3052,6 +2757,23 @@ ${SYSTEM_REMINDER_CLOSE}
         content: messageContent as unknown as MessageCreate["content"],
         otid: userOtid,
       });
+
+      // F-03 §5.5.2: one count per submitted user message, for this
+      // conversation. System-only input (task notifications) is not a user
+      // message, and slash commands returned above. The count is awaited so it
+      // is on disk before the turn's post-turn trigger reads it.
+      if (!isSystemOnly && userTextForInput.length > 0 && agentId) {
+        try {
+          await recordReflectionUserMessage(agentId, conversationId);
+        } catch (error) {
+          debugWarn(
+            "memory",
+            `Failed to record reflection user message: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
 
       const finishTurn = async () => {
         await processConversation(initialInput, {

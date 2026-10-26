@@ -1,40 +1,39 @@
 import { describe, expect, test } from "bun:test";
-import { parseReflectCommandArgs } from "./reflect-command";
+import {
+  parseReflectCommandArgs,
+  REFLECT_COMMAND_USAGE,
+} from "./reflect-command";
 
 describe.each(["dream", "reflect", "reflection"])("/%s arguments", (alias) => {
-  test("preserves existing Code-managed modes and instructions", () => {
-    expect(parseReflectCommandArgs(`/${alias}`)).toEqual({ kind: "single" });
+  test("accepts the instruction parameter in its supported spellings", () => {
+    expect(parseReflectCommandArgs(`/${alias}`)).toEqual({});
     expect(
-      parseReflectCommandArgs(
-        `/${alias} --recent 2 --instruction "remember this"`,
-      ),
-    ).toEqual({ kind: "recent", limit: 2, instruction: "remember this" });
+      parseReflectCommandArgs(`/${alias} --instruction remember this`),
+    ).toEqual({ instruction: "remember this" });
     expect(
-      parseReflectCommandArgs(
-        `/${alias} --conversation conv-a --conversation conv-b`,
-      ),
-    ).toEqual({
-      kind: "conversations",
-      conversationIds: ["conv-a", "conv-b"],
-      instruction: undefined,
-    });
-    expect(
-      parseReflectCommandArgs(`/${alias} --auto -- focus on tools`),
-    ).toEqual({ kind: "auto", instruction: "focus on tools" });
+      parseReflectCommandArgs(`/${alias} --instruction="remember this"`),
+    ).toEqual({ instruction: "remember this" });
     expect(parseReflectCommandArgs(`/${alias} -i remember this`)).toEqual({
-      kind: "single",
       instruction: "remember this",
     });
   });
-  test("rejects incompatible or unsupported arguments", () => {
-    for (const args of [
-      "--auto --recent 2",
-      "--instruction",
-      "--recent 0",
-      "transcript.txt",
-      "--unknown",
-    ]) {
-      expect(() => parseReflectCommandArgs(`/${alias} ${args}`)).toThrow();
+
+  test("rejects the retired cross-conversation parameters with the new usage", () => {
+    for (const flag of ["--recent", "--conversation", "--auto"]) {
+      expect(() => parseReflectCommandArgs(`/${alias} ${flag} 2`)).toThrow(
+        /no longer supported/,
+      );
+      expect(() => parseReflectCommandArgs(`/${alias} ${flag} 2`)).toThrow(
+        REFLECT_COMMAND_USAGE,
+      );
+    }
+  });
+
+  test("rejects malformed arguments", () => {
+    for (const args of ["--instruction", "transcript.txt", "--unknown"]) {
+      expect(() => parseReflectCommandArgs(`/${alias} ${args}`)).toThrow(
+        REFLECT_COMMAND_USAGE,
+      );
     }
   });
 });
