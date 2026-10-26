@@ -8,6 +8,64 @@
 > **版本号谱系说明**：本 fork 早期使用 `0.35.0-better` … `0.36.2-better` 命名；分家后**重起为 `0.1.0`**（见 `0.1.0` 条目）。
 > 因此语义化排序上 `0.36.x-better` 早于 `0.1.0`，这是**刻意的重编号**，不是版本回退。
 
+## [0.4.3] - 2026-10-26
+
+> 反思换了骨架：从「转写文件 + 记忆 worktree + 合并」换成「当前会话的隐藏 fork + 子进程直接写记忆」。
+> 反思拿到的 system prompt、工具清单和模型设置与主会话**逐字节相同**，只多一条任务消息；
+> 它不再产生需要合并的分支，也不再和主会话抢工作区。
+> 同时：触发改成两个独立开关、新增时限与超时收尾、完成即删，反思的花费进 `/usage`。
+
+### 新增
+
+- **隐藏 fork 式反思**：反思跑在当前会话的 `inherited-context` fork 上，只复制当前上下文窗口内的消息
+  （含压缩摘要），system prompt／`client_tools`／model＋model settings 与父会话逐字节一致；
+  子进程用 `--conv` 恢复该 fork，任务消息走 stdin 追加。前缀不重编译，也不改动父会话。
+- **两个独立触发开关**：`reflectionOnCompaction`（默认 **开**）与 `reflectionEveryUserMessages`
+  （默认 **0 = 关**，开启建议 25）；per-agent 可覆盖；三个设置层（global/project/local）都支持。
+  旧键（`reflection*Trigger`／步数计数）一次性迁移，旧计数从 0 重新开始。
+- **`reflectionTimeoutMinutes`**（默认 **3**，范围 **1–60**，全局＋per-agent）：到点先标记 `timeout`，
+  宽限 10s 让当前工具步走完，仍在跑才中止（Windows 走 `taskkill /T /F`）。
+  未提交的记忆改动备份为 `refs/letta-backup/reflection-timeout-<ts>` 与一份 patch，然后丢弃；
+  已提交的内容永不回滚。
+- **`reflectionDeleteSessionOnSuccess`**（默认 **开**）：成功（含 no-op）后删除该反思 fork；
+  失败／超时保留，带状态与 run id。
+- **运行期保护**：反思持记忆锁；主会话收到一条开始提醒、一条结束提醒；
+  Edit／Write／ApplyPatch 写正在反思的记忆仓会被拒绝并给出文案（Read、仓库外、Bash 不拦）。
+- **恢复**：启动时与每次触发前收割死进程留下的锁、abort 卡住的 rebase／merge、清理陈旧 `index.lock`，
+  dirty 工作区先备份再修复，未完成的会话标注 `unfinished`。
+- **用量账本扩展**：`source`／`outcome`／`runId`／`sessionId`／`parentSessionId` 五个可选字段；
+  反思子进程在回合结束时自记（`source: "reflection"`），超时由父进程补一条**零 token** 的
+  `outcome: "timeout"` 行；失败／取消也记。`/usage` 明细新增「Automated tasks」一节，按来源分组。
+- **账单并发安全**：`appendUsageRecord` 与 `rewriteUsageLedger` 共用一把文件锁（等锁上限 60s，
+  拿不到就丢弃并写 debug 日志）；顺手修了 prune 与并发 append 互相吃行的老问题。
+
+### 变更（破坏性请先读）
+
+- **`/reflect` 与 `/dream` 的参数收窄为 `[--instruction TEXT]`**：`--recent`、`--conversation`、`--auto`
+  已删除并报错给出新用法；反思**只对当前会话**生效，不再跨会话、不再有选择器子代理。
+- **Windows 自动反思去门**：全平台默认在压缩时触发，不再需要
+  `HARUYUKI_ENABLE_WINDOWS_AUTO_REFLECTION=1`；已保存的旧开关项会被迁移忽略。
+- **旧链路退役**：反思转写文件（payload）、记忆 worktree 与合并/冲突解决、explicit 集成子代理、
+  multi/选择器反思全部删除，没有双写路径。`protocol_v2` 的 `merge`／`merge_instructions`
+  仅作为桌面兼容 wire 字段保留，内部忽略。
+- **计数升版**：`state.json` 计数从「完成步」改为「用户消息数」并升到 v4，旧值丢弃。
+- **反思提示词换 v3**：人格、职责、登记/不登记、过滤器、放置与归档、技能六操作、提交格式与报告格式
+  全部写在任务消息里（append 式）；未覆盖或冲突时**以核心提示词为准**（persona／系统提示词／技能／既有记忆）。
+- 文档：`/memory config` 现在只管反思触发与时限；`docs/commands.zh-CN.md` 与随包 `haruyuki-guide`
+  的反思、设置、记忆章节同步改写。
+
+### 隐私契约变更
+
+- 用量账本记录新增 `sessionId`／`parentSessionId`（只写 id，不写消息文本、路径与密钥）；
+  文件位置、权限与 180 天保留期不变，本机账本因此可反查会话 id。
+
+### 已知限制
+
+- **Bash 不在硬拒绝范围内**（用户裁定）：反思运行期间主会话仍可用 shell 写记忆，并发写由 git 冲突兜底，
+  这是记录在案的可接受损失。
+- **超时会丢弃未提交的记忆改动**：先备份为 ref＋patch，但备份入口目前只给坐标（查看器与一键回滚未做）。
+- 反思提示词未经真实模型长期验证：L2 实机验收（长对话压缩触发、超时、失败重试、`/usage` 成本）需要人工走一遍。
+
 ## [0.4.2] - 2026-10-26
 
 > 一台机器的数据带走，另一台一条命令放回去：`haruyuki export` / `haruyuki import`。

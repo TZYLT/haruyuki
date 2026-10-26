@@ -66,7 +66,7 @@ to that end.
 | **Prefix freezing** | Changes to prompts, tools, or memory **never silently rewrite context already sent**, so you don't wake up to a terrifying bill; `/context pending` shows what is queued, `/recompile` applies it explicitly |
 | **Topic trimming** | `/topic`, `/topic list`, `/compact` — trim context along topic boundaries you choose, instead of dropping the tail proportionally |
 | **Memory as a file tree** | MemFS: all context (including memory blocks) is tracked by git — diffable, revertible, and pushable to your own remote |
-| **Passive memory** | A reflection agent runs alongside you and organises memory itself; `/reflect`, `/dream`, and `/memory config` control when it fires |
+| **Passive memory** | **Reflection rewritten**: reflection runs as a hidden session on the current context, adds only one task message, and writes the memory repository directly, so it no longer produces conflicting commits; `/reflect`, `/dream`, and `/memory config` control triggers and the time limit; the TUI's `/usage` detail now shows reflection cost under "Automated tasks" |
 | **Local backend** | A single backend mode (`--backend local`): agent, conversations, memory, and transcripts all live on this machine |
 | **Multi-agent** | Any agent can act as another agent's subagent (including built-in subagents such as fork and recall) |
 | **Channels and a local server** | `haruyuki server` provides a local app-server, WebSocket, and Slack/Telegram channels |
@@ -109,7 +109,7 @@ node ./haruyuki.js   # start the interactive UI
 ```
 
 > The build output is a **single-file bundle** (~14.2 MiB) with production dependencies inlined;
-> `--version` should print `0.4.2 (Haruyuki)`. The number comes from `package.json`'s `version`
+> `--version` should print `0.4.3 (Haruyuki)`. The number comes from `package.json`'s `version`
 > and is **inlined at build time**, so changing it requires a rebuild.
 
 ### Option 2 — the npm package (recommended)
@@ -172,7 +172,7 @@ memory.
 
 | Item | Notes |
 |---|---|
-| Windows | **Automatic reflection is off by default** (including a saved `/memory config` setting); manual `/reflect` and `/dream` work. To enable it, set `HARUYUKI_ENABLE_WINDOWS_AUTO_REFLECTION=1` in the process that starts Haruyuki |
+| Reflection | Automatic reflection now runs **on compaction** on every platform (the Windows environment-variable gate is gone). A run longer than `reflectionTimeoutMinutes` (default 3) is aborted and **its uncommitted memory changes are discarded** (backed up first as `refs/letta-backup/*` plus a patch, but there is no one-click restore entry). While a run is active, Edit/Write/ApplyPatch against memory are rejected; Bash is not blocked |
 | Sandboxing | Kernel-level filesystem sandboxing is available only on macOS (seatbelt) and Linux (bwrap); **Windows has no kernel backend** (a code fact — see `src/sandbox/availability.ts`), so the cross-agent memory fence falls back to a static path guard |
 | Legacy flags | `--computer`, `--no-wait`, `--memfs-startup` and similar are still in the help output (upstream compatibility surface); this fork does not promise their cloud semantics work |
 | Multiple platforms untested | This project is developed on Windows and I have no other machines to test on. If you hit a problem, please open an issue |
@@ -220,6 +220,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
+| `0.4.3` | - | **Reflection rewritten**: reflection now runs as a hidden session that writes memory directly, so it no longer produces conflicting commits; triggers became two switches (on compaction / every N user messages), with a time limit and timeout cleanup, and delete-on-success. `/reflect` is narrowed to `--instruction`, and reflection cost appears in the `/usage` detail |
 | `0.4.2` | + | **Data export and import**: snapshot-style export and import of all data. Cross-platform is not guaranteed yet; back up your data before you start, in case something goes wrong |
 | `0.4.1` | + | **Hidden sessions**: sessions that run automatically are hidden automatically |
 | `0.4.0` | + | **Prompt work and a collapsed command surface**: every command name now lives in a hub, and the agent prompts are specialised and tuned. The only **breaking change** in this version |

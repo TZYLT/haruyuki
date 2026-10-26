@@ -19,6 +19,8 @@
 
 本人（开发者）已尽力遵循原项目要求的法律条款，但仍因个人能力有限难免有疏忽之处，如果本项目侵犯了您的权益，请务必联系我以解决问题。
 
+2026.10.26 注：由于本人身体情况，目前开发周期已放缓，会照常处理问题但不再保证功能项更新速率，感谢理解，也欢迎贡献本项目。
+
 ## 一、这个项目是什么
 
 **Haruyuki 是一个本地自有的成本节约型陪伴 agent 运行时，基于 `letta-code` 的深度改造分支。**
@@ -47,7 +49,7 @@ Haruyuki 把 agent 的记忆、身份与行为当作**可以长期演进的资�
 | **前缀冻结** | 提示/工具/记忆的改动**不会静默改写已发出的上下文**，不会让你不知不觉得到超级吓人的账单；`/context pending` 看待应用项，`/recompile` 显式应用 |
 | **话题裁切** | `/topic`、`/topic list`、`/compact` —— 按你选的话题边界裁上下文，而不是默认按比例丢尾巴 |
 | **记忆即文件树** | MemFS：全部上下文（含记忆块）由 git 跟踪，可 diff、可回滚、可推到自己的远端仓库 |
-| **被动记忆** | 反思代理与你并行运行，自己整理记忆；有 `/reflect`、`/dream`、`/memory config` 控制触发方式 |
+| **被动记忆** | **重写反思机制**：反思作为隐藏会话在当前上下文上运行，只多一条任务消息，直接写记忆仓、不再产生冲突提交；`/reflect`、`/dream`、`/memory config` 控制触发与时限；TUI 同步添加相关成本统计（`/usage` 明细「Automated tasks」） |
 | **本地后端** | 单一后端模式（`--backend local`）：agent、会话、记忆、transcript 全在本机 |
 | **多 agent** | 任意 agent 可作为另一个 agent 的 subagent（含 fork、recall 等内置 subagent） |
 | **渠道与本地服务** | `haruyuki server` 提供本地 app-server ＋ WebSocket ＋ Slack/Telegram 渠道 |
@@ -82,7 +84,7 @@ bun run build        # 产出仓根 haruyuki.js（已 gitignore）
 node ./haruyuki.js   # 启动交互界面
 ```
 
-> 构建产物是**单文件 bundle**（约 14.2 MiB），它把生产依赖内联其中；`--version` 应打印 `0.4.2 (Haruyuki)`（版本号取自 `package.json` 的 `version`，且是**构建期内联**——改了版本号必须重新构建才会生效）。
+> 构建产物是**单文件 bundle**（约 14.2 MiB），它把生产依赖内联其中；`--version` 应打印 `0.4.3 (Haruyuki)`（版本号取自 `package.json` 的 `version`，且是**构建期内联**——改了版本号必须重新构建才会生效）。
 
 ### 方式二：npm 包（推荐）
 
@@ -139,7 +141,7 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 
 | 项 | 说明 |
 |---|---|
-| Windows | **自动反思默认关闭**（包含已保存的 `/memory config` 设置）；手动 `/reflect`、`/dream` 可用。要打开自动反思，在启动 Haruyuki 的进程里设 `HARUYUKI_ENABLE_WINDOWS_AUTO_REFLECTION=1` |
+| 反思 | 自动触发默认在**压缩时**运行（全平台，不再有 Windows 环境变量门）；时长超过 `reflectionTimeoutMinutes`（默认 3 分钟）会中止并**丢弃未提交的记忆改动**（先备份为 `refs/letta-backup/*` 与 patch，但没有一键回滚入口）。反思运行期间，主会话用 Edit／Write／ApplyPatch 写记忆会被拒绝，Bash 不拦 |
 | 沙箱 | 内核级文件沙箱只在 macOS（seatbelt）与 Linux（bwrap）可用；**Windows 没有内核后端**（代码事实，见 `src/sandbox/availability.ts`），跨 agent 记忆围栏退回到静态路径守卫 |
 | 遗留接口 | `--computer`、`--no-wait`、`--memfs-startup` 等参数仍在帮助里（上游兼容面），本分支不承诺其云端语义可用 |
 | 多平台验证缺失 | 本项目在 Windows 平台上开发，暂时没有其他系统的机器以供测试，如果您发现了问题，欢迎提交 issue |
@@ -161,6 +163,7 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 - [x] 前缀冻结 -> 提升缓存命中以大幅降低成本
 - [x] 话题标记 -> 更高自由度的上下文裁切
 - [x] 被动记忆召回 -> 提升回复准确度（短期与长期成本变化尚不确定）
+- [x] 反思机制重写 -> 隐藏会话直接写记忆、不再产生冲突提交，反思成本进 `/usage`
 - [ ] 主动会话树机制 -> 提供连续统一的对话体验
 - [x] 重新设计TUI (仍在打磨细节)
 - [ ] 网络访问与webUI
@@ -180,6 +183,7 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 
 | 版本 | npm 上有同版本包 | 更新了什么、有什么好处 |
 |---|---|---|
+| `0.4.3` | - | **反思机制重写**：反思改为隐藏会话直接写记忆，不再产生冲突提交；触发改为「压缩时 / 每 N 条用户消息」两个开关，新增时限与超时收尾、完成即删；`/reflect` 参数收窄为 `--instruction`；反思成本进 `/usage` 明细 |
 | `0.4.2` | + | 增加数据导出导入功能：允许快照式导出导入全部数据，暂不保证跨平台，操作前请务必自行备份，以防数据损坏 |
 | `0.4.1` | + | 增加隐藏会话：自动运行的会话会被自动隐藏 |
 | `0.4.0` | + | **提示词优化，命令面收拢**：命令名全面收拢为 hub，提示词特化与优化。本版唯一的**破坏性变更** |
