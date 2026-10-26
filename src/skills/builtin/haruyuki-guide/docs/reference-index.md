@@ -859,8 +859,8 @@ Commands marked hidden still work but are kept out of autocomplete.
 | `/maintenance` | `<feedback\|bg\|workflows\|install-github-app\|sessions>` | Maintenance: feedback, background shells, workflows, GitHub app, hidden sessions | `src/cli/commands/registry.ts:122` |
 | `/model` | — | Switch model | `src/cli/commands/registry.ts:139` |
 | `/doctor` | `[symptom]` | Investigate an agent issue in this conversation | `src/cli/commands/registry.ts:156` |
-| `/dream` | `[--recent N \| --conversation ID ... \| --auto] [--instruction TEXT]` | Reflect on memory (alias for /reflect; Cloud reflects this conversation) | `src/cli/commands/registry.ts:165` |
-| `/reflect` | `[--recent N \| --conversation ID ... \| --auto] [--instruction TEXT]` | Launch reflection (/reflect [--recent N \| --conversation ID ... \| --auto] [--instruction TEXT]) | `src/cli/commands/registry.ts:171` |
+| `/dream` | `[--instruction TEXT]` | Reflect on this conversation's memory (alias for /reflect) | `src/cli/commands/registry.ts:165` |
+| `/reflect` | `[--instruction TEXT]` | Launch reflection on this conversation (/reflect [--instruction TEXT]) | `src/cli/commands/registry.ts:171` |
 | `/memory` | `<recall\|init\|memfs\|remote\|palace\|config>` | Memory: view, init, filesystem backend, remote, palace, recall | `src/cli/commands/registry.ts:194` |
 | `/search` | — | Search messages across all agents (/search [query]) | `src/cli/commands/registry.ts:245` |
 | `/clear` | — | Clear in-context messages | `src/cli/commands/registry.ts:262` |
@@ -911,7 +911,7 @@ it, so these are the only spellings that run.
 | `/memory memfs` | `[enable\|disable\|sync\|reset]` | Manage the filesystem-backed memory |
 | `/memory remote` | `<set\|unset\|status\|push> [url]` | Push this agent's memory repo to another git remote |
 | `/memory palace` | — | Open the Memory Palace in your browser |
-| `/memory config` | — | Sleep-time reflection trigger and merge settings |
+| `/memory config` | — | Sleep-time reflection triggers and limits |
 | `/messages history` | — | Open the message history (also Ctrl+X h) |
 | `/messages clear` | — | Reset all agent messages (destructive) |
 | `/skill` | — | List the available skills |
