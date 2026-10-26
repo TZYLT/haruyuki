@@ -220,7 +220,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
-| `0.4.3` | - | **Reflection rewritten**: reflection now runs as a hidden session that writes memory directly, so it no longer produces conflicting commits; triggers became two switches (on compaction / every N user messages), with a time limit and timeout cleanup, and delete-on-success. `/reflect` is narrowed to `--instruction`, and reflection cost appears in the `/usage` detail |
+| `0.4.3` | + | **Reflection rewritten**: reflection now runs as a hidden session that writes memory directly, so it no longer produces conflicting commits; The TUI display section will undergo beautification in the future. |
 | `0.4.2` | + | **Data export and import**: snapshot-style export and import of all data. Cross-platform is not guaranteed yet; back up your data before you start, in case something goes wrong |
 | `0.4.1` | + | **Hidden sessions**: sessions that run automatically are hidden automatically |
 | `0.4.0` | + | **Prompt work and a collapsed command surface**: every command name now lives in a hub, and the agent prompts are specialised and tuned. The only **breaking change** in this version |
