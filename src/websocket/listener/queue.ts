@@ -502,7 +502,13 @@ async function drainQueuedMessages(
       }
 
       const { dequeuedBatch, queuedTurn } = consumedQueuedTurn;
-      await recordListenerQueuedUserMessages(runtime, dequeuedBatch);
+      // The counter write is best-effort and must not hold the pump: the first
+      // write in a process creates the transcript directory and takes a file
+      // lock (~180ms measured), which is enough to delay the next queued turn
+      // and to break the queue-handoff timing contract. The turn that is about
+      // to start runs for far longer than the write, so the count still lands
+      // before `end_turn` evaluates the trigger.
+      void recordListenerQueuedUserMessages(runtime, dequeuedBatch);
       emitDequeuedUserMessage(
         turnTransport,
         runtime,
