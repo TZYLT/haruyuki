@@ -1,5 +1,6 @@
 import type { ConversationCreateBody, ConversationUpdateBody } from "@/backend";
 import { readConversationProvenance } from "@/types/conversation-provenance";
+import { readReflectionRunMetadata } from "@/types/reflection-run-metadata";
 import { isRecord } from "@/utils/type-guards";
 import {
   normalizeLocalModelHandle,
@@ -29,6 +30,10 @@ export function createLocalConversationRecord(
   // that copied nothing cannot claim an inherited segment. Forks write those
   // two fields themselves (`LocalStore.forkConversation`).
   const provenance = readConversationProvenance(bodyRecord);
+  // A reflection run's record is written after the fork (the run id exists
+  // before it), but creation accepts it too so a caller that already has the
+  // metadata never needs a second write.
+  const reflection = readReflectionRunMetadata(bodyRecord.reflection);
   return {
     id: conversationId,
     agent_id: agentId,
@@ -61,6 +66,7 @@ export function createLocalConversationRecord(
     ...(provenance.context_mode !== undefined
       ? { context_mode: provenance.context_mode }
       : {}),
+    ...(reflection !== undefined ? { reflection } : {}),
     ...(isStringArray(bodyRecord.tags) ? { tags: bodyRecord.tags } : {}),
     ...(typeof bodyRecord.system === "string"
       ? { system: bodyRecord.system }
@@ -182,6 +188,17 @@ export function updateLocalConversationRecord(
   }
   if (isStringArray(bodyRecord.tags)) {
     next.tags = bodyRecord.tags;
+  }
+  // Additive local field: `reflection` carries the run record (F-03 §5.3.4).
+  // An explicit `null` clears it; a malformed object is ignored so a bad status
+  // write cannot erase a good one.
+  if (bodyRecord.reflection !== undefined) {
+    const reflection = readReflectionRunMetadata(bodyRecord.reflection);
+    if (reflection !== undefined) {
+      next.reflection = reflection;
+    } else if (bodyRecord.reflection === null) {
+      delete next.reflection;
+    }
   }
   return next;
 }

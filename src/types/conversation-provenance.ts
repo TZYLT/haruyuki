@@ -7,6 +7,10 @@
  * `hidden`, so a missing or wrong `origin` can never widen a delete.
  */
 import type { Conversation } from "@letta-ai/letta-client/resources/conversations/conversations";
+import {
+  type ReflectionRunMetadata,
+  readReflectionRunMetadata,
+} from "@/types/reflection-run-metadata";
 import { isRecord } from "@/utils/type-guards";
 
 export type ConversationOrigin =
@@ -32,6 +36,12 @@ export interface ConversationProvenance {
   inherited_message_count?: number | null;
   /** Id of the last projected cloned message; the precise slice cursor. */
   inherited_through_message_id?: string | null;
+  /**
+   * Optional reflection-run record on the conversation itself (F-03 §5.3.4).
+   * Present only on a conversation a reflection run forked; absent means "not a
+   * reflection run", never "unknown status".
+   */
+  reflection?: ReflectionRunMetadata;
 }
 
 /**
@@ -159,6 +169,7 @@ export function readConversationProvenance(
   const inheritedThrough = optionalStringOrNull(
     record.inherited_through_message_id,
   );
+  const reflection = readReflectionRunMetadata(record.reflection);
   return {
     origin,
     ...(parentConversationId !== undefined
@@ -171,6 +182,7 @@ export function readConversationProvenance(
     ...(inheritedThrough !== undefined
       ? { inherited_through_message_id: inheritedThrough }
       : {}),
+    ...(reflection !== undefined ? { reflection } : {}),
   };
 }
 
