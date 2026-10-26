@@ -39,6 +39,10 @@ export function appendTurnUsageRecord(
     contextTokens: usage.contextTokens,
     contextBreakdown: snapshot.contextBreakdown,
     cost: snapshot.cost,
+    // F-03 §5.16.2: a turn the user drove is tagged as such, so the Usage page
+    // can keep automated spend apart from it. Old rows have no source and read
+    // as this same value (ledger §5.16.3).
+    source: "interactive",
     ...(options.cancelled ? { cancelled: true } : {}),
   });
   return appendUsageRecord(record);

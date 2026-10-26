@@ -22,9 +22,12 @@ import {
 } from "@/tools/impl/shell-env";
 import { APP_DIR_NAME, APP_SUBDIRS } from "@/utils/app-paths";
 import {
+  PARENT_CONVERSATION_ENV,
   SUBAGENT_LAUNCH_ENV,
   SUBAGENT_LAUNCH_PROFILE_ENV,
   SUBAGENT_NAME_ENV,
+  USAGE_RUN_ID_ENV,
+  USAGE_SOURCE_ENV,
 } from "@/utils/subagent-launch-marker";
 import { TRANSCRIPT_ROOT_ENV } from "@/utils/transcript-paths";
 import type { SubagentLaunchProfile, SubagentMemoryScope } from ".";
@@ -168,6 +171,17 @@ export interface ComposeSubagentChildEnvOptions {
   subagentName?: string;
   /** Parent-process task ID used to isolate child background output files. */
   subagentId?: string;
+  /**
+   * Automated-usage tag for a harness-launched child (F-03 §5.16.2).
+   *
+   * Set **only** by the launch path that knows the run (reflection today), and
+   * only for that spawn: the child writes its own ledger row from this tag.
+   * Absent means "not an automated run", and a nested launch never inherits its
+   * parent's tag — see the delete below.
+   */
+  usageSource?: string;
+  /** The run the spend belongs to; written next to the source tag. */
+  usageRunId?: string;
 }
 
 function resolveMemorySubagentScratchpad(
@@ -241,13 +255,23 @@ export function composeSubagentChildEnv(
     }),
     // Replace inherited parent addresses even when the new scope is unknown.
     HARUYUKI_PARENT_AGENT_ID: parentAgentId,
-    HARUYUKI_PARENT_CONVERSATION_ID: options.parentConversationId,
+    [PARENT_CONVERSATION_ENV]: options.parentConversationId,
     ...(transcriptPath && { TRANSCRIPT_PATH: transcriptPath }),
   };
 
   // A nested launch must never reuse its parent's assigned creation name.
   delete childEnv[SUBAGENT_NAME_ENV];
   if (options.subagentName) childEnv[SUBAGENT_NAME_ENV] = options.subagentName;
+
+  // Same rule for the automated-usage tag: it describes *this* spawn, so an
+  // inherited value would make a reflection's own worker report reflection
+  // spend it never did. Cleared unconditionally, then set only when asked.
+  delete childEnv[USAGE_SOURCE_ENV];
+  delete childEnv[USAGE_RUN_ID_ENV];
+  const usageSource = options.usageSource?.trim();
+  if (usageSource) childEnv[USAGE_SOURCE_ENV] = usageSource;
+  const usageRunId = options.usageRunId?.trim();
+  if (usageRunId) childEnv[USAGE_RUN_ID_ENV] = usageRunId;
 
   if (backendMode === "local") {
     childEnv.HARUYUKI_LOCAL_BACKEND_EXPERIMENTAL = "1";

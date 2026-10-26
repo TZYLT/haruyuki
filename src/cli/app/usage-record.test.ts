@@ -90,6 +90,10 @@ describe("appendTurnUsageRecord", () => {
     expect(record?.cost?.total).toBe(1);
     // The hour is derived, not supplied, so it must look like one.
     expect(record?.tsHour).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}$/);
+    // F-03 §5.16.2: a turn the user drove is tagged, so automated spend can be
+    // kept apart on the Usage page.
+    expect(record?.source).toBe("interactive");
+    expect(record?.outcome).toBeUndefined();
   });
 
   test("falls back to a placeholder identity rather than dropping the turn", async () => {

@@ -21,6 +21,10 @@ import {
   trackEndTurnNoAssistant,
 } from "@/telemetry/error-reporting";
 import { extractTelemetryInputText } from "@/telemetry/input";
+import {
+  automatedUsageOutcomeOf,
+  recordAutomatedTurnUsage,
+} from "@/usage/automated";
 import { installHeadlessStdoutGuard } from "@/utils/headless-stdout-guard";
 import {
   addToMessageQueue,
@@ -3090,6 +3094,28 @@ export async function handleHeadlessCommand(
     }),
   };
 
+  // F-03 §5.16.2: a child launched for an automated run (a reflection fork
+  // today) records its own spend at the end of its turn. A child without the
+  // tag writes nothing here — the TUI, or whoever spawned it, owns that row.
+  // The write is bounded and never throws, so it cannot fail the turn.
+  await recordAutomatedTurnUsage({
+    agentId: agent.id,
+    model: reportModel ?? "unknown",
+    sessionId: conversationId,
+    outcome: "completed",
+    usage: {
+      prompt: usage.prompt_tokens,
+      cachedInput: usage.cached_input_tokens,
+      cacheWrite: usage.cache_write_tokens,
+      completion: usage.completion_tokens,
+      reasoning: usage.reasoning_tokens,
+      steps: usage.step_count,
+    },
+    wallMs: stats.totalWallMs,
+    apiMs: stats.totalApiMs,
+    contextTokens: stats.usage.contextTokens,
+  });
+
   // Output based on format
   if (outputFormat === "json") {
     const output = {
@@ -4648,6 +4674,30 @@ async function runBidirectionalMode(
             );
           }
         }
+
+        // F-03 §5.16.2 — the bidirectional half of the one-shot write above.
+        // `buffers.usage` is this turn's own accumulator (a fresh buffer per
+        // turn), so the row is per-turn even though the process stays alive.
+        await recordAutomatedTurnUsage({
+          agentId: agent.id,
+          model: effectiveModel ?? agent.llm_config?.model ?? "unknown",
+          sessionId: conversationId,
+          outcome: automatedUsageOutcomeOf(subtype),
+          usage: {
+            prompt: buffers.usage.promptTokens,
+            cachedInput: buffers.usage.cachedInputTokens,
+            cacheWrite: buffers.usage.cacheWriteTokens,
+            completion: buffers.usage.completionTokens,
+            reasoning: buffers.usage.reasoningTokens,
+            steps: buffers.usage.stepCount,
+          },
+          wallMs: durationMs,
+          // The bidirectional result envelope reports 0 for API time because
+          // the stream does not break it out; the ledger says the same rather
+          // than inventing a number.
+          apiMs: 0,
+          contextTokens: buffers.usage.contextTokens,
+        });
 
         const resultMsg: ResultMessage = {
           type: "result",

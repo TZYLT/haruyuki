@@ -7,7 +7,12 @@
  * four weeks by weekday), and the local store keeps no usage at all — its
  * messages carry `emptyLocalUsage()`. A conversation-scoped store also loses
  * history when a conversation is compacted or deleted; the ledger outlives
- * both. Only numbers are written: no conversation id, no message text.
+ * both.
+ *
+ * Since F-03 (§5.16.6) a row may also carry **ids** (`sessionId`,
+ * `parentSessionId`), its `source` and its `outcome`; message text, paths and
+ * secrets are still never written. That is the one deliberate widening of the
+ * original "numbers only" rule, and old rows without it stay readable.
  *
  * Shape and retention are fixed by docs/38 §14.5:
  * - one record per completed turn, aggregated at read time (the heatmap wants
@@ -27,8 +32,11 @@
 import {
   appendFile,
   mkdir,
+  open,
   readFile,
   rename,
+  stat,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -37,6 +45,7 @@ import {
   type AppHomePathOptions,
   appHomePath,
 } from "@/utils/app-paths";
+import { debugLog } from "@/utils/debug";
 import type { UsageContextBreakdown } from "@/utils/usage-context";
 import {
   addUsageCost,
@@ -50,6 +59,72 @@ export const USAGE_RETENTION_DAYS = 180;
 
 /** File name inside the `usage/` subdir of the harness root. */
 export const USAGE_LEDGER_FILE_NAME = "ledger.jsonl";
+
+/**
+ * How long a writer waits for the ledger lock before dropping its row.
+ *
+ * F-03 §5.16.3 fixes the cap: an append may wait, but never indefinitely — and
+ * a row that cannot be written within the window is dropped with a debug line
+ * rather than failing the turn that produced it.
+ */
+export const USAGE_LOCK_TIMEOUT_MS = 60_000;
+
+/** Where the spend came from (F-03 §5.16.1). Absent reads as `interactive`. */
+export type UsageSource =
+  | "interactive"
+  | "reflection"
+  | "dream"
+  | "cron"
+  | "subagent"
+  | "other";
+
+const USAGE_SOURCES: readonly UsageSource[] = [
+  "interactive",
+  "reflection",
+  "dream",
+  "cron",
+  "subagent",
+  "other",
+];
+
+/** The source a record without `source` is read as (old ledgers stay readable). */
+export const DEFAULT_USAGE_SOURCE: UsageSource = "interactive";
+
+/** How the run that spent the tokens ended (F-03 §5.16.1). */
+export type UsageOutcome = "completed" | "timeout" | "failed" | "cancelled";
+
+const USAGE_OUTCOMES: readonly UsageOutcome[] = [
+  "completed",
+  "timeout",
+  "failed",
+  "cancelled",
+];
+
+function isUsageSource(value: unknown): value is UsageSource {
+  return (
+    typeof value === "string" &&
+    (USAGE_SOURCES as readonly string[]).includes(value)
+  );
+}
+
+function isUsageOutcome(value: unknown): value is UsageOutcome {
+  return (
+    typeof value === "string" &&
+    (USAGE_OUTCOMES as readonly string[]).includes(value)
+  );
+}
+
+/** A trimmed, non-empty string, or `undefined` (empty fields are not written). */
+function cleanOptional(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/** The record's effective source: an old row without one is an interactive turn. */
+export function usageSourceOf(record: UsageRecord): UsageSource {
+  return record.source ?? DEFAULT_USAGE_SOURCE;
+}
 
 /** One completed turn. Field names follow docs/38 §14.5. */
 export interface UsageRecord {
@@ -106,6 +181,26 @@ export interface UsageRecord {
    * for anything that wants to separate finished work from interrupted work.
    */
   cancelled?: boolean;
+  /**
+   * Where the spend came from (F-03 §5.16.1).
+   *
+   * Absent in rows written before F-03, and read as `interactive` then — the
+   * ledger's totals must not change because a column was added.
+   */
+  source?: UsageSource;
+  /** How an automated run ended. Interactive turns carry `cancelled` instead. */
+  outcome?: UsageOutcome;
+  /** Stable id of one automated run (reflection: the fork's run id). */
+  runId?: string;
+  /**
+   * Conversation the spend happened in.
+   *
+   * An F-03 privacy-contract change: the ledger used to carry numbers only.
+   * Ids are written, message text and paths never are (§5.16.6).
+   */
+  sessionId?: string;
+  /** Source conversation when the recorded run was a fork of another one. */
+  parentSessionId?: string;
 }
 
 export interface UsageRecordInput {
@@ -125,6 +220,12 @@ export interface UsageRecordInput {
   contextBreakdown?: UsageContextBreakdown;
   cost?: UsageCost;
   cancelled?: boolean;
+  /** See `UsageRecord.source`. `interactive` is written by the TUI's own writer. */
+  source?: UsageSource;
+  outcome?: UsageOutcome;
+  runId?: string;
+  sessionId?: string;
+  parentSessionId?: string;
 }
 
 /** Local hour key, `YYYY-MM-DDTHH`. Sorts lexicographically = chronologically. */
@@ -186,24 +287,131 @@ export function buildUsageRecord(input: UsageRecordInput): UsageRecord {
   if (input.cancelled) {
     record.cancelled = true;
   }
+  // F-03 §5.16.1. Written conditionally so a row never carries an empty string
+  // or a field it has no value for: `{"runId":""}` reads like a real id.
+  if (isUsageSource(input.source)) {
+    record.source = input.source;
+  }
+  if (isUsageOutcome(input.outcome)) {
+    record.outcome = input.outcome;
+  }
+  const runId = cleanOptional(input.runId);
+  if (runId) record.runId = runId;
+  const sessionId = cleanOptional(input.sessionId);
+  if (sessionId) record.sessionId = sessionId;
+  const parentSessionId = cleanOptional(input.parentSessionId);
+  if (parentSessionId) record.parentSessionId = parentSessionId;
   return record;
 }
 
 /**
  * Append one record. Resolves `false` instead of throwing when the ledger
- * cannot be written (no home dir, read-only disk, full disk).
+ * cannot be written (no home dir, read-only disk, full disk) or when the shared
+ * lock cannot be taken within `lockTimeoutMs`.
  */
 export async function appendUsageRecord(
   record: UsageRecord,
-  options: { path?: string } = {},
+  options: { path?: string; lockTimeoutMs?: number } = {},
 ): Promise<boolean> {
   const path = options.path ?? usageLedgerPath();
   try {
     await mkdir(dirname(path), { recursive: true });
-    await appendFile(path, `${JSON.stringify(record)}\n`, "utf8");
-    return true;
   } catch {
     return false;
+  }
+  return withUsageLedgerLock(
+    path,
+    options.lockTimeoutMs ?? USAGE_LOCK_TIMEOUT_MS,
+    async () => {
+      await appendFile(path, `${JSON.stringify(record)}\n`, "utf8");
+    },
+  ).then((outcome) => outcome.locked);
+}
+
+/**
+ * The lock both writers take.
+ *
+ * `appendUsageRecord` and `rewriteUsageLedger` must share it: a lazy prune
+ * rewrites the whole file from a snapshot it read, so an append that lands
+ * between that read and the rename is silently erased. The lock is a sibling
+ * file created with `wx` (exclusive create), which is the one primitive that
+ * is atomic on both Windows and POSIX.
+ *
+ * Waiting is bounded (§5.16.3): a lock nobody can take within the timeout is
+ * dropped with a debug line. A lock older than the timeout is treated as
+ * abandoned (its holder died mid-write) and reaped, otherwise one crashed
+ * writer would make every later append wait the full 60s and then drop.
+ */
+type LockedOutcome<T> = { locked: true; value: T } | { locked: false };
+
+async function withUsageLedgerLock<T>(
+  path: string,
+  waitMs: number,
+  run: () => Promise<T>,
+): Promise<LockedOutcome<T>> {
+  const lockPath = `${path}.lock`;
+  // The deadline is absolute, so polling overhead cannot extend the wait.
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      const handle = await open(lockPath, "wx");
+      try {
+        // Informational only (who holds it); existence is the lock.
+        await handle.writeFile(`${process.pid}\n`, "utf8");
+      } catch {
+        // A body that cannot be written does not invalidate the lock.
+      }
+      await handle.close();
+      break;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") {
+        // Not contention — an unwritable directory, a bad path. Waiting will
+        // not fix it, and the caller already reports the drop.
+        debugLog(
+          "usage",
+          `ledger lock unavailable at ${lockPath}: ${code ?? "unknown error"}`,
+        );
+        return { locked: false };
+      }
+      await reapAbandonedLock(lockPath);
+      if (Date.now() >= deadline) {
+        debugLog(
+          "usage",
+          `dropped a ledger write: the lock ${lockPath} was held for ${waitMs}ms`,
+        );
+        return { locked: false };
+      }
+      const jitter = 5 + Math.floor(Math.random() * 40);
+      await new Promise((resolve) => setTimeout(resolve, jitter));
+    }
+  }
+  try {
+    return { locked: true, value: await run() };
+  } catch {
+    // Best effort: usage is observability, never a critical path.
+    return { locked: false };
+  } finally {
+    try {
+      await unlink(lockPath);
+    } catch {
+      // A missing lock file is already released.
+    }
+  }
+}
+
+/** Remove a lock file left behind by a writer that died mid-write. */
+async function reapAbandonedLock(lockPath: string): Promise<void> {
+  try {
+    const info = await stat(lockPath);
+    if (Date.now() - info.mtimeMs < USAGE_LOCK_TIMEOUT_MS) return;
+  } catch {
+    return;
+  }
+  try {
+    await unlink(lockPath);
+  } catch {
+    // Another waiter reaped it first — the retry loop simply tries again.
   }
 }
 
@@ -261,6 +469,20 @@ function parseUsageRecord(line: string): UsageRecord | null {
   if (value.cancelled === true) {
     record.cancelled = true;
   }
+  // F-03 §5.16.1: an invalid enum or id is dropped to `undefined` — the row
+  // itself must survive, because the numbers in it were still billed.
+  if (isUsageSource(value.source)) {
+    record.source = value.source;
+  }
+  if (isUsageOutcome(value.outcome)) {
+    record.outcome = value.outcome;
+  }
+  const runId = cleanOptional(value.runId);
+  if (runId) record.runId = runId;
+  const sessionId = cleanOptional(value.sessionId);
+  if (sessionId) record.sessionId = sessionId;
+  const parentSessionId = cleanOptional(value.parentSessionId);
+  if (parentSessionId) record.parentSessionId = parentSessionId;
   const breakdown = value.contextBreakdown;
   if (breakdown && typeof breakdown === "object") {
     const parts = breakdown as Record<string, unknown>;
@@ -313,7 +535,7 @@ export function pruneUsageRecords(
   return { kept, dropped: records.length - kept.length };
 }
 
-async function rewriteUsageLedger(
+async function writeUsageLedger(
   path: string,
   records: readonly UsageRecord[],
 ): Promise<void> {
@@ -328,6 +550,56 @@ async function rewriteUsageLedger(
   }
 }
 
+/**
+ * Rewrite the whole file under the shared lock.
+ *
+ * `produce` runs **inside** the lock. For a prune that means re-reading the
+ * file there, so an append that landed between the caller's first read and this
+ * rewrite is not erased by the rewrite — the loss the shared lock exists to
+ * prevent. Returns the records that were actually persisted, or `locked: false`
+ * when the wait ran out (the caller keeps its in-memory answer).
+ */
+async function rewriteUsageLedger(
+  path: string,
+  produce: () => Promise<UsageRecord[]> | UsageRecord[],
+  lockTimeoutMs: number = USAGE_LOCK_TIMEOUT_MS,
+): Promise<{ locked: boolean; records?: UsageRecord[] }> {
+  const outcome = await withUsageLedgerLock(path, lockTimeoutMs, async () => {
+    const records = await produce();
+    await writeUsageLedger(path, records);
+    return records;
+  });
+  if (!outcome.locked) return { locked: false };
+  return { locked: true, records: outcome.value };
+}
+
+/**
+ * Parse every line of the ledger file; malformed lines are skipped.
+ *
+ * `null` (not `[]`) when the file cannot be read at all: a missing file and an
+ * unreadable one are the same "nothing to prune" for a caller, but only the
+ * missing case may be replaced with a fresh file — turning a transient read
+ * error into an empty file would delete the ledger.
+ */
+async function readUsageLedgerFile(
+  path: string,
+): Promise<UsageRecord[] | null> {
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    return null;
+  }
+  const records: UsageRecord[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    const record = parseUsageRecord(line);
+    if (record) records.push(record);
+  }
+  return records;
+}
+
 export interface ReadUsageLedgerOptions {
   path?: string;
   /** Defaults to now; injectable for retention tests. */
@@ -339,6 +611,8 @@ export interface ReadUsageLedgerOptions {
    * old lines at all.
    */
   prune?: boolean;
+  /** How long the prune's rewrite waits for the shared ledger lock. */
+  lockTimeoutMs?: number;
 }
 
 /**
@@ -350,32 +624,28 @@ export async function readUsageLedger(
   options: ReadUsageLedgerOptions = {},
 ): Promise<UsageRecord[]> {
   const path = options.path ?? usageLedgerPath();
-  let text: string;
-  try {
-    text = await readFile(path, "utf8");
-  } catch {
-    return [];
-  }
-  const records: UsageRecord[] = [];
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
-    const record = parseUsageRecord(line);
-    if (record) records.push(record);
-  }
+  const records = (await readUsageLedgerFile(path)) ?? [];
   if (options.prune === false) return records;
-  const { kept, dropped } = pruneUsageRecords(
-    records,
-    options.now ?? new Date(),
-    options.retentionDays ?? USAGE_RETENTION_DAYS,
+  const now = options.now ?? new Date();
+  const retentionDays = options.retentionDays ?? USAGE_RETENTION_DAYS;
+  const { kept, dropped } = pruneUsageRecords(records, now, retentionDays);
+  if (dropped === 0) return kept;
+  // The rewrite re-reads the file **under the lock**: reading first and then
+  // rewriting from that snapshot would erase every append that landed in
+  // between — the exact loss the shared lock exists to prevent. The first read
+  // is the cheap check that a prune is even needed.
+  const outcome = await rewriteUsageLedger(
+    path,
+    async () => {
+      const current = await readUsageLedgerFile(path);
+      // Unreadable (not missing): do not replace a file we could not read.
+      if (!current) throw new Error("usage ledger unreadable");
+      return pruneUsageRecords(current, now, retentionDays).kept;
+    },
+    options.lockTimeoutMs ?? USAGE_LOCK_TIMEOUT_MS,
   );
-  if (dropped > 0) {
-    try {
-      await rewriteUsageLedger(path, kept);
-    } catch {
-      // Keep the in-memory answer even if the cleanup could not be persisted.
-    }
-  }
-  return kept;
+  // Keep the in-memory answer even if the cleanup could not be persisted.
+  return outcome.locked ? (outcome.records ?? kept) : kept;
 }
 
 /** Summed usage over some bucket (an hour, a day, a model). */
@@ -457,4 +727,17 @@ export function aggregateUsageByModel(
   records: readonly UsageRecord[],
 ): Map<string, UsageTotals> {
   return aggregateBy(records, (record) => record.model);
+}
+
+/**
+ * Per-source buckets keyed by `source` (F-03 §5.16.5).
+ *
+ * Old rows have no `source` and are keyed as `interactive`, which is exactly
+ * how they were spent: one ledger, one total, and the automated rows are
+ * separable only where a writer tagged them.
+ */
+export function aggregateUsageBySource(
+  records: readonly UsageRecord[],
+): Map<UsageSource, UsageTotals> {
+  return aggregateBy(records, usageSourceOf) as Map<UsageSource, UsageTotals>;
 }

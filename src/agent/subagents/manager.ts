@@ -14,6 +14,7 @@ import { getScopedMemoryFilesystemRoot } from "@/agent/memory-filesystem";
 import { detectMemoryFormat } from "@/agent/memory-format";
 import recallSubagentPrompt from "@/agent/prompts/recall_subagent.md";
 import recallSubagentLocalPrompt from "@/agent/prompts/recall_subagent_local.md";
+import { getActiveReflectionRun } from "@/agent/reflection-run";
 import { updateSubagent } from "@/agent/subagent-state.js";
 import { wrapSubagentLauncher } from "@/agent/subagents/sandbox";
 import { getDesktopAccessToken } from "@/auth/desktop-credentials";
@@ -382,6 +383,16 @@ async function executeSubagent(
       ),
       USER_CWD: subagentWorkingDirectory,
     };
+    // F-03 §5.16.2: a reflection child records its own spend, so it needs the
+    // source and the run it belongs to. Resolved from the run controller rather
+    // than from the subagent config (which is a static file): the run id exists
+    // only while the parent process is launching, and only one run is active per
+    // agent, which is the same single-writer premise the launcher relies on.
+    // Every other subagent type launches untagged and records nothing.
+    const reflectionRun =
+      type === "reflection" && parentAgentId
+        ? getActiveReflectionRun(parentAgentId)
+        : undefined;
     const childEnv = composeSubagentChildEnv({
       parentProcessEnv,
       backendMode,
@@ -396,6 +407,12 @@ async function executeSubagent(
       inheritedBaseUrl,
       transcriptPath,
       subagentId,
+      ...(reflectionRun
+        ? {
+            usageSource: "reflection",
+            usageRunId: reflectionRun.runId,
+          }
+        : {}),
       subagentName:
         existingAgentId || existingConversationId
           ? undefined
