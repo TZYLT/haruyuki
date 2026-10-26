@@ -58,6 +58,10 @@ import type {
   ReflectionRunMetadata,
   ReflectionRunTriggerSource,
 } from "@/types/reflection-run-metadata";
+import {
+  recordTimedOutReflectionRun,
+  type TimedOutReflectionRunInput,
+} from "@/usage/automated";
 import { debugLog, debugWarn } from "@/utils/debug";
 
 export const AUTO_REFLECTION_DESCRIPTION = "Reflect on recent conversations";
@@ -246,6 +250,11 @@ export interface ReflectionLaunchDependencies {
   memoryFormat?(agentId: string): LocalMemoryFormat;
   deleteConversation?(conversationId: string): Promise<void>;
   writeRunMetadata?(input: WriteReflectionRunMetadataInput): Promise<void>;
+  /**
+   * Test seam for the one row the parent owns: the zero-token marker written
+   * when a run is killed at its deadline (§5.16.4).
+   */
+  recordTimeoutUsage?(input: TimedOutReflectionRunInput): Promise<boolean>;
 }
 
 /**
@@ -578,6 +587,25 @@ export async function launchReflectionSubagent(
             // A timed-out run was already finished by the controller; only a
             // still-running one is ours to finish (§2.4 state machine).
             const current = getReflectionRun(run.runId);
+            // The one row the parent owns: a run killed at its deadline never
+            // ends a child turn, so only this side can put its ending in the
+            // ledger (§5.16.4). Zero tokens by construction — see
+            // `recordTimedOutReflectionRun`.
+            if (current?.status === "timeout") {
+              await writeTimeoutUsage({
+                input: {
+                  runId: run.runId,
+                  agentId,
+                  sessionId: forkConversationId,
+                  parentSessionId: conversationId,
+                  model: model?.trim() || "unknown",
+                  wallMs: Math.max(0, Math.round(durationMs ?? 0)),
+                },
+                writer:
+                  dependencies.recordTimeoutUsage ??
+                  recordTimedOutReflectionRun,
+              });
+            }
             if (
               current?.status === "running" ||
               current?.status === "starting"
@@ -677,5 +705,31 @@ export async function launchReflectionSubagent(
       }`,
     );
     return { launched: false, reason: "error", error };
+  }
+}
+
+/**
+ * Put a killed run's ending in the ledger. Never throws: the ledger must not be
+ * able to change what a completed reflection reports (§5.16.2).
+ */
+async function writeTimeoutUsage(input: {
+  input: TimedOutReflectionRunInput;
+  writer: (input: TimedOutReflectionRunInput) => Promise<boolean>;
+}): Promise<void> {
+  try {
+    const written = await input.writer(input.input);
+    if (!written) {
+      debugLog(
+        "usage",
+        `dropped timeout row for reflection run ${input.input.runId}`,
+      );
+    }
+  } catch (error) {
+    debugWarn(
+      "usage",
+      `failed to record timeout usage for reflection run ${input.input.runId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
 }

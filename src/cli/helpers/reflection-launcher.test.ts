@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  finishReflectionRun,
   getReflectionRun,
   isReflectionRunActive,
   resetReflectionRuns,
@@ -23,6 +24,7 @@ import {
 } from "@/cli/helpers/reflection-launcher";
 import { resetReflectionRetries } from "@/cli/helpers/reflection-retry";
 import type { SpawnBackgroundSubagentTaskArgs } from "@/tools/impl/task";
+import type { TimedOutReflectionRunInput } from "@/usage/automated";
 
 const agentId = "agent-t1-launcher";
 const conversationId = "conv-parent";
@@ -414,5 +416,53 @@ describe("getReflectionLaunchSkippedMessage", () => {
     expect(getReflectionLaunchSkippedMessage("retry_backoff")).toBeUndefined();
     expect(getReflectionLaunchSkippedMessage("fork_failed")).toBeUndefined();
     expect(getReflectionLaunchSkippedMessage("error")).toBeUndefined();
+  });
+});
+
+describe("launchReflectionSubagent timeout accounting", () => {
+  test("writes one zero-token timeout row when the run already ended at its deadline", async () => {
+    const rows: TimedOutReflectionRunInput[] = [];
+    const h = harness({
+      recordTimeoutUsage: async (input) => {
+        rows.push(input);
+        return true;
+      },
+    });
+
+    const result = await launchReflectionSubagent(launchOptions(), h.deps);
+    if (!result.launched) throw new Error("expected a launch");
+
+    // The controller finishes a timed-out run before the child's completion
+    // callback arrives; only the parent can record that ending (§5.16.4).
+    await finishReflectionRun(result.runId, "timeout");
+    await h.complete({ success: false, error: "timed out" });
+
+    expect(rows).toEqual([
+      {
+        runId: result.runId,
+        agentId,
+        sessionId: "conv-fork-1",
+        parentSessionId: conversationId,
+        model: "unknown",
+        wallMs: 0,
+      },
+    ]);
+  });
+
+  test("writes no timeout row when the run finishes normally", async () => {
+    const rows: TimedOutReflectionRunInput[] = [];
+    const h = harness({
+      recordTimeoutUsage: async (input) => {
+        rows.push(input);
+        return true;
+      },
+    });
+
+    const result = await launchReflectionSubagent(launchOptions(), h.deps);
+    if (!result.launched) throw new Error("expected a launch");
+    await h.complete({ success: true });
+
+    expect(getReflectionRun(result.runId)?.status).toBe("succeeded");
+    expect(rows).toHaveLength(0);
   });
 });

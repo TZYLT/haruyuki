@@ -14,6 +14,7 @@ import {
   readAutomatedUsageTag,
   recordAutomatedTurnUsage,
   recordAutomatedUsage,
+  recordTimedOutReflectionRun,
 } from "./automated";
 
 const tempRoots: string[] = [];
@@ -140,6 +141,37 @@ describe("recordAutomatedUsage", () => {
     expect(record?.outcome).toBe("failed");
     expect(record?.runId).toBeUndefined();
     expect(record?.parentSessionId).toBeUndefined();
+  });
+});
+
+describe("recordTimedOutReflectionRun (the row only the parent can write)", () => {
+  test("records the ending with zero tokens and the run coordinates", async () => {
+    await makeTempRoot();
+
+    expect(
+      await recordTimedOutReflectionRun({
+        runId: "reflection-agent-1-timeout",
+        agentId: "agent-1",
+        sessionId: "local-conv-2",
+        parentSessionId: "local-conv-1",
+        model: "openai/gpt-5.5",
+        wallMs: 180_400.6,
+      }),
+    ).toBe(true);
+
+    const [record] = await readUsageLedger();
+    expect(record?.source).toBe("reflection");
+    expect(record?.outcome).toBe("timeout");
+    expect(record?.runId).toBe("reflection-agent-1-timeout");
+    expect(record?.sessionId).toBe("local-conv-2");
+    expect(record?.parentSessionId).toBe("local-conv-1");
+    expect(record?.agentId).toBe("agent-1");
+    expect(record?.model).toBe("openai/gpt-5.5");
+    // The parent never sees the child's counters: the marker is zero by design.
+    expect(record?.prompt).toBe(0);
+    expect(record?.completion).toBe(0);
+    expect(record?.steps).toBe(0);
+    expect(record?.wallMs).toBe(180_401);
   });
 });
 

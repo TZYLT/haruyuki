@@ -9,9 +9,12 @@
  *
  * Three rules shape everything here:
  *
- * - **The child writes its own row.** The parent process never records
+ * - **The child writes its own row.** The parent process does not record
  *   reflection spend on the child's behalf (§5.16.2); the child already holds
- *   the numbers and the turn it ended.
+ *   the numbers and the turn it ended. The one exception is a run the parent
+ *   had to kill at its deadline: nothing else can report that run, so the parent
+ *   writes a zero-token marker row ({@link recordTimedOutReflectionRun}) rather
+ *   than losing the event from the ledger (requirement §5.16.4).
  * - **Only a tagged child writes.** The harness sets `HARUYUKI_USAGE_SOURCE` /
  *   `HARUYUKI_USAGE_RUN_ID` when it launches an automated run, so an ordinary
  *   subagent (or a nested launch inside a reflection) records nothing and
@@ -174,6 +177,61 @@ export async function recordAutomatedUsage(
     );
   }
   return written;
+}
+
+/**
+ * What the parent knows about a run it had to kill at its deadline — and the
+ * marker row it writes instead of the ending the child never got to report.
+ *
+ * A timed-out run is the one case the child cannot report: the parent kills it
+ * between turns, so no child turn ever ends and no row is written, while the
+ * requirement still wants the run to appear in the ledger (§5.16.4). The parent
+ * therefore records a **zero-token** row tagged `outcome: "timeout"`: it says
+ * the run happened and how long it was held, not how much it spent (the parent
+ * never sees the child's counters). A child that managed to finish an earlier
+ * turn already wrote that turn's real row; this marker never duplicates its
+ * numbers, it only adds the ending.
+ */
+export interface TimedOutReflectionRunInput {
+  runId: string;
+  agentId: string;
+  /** The fork conversation the run used. */
+  sessionId: string;
+  /** The conversation the fork came from. */
+  parentSessionId?: string;
+  /** The child's model as the spawn pipeline reported it. */
+  model: string;
+  /** How long the run was alive before the kill. */
+  wallMs: number;
+}
+
+const ZERO_TOKENS: AutomatedUsageTokens = {
+  prompt: 0,
+  cachedInput: 0,
+  cacheWrite: 0,
+  completion: 0,
+  reasoning: 0,
+  steps: 0,
+};
+
+/** Record the zero-token marker row for a timed-out reflection run. */
+export async function recordTimedOutReflectionRun(
+  input: TimedOutReflectionRunInput,
+): Promise<boolean> {
+  return recordAutomatedUsage({
+    source: "reflection",
+    outcome: "timeout",
+    runId: input.runId,
+    sessionId: input.sessionId,
+    ...(input.parentSessionId !== undefined
+      ? { parentSessionId: input.parentSessionId }
+      : {}),
+    agentId: input.agentId,
+    model: input.model,
+    usage: ZERO_TOKENS,
+    wallMs: Math.max(0, Math.round(input.wallMs)),
+    apiMs: 0,
+  });
 }
 
 /** One child turn, as the child's own headless entrypoint sees it. */
