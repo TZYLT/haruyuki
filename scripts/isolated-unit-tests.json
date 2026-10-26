@@ -163,11 +163,6 @@
       "reason": "Mutates the settings singleton and HOME while checking persisted conversation overrides."
     },
     {
-      "path": "src/cli/reflection-worktree-completion.test.ts",
-      "timeoutMs": 15000,
-      "reason": "Runs real Git processes against a temporary memory repository to verify reflection worktree completion, merge, and cleanup outcomes outside the shared worker."
-    },
-    {
       "path": "src/cli/helpers/reflection-launcher.test.ts",
       "timeoutMs": 15000,
       "reason": "Exercises reflection launch preflight with real Git processes and temporary local-backend environment overrides."
@@ -236,6 +231,16 @@
       "path": "src/websocket/listener/remote-settings.test.ts",
       "timeoutMs": 15000,
       "reason": "Mutates HOME and the remote-settings singleton to verify startup cwd-map repair."
+    },
+    {
+      "path": "src/cli/app/tui-post-turn-reflection.test.tsx",
+      "timeoutMs": 30000,
+      "reason": "Mounts the production TUI against a fake in-process backend with the subagent spawn boundary mocked; its process-wide agent context, settings, reflection run registry, and background task state must not reach other files."
+    },
+    {
+      "path": "src/websocket/listener/turn-completion-reflection.test.ts",
+      "timeoutMs": 30000,
+      "reason": "Drives a real listener turn end with the subagent spawn boundary mocked, mutating the process-global backend, settings, reflection run registry, and background task state."
     }
   ]
 }
