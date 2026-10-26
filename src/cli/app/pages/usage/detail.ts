@@ -38,11 +38,16 @@ import {
   DETAIL_COST_DECIMALS,
   formatCost,
   formatPercent,
+  formatRate,
 } from "@/cli/helpers/usage-format";
 import {
   aggregateUsageByDay,
   aggregateUsageByModel,
+  aggregateUsageBySource,
+  DEFAULT_USAGE_SOURCE,
   type UsageRecord,
+  type UsageSource,
+  type UsageTotals,
   usageDayKey,
 } from "@/usage/ledger";
 import type { UsageSummary } from "@/usage/summary";
@@ -50,9 +55,19 @@ import {
   contextBreakdownTotal,
   type UsageContextBreakdown,
 } from "@/utils/usage-context";
+import { addUsageCost } from "@/utils/usage-cost";
 
 /** Days of history the screen shows (docs/38 §14.8). */
 export const DETAIL_HISTORY_DAYS = 14;
+
+/**
+ * Columns the Automated tasks table gives its source name.
+ *
+ * Ten because `reflection` — the longest source F-03 writes — is exactly ten,
+ * and `truncateText` (not the padding) is what protects the columns to its
+ * right if a later source is longer.
+ */
+const SOURCE_COLUMN_WIDTH = 10;
 
 function textRow(text: string, width: number): PageRow {
   return { kind: "text", text: truncateText(text, width) };
@@ -154,6 +169,143 @@ export function recentDays(
 /** `$ 0.10000` right-aligned in the money column, `—` when unpriced. */
 function money(value: number | undefined): string {
   return formatCost(value, DETAIL_COST_DECIMALS);
+}
+
+/**
+ * One row of the Automated tasks table (F-03 §5.16.5).
+ *
+ * `tokens` is all four billed buckets, the same definition the cost section
+ * uses, so the rows here add up to what the automated runs really spent.
+ */
+export interface AutomatedUsageRow {
+  source: UsageSource;
+  turns: number;
+  /** prompt + cached + cacheWrite + completion, all four billed buckets. */
+  tokens: number;
+  output: number;
+  cost: number | undefined;
+  cacheHitRate: number | undefined;
+}
+
+function automatedRow(
+  source: UsageSource,
+  totals: UsageTotals,
+): AutomatedUsageRow {
+  const billedInput = totals.prompt + totals.cachedInput;
+  return {
+    source,
+    turns: totals.turns,
+    tokens:
+      totals.prompt +
+      totals.cachedInput +
+      totals.cacheWrite +
+      totals.completion,
+    output: totals.completion,
+    // Absent, not zero: a record with no price is unknown, not free.
+    cost: totals.cost.total > 0 ? totals.cost.total : undefined,
+    cacheHitRate:
+      billedInput > 0 ? totals.cachedInput / billedInput : undefined,
+  };
+}
+
+/** Fold `from` into `into` (the section's own total row). */
+function addTotals(into: UsageTotals, from: UsageTotals): void {
+  into.turns += from.turns;
+  into.prompt += from.prompt;
+  into.cachedInput += from.cachedInput;
+  into.cacheWrite += from.cacheWrite;
+  into.completion += from.completion;
+  into.reasoning += from.reasoning;
+  into.steps += from.steps;
+  into.wallMs += from.wallMs;
+  into.apiMs += from.apiMs;
+  addUsageCost(into.cost, from.cost);
+}
+
+/** The automated sources' totals, keyed by source (`interactive` dropped). */
+function automatedTotals(records: readonly UsageRecord[]): {
+  rows: Array<{ source: UsageSource; totals: UsageTotals }>;
+  total: UsageTotals | undefined;
+} {
+  const rows: Array<{ source: UsageSource; totals: UsageTotals }> = [];
+  let total: UsageTotals | undefined;
+  for (const [source, totals] of aggregateUsageBySource(records)) {
+    if (source === DEFAULT_USAGE_SOURCE) continue;
+    rows.push({ source, totals });
+    if (!total) {
+      // Copy: the map's totals object belongs to the ledger, and the section's
+      // total must not mutate it.
+      total = { ...totals, cost: { ...totals.cost } };
+    } else {
+      addTotals(total, totals);
+    }
+  }
+  rows.sort((left, right) => left.source.localeCompare(right.source));
+  return { rows, total };
+}
+
+/**
+ * The automated runs, one row per source, `interactive` excluded.
+ *
+ * The overview's total already folds these records in (they are ordinary
+ * records); this section only splits them out, which is exactly what §5.16.5
+ * asks for — automated spend visible, and separable from the interactive bill.
+ */
+export function automatedUsageRows(
+  records: readonly UsageRecord[],
+): AutomatedUsageRow[] {
+  return automatedTotals(records).rows.map(({ source, totals }) =>
+    automatedRow(source, totals),
+  );
+}
+
+/** The automated records' own total (the section's last row). */
+export function automatedUsageTotal(
+  records: readonly UsageRecord[],
+): AutomatedUsageRow | undefined {
+  const { total } = automatedTotals(records);
+  return total ? automatedRow("other", total) : undefined;
+}
+
+/** The Automated tasks section: one row per source, then its total. */
+function automatedSectionRows(
+  records: readonly UsageRecord[],
+  width: number,
+): PageRow[] {
+  const rows: PageRow[] = [];
+  const automated = automatedUsageRows(records);
+  if (automated.length === 0) {
+    rows.push(textRow("  no automated runs recorded", width));
+    return rows;
+  }
+  rows.push(
+    textRow(
+      `  ${"source".padEnd(SOURCE_COLUMN_WIDTH)}${"runs".padStart(6)}${"tokens".padStart(9)}${"out".padStart(9)}${"cost".padStart(11)}${"hit".padStart(8)}`,
+      width,
+    ),
+  );
+  const total = automatedUsageTotal(records);
+  const table: Array<{ label: string; row: AutomatedUsageRow }> = [
+    ...automated.map((row) => ({ label: row.source, row })),
+    ...(total ? [{ label: "total", row: total }] : []),
+  ];
+  for (const { label, row } of table) {
+    // `truncateText` first: a future source may be longer than the column, and
+    // padding a string that is about to be cut would shift every column after
+    // it. Ten columns is `reflection` exactly.
+    const source = truncateText(label, SOURCE_COLUMN_WIDTH).padEnd(
+      SOURCE_COLUMN_WIDTH,
+    );
+    const cells = [
+      `${row.turns}`.padStart(6),
+      formatCompact(row.tokens).padStart(9),
+      formatCompact(row.output).padStart(9),
+      money(row.cost).padStart(11),
+      formatRate(row.cacheHitRate).padStart(8),
+    ];
+    rows.push(textRow(`  ${source}${cells.join("")}`, width));
+  }
+  return rows;
 }
 
 /** Build the detail screen's rows. */
@@ -262,6 +414,12 @@ export function buildDetailRows(input: {
       ),
     );
   }
+
+  // F-03 §5.16.5: automated spend sits between the per-model split and the
+  // history, so the bill and the runs behind it are read together. The totals
+  // above already include these records; this section only separates them.
+  openSection(rows, "Automated tasks");
+  rows.push(...automatedSectionRows(records, width));
 
   openSection(rows, `History (last ${DETAIL_HISTORY_DAYS} days)`);
   const byDay = aggregateUsageByDay(records);

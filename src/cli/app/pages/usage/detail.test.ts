@@ -3,6 +3,8 @@ import type { PageRow } from "@/cli/app/pages/page-model";
 import type { UsageRecord } from "@/usage/ledger";
 import { summarizeUsage } from "@/usage/summary";
 import {
+  automatedUsageRows,
+  automatedUsageTotal,
   bucketTokens,
   buildDetailRows,
   latestContextTokens,
@@ -94,7 +96,7 @@ describe("recentDays", () => {
 });
 
 describe("buildDetailRows", () => {
-  test("draws the four sections the spec names, in English", () => {
+  test("draws the five sections the spec names, in English", () => {
     const rows = detailOf([record("2026-10-22T09")]);
     const joined = rows.join("\n");
     expect(joined).toContain("Cost (est.");
@@ -104,6 +106,7 @@ describe("buildDetailRows", () => {
     expect(joined).toContain("Output");
     expect(joined).toContain("Context composition (latest request)");
     expect(joined).toContain("By model");
+    expect(joined).toContain("Automated tasks");
     expect(joined).toContain("History (last 14 days)");
   });
 
@@ -190,6 +193,7 @@ describe("buildDetailRows", () => {
       "Cost (est.",
       "Context composition (latest request)",
       "By model",
+      "Automated tasks",
       "History (last 14 days)",
     ];
     for (const title of titles) {
@@ -233,5 +237,105 @@ describe("buildDetailRows", () => {
     expect(index).toBeGreaterThan(0);
     expect(rows[index]).toContain("write");
     expect(rows[index + 1]).toContain("10-22");
+  });
+});
+
+describe("the automated tasks section", () => {
+  const automated: UsageRecord[] = [
+    record("2026-10-22T09", {
+      source: "reflection",
+      prompt: 800,
+      cachedInput: 200,
+      cacheWrite: 0,
+      completion: 100,
+      cost: {
+        input: 0.1,
+        cacheRead: 0.2,
+        cacheWrite: 0,
+        output: 0.2,
+        total: 0.5,
+      },
+    }),
+    record("2026-10-22T10", {
+      source: "reflection",
+      prompt: 200,
+      cachedInput: 0,
+      cacheWrite: 0,
+      completion: 100,
+    }),
+    record("2026-10-21T09", {
+      source: "dream",
+      prompt: 100,
+      cachedInput: 0,
+      cacheWrite: 0,
+      completion: 0,
+    }),
+  ];
+
+  test("splits the spend by source and totals it", () => {
+    const rows = automatedUsageRows(automated);
+    expect(rows.map((row) => row.source)).toEqual(["dream", "reflection"]);
+    const reflection = rows[1];
+    expect(reflection?.turns).toBe(2);
+    // 800 + 200 + 200 = 1200 in, 100 + 100 = 200 out.
+    expect(reflection?.tokens).toBe(1_400);
+    expect(reflection?.output).toBe(200);
+    expect(reflection?.cost).toBeCloseTo(0.5);
+    // 200 cached of 1000 miss + 200 cached: the hit rate is input-only.
+    expect(reflection?.cacheHitRate).toBeCloseTo(200 / 1_200);
+
+    const total = automatedUsageTotal(automated);
+    expect(total?.turns).toBe(3);
+    expect(total?.tokens).toBe(1_500);
+    expect(total?.cost).toBeCloseTo(0.5);
+    expect(total?.cacheHitRate).toBeCloseTo(200 / 1_300);
+  });
+
+  test("interactive turns are not automated runs", () => {
+    const mixed = [...automated, record("2026-10-22T11", { prompt: 999 })];
+    expect(automatedUsageRows(mixed).map((row) => row.source)).toEqual([
+      "dream",
+      "reflection",
+    ]);
+    // Interactive spend must not move the automated total.
+    expect(automatedUsageTotal(mixed)?.tokens).toBe(1_500);
+  });
+
+  test("the screen lists the sources and their total between By model and History", () => {
+    const rows = detailOf(automated);
+    const joined = rows.join("\n");
+    expect(joined).toContain("Automated tasks");
+    const byModel = rows.findIndex((row) => row.startsWith("By model"));
+    const automatedTitle = rows.findIndex((row) =>
+      row.startsWith("Automated tasks"),
+    );
+    const history = rows.findIndex((row) => row.startsWith("History (last"));
+    expect(byModel).toBeGreaterThan(0);
+    expect(automatedTitle).toBeGreaterThan(byModel);
+    expect(history).toBeGreaterThan(automatedTitle);
+
+    const table = rows.filter((row) =>
+      /^ {2}(dream|reflection|total)\b/.test(row),
+    );
+    expect(table).toHaveLength(3);
+    // The source column is ten wide, so the columns after it line up: the runs
+    // cell is columns 12–17 whatever the source's own length is.
+    const reflection = table.find((row) => row.startsWith("  reflection"));
+    expect(reflection?.slice(2, 12)).toBe("reflection");
+    expect(reflection?.slice(12, 18).trim()).toBe("2");
+    const total = table.find((row) => row.startsWith("  total"));
+    expect(total?.slice(12, 18).trim()).toBe("3");
+    expect(joined).toContain("16.67%");
+    expect(joined).toContain("$ 0.50000");
+  });
+
+  test("an all-interactive ledger says there is nothing automated", () => {
+    const rows = detailOf([record("2026-10-22T09")]);
+    expect(rows.join("\n")).toContain("no automated runs recorded");
+  });
+
+  test("a section with automated records has no empty-state line", () => {
+    const rows = detailOf(automated);
+    expect(rows.join("\n")).not.toContain("no automated runs recorded");
   });
 });

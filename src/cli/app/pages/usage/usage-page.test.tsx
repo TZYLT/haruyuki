@@ -300,12 +300,47 @@ describe("the usage page", () => {
       "Cost (est.",
       "Context composition",
       "By model",
+      "Automated tasks",
       "History (last",
     ]) {
       const index = rows.findIndex((row) => row.includes(title));
       expect(index).toBeGreaterThan(0);
       expect(rows[index - 1]?.trim()).toBe("");
     }
+  });
+
+  test("a reflection record is drawn in the Automated tasks section", async () => {
+    // F-03 §5.16.5's user-visible outcome: automated spend is on the detail
+    // screen, next to the interactive bill, without changing the overview's
+    // total. Only the frame can answer whether the section paints.
+    await homeWithLedger();
+    await appendUsageRecord(
+      buildUsageRecord({
+        at: todayAtNine(),
+        agentId: "agent-1",
+        model: "openai/gpt-5.5",
+        prompt: 10_000,
+        cachedInput: 0,
+        cacheWrite: 0,
+        completion: 500,
+        steps: 1,
+        wallMs: 2_000,
+        apiMs: 1_000,
+        source: "reflection",
+        outcome: "completed",
+        runId: "reflection-agent-1-abc",
+        sessionId: "local-conv-2",
+        parentSessionId: "local-conv-1",
+      }),
+    );
+    const tty = mount(100);
+    await settle();
+    await tty.press(TAB);
+    await settle();
+    const frame = (await tty.rows()).join("\n");
+    expect(frame).toContain("Automated tasks");
+    expect(frame).toContain("reflection");
+    expect(frame).toContain("total");
   });
 
   test("Esc hands focus back to the conversation tab", async () => {

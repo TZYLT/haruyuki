@@ -235,6 +235,34 @@ describe("buildOverviewRows (line tier)", () => {
     );
     expect(narrow).toEqual(expect.arrayContaining(items));
   });
+
+  test("the total already includes automated records (F-03 §5.16.5)", () => {
+    // The overview keeps one total on purpose: an automated run spent real
+    // tokens, so hiding it here would make the page disagree with the bill. The
+    // detail screen is where the split lives.
+    const records = [
+      record("2026-10-22T09"),
+      record("2026-10-22T10", {
+        source: "reflection",
+        prompt: 100_000,
+        cachedInput: 0,
+        cacheWrite: 0,
+        completion: 0,
+      }),
+    ];
+    const rows = texts(
+      buildOverviewRows({
+        summary: summaryOf(records),
+        records,
+        now: NOW,
+        width: 40,
+        height: 22,
+      }),
+    );
+    // 460k interactive + 100k reflection: one number, and it is the sum.
+    expect(rows[0]).toBe("560k tokens");
+    expect(summaryOf(records).totals.turns).toBe(2);
+  });
 });
 
 describe("centring", () => {
