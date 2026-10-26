@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * verify-prefix-fork.ts — F-03 M0 prefix byte gate (dev-only, not shipped).
+ * verify-prefix-fork.ts — F-03 M0 prefix byte gate (dev-only tool).
  *
  * Answers the one question the whole F-03 route depends on: **does a child turn
  * that runs on a forked conversation send the same prefix bytes as the parent
