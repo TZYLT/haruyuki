@@ -331,12 +331,11 @@ export class LocalBackend extends HeadlessBackend {
   }
 
   /**
-   * Fork a conversation, carrying its topic markers across.
-   *
-   * The store clones messages with fresh ids, so a marker's anchor has to be
-   * remapped onto the child's copy. Both sides' in-context lists are read before
-   * and after the fork: the child is a prefix of the parent (a cutoff fork keeps
-   * fewer messages), which is exactly the positional mapping the anchors need.
+   * Fork a conversation, carrying its topic markers across: the store clones
+   * messages with fresh ids, so each anchor is remapped onto the child's copy by
+   * position — valid because the child is a prefix of the parent. An
+   * `inherited-context` fork holds the current window instead, which is not a
+   * positional prefix, so its markers are not copied at all.
    */
   override async forkConversation(
     ...args: Parameters<HeadlessBackend["forkConversation"]>
@@ -346,6 +345,7 @@ export class LocalBackend extends HeadlessBackend {
       args[1]?.agentId,
     );
     const forked = await super.forkConversation(...args);
+    if (args[1]?.contextMode === "inherited-context") return forked;
     const forkedMessages = this.store.listLocalMessages(forked.id);
     const anchorIds = new Map(
       forkedMessages.map((message, index) => [

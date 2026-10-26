@@ -1,96 +1,111 @@
+/**
+ * Launch one reflection run: a hidden fork of the current conversation, plus a
+ * child process resumed on that fork through `--conv`.
+ *
+ * The order is fixed (F-03 §5.1.4, route §4 M1b):
+ *
+ *   cheap checks → reserve → register the run → non-blocking memory lock →
+ *   fork → attach the fork → record `running` → spawn → attach the child.
+ *
+ * Everything expensive is after the cheap checks, so `end_turn` only pays for
+ * the decision. A launch that cannot take the lock is skipped, never queued
+ * (§5.5.6): a queued reflection would stack cost on a run that is already
+ * writing memory.
+ *
+ * Old route retired here (§5.13.1): the transcript payload, the memory worktree
+ * and its merge, the parent-repo dirty pre-check, the `explicit` integration
+ * subagent and its archived conversation. The child writes the memory repo
+ * directly and commits there; the memory lock is what serialises it.
+ */
+import { getScopedMemoryFilesystemRoot } from "@/agent/memory-filesystem";
 import {
-  getScopedMemoryFilesystemRoot,
-  isLettaCloud,
-} from "@/agent/memory-filesystem";
-import { detectMemoryFormat } from "@/agent/memory-format";
-import { withMemoryOperation } from "@/agent/memory-operation";
-import { syncPendingMemoryCommitsAfterTurn } from "@/agent/memory-post-turn-sync";
+  detectMemoryFormat,
+  type LocalMemoryFormat,
+} from "@/agent/memory-format";
+import { claimMemoryOperation } from "@/agent/memory-operation";
 import {
-  buildReflectionIntegrationMemoryScope,
-  buildReflectionMemoryScope,
-  createReflectionMemoryWorktree,
-  finalizeReflectionMemoryWorktree,
-  finalizeReflectionMemoryWorktreeUnlocked,
-  inspectReflectionMemoryWorktree,
-  type ReflectionMemoryWorktree,
-  type ReflectionMemoryWorktreeFinalizeResult,
-  reflectionIntegrationConsumesTranscript,
-  reflectionMemoryParentHasChanges,
-} from "@/agent/memory-worktree";
+  attachReflectionFork,
+  attachReflectionTask,
+  finishReflectionRun,
+  getReflectionRun,
+  isReflectionRunActive,
+  type ReflectionRunState,
+  startReflectionRun,
+} from "@/agent/reflection-run";
+import {
+  type WriteReflectionRunMetadataInput,
+  writeReflectionRunMetadata,
+} from "@/agent/reflection-run-metadata";
 import { getSubagents } from "@/agent/subagent-state";
+import {
+  getAllSubagentConfigs,
+  type SubagentConfig,
+  type SubagentMemoryScope,
+} from "@/agent/subagents";
+import { forkParentConversation } from "@/agent/subagents/fork-conversation";
 import { getBackend } from "@/backend";
-import { retrieveCloudReflectionConfig } from "@/backend/api/reflection";
-import {
-  getReflectionSettings,
-  type ReflectionSettings,
-  type ReflectionTrigger,
-  shouldFireStepCountTrigger,
-} from "@/cli/helpers/memory-reminder";
-import {
-  handleMemorySubagentCompletion,
-  type MemorySubagentSuccessMessageOverride,
-} from "@/cli/helpers/memory-subagent-completion";
-import { finalizeAutoReflectionCompletion } from "@/cli/helpers/reflection-completion";
 import { classifyReflectionConfigurationError } from "@/cli/helpers/reflection-configuration-error";
+import { buildReflectionTaskMessage } from "@/cli/helpers/reflection-prompt";
 import {
-  buildReflectionIntegrationConversationTitle,
-  buildReflectionIntegrationPrompt,
-} from "@/cli/helpers/reflection-integration";
-import {
+  clearReflectionRetry,
   isReflectionRetryDeferred,
-  recordReflectionIntegrationRetry,
+  recordReflectionFailure,
 } from "@/cli/helpers/reflection-retry";
-import {
-  buildAutoReflectionPayload,
-  buildParentMemorySnapshot,
-  buildReflectionSubagentPrompt,
-  getReflectionTranscriptState,
-} from "@/cli/helpers/reflection-transcript";
-import { isAutoReflectionEnabled } from "@/reflection-settings";
-import { type ReflectionWorktreeCleanupOutcome, telemetry } from "@/telemetry";
+import { telemetry } from "@/telemetry";
 import { maybeSendReflectionThresholdFeedback } from "@/telemetry/reflection-threshold-feedback";
+import type { SpawnBackgroundSubagentTaskArgs } from "@/tools/impl/task";
+import type {
+  ReflectionRunMetadata,
+  ReflectionRunTriggerSource,
+} from "@/types/reflection-run-metadata";
 import { debugLog, debugWarn } from "@/utils/debug";
 
 export const AUTO_REFLECTION_DESCRIPTION = "Reflect on recent conversations";
 
-export function getReflectionMergeLaunchOptions(agentId: string) {
-  const settings = getReflectionSettings(agentId);
-  return {
-    mergePolicy: settings.merge ?? "auto",
-    mergeInstructions: settings.mergeInstructions,
-  } as const;
-}
+/** Requirement §5.8.1: one run is capped at 3 minutes unless configured. */
+export const DEFAULT_REFLECTION_TIMEOUT_MINUTES = 3;
 
-export function getReflectionFinalizationContext(agentId: string) {
-  return {
-    agentId,
-    ...getReflectionMergeLaunchOptions(agentId),
-  } as const;
-}
+/**
+ * Used only when the reflection subagent config cannot be discovered at all.
+ * The child's persona comes from the appended task message, not the config, so
+ * the fallback still has to pin `allowedTools: "all"` (see below).
+ */
+const FALLBACK_REFLECTION_CONFIG: SubagentConfig = {
+  name: "reflection",
+  description: AUTO_REFLECTION_DESCRIPTION,
+  systemPrompt: "",
+  allowedTools: "all",
+  skills: [],
+  fork: true,
+  launchProfile: "memory-subagent",
+};
 
-/** Max background wait for the reflection subagent's agent ID before emitting `reflection_start` (previously 1s inline, timed out ~100% of the time). */
-export const REFLECTION_AGENT_ID_WAIT_MS = 30_000;
+/**
+ * Per-run settings the launcher reads. Deliberately narrow: the launcher owns
+ * the run, not the trigger policy, so it takes the deadline and nothing else
+ * from the settings layer. The settings layer resolves the per-agent override
+ * and passes it in (`ReflectionLaunchOptions.reflectionSettings`); a caller
+ * that omits it gets the requirement's 3-minute default.
+ */
+export interface ReflectionLaunchSettings {
+  timeoutMinutes?: number;
+}
 
 const reservedReflectionAgentIds = new Set<string>();
-const pendingReflectionLaunches = new Map<string, ReflectionLaunchOptions>();
 const suppressedAutomaticReflections = new Map<
   string,
   { model?: string; message: string }
 >();
 
-export type ReflectionLaunchTriggerSource =
-  | "manual"
-  | Exclude<ReflectionTrigger, "off">;
+export type ReflectionLaunchTriggerSource = ReflectionRunTriggerSource;
 
 export type ReflectionLaunchSkippedReason =
   | "memfs_disabled"
-  | "windows_disabled"
-  | "cutover"
+  | "lock_busy"
   | "already_active"
-  | "configuration_error"
   | "retry_backoff"
-  | "parent_dirty"
-  | "no_payload"
+  | "configuration_error"
+  | "fork_failed"
   | "error";
 
 export function getReflectionLaunchSkippedMessage(
@@ -98,26 +113,22 @@ export function getReflectionLaunchSkippedMessage(
   surface: "cli" | "listener" = "cli",
 ): string | undefined {
   switch (reason) {
-    case "cutover":
-      return "Reflection is managed by the server for this agent.";
     case "already_active":
       return surface === "listener"
         ? "A reflection agent is already running for this conversation."
         : "A reflection agent is already running in the background.";
     case "configuration_error":
       return "Automatic reflection is paused because its model configuration is invalid. Fix the reflection model or provider, run /reload, then use /reflect to retry.";
+    case "lock_busy":
+      return surface === "listener"
+        ? "Memory is being written by another process; skipped this reflection."
+        : "Memory is being written by another process; skipped this reflection.";
     case "memfs_disabled":
       return surface === "listener"
         ? "Reflection needs the memory filesystem to be enabled for this agent."
         : "Memory filesystem is not enabled.";
-    case "no_payload":
-      return surface === "listener"
-        ? "No new transcript content to reflect on for this conversation."
-        : "No new transcript content to reflect on.";
-    case "parent_dirty":
-      return "Parent memory has uncommitted changes; commit or discard them before reflecting.";
     case "error":
-    case "windows_disabled":
+    case "fork_failed":
     case "retry_backoff":
       return undefined;
   }
@@ -129,51 +140,31 @@ export interface ReflectionFeedbackContext {
   surface?: string;
 }
 
-function getReflectionWorktreeCleanupOutcome(
-  integration: ReflectionMemoryWorktreeFinalizeResult,
-):
-  | {
-      outcome: ReflectionWorktreeCleanupOutcome;
-      integrationStatus:
-        | "parent_dirty"
-        | "merge_conflict"
-        | "dirty_uncommitted"
-        | "failed";
-    }
-  | undefined {
-  switch (integration.status) {
-    case "parent_dirty":
-      return { outcome: "parent_dirty", integrationStatus: "parent_dirty" };
-    case "merge_conflict":
-      return { outcome: "merge_conflict", integrationStatus: "merge_conflict" };
-    case "dirty_uncommitted":
-      return {
-        outcome: "reflection_worktree_dirty",
-        integrationStatus: "dirty_uncommitted",
-      };
-    case "failed":
-      return { outcome: "subagent_failed", integrationStatus: "failed" };
-    case "merged":
-    case "no_changes":
-      return undefined;
-  }
-}
+/**
+ * Telemetry still carries the pre-F-03 trigger names; the requirement's trigger
+ * sources are mapped here instead of widening a shared telemetry contract.
+ */
+const TELEMETRY_TRIGGER_SOURCE: Record<
+  ReflectionLaunchTriggerSource,
+  "manual" | "step-count" | "compaction-event"
+> = {
+  manual: "manual",
+  compaction: "compaction-event",
+  "user-messages": "step-count",
+};
 
 export function emitReflectionRunStart(params: {
   triggerSource: ReflectionLaunchTriggerSource;
   subagentId?: string;
   conversationId: string;
-  startMessageId?: string;
-  endMessageId?: string;
-  model?: string | null;
 }): void {
-  telemetry.trackReflectionStart(params.triggerSource, {
-    subagentId: params.subagentId,
-    conversationId: params.conversationId,
-    startMessageId: params.startMessageId,
-    endMessageId: params.endMessageId,
-    model: params.model,
-  });
+  telemetry.trackReflectionStart(
+    TELEMETRY_TRIGGER_SOURCE[params.triggerSource],
+    {
+      subagentId: params.subagentId,
+      conversationId: params.conversationId,
+    },
+  );
 }
 
 export function emitReflectionRunEnd(params: {
@@ -188,21 +179,25 @@ export function emitReflectionRunEnd(params: {
   model?: string | null;
   feedbackContext?: ReflectionFeedbackContext;
 }): void {
-  telemetry.trackReflectionEnd(params.triggerSource, params.success, {
-    subagentId: params.subagentId,
-    conversationId: params.conversationId,
-    error: params.error,
-    stepCount: params.stepCount,
-    durationMs: params.durationMs,
-    model: params.model,
-  });
+  telemetry.trackReflectionEnd(
+    TELEMETRY_TRIGGER_SOURCE[params.triggerSource],
+    params.success,
+    {
+      subagentId: params.subagentId,
+      conversationId: params.conversationId,
+      error: params.error,
+      stepCount: params.stepCount,
+      durationMs: params.durationMs,
+      model: params.model,
+    },
+  );
   maybeSendReflectionThresholdFeedback({
     parentAgentId: params.parentAgentId,
     parentAgentName: params.feedbackContext?.parentAgentName,
     parentAgentDescription: params.feedbackContext?.parentAgentDescription,
     reflectionSubagentId: params.subagentId,
     conversationId: params.conversationId,
-    triggerSource: params.triggerSource,
+    triggerSource: TELEMETRY_TRIGGER_SOURCE[params.triggerSource],
     success: params.success,
     error: params.error,
     stepCount: params.stepCount,
@@ -215,11 +210,9 @@ export function emitReflectionRunEnd(params: {
 export type ReflectionLaunchResult =
   | {
       launched: true;
-      payloadPath: string;
-      subagentId: string;
-      reflectionAgentId?: string;
-      startMessageId?: string;
-      endMessageId?: string;
+      runId: string;
+      forkConversationId?: string;
+      subagentId?: string;
     }
   | {
       launched: false;
@@ -227,35 +220,44 @@ export type ReflectionLaunchResult =
       error?: unknown;
     };
 
+/** Frozen entry shape (route §3.4): M1h depends on it, not on the internals. */
 export interface ReflectionLaunchOptions {
   agentId: string;
   conversationId: string;
   memfsEnabled: boolean;
   triggerSource: ReflectionLaunchTriggerSource;
-  reflectionSettings?: ReflectionSettings;
-  description: string;
-  /** Explicit model for this reflection subagent, if requested by the caller. */
-  model?: string;
+  reflectionSettings?: ReflectionLaunchSettings;
+  /** `/reflect --instruction`: user text appended to the task message. */
   instruction?: string;
-  /**
-   * Replace the reflection task prompt entirely (advanced). The caller owns the
-   * transcript/memory mechanics the default prompt provides ($TRANSCRIPT_PATH,
-   * $MEMORY_DIR, the commit contract).
-   */
-  reflectionPromptOverride?: string;
-  /** Replace the reflection subagent's system prompt/persona (advanced). */
-  reflectionSystemPromptOverride?: string;
-  completionConversationId?: string | (() => string);
-  onCompletionMessage?: (
-    message: string,
-    result: {
-      success: boolean;
-      error?: string;
-      reflectionAgentId?: string;
-      integrationConversationId?: string;
-    },
-  ) => void | Promise<void>;
-  feedbackContext?: ReflectionFeedbackContext;
+}
+
+/**
+ * Seams for tests and for callers that already hold these resources. Production
+ * callers pass options only; every default here is the real implementation.
+ */
+export interface ReflectionLaunchDependencies {
+  claimMemoryLock?(memoryDir: string): Promise<(() => Promise<void>) | null>;
+  forkConversation?(
+    params: Parameters<typeof forkParentConversation>[0],
+  ): Promise<{ id: string }>;
+  spawnTask?(args: SpawnBackgroundSubagentTaskArgs): ReflectionSpawnedTask;
+  resolveConfig?(): Promise<SubagentConfig | undefined>;
+  memoryRoot?(agentId: string): string;
+  memoryFormat?(agentId: string): LocalMemoryFormat;
+  deleteConversation?(conversationId: string): Promise<void>;
+  writeRunMetadata?(input: WriteReflectionRunMetadataInput): Promise<void>;
+}
+
+/**
+ * The slice of the spawn result the launcher uses. The child's abort handle is
+ * optional here because the launcher must keep compiling against a spawn layer
+ * that has not grown one yet; `spawnedTaskAbortHandle` degrades loudly.
+ */
+export interface ReflectionSpawnedTask {
+  taskId: string;
+  subagentId: string;
+  outputFile?: string;
+  abort?: () => void;
 }
 
 function isReflectionSubagentActiveForAgent(agentId: string): boolean {
@@ -272,6 +274,9 @@ function isReflectionSubagentActiveForAgent(agentId: string): boolean {
 
 export function tryReserveReflectionLaunch(agentId: string): boolean {
   if (reservedReflectionAgentIds.has(agentId)) {
+    return false;
+  }
+  if (isReflectionRunActive(agentId)) {
     return false;
   }
   if (isReflectionSubagentActiveForAgent(agentId)) {
@@ -308,10 +313,6 @@ export function recordReflectionConfigurationFailure(params: {
     model: params.model,
     message: configurationError.message,
   });
-  const pendingLaunch = pendingReflectionLaunches.get(params.agentId);
-  if (pendingLaunch?.triggerSource !== "manual") {
-    pendingReflectionLaunches.delete(params.agentId);
-  }
   debugWarn(
     "memory",
     `Pausing automatic reflection for ${params.agentId}: ${configurationError.message}`,
@@ -321,460 +322,96 @@ export function recordReflectionConfigurationFailure(params: {
 
 export function releaseReflectionLaunch(agentId: string): void {
   reservedReflectionAgentIds.delete(agentId);
-  schedulePendingReflectionLaunch(agentId);
 }
 
-function queuePendingReflectionLaunch(options: ReflectionLaunchOptions): void {
-  pendingReflectionLaunches.set(options.agentId, options);
-  debugLog(
-    "memory",
-    `Queued reflection launch (${options.triggerSource}) until active reflection finishes`,
-  );
+function resolveTimeoutMinutes(
+  settings: ReflectionLaunchSettings | undefined,
+): number {
+  const requested = settings?.timeoutMinutes;
+  return typeof requested === "number" && Number.isFinite(requested)
+    ? requested
+    : DEFAULT_REFLECTION_TIMEOUT_MINUTES;
 }
 
-export async function shouldRunQueuedReflectionLaunch(
-  options: ReflectionLaunchOptions,
-  deps: {
-    getTranscriptState?: typeof getReflectionTranscriptState;
-    getSettings?: typeof getReflectionSettings;
-  } = {},
-): Promise<boolean> {
-  if (isReflectionRetryDeferred(options.agentId, options.triggerSource)) {
-    return false;
-  }
-  if (options.triggerSource !== "step-count") {
-    return true;
-  }
-
-  const settings =
-    options.reflectionSettings ??
-    (deps.getSettings ?? getReflectionSettings)(options.agentId);
-  const readTranscriptState =
-    deps.getTranscriptState ?? getReflectionTranscriptState;
-  const transcriptState = await readTranscriptState(
-    options.agentId,
-    options.conversationId,
-  );
-  const shouldLaunch = shouldFireStepCountTrigger(
-    transcriptState.steps_since_last_successful_reflection,
-    settings,
-  );
-
-  if (!shouldLaunch) {
-    debugLog(
-      "memory",
-      `Skipping queued reflection launch (${options.triggerSource}) because the trigger threshold is no longer met`,
-    );
-  }
-
-  return shouldLaunch;
+async function resolveReflectionConfig(): Promise<SubagentConfig | undefined> {
+  const configs = await getAllSubagentConfigs();
+  return configs.reflection;
 }
 
-function schedulePendingReflectionLaunch(agentId: string): void {
-  const pendingOptions = pendingReflectionLaunches.get(agentId);
-  if (!pendingOptions) return;
-  pendingReflectionLaunches.delete(agentId);
-
-  queueMicrotask(() => {
-    void (async () => {
-      if (!(await shouldRunQueuedReflectionLaunch(pendingOptions))) {
-        return;
-      }
-      await launchReflectionSubagent(pendingOptions);
-    })().catch((error) => {
-      debugWarn(
-        "memory",
-        `Failed to launch queued reflection (${pendingOptions.triggerSource}): ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    });
-  });
+async function deleteBackendConversation(
+  conversationId: string,
+): Promise<void> {
+  await getBackend().deleteConversation?.(conversationId);
 }
 
-function resolveCompletionConversationId(
-  completionConversationId: ReflectionLaunchOptions["completionConversationId"],
-  fallback: string,
-): string {
-  if (typeof completionConversationId === "function") {
-    return completionConversationId();
-  }
-  return completionConversationId ?? fallback;
-}
-
-function getReflectionCompletionMessage(
-  integration: ReflectionMemoryWorktreeFinalizeResult,
-  subagentError?: string,
-  automaticReflectionPaused = false,
-): MemorySubagentSuccessMessageOverride | undefined {
-  switch (integration.status) {
-    case "merged":
-      return undefined;
-    case "no_changes":
-      return ({ action }) => `${action}; no memory changes were needed.`;
-    case "parent_dirty":
-      return "Tried to reflect, but parent memory had uncommitted changes; will retry later.";
-    case "merge_conflict":
-      return "Tried to reflect, but memory updates conflicted with newer changes; will retry later.";
-    case "dirty_uncommitted":
-      return "Tried to reflect, but memory changes were not committed cleanly; will retry later.";
-    case "failed": {
-      if (integration.failurePhase === "integration") {
-        return `${integration.summary} Will retry later.`;
-      }
-      const configurationError =
-        classifyReflectionConfigurationError(subagentError);
-      if (!configurationError) {
-        return "Tried to reflect, but memory updates were not completed cleanly; will retry later.";
-      }
-      return automaticReflectionPaused
-        ? `Reflection failed: ${configurationError.message} Automatic reflection is paused until the model configuration changes; use /reflect to retry.`
-        : `Reflection failed: ${configurationError.message} Fix the reflection model configuration, then use /reflect to retry.`;
-    }
-  }
-}
-
-interface ReflectionIntegrationOutcome {
-  success: boolean;
-  error?: string;
-  conversationId?: string;
-}
-
-type RunExplicitReflectionIntegration = typeof runExplicitReflectionIntegration;
-
-async function runExplicitReflectionIntegration(params: {
-  agentId: string;
-  conversationId: string;
-  worktree: ReflectionMemoryWorktree;
-  instructions?: string;
-  reflectionSubagentId?: string;
-}): Promise<ReflectionIntegrationOutcome> {
-  const {
-    spawnBackgroundSubagentTask,
-    waitForBackgroundSubagentConversationId,
-  } = await import("@/tools/impl/task");
-  return await new Promise<ReflectionIntegrationOutcome>((resolve) => {
-    try {
-      const { subagentId } = spawnBackgroundSubagentTask({
-        subagentType: "general-purpose",
-        displayType: "reflection integration",
-        prompt: buildReflectionIntegrationPrompt({
-          worktree: params.worktree,
-          instructions: params.instructions,
-          reflectionSubagentId: params.reflectionSubagentId,
-        }),
-        description: "Integrate reflection memory changes",
-        existingAgentId: params.agentId,
-        memoryScope: buildReflectionIntegrationMemoryScope(params.worktree),
-        parentScope: {
-          agentId: params.agentId,
-          conversationId: params.conversationId,
-        },
-        silentCompletion: true,
-        onComplete: (result) => {
-          resolve({
-            success: result.success,
-            error: result.success
-              ? undefined
-              : (result.error ?? "Reflection integration did not complete"),
-            conversationId: result.conversationId,
-          });
-        },
-      });
-      void waitForBackgroundSubagentConversationId(
-        subagentId,
-        REFLECTION_AGENT_ID_WAIT_MS,
-      )
-        .then(async (conversationId) => {
-          if (!conversationId) return;
-          await getBackend().updateConversation(conversationId, {
-            summary: buildReflectionIntegrationConversationTitle(
-              params.reflectionSubagentId,
-            ),
-          });
-        })
-        .catch((error) => {
-          debugWarn(
-            "memory",
-            `Failed to title reflection integration conversation: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        });
-    } catch (error) {
-      resolve({
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  });
-}
-
-export async function prepareReflectionMemoryWorktreeLaunch(params: {
-  agentId: string;
-  instruction?: string;
-  reflectionPromptOverride?: string;
-}): Promise<{
-  worktree: ReflectionMemoryWorktree;
-  reflectionPrompt: string;
-}> {
-  const memoryDir = getScopedMemoryFilesystemRoot(params.agentId);
-  const backend = getBackend();
-  const memoryFormat = detectMemoryFormat(
-    memoryDir,
-    backend.capabilities.localMemfs,
-  );
-  const worktree = await createReflectionMemoryWorktree({
-    parentMemoryDir: memoryDir,
-  });
+/**
+ * Write `running` on the fork. A failure is a warning, never a launch failure:
+ * the in-process run is what the gate trusts, the record is the durable copy
+ * (§5.3.4).
+ */
+async function recordRunningMetadata(input: {
+  forkConversationId: string;
+  metadata: ReflectionRunMetadata;
+  writer?: (input: WriteReflectionRunMetadataInput) => Promise<void>;
+}): Promise<void> {
   try {
-    // An override replaces the whole task prompt; the caller is then responsible
-    // for referencing $TRANSCRIPT_PATH / $MEMORY_DIR, so we skip the (otherwise
-    // wasted) parent-memory snapshot in that case.
-    const reflectionPrompt =
-      params.reflectionPromptOverride ??
-      buildReflectionSubagentPrompt({
-        instruction: params.instruction,
-        parentMemory: await buildParentMemorySnapshot(worktree.worktreeDir, {
-          memoryFormat,
-        }),
-        memoryFormat,
-      });
-    return { worktree, reflectionPrompt };
-  } catch (error) {
-    await finalizeReflectionMemoryWorktree(worktree, {
-      shouldMerge: false,
-    }).catch(() => {});
-    throw error;
-  }
-}
-
-export async function finalizeReflectionMemoryWorktreeLaunch(params: {
-  worktree: ReflectionMemoryWorktree;
-  subagentSuccess: boolean;
-  subagentError?: string;
-  agentId: string;
-  conversationId: string;
-  subagentAgentId?: string;
-  subagentType?: "reflection";
-  knownNoChanges?: boolean;
-  model?: string | null;
-  mergePolicy?: "auto" | "explicit";
-  mergeInstructions?: string;
-  runExplicitIntegration?: RunExplicitReflectionIntegration;
-  /** Pushes the integration merge; the integration child cannot while the lease is held. */
-  syncIntegratedMemory?: typeof syncPendingMemoryCommitsAfterTurn;
-  updateIntegrationConversation?: (
-    conversationId: string,
-    body: { summary: string; archived: boolean },
-  ) => Promise<unknown>;
-  telemetryContext?: {
-    triggerSource: ReflectionLaunchTriggerSource;
-  };
-}): Promise<{
-  integration: ReflectionMemoryWorktreeFinalizeResult;
-  completionSuccess: boolean;
-  completionMessage: string;
-  shouldNotify: boolean;
-  integrationConversationId?: string;
-}> {
-  const configurationFailure =
-    !params.subagentSuccess &&
-    recordReflectionConfigurationFailure({
-      agentId: params.agentId,
-      model: params.model ?? undefined,
-      error: params.subagentError,
+    await (input.writer ?? writeReflectionRunMetadata)({
+      conversationId: input.forkConversationId,
+      metadata: input.metadata,
     });
-  if (params.subagentSuccess) {
-    clearAutomaticReflectionSuppression(params.agentId);
-  }
-
-  let integrationRun: ReflectionIntegrationOutcome | undefined;
-  const finalizeOptions = () => ({
-    shouldMerge: params.subagentSuccess,
-    knownNoChanges: params.knownNoChanges,
-    requireAlreadyMerged:
-      params.mergePolicy === "explicit" && integrationRun !== undefined,
-    failureSummary: integrationRun?.error
-      ? `Reflection integration did not complete (${integrationRun.error}); the worktree was cleaned up so the transcript can be retried.`
-      : undefined,
-  });
-  const explicitIntegration =
-    params.subagentSuccess &&
-    params.mergePolicy === "explicit" &&
-    (params.knownNoChanges
-      ? false
-      : await inspectReflectionMemoryWorktree(params.worktree).then(
-          (state) => state.commitCount > 0 || state.dirty,
-        ));
-  // Explicit integration, its verification and the push happen under one
-  // lease: releasing between them would let another process's post-turn sync
-  // pull --rebase and rewrite the merge before ancestry is checked.
-  const integration = explicitIntegration
-    ? await withMemoryOperation(params.worktree.parentMemoryDir, async () => {
-        integrationRun = await (
-          params.runExplicitIntegration ?? runExplicitReflectionIntegration
-        )({
-          agentId: params.agentId,
-          conversationId: params.conversationId,
-          worktree: params.worktree,
-          instructions: params.mergeInstructions,
-          reflectionSubagentId: params.subagentAgentId,
-        });
-        const result = await finalizeReflectionMemoryWorktreeUnlocked(
-          params.worktree,
-          finalizeOptions(),
-        );
-        // The integration child's own post-turn sync found the lease held and
-        // skipped, and no parent turn may follow; push its verified merge here.
-        if (result.status === "merged") {
-          try {
-            const sync = await (
-              params.syncIntegratedMemory ?? syncPendingMemoryCommitsAfterTurn
-            )(params.agentId, { memoryDir: params.worktree.parentMemoryDir });
-            if (sync.status !== "clean" && sync.status !== "pushed") {
-              debugWarn("reflection", `Integration sync: ${sync.summary}`);
-            }
-          } catch (error) {
-            debugWarn(
-              "reflection",
-              `Integration sync failed: ${String(error)}`,
-            );
-          }
-        }
-        return result;
-      })
-    : await finalizeReflectionMemoryWorktree(
-        params.worktree,
-        finalizeOptions(),
-      );
-  const completionSuccess =
-    params.subagentSuccess &&
-    reflectionIntegrationConsumesTranscript(integration);
-
-  const shouldNotify = recordReflectionIntegrationRetry(
-    params.agentId,
-    integration,
-    completionSuccess,
-    params.telemetryContext?.triggerSource ?? "manual",
-  );
-
-  const cleanup = getReflectionWorktreeCleanupOutcome(integration);
-  if (cleanup) {
-    telemetry.trackReflectionWorktreeCleanup({
-      outcome: cleanup.outcome,
-      integration_status: cleanup.integrationStatus,
-      trigger_source: params.telemetryContext?.triggerSource,
-      subagent_id: params.subagentAgentId,
-      conversation_id: params.conversationId,
-      reflection_worktree_id: params.worktree.id,
-      commit_count: integration.commitCount,
-      model: params.model ?? undefined,
-    });
-  }
-
-  const completionMessage = await handleMemorySubagentCompletion({
-    subagentType: params.subagentType ?? "reflection",
-    success: completionSuccess,
-    error: completionSuccess ? undefined : params.subagentError,
-    subagentAgentId: params.subagentAgentId,
-    successMessageOverride: getReflectionCompletionMessage(
-      integration,
-      params.subagentError,
-      configurationFailure,
-    ),
-  });
-
-  if (completionSuccess && integrationRun?.conversationId) {
-    try {
-      const body = {
-        summary: buildReflectionIntegrationConversationTitle(
-          params.subagentAgentId,
-        ),
-        archived: true,
-      };
-      if (params.updateIntegrationConversation) {
-        await params.updateIntegrationConversation(
-          integrationRun.conversationId,
-          body,
-        );
-      } else {
-        await getBackend().updateConversation(
-          integrationRun.conversationId,
-          body,
-        );
-      }
-    } catch (error) {
-      debugWarn(
-        "memory",
-        `Failed to archive reflection integration conversation: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-
-  return {
-    integration,
-    completionSuccess,
-    completionMessage,
-    shouldNotify,
-    integrationConversationId: integrationRun?.conversationId,
-  };
-}
-
-async function isReflectionCutover(agentId: string): Promise<boolean> {
-  try {
-    if (!(await isLettaCloud())) return false;
-    const config = await retrieveCloudReflectionConfig(agentId);
-    return config.cutover === true;
   } catch (error) {
     debugWarn(
       "memory",
-      `Failed to check Cloud reflection cutover: ${
+      `Failed to record reflection run metadata for ${input.metadata.runId}: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
-    return false;
+  }
+}
+
+/**
+ * The abort handle arrives with the run controller work item; until then the
+ * attach still records the task id so a later step can find the child.
+ */
+function spawnedTaskAbortHandle(spawned: ReflectionSpawnedTask): () => void {
+  if (typeof spawned.abort === "function") return spawned.abort;
+  return () => {
+    debugWarn(
+      "memory",
+      `Task ${spawned.taskId} has no abort handle yet; the reflection run cannot be stopped from here`,
+    );
+  };
+}
+
+async function deleteHalfBuiltFork(
+  forkConversationId: string,
+  remove: (conversationId: string) => Promise<void> = deleteBackendConversation,
+): Promise<void> {
+  try {
+    await remove(forkConversationId);
+  } catch (error) {
+    debugWarn(
+      "memory",
+      `Failed to delete half-built reflection fork ${forkConversationId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
 }
 
 export async function launchReflectionSubagent(
   options: ReflectionLaunchOptions,
-  dependencies: {
-    isCutover?: (agentId: string) => Promise<boolean>;
-  } = {},
+  dependencies: ReflectionLaunchDependencies = {},
 ): Promise<ReflectionLaunchResult> {
-  const {
-    agentId,
-    conversationId,
-    memfsEnabled,
-    triggerSource,
-    description,
-    onCompletionMessage,
-  } = options;
-  const reflectionSettings =
-    options.reflectionSettings ?? getReflectionSettings(agentId);
+  const { agentId, conversationId, memfsEnabled, triggerSource } = options;
 
+  // ── Cheap checks: no repository, no fork, no spawn ──────────────────────
   if (!memfsEnabled) {
     return { launched: false, reason: "memfs_disabled" };
   }
-  if (triggerSource !== "manual" && !isAutoReflectionEnabled()) {
-    return { launched: false, reason: "windows_disabled" };
-  }
-
   if (isReflectionRetryDeferred(agentId, triggerSource)) {
     return { launched: false, reason: "retry_backoff" };
   }
-
-  if (await (dependencies.isCutover ?? isReflectionCutover)(agentId)) {
-    debugLog(
-      "memory",
-      `Skipping reflection launch (${triggerSource}) because server-side reflection owns this agent`,
-    );
-    return { launched: false, reason: "cutover" };
-  }
-
   if (shouldSuppressReflectionLaunch(agentId, triggerSource)) {
     const suppressed = suppressedAutomaticReflections.get(agentId);
     debugLog(
@@ -783,179 +420,256 @@ export async function launchReflectionSubagent(
     );
     return { launched: false, reason: "configuration_error" };
   }
-
-  if (!tryReserveReflectionLaunch(agentId)) {
+  if (isReflectionRunActive(agentId) || !tryReserveReflectionLaunch(agentId)) {
     debugLog(
       "memory",
       `Skipping reflection launch (${triggerSource}) because one is already active`,
     );
-    if (reservedReflectionAgentIds.has(agentId)) {
-      queuePendingReflectionLaunch(options);
-    }
     return { launched: false, reason: "already_active" };
   }
 
-  let releaseOnComplete = false;
-  let preparedWorktree: ReflectionMemoryWorktree | undefined;
+  const reflectionSettings = options.reflectionSettings;
+  const timeoutMinutes = resolveTimeoutMinutes(reflectionSettings);
+
+  let run: ReflectionRunState;
   try {
-    const memoryDir = getScopedMemoryFilesystemRoot(agentId);
-    if (await reflectionMemoryParentHasChanges(memoryDir)) {
-      debugLog(
-        "memory",
-        `Skipping reflection launch (${triggerSource}) because parent memory has uncommitted changes`,
-      );
-      releaseReflectionLaunch(agentId);
-      return { launched: false, reason: "parent_dirty" };
-    }
-
-    const autoPayload = await buildAutoReflectionPayload(
+    run = startReflectionRun({
       agentId,
-      conversationId,
+      parentConversationId: conversationId,
+      triggerSource,
+      timeoutMinutes,
+    });
+  } catch (error) {
+    // Another path registered a run between the check and here.
+    releaseReflectionLaunch(agentId);
+    debugLog(
+      "memory",
+      `Skipping reflection launch (${triggerSource}): ${
+        error instanceof Error ? error.message : String(error)
+      }`,
     );
-    if (!autoPayload) {
+    return { launched: false, reason: "already_active", error };
+  }
+
+  let releaseMemoryLock: (() => Promise<void>) | undefined;
+  try {
+    const memoryRoot = dependencies.memoryRoot ?? getScopedMemoryFilesystemRoot;
+    const memoryDir = memoryRoot(agentId);
+
+    // ── Single writer: one non-blocking attempt, no queue (§5.5.6) ───────
+    const claimedLock = await (
+      dependencies.claimMemoryLock ?? claimMemoryOperation
+    )(memoryDir);
+    if (!claimedLock) {
       debugLog(
         "memory",
-        `Skipping reflection launch (${triggerSource}) because transcript has no new content`,
+        `Skipping reflection launch (${triggerSource}) because the memory checkout is held by another process`,
       );
+      await finishReflectionRun(run.runId, "cancelled");
       releaseReflectionLaunch(agentId);
-      return { launched: false, reason: "no_payload" };
+      return { launched: false, reason: "lock_busy" };
+    }
+    releaseMemoryLock = claimedLock;
+    const releaseLock = claimedLock;
+
+    // ── Fork: context-only, hidden, from this conversation (§5.2) ────────
+    const reflectionConfig = await (
+      dependencies.resolveConfig ?? resolveReflectionConfig
+    )();
+    let forkConversationId: string;
+    try {
+      const forked = await (
+        dependencies.forkConversation ?? forkParentConversation
+      )({
+        backend: getBackend(),
+        parentAgentId: agentId,
+        parentConversationId: conversationId,
+        config: reflectionConfig,
+        origin: "reflection",
+        contextMode: "inherited-context",
+        provenanceParentConversationId: conversationId,
+      });
+      forkConversationId = forked.id;
+    } catch (error) {
+      debugWarn(
+        "memory",
+        `Failed to fork the conversation for reflection (${triggerSource}): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      await finishReflectionRun(run.runId, "failed");
+      await releaseLock();
+      releaseReflectionLaunch(agentId);
+      return { launched: false, reason: "fork_failed", error };
     }
 
-    const { worktree, reflectionPrompt } =
-      await prepareReflectionMemoryWorktreeLaunch({
-        agentId,
-        instruction: options.instruction,
-        reflectionPromptOverride: options.reflectionPromptOverride,
-      });
-    preparedWorktree = worktree;
+    attachReflectionFork(run.runId, forkConversationId);
 
-    const { spawnBackgroundSubagentTask, waitForBackgroundSubagentAgentId } =
-      await import("@/tools/impl/task");
-
-    // Defer `reflection_start` until the agent ID resolves (background, bounded by REFLECTION_AGENT_ID_WAIT_MS).
-    const emitReflectionStart = (resolvedAgentId: string | null) => {
-      emitReflectionRunStart({
-        triggerSource,
-        subagentId: resolvedAgentId ?? undefined,
-        conversationId,
-        startMessageId: autoPayload.startMessageId,
-        endMessageId: autoPayload.endMessageId,
-        model: options.model,
-      });
+    // ── Spawn the child on the fork; the task message is stdin ───────────
+    const memoryFormat =
+      dependencies.memoryFormat?.(agentId) ??
+      detectMemoryFormat(memoryDir, getBackend().capabilities.localMemfs);
+    const memoryScope: SubagentMemoryScope = {
+      primaryRoot: memoryDir,
+      writableRoots: [memoryDir],
     };
-
-    const { subagentId } = spawnBackgroundSubagentTask({
-      subagentType: "reflection",
-      prompt: reflectionPrompt,
-      description,
-      exactModelHandle: options.model,
-      systemPromptOverride: options.reflectionSystemPromptOverride,
-      silentCompletion: true,
-      transcriptPath: autoPayload.payloadPath,
-      memoryScope: buildReflectionMemoryScope(worktree),
-      parentScope: { agentId, conversationId },
-      onComplete: async ({
-        success,
-        error,
-        agentId: reflectionAgentId,
-        model: reflectionModel,
-        stepCount,
-        durationMs,
-      }) => {
-        try {
-          emitReflectionRunEnd({
-            parentAgentId: agentId,
-            triggerSource,
-            success,
-            subagentId: reflectionAgentId ?? undefined,
-            conversationId,
-            error,
-            stepCount,
-            durationMs,
-            model: reflectionModel,
-            feedbackContext: options.feedbackContext,
-          });
-          const completionConversationId = resolveCompletionConversationId(
-            options.completionConversationId,
-            conversationId,
-          );
-          const {
-            completionSuccess,
-            completionMessage,
-            shouldNotify,
-            integrationConversationId,
-          } = await finalizeReflectionMemoryWorktreeLaunch({
-            worktree,
-            subagentSuccess: success,
-            subagentError: error,
-            agentId,
-            conversationId: completionConversationId,
-            subagentAgentId: reflectionAgentId ?? undefined,
-            model: reflectionModel,
-            mergePolicy: reflectionSettings.merge,
-            mergeInstructions: reflectionSettings.mergeInstructions,
-            telemetryContext: { triggerSource },
-          });
-
-          await finalizeAutoReflectionCompletion(
-            agentId,
-            conversationId,
-            autoPayload.payloadPath,
-            autoPayload.endSnapshotLine,
-            autoPayload.endMessageId,
-            completionSuccess,
-          );
-          if (shouldNotify) {
-            await onCompletionMessage?.(completionMessage, {
-              success: completionSuccess,
-              error,
-              reflectionAgentId: reflectionAgentId ?? undefined,
-              integrationConversationId,
-            });
-          }
-        } finally {
-          releaseReflectionLaunch(agentId);
-        }
-      },
+    const spawnTask =
+      dependencies.spawnTask ??
+      (await import("@/tools/impl/task")).spawnBackgroundSubagentTask;
+    const taskMessage = buildReflectionTaskMessage({
+      runId: run.runId,
+      instruction: options.instruction,
+      memoryFormat,
     });
-    releaseOnComplete = true;
-    preparedWorktree = undefined;
-    // Fire-and-forget: emit `reflection_start` when the agent ID resolves or after timeout.
-    void waitForBackgroundSubagentAgentId(
-      subagentId,
-      REFLECTION_AGENT_ID_WAIT_MS,
-    )
-      .then((resolvedAgentId) => {
-        emitReflectionStart(resolvedAgentId);
-      })
-      .catch((err) => {
-        // Worst case — still emit with no subagent_id so we don't lose the event.
-        debugWarn(
-          "memory",
-          `Failed waiting for reflection agent ID: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-        emitReflectionStart(null);
-      });
 
-    debugLog("memory", `Launched reflection subagent (${triggerSource})`);
+    let spawned: ReflectionSpawnedTask;
+    try {
+      spawned = spawnTask({
+        subagentType: "reflection",
+        // The existing-conversation branch still adds `--tools` unconditionally
+        // when the config narrows the set, which would leave the child's local
+        // registry short of the tools its frozen `client_tools` advertises
+        // (§5.1.8). "all" is the only value that suppresses the flag.
+        config: {
+          ...(reflectionConfig ?? FALLBACK_REFLECTION_CONFIG),
+          allowedTools: "all",
+        },
+        prompt: taskMessage,
+        description: AUTO_REFLECTION_DESCRIPTION,
+        existingConversationId: forkConversationId,
+        memoryScope,
+        parentScope: { agentId, conversationId },
+        silentCompletion: true,
+        onComplete: async ({
+          success,
+          error,
+          model,
+          stepCount,
+          durationMs,
+        }) => {
+          try {
+            emitReflectionRunEnd({
+              parentAgentId: agentId,
+              triggerSource,
+              success,
+              subagentId: spawned.subagentId,
+              conversationId: forkConversationId,
+              error,
+              stepCount,
+              durationMs,
+              model,
+            });
+            if (success) {
+              clearAutomaticReflectionSuppression(agentId);
+              clearReflectionRetry(agentId);
+            } else {
+              // §5.1.6: a failed child must leave a trace of why, not just a
+              // status transition — the notification alone does not say it.
+              debugWarn(
+                "memory",
+                `reflection run ${run.runId} failed: ${error ?? "unknown error"}`,
+              );
+              recordReflectionConfigurationFailure({
+                agentId,
+                model,
+                error,
+              });
+            }
+            // A timed-out run was already finished by the controller; only a
+            // still-running one is ours to finish (§2.4 state machine).
+            const current = getReflectionRun(run.runId);
+            if (
+              current?.status === "running" ||
+              current?.status === "starting"
+            ) {
+              await finishReflectionRun(
+                run.runId,
+                success ? "succeeded" : "failed",
+              );
+            }
+            // §5.5.7: only startup/settlement failures back off. A timeout or an
+            // interruption already surfaced to the user, and backing off from it
+            // would starve a healthy channel.
+            if (
+              !success &&
+              current?.status !== "timeout" &&
+              current?.status !== "cancelled"
+            ) {
+              recordReflectionFailure(agentId);
+            }
+          } finally {
+            await releaseLock();
+            releaseReflectionLaunch(agentId);
+          }
+        },
+      });
+    } catch (error) {
+      // The fork exists but nothing will ever run on it: remove the half-built
+      // conversation instead of leaving an empty hidden session behind (§5.1.4).
+      debugWarn(
+        "memory",
+        `Failed to spawn the reflection subagent (${triggerSource}): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      await deleteHalfBuiltFork(
+        forkConversationId,
+        dependencies.deleteConversation,
+      );
+      await finishReflectionRun(run.runId, "failed");
+      await releaseLock();
+      recordReflectionFailure(agentId);
+      releaseReflectionLaunch(agentId);
+      return { launched: false, reason: "error", error };
+    }
+
+    attachReflectionTask(run.runId, {
+      taskId: spawned.taskId,
+      abort: spawnedTaskAbortHandle(spawned),
+    });
+
+    // ── Durable copy of the run (best effort) ────────────────────────────
+    // Read the run back: attaching the child is the point where the run
+    // controller re-anchors the deadline on the successful spawn, so the value
+    // recorded here is the one the user will actually be held to.
+    const attachedRun = getReflectionRun(run.runId) ?? run;
+    await recordRunningMetadata({
+      forkConversationId,
+      metadata: {
+        runId: attachedRun.runId,
+        triggerSource,
+        parentConversationId: conversationId,
+        startedAt: attachedRun.startedAt,
+        deadlineAt: Number.isFinite(attachedRun.deadlineAt)
+          ? attachedRun.deadlineAt
+          : null,
+        status: "running",
+      },
+      writer: dependencies.writeRunMetadata,
+    });
+
+    emitReflectionRunStart({
+      triggerSource,
+      subagentId: spawned.subagentId,
+      conversationId: forkConversationId,
+    });
+    debugLog(
+      "memory",
+      `run ${run.runId} launched (${triggerSource}) on fork ${forkConversationId}; timeout ${timeoutMinutes}m`,
+    );
     return {
       launched: true,
-      payloadPath: autoPayload.payloadPath,
-      subagentId,
-      startMessageId: autoPayload.startMessageId,
-      endMessageId: autoPayload.endMessageId,
+      runId: run.runId,
+      forkConversationId,
+      subagentId: spawned.subagentId,
     };
   } catch (error) {
-    if (!releaseOnComplete && preparedWorktree) {
-      await finalizeReflectionMemoryWorktree(preparedWorktree, {
-        shouldMerge: false,
-      }).catch(() => {});
-    }
-    if (!releaseOnComplete) {
-      releaseReflectionLaunch(agentId);
-    }
+    // Anything unexpected after the reservation (memory-dir resolution, task
+    // module import) releases every resource it may hold.
+    await releaseMemoryLock?.();
+    await finishReflectionRun(run.runId, "failed");
+    recordReflectionFailure(agentId);
+    releaseReflectionLaunch(agentId);
     debugWarn(
       "memory",
       `Failed to launch reflection subagent (${triggerSource}): ${

@@ -1,218 +1,374 @@
-import { describe, expect, mock, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  getReflectionRun,
+  isReflectionRunActive,
+  resetReflectionRuns,
+  startReflectionRun,
+} from "@/agent/reflection-run";
+import type { SubagentConfig } from "@/agent/subagents";
+import type { ForkParentConversationParams } from "@/agent/subagents/fork-conversation";
 import {
   clearAutomaticReflectionSuppression,
   getReflectionLaunchSkippedMessage,
   isAutomaticReflectionSuppressed,
   launchReflectionSubagent,
+  type ReflectionLaunchDependencies,
   type ReflectionLaunchOptions,
   recordReflectionConfigurationFailure,
-  shouldRunQueuedReflectionLaunch,
+  releaseReflectionLaunch,
   shouldSuppressReflectionLaunch,
 } from "@/cli/helpers/reflection-launcher";
-import {
-  REFLECTION_STATE_SCHEMA_VERSION,
-  type ReflectionTranscriptState,
-} from "@/cli/helpers/reflection-transcript";
+import { resetReflectionRetries } from "@/cli/helpers/reflection-retry";
+import type { SpawnBackgroundSubagentTaskArgs } from "@/tools/impl/task";
 
-function queuedLaunchOptions(
+const agentId = "agent-t1-launcher";
+const conversationId = "conv-parent";
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  resetReflectionRuns();
+  resetReflectionRetries();
+  releaseReflectionLaunch(agentId);
+  clearAutomaticReflectionSuppression(agentId);
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+function launchOptions(
   overrides: Partial<ReflectionLaunchOptions> = {},
 ): ReflectionLaunchOptions {
   return {
-    agentId: "agent-1",
-    conversationId: "conv-1",
+    agentId,
+    conversationId,
     memfsEnabled: true,
-    triggerSource: "step-count",
-    reflectionSettings: { trigger: "step-count", stepCount: 25 },
-    description: "Reflect on recent conversations",
+    triggerSource: "user-messages",
     ...overrides,
   };
 }
 
-function transcriptState(
-  stepsSinceLastSuccessfulReflection: number,
-): ReflectionTranscriptState {
-  return {
-    schema_version: REFLECTION_STATE_SCHEMA_VERSION,
-    total_completed_steps: stepsSinceLastSuccessfulReflection,
-    reflected_completed_steps: 0,
-    steps_since_last_successful_reflection: stepsSinceLastSuccessfulReflection,
-  };
-}
-
-const GIT_ENV = {
-  ...process.env,
-  GIT_AUTHOR_NAME: "test",
-  GIT_AUTHOR_EMAIL: "test@test.com",
-  GIT_COMMITTER_NAME: "test",
-  GIT_COMMITTER_EMAIL: "test@test.com",
+const reflectionConfig: SubagentConfig = {
+  name: "reflection",
+  description: "Reflect",
+  systemPrompt: "",
+  allowedTools: ["Bash", "Edit"],
+  skills: [],
+  fork: false,
+  launchProfile: "memory-subagent",
 };
 
-function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, {
-    cwd,
-    env: GIT_ENV,
-    encoding: "utf-8",
-  });
+interface Harness {
+  deps: ReflectionLaunchDependencies;
+  forks: ForkParentConversationParams[];
+  spawns: SpawnBackgroundSubagentTaskArgs[];
+  metadata: unknown[];
+  deleted: string[];
+  lockReleases: number;
+  complete: (result: { success: boolean; error?: string }) => Promise<void>;
 }
 
-describe("shouldRunQueuedReflectionLaunch", () => {
-  test("skips queued step-count launches when the threshold is no longer met", async () => {
-    const getTranscriptState = mock(async () => transcriptState(1));
+/**
+ * Every seam a launch crosses is stubbed: no filesystem, no settings manager, no
+ * child process. The defaults are the "happy" answers each test then bends.
+ */
+function harness(
+  overrides: Partial<ReflectionLaunchDependencies> = {},
+): Harness {
+  const memoryRoot = mkdtempSync(join(tmpdir(), "reflection-launch-"));
+  temporaryDirectories.push(memoryRoot);
+  const forks: Harness["forks"] = [];
+  const spawns: SpawnBackgroundSubagentTaskArgs[] = [];
+  const metadata: unknown[] = [];
+  const deleted: string[] = [];
+  let lockReleases = 0;
+  let complete: Harness["complete"] = async () => undefined;
 
-    const shouldRun = await shouldRunQueuedReflectionLaunch(
-      queuedLaunchOptions(),
-      { getTranscriptState },
+  const deps: ReflectionLaunchDependencies = {
+    claimMemoryLock: async () => async () => {
+      lockReleases += 1;
+    },
+    forkConversation: async (params) => {
+      forks.push(params);
+      return { id: "conv-fork-1" };
+    },
+    spawnTask: (args) => {
+      spawns.push(args);
+      complete = async (result) => {
+        await args.onComplete?.(result);
+      };
+      return {
+        taskId: "task-1",
+        outputFile: "/tmp/task-1.out",
+        subagentId: "subagent-1",
+      };
+    },
+    resolveConfig: async () => reflectionConfig,
+    memoryRoot: () => memoryRoot,
+    memoryFormat: () => "memfs-v1",
+    deleteConversation: async (forkId) => {
+      deleted.push(forkId);
+    },
+    writeRunMetadata: async (input) => {
+      metadata.push(input);
+    },
+    ...overrides,
+  };
+
+  return {
+    deps,
+    forks,
+    spawns,
+    metadata,
+    deleted,
+    get lockReleases() {
+      return lockReleases;
+    },
+    complete: (result) => complete(result),
+  } as Harness;
+}
+
+describe("launchReflectionSubagent cheap checks", () => {
+  test("skips when the memory filesystem is disabled", async () => {
+    const h = harness();
+    const result = await launchReflectionSubagent(
+      launchOptions({ memfsEnabled: false }),
+      h.deps,
     );
 
-    expect(shouldRun).toBe(false);
-    expect(getTranscriptState).toHaveBeenCalledWith("agent-1", "conv-1");
+    expect(result).toEqual({ launched: false, reason: "memfs_disabled" });
+    expect(h.forks).toHaveLength(0);
+    expect(h.spawns).toHaveLength(0);
   });
 
-  test("runs queued step-count launches when the threshold is still met", async () => {
-    const getTranscriptState = mock(async () => transcriptState(25));
+  test("skips while automatic reflection is suppressed by a bad model config", async () => {
+    recordReflectionConfigurationFailure({
+      agentId,
+      model: "openai-proxy/missing",
+      error: '400 {"error":"Model handle not found: openai-proxy/missing"}',
+    });
+    const h = harness();
 
-    const shouldRun = await shouldRunQueuedReflectionLaunch(
-      queuedLaunchOptions(),
-      { getTranscriptState },
+    const automatic = await launchReflectionSubagent(launchOptions(), h.deps);
+    const manual = await launchReflectionSubagent(
+      launchOptions({ triggerSource: "manual" }),
+      h.deps,
     );
 
-    expect(shouldRun).toBe(true);
+    expect(automatic).toEqual({
+      launched: false,
+      reason: "configuration_error",
+    });
+    expect(manual.launched).toBe(true);
   });
 
-  test("does not re-check non-step-count queued launches", async () => {
-    const getTranscriptState = mock(async () => transcriptState(0));
+  test("skips while a run is already registered for the agent", async () => {
+    startReflectionRun({
+      agentId,
+      parentConversationId: conversationId,
+      triggerSource: "compaction",
+      timeoutMinutes: 3,
+    });
+    const h = harness();
 
-    const shouldRun = await shouldRunQueuedReflectionLaunch(
-      queuedLaunchOptions({ triggerSource: "compaction-event" }),
-      { getTranscriptState },
+    const result = await launchReflectionSubagent(
+      launchOptions({ triggerSource: "compaction" }),
+      h.deps,
     );
 
-    expect(shouldRun).toBe(true);
-    expect(getTranscriptState).not.toHaveBeenCalled();
+    expect(result).toEqual({ launched: false, reason: "already_active" });
+    expect(h.forks).toHaveLength(0);
+  });
+
+  test("skips and releases the run when the memory checkout is held", async () => {
+    const h = harness({
+      claimMemoryLock: async () => null,
+    });
+
+    const result = await launchReflectionSubagent(launchOptions(), h.deps);
+
+    expect(result).toEqual({ launched: false, reason: "lock_busy" });
+    expect(h.forks).toHaveLength(0);
+    // The reserved run did not leak: the agent can launch again.
+    expect(isReflectionRunActive(agentId)).toBe(false);
   });
 });
 
-describe("reflection launchers", () => {
-  test.each([
-    ["win32", "step-count", undefined, true],
-    ["win32", "compaction-event", undefined, true],
-    ["win32", "step-count", "0", true],
-    ["win32", "step-count", "true", true],
-    ["win32", "step-count", "1", false],
-    ["win32", "compaction-event", "1", false],
-    ["win32", "manual", undefined, false],
-    ["linux", "step-count", undefined, false],
-    ["linux", "compaction-event", "0", false],
-    ["darwin", "step-count", undefined, false],
-    ["darwin", "compaction-event", "0", false],
-  ] as const)(
-    "%s %s with Windows opt-in %s: skipped=%s",
-    async (platform, triggerSource, optIn, skipped) => {
-      const originalPlatform = Object.getOwnPropertyDescriptor(
-        process,
-        "platform",
-      );
-      const originalOptIn = process.env.HARUYUKI_ENABLE_WINDOWS_AUTO_REFLECTION;
-      // Stop allowed launches at the next gate without API or filesystem work.
-      const isCutover = mock(async () => true);
-      try {
-        Object.defineProperty(process, "platform", { value: platform });
-        if (optIn === undefined) {
-          delete process.env.HARUYUKI_ENABLE_WINDOWS_AUTO_REFLECTION;
-        } else {
-          process.env.HARUYUKI_ENABLE_WINDOWS_AUTO_REFLECTION = optIn;
-        }
-        const result = await launchReflectionSubagent(
-          queuedLaunchOptions({ triggerSource }),
-          { isCutover },
-        );
-        expect(result).toEqual({
-          launched: false,
-          reason: skipped ? "windows_disabled" : "cutover",
-        });
-        expect(isCutover).toHaveBeenCalledTimes(skipped ? 0 : 1);
-      } finally {
-        if (originalPlatform) {
-          Object.defineProperty(process, "platform", originalPlatform);
-        }
-        if (originalOptIn === undefined) {
-          delete process.env.HARUYUKI_ENABLE_WINDOWS_AUTO_REFLECTION;
-        } else {
-          process.env.HARUYUKI_ENABLE_WINDOWS_AUTO_REFLECTION = originalOptIn;
-        }
-      }
-    },
-  );
-
-  test("skips client-side reflection after server cutover", async () => {
-    const isCutover = mock(async () => true);
+describe("launchReflectionSubagent run creation", () => {
+  test("creates exactly one fork and spawns exactly once", async () => {
+    const h = harness();
+    const taskInstruction = "focus on the migration plan";
 
     const result = await launchReflectionSubagent(
-      queuedLaunchOptions({ triggerSource: "manual" }),
-      { isCutover },
+      launchOptions({ instruction: taskInstruction }),
+      h.deps,
     );
 
-    expect(result).toEqual({ launched: false, reason: "cutover" });
-    expect(isCutover).toHaveBeenCalledWith("agent-1");
+    expect(result.launched).toBe(true);
+    if (!result.launched) throw new Error("expected a launch");
+
+    // One fork, context-only, from this conversation.
+    expect(h.forks).toHaveLength(1);
+    expect(h.forks[0]).toMatchObject({
+      parentAgentId: agentId,
+      parentConversationId: conversationId,
+      origin: "reflection",
+      contextMode: "inherited-context",
+      provenanceParentConversationId: conversationId,
+    });
+
+    // One spawn, resuming the fork, with the tool set left untouched: the child
+    // must not narrow what the frozen prefix already advertised (§5.1.8).
+    expect(h.spawns).toHaveLength(1);
+    const spawn = h.spawns[0];
+    expect(spawn?.existingConversationId).toBe("conv-fork-1");
+    expect(spawn?.subagentType).toBe("reflection");
+    expect(spawn?.config?.allowedTools).toBe("all");
+    expect(spawn?.prompt).toContain(result.runId);
+    expect(spawn?.prompt).toContain(taskInstruction);
+
+    // The durable run record is written `running` before the spawn is attached.
+    expect(h.metadata).toEqual([
+      {
+        conversationId: "conv-fork-1",
+        metadata: expect.objectContaining({
+          runId: result.runId,
+          triggerSource: "user-messages",
+          parentConversationId: conversationId,
+          status: "running",
+          deadlineAt: expect.any(Number),
+        }),
+      },
+    ]);
+
+    expect(h.deleted).toHaveLength(0);
+    expect(isReflectionRunActive(agentId)).toBe(true);
+    expect(result.forkConversationId).toBe("conv-fork-1");
+    expect(result.subagentId).toBe("subagent-1");
+
+    // Completion finishes the run once, releases the lock once and releases the
+    // reservation so the next turn can reflect again.
+    await h.complete({ success: true });
+
+    expect(getReflectionRun(result.runId)?.status).toBe("succeeded");
+    expect(isReflectionRunActive(agentId)).toBe(false);
+    expect(h.lockReleases).toBe(1);
+    expect(h.forks).toHaveLength(1);
+    expect(h.spawns).toHaveLength(1);
   });
 
-  test("skips before payload and worktree creation when parent memory is dirty", async () => {
-    const originalLocalBackend =
-      process.env.HARUYUKI_LOCAL_BACKEND_EXPERIMENTAL;
-    const originalLocalBackendDir = process.env.LETTA_LOCAL_BACKEND_DIR;
-    const storageDir = mkdtempSync(join(tmpdir(), "reflection-preflight-"));
-    const agentId = "agent-parent-dirty";
-    const memoryDir = join(storageDir, "memfs", agentId, "memory");
+  test("records the deadline the controller armed after the spawn", async () => {
+    const h = harness();
+    const before = Date.now();
+    const result = await launchReflectionSubagent(
+      launchOptions({ reflectionSettings: { timeoutMinutes: 7 } }),
+      h.deps,
+    );
+    if (!result.launched) throw new Error("expected a launch");
 
-    try {
-      process.env.HARUYUKI_LOCAL_BACKEND_EXPERIMENTAL = "1";
-      process.env.LETTA_LOCAL_BACKEND_DIR = storageDir;
-      mkdirSync(memoryDir, { recursive: true });
-      git(storageDir, ["init", "-b", "main", memoryDir]);
-      writeFileSync(join(memoryDir, "persona.md"), "base\n", "utf-8");
-      git(memoryDir, ["add", "persona.md"]);
-      git(memoryDir, ["commit", "-m", "init"]);
-      writeFileSync(join(memoryDir, "dirty.md"), "dirty\n", "utf-8");
+    const recorded = h.metadata[0] as {
+      metadata: { deadlineAt: number | null };
+    };
+    // Anchored at the successful spawn, not at registration: the recorded value
+    // is the controller's, within a few ms of launch time + the configured cap.
+    expect(recorded.metadata.deadlineAt).toBeGreaterThanOrEqual(
+      before + 7 * 60_000,
+    );
+    expect(recorded.metadata.deadlineAt).toBeLessThanOrEqual(
+      Date.now() + 7 * 60_000,
+    );
+  });
 
-      const result = await launchReflectionSubagent(
-        queuedLaunchOptions({ agentId, triggerSource: "manual" }),
-        { isCutover: async () => false },
-      );
+  test("records a null deadline for a run with no wall-clock limit", async () => {
+    const h = harness();
+    const result = await launchReflectionSubagent(
+      launchOptions({ reflectionSettings: { timeoutMinutes: 0 } }),
+      h.deps,
+    );
+    if (!result.launched) throw new Error("expected a launch");
 
-      expect(result).toEqual({ launched: false, reason: "parent_dirty" });
-      expect(
-        existsSync(join(storageDir, "memfs", agentId, "memory-worktrees")),
-      ).toBe(false);
-    } finally {
-      if (originalLocalBackend === undefined) {
-        delete process.env.HARUYUKI_LOCAL_BACKEND_EXPERIMENTAL;
-      } else {
-        process.env.HARUYUKI_LOCAL_BACKEND_EXPERIMENTAL = originalLocalBackend;
-      }
-      if (originalLocalBackendDir === undefined) {
-        delete process.env.LETTA_LOCAL_BACKEND_DIR;
-      } else {
-        process.env.LETTA_LOCAL_BACKEND_DIR = originalLocalBackendDir;
-      }
-      rmSync(storageDir, { recursive: true, force: true });
-    }
+    const recorded = h.metadata[0] as {
+      metadata: { deadlineAt: number | null };
+    };
+    expect(recorded.metadata.deadlineAt).toBeNull();
+  });
+
+  test("launches even when recording the run metadata fails", async () => {
+    const h = harness({
+      writeRunMetadata: async () => {
+        throw new Error("conversation.json is read-only");
+      },
+    });
+
+    const result = await launchReflectionSubagent(launchOptions(), h.deps);
+
+    // Durable copy is best effort; the in-process run is the gate authority.
+    expect(result.launched).toBe(true);
+    expect(h.spawns).toHaveLength(1);
+  });
+});
+
+describe("launchReflectionSubagent failure cleanup", () => {
+  test("skips with fork_failed and releases the lock when forking throws", async () => {
+    const h = harness({
+      forkConversation: async () => {
+        throw new Error("conversation not found");
+      },
+    });
+
+    const result = await launchReflectionSubagent(launchOptions(), h.deps);
+
+    expect(result).toEqual({
+      launched: false,
+      reason: "fork_failed",
+      error: expect.any(Error),
+    });
+    expect(h.spawns).toHaveLength(0);
+    expect(h.lockReleases).toBe(1);
+    expect(isReflectionRunActive(agentId)).toBe(false);
+    // No fork existed, so nothing to delete.
+    expect(h.deleted).toHaveLength(0);
+  });
+
+  test("deletes the half-built fork when the spawn throws", async () => {
+    const h = harness({
+      spawnTask: () => {
+        throw new Error("background task capacity exceeded");
+      },
+    });
+
+    const result = await launchReflectionSubagent(launchOptions(), h.deps);
+
+    expect(result).toEqual({
+      launched: false,
+      reason: "error",
+      error: expect.any(Error),
+    });
+    // A fork nobody will ever run on must not survive as an empty hidden session.
+    expect(h.deleted).toEqual(["conv-fork-1"]);
+    expect(h.lockReleases).toBe(1);
+    expect(isReflectionRunActive(agentId)).toBe(false);
+
+    // A startup failure opens the §5.5.7 backoff window: the next automatic
+    // attempt is deferred, a manual one is not.
+    const retry = harness();
+    const deferred = await launchReflectionSubagent(
+      launchOptions(),
+      retry.deps,
+    );
+    expect(deferred).toEqual({ launched: false, reason: "retry_backoff" });
+    const manual = await launchReflectionSubagent(
+      launchOptions({ triggerSource: "manual" }),
+      retry.deps,
+    );
+    expect(manual.launched).toBe(true);
   });
 });
 
 describe("reflection configuration failure suppression", () => {
   test("suppresses automatic launches but allows manual retries", () => {
-    const agentId = "agent-invalid-reflection-model";
-    clearAutomaticReflectionSuppression(agentId);
     expect(
       recordReflectionConfigurationFailure({
         agentId,
@@ -223,18 +379,12 @@ describe("reflection configuration failure suppression", () => {
     ).toBe(true);
 
     expect(isAutomaticReflectionSuppressed(agentId)).toBe(true);
-    expect(shouldSuppressReflectionLaunch(agentId, "step-count")).toBe(true);
-    expect(shouldSuppressReflectionLaunch(agentId, "compaction-event")).toBe(
-      true,
-    );
+    expect(shouldSuppressReflectionLaunch(agentId, "user-messages")).toBe(true);
+    expect(shouldSuppressReflectionLaunch(agentId, "compaction")).toBe(true);
     expect(shouldSuppressReflectionLaunch(agentId, "manual")).toBe(false);
-    clearAutomaticReflectionSuppression(agentId);
   });
 
   test("does not suppress automatic reflection for retryable failures", () => {
-    const agentId = "agent-retryable-reflection-failure";
-    clearAutomaticReflectionSuppression(agentId);
-
     expect(
       recordReflectionConfigurationFailure({
         agentId,
@@ -247,18 +397,22 @@ describe("reflection configuration failure suppression", () => {
 });
 
 describe("getReflectionLaunchSkippedMessage", () => {
-  test("formats parent-dirty and listener-specific skipped reasons", () => {
-    expect(getReflectionLaunchSkippedMessage("cutover")).toContain(
-      "managed by the server",
+  test("formats the reasons a caller can surface", () => {
+    expect(getReflectionLaunchSkippedMessage("already_active")).toContain(
+      "already running",
     );
-    expect(getReflectionLaunchSkippedMessage("parent_dirty")).toContain(
-      "uncommitted changes",
+    expect(getReflectionLaunchSkippedMessage("memfs_disabled")).toContain(
+      "Memory filesystem is not enabled.",
     );
     expect(getReflectionLaunchSkippedMessage("configuration_error")).toContain(
       "Automatic reflection is paused",
     );
-    expect(getReflectionLaunchSkippedMessage("no_payload", "listener")).toBe(
-      "No new transcript content to reflect on for this conversation.",
+    expect(getReflectionLaunchSkippedMessage("lock_busy")).toContain(
+      "another process",
     );
+    // Silent skips: nothing to tell the user.
+    expect(getReflectionLaunchSkippedMessage("retry_backoff")).toBeUndefined();
+    expect(getReflectionLaunchSkippedMessage("fork_failed")).toBeUndefined();
+    expect(getReflectionLaunchSkippedMessage("error")).toBeUndefined();
   });
 });

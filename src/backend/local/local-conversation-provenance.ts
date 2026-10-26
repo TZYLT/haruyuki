@@ -2,9 +2,8 @@
  * Fork provenance for the local backend: which context mode a fork may claim,
  * and the record fields describing what it actually copied.
  *
- * Kept out of `local-store.ts` so the F-01 policy (reject `inherited-context`
- * until F-03 can select context) has one home a later feature extends, instead
- * of a new branch inside an already pinned file.
+ * Kept out of `local-store.ts` so the fork context policy has one home a later
+ * feature extends, instead of a new branch inside an already pinned file.
  */
 import {
   type ConversationContextMode,
@@ -25,22 +24,31 @@ export interface LocalForkConversationOptions
 export const DEFAULT_FORK_CONTEXT_MODE: ConversationContextMode =
   "inherited-history";
 
+/** The fork selection a caller asked for, reduced to what the policy reads. */
+export interface ForkContextSelection {
+  contextMode?: ConversationContextMode;
+  messageId?: string;
+}
+
 /**
  * The context mode a fork will record.
  *
- * `inherited-context` is rejected until F-03 can actually select context: the
- * current fork clones the whole transcript, so that label would promise a
- * smaller child than the one written (user decision A, 2026-10-25).
+ * `inherited-context` (F-03) copies only the parent's current context window,
+ * so a cutoff by projected message id would contradict what the fork claims to
+ * hold: the two selections answer different questions and are rejected together
+ * rather than letting one silently win.
  */
 export function forkContextMode(
-  requested: ConversationContextMode | undefined,
+  selection: ForkContextSelection = {},
 ): ConversationContextMode {
-  const mode = requested ?? DEFAULT_FORK_CONTEXT_MODE;
+  const mode = selection.contextMode ?? DEFAULT_FORK_CONTEXT_MODE;
   if (!isConversationContextMode(mode)) {
     throw new Error(`Unknown conversation context_mode: ${String(mode)}`);
   }
-  if (mode === "inherited-context") {
-    throw new Error("not_supported: inherited-context requires F-03");
+  if (mode === "inherited-context" && selection.messageId) {
+    throw new Error(
+      "invalid_argument: context_mode inherited-context selects the current context; messageId cannot be combined with it",
+    );
   }
   return mode;
 }

@@ -933,7 +933,7 @@ export class LocalStore {
   ): { id: string } {
     // A rejected context mode must not leave a half-created conversation
     // behind, so the F-01 policy runs before any write.
-    const contextMode = forkContextMode(options.contextMode);
+    const contextMode = forkContextMode(options);
     const source = this.findConversation(
       conversationId,
       conversationId === "default" ? options.agentId : undefined,
@@ -949,8 +949,8 @@ export class LocalStore {
     const sourceMessages = selectLocalMessagesForFork(
       this.localMessagesForConversation(source.id, source.agent_id),
       options.messageId,
-      source.agent_id,
-      source.id,
+      source,
+      contextMode,
     );
     if (!sourceMessages) {
       throw new LocalBackendNotFoundError("Message", options.messageId ?? "");

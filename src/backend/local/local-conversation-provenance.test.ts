@@ -19,17 +19,46 @@ function storedMessage(id: string): StoredMessage {
 describe("forkContextMode", () => {
   test("defaults a fork to inherited-history", () => {
     expect(DEFAULT_FORK_CONTEXT_MODE).toBe("inherited-history");
-    expect(forkContextMode(undefined)).toBe("inherited-history");
+    expect(forkContextMode()).toBe("inherited-history");
+    expect(forkContextMode({})).toBe("inherited-history");
   });
 
-  test("rejects inherited-context until F-03 can select context", () => {
-    expect(() => forkContextMode("inherited-context")).toThrow(
-      "not_supported: inherited-context requires F-03",
+  test("accepts inherited-context, the F-03 context-only mode", () => {
+    expect(forkContextMode({ contextMode: "inherited-context" })).toBe(
+      "inherited-context",
     );
   });
 
+  test("rejects a message cutoff combined with inherited-context", () => {
+    // The two selections answer different questions: one copies the current
+    // window, the other cuts the transcript at a projected row.
+    expect(() =>
+      forkContextMode({
+        contextMode: "inherited-context",
+        messageId: "local-msg-1",
+      }),
+    ).toThrow(
+      "invalid_argument: context_mode inherited-context selects the current context",
+    );
+  });
+
+  test("accepts a message cutoff for inherited-history", () => {
+    expect(
+      forkContextMode({
+        contextMode: "inherited-history",
+        messageId: "local-msg-1",
+      }),
+    ).toBe("inherited-history");
+  });
+
   test("passes standalone through", () => {
-    expect(forkContextMode("standalone")).toBe("standalone");
+    expect(forkContextMode({ contextMode: "standalone" })).toBe("standalone");
+  });
+
+  test("rejects an unknown mode", () => {
+    expect(() => forkContextMode({ contextMode: "unknown" as never })).toThrow(
+      "Unknown conversation context_mode: unknown",
+    );
   });
 });
 

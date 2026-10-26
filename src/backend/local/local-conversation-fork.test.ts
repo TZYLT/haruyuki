@@ -113,6 +113,42 @@ describe("LocalBackend conversation forks", () => {
     }
   });
 
+  test("does not copy topic markers into an inherited-context fork (F-03)", async () => {
+    // A context-only fork holds the parent's current window, not a positional
+    // prefix, so the anchor remap cannot be trusted; the markers stay behind.
+    const storageDir = await mkdtemp(join(tmpdir(), "local-fork-topics-ctx-"));
+    try {
+      const agentId = "agent-local-fork-topics-context";
+      const store = new LocalStore(agentId, { storageDir });
+      const source = store.createConversation({ agent_id: agentId } as never);
+      store.appendTurnInput(source.id, {
+        agent_id: agentId,
+        messages: [
+          { role: "user", content: "first topic" },
+          { role: "user", content: "second topic" },
+        ],
+      } as unknown as ConversationMessageCreateBody);
+      store.contextRewrites.appendTopicMarker({
+        conversationId: source.id,
+        agentId,
+        title: "Parent topic",
+        createdBy: "agent",
+      });
+
+      const backend = new LocalBackend({ storageDir, memfsEnabled: false });
+      const forked = await backend.forkConversation(source.id, {
+        contextMode: "inherited-context",
+      });
+
+      expect(backend.listTopicMarkers(forked.id, agentId)).toEqual([]);
+      expect(
+        backend.listTopicMarkers(source.id, agentId).map((m) => m.title),
+      ).toEqual(["Parent topic"]);
+    } finally {
+      await rm(storageDir, { recursive: true, force: true });
+    }
+  });
+
   test("does not inherit the source snapshot into a different agent (R-06)", () => {
     const agentId = "agent-local-fork-owner";
     const otherAgentId = "agent-local-fork-other";
@@ -343,21 +379,116 @@ describe("LocalStore fork provenance (F-01 §5.5)", () => {
     expect(record.inherited_message_count).toBe(1);
   });
 
-  test("rejects inherited-context before writing anything", () => {
-    const agentId = "agent-fork-provenance-inherited-context";
+  test("inherited-context copies only the compaction window, summary included", async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), "local-fork-context-"));
+    try {
+      const agentId = "agent-fork-context-window";
+      const store = new LocalStore(agentId, { storageDir });
+      const source = store.createConversation({ agent_id: agentId } as never);
+      store.appendTurnInput(source.id, {
+        agent_id: agentId,
+        messages: [
+          { role: "user", content: "first" },
+          { role: "user", content: "second" },
+          { role: "user", content: "third" },
+        ],
+      } as unknown as ConversationMessageCreateBody);
+      const kept = store.listLocalMessages(source.id, agentId).at(-1);
+      if (!kept) throw new Error("Expected a source message");
+      store.contextRewrites.rewriteInContext({
+        conversationId: source.id,
+        agentId,
+        summary: "earlier turns",
+        packedSummary: "[compaction] earlier turns",
+        remainingMessages: [kept],
+      });
+      // The window is the summary row plus the message it kept; the other two
+      // user messages are out of context.
+      expect(store.getInContextMessageIds(source.id, agentId)).toHaveLength(2);
+
+      const forked = store.forkConversation(source.id, {
+        origin: "reflection",
+        contextMode: "inherited-context",
+        parentConversationId: source.id,
+        hidden: true,
+      });
+
+      const forkedMessages = store.listLocalMessages(forked.id, agentId);
+      expect(forkedMessages).toHaveLength(2);
+      expect(forkedMessages[0]?.role).toBe("user");
+      expect(forkedMessages[0]?.metadata?.compaction?.summary).toBe(
+        "earlier turns",
+      );
+      expect(forkedMessages[1]?.content).toEqual(kept.content);
+      expect(forkedMessages.map((message) => message.id)).not.toContain(
+        kept.id,
+      );
+
+      const record = storedConversation(store, forked.id);
+      expect(record.context_mode).toBe("inherited-context");
+      expect(record.origin).toBe("reflection");
+      expect(record.parent_conversation_id).toBe(source.id);
+      expect(record.hidden).toBe(true);
+      expect(record.inherited_message_count).toBeGreaterThan(0);
+    } finally {
+      await rm(storageDir, { recursive: true, force: true });
+    }
+  });
+
+  test("an empty context copies no messages but keeps the frozen prefix", () => {
+    const agentId = "agent-fork-context-empty";
     const store = new LocalStore(agentId);
     const source = store.createConversation({ agent_id: agentId } as never);
     store.appendTurnInput(source.id, {
       agent_id: agentId,
       messages: [{ role: "user", content: "hello" }],
     } as unknown as ConversationMessageCreateBody);
+    store.setCompiledSystemPrompt(source.id, agentId, {
+      content: "compiled system",
+      coreMemory: "core",
+      compiledAt: "2026-01-01T00:00:00.000Z",
+      systemTemplateHash: "hash",
+      memfsRevision: "rev",
+      frozenReason: "conversation_created",
+    });
+    const record = storedConversation(store, source.id);
+    record.in_context_message_ids = [];
+
+    const forked = store.forkConversation(source.id, {
+      contextMode: "inherited-context",
+    });
+
+    // No message is copied (§5.2.6); the fork still exists and inherits the
+    // parent's applied system prompt snapshot.
+    expect(store.listLocalMessages(forked.id, agentId)).toHaveLength(0);
+    const forkRecord = storedConversation(store, forked.id);
+    expect(forkRecord.inherited_message_count).toBe(0);
+    expect(forkRecord.inherited_through_message_id).toBeNull();
+    expect(store.getCompiledSystemPrompt(forked.id, agentId)?.content).toBe(
+      "compiled system",
+    );
+    expect(
+      store.getCompiledSystemPrompt(forked.id, agentId)?.frozenReason,
+    ).toBe("fork_inherited");
+  });
+
+  test("rejects a message cutoff combined with inherited-context", () => {
+    const agentId = "agent-fork-context-message-id";
+    const store = new LocalStore(agentId);
+    const source = store.createConversation({ agent_id: agentId } as never);
+    store.appendTurnInput(source.id, {
+      agent_id: agentId,
+      messages: [{ role: "user", content: "hello" }],
+    } as unknown as ConversationMessageCreateBody);
+    const messageId = projectedIds(store, source.id)[0];
+    if (!messageId) throw new Error("Expected a projected message id");
 
     expect(() =>
       store.forkConversation(source.id, {
         contextMode: "inherited-context",
+        messageId,
       }),
-    ).toThrow("not_supported: inherited-context requires F-03");
-    // A rejected fork leaves no half-created conversation behind.
+    ).toThrow("invalid_argument");
     expect(store.listConversations({ agent_id: agentId })).toHaveLength(1);
   });
 
