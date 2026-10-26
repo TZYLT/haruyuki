@@ -189,7 +189,6 @@ async function runBidirectionalReflectionScenario(): Promise<BidirectionalReflec
         // Ordinary turns still return pong, while reflection turns execute a
         // real Bash read of TRANSCRIPT_PATH before returning success.
         HARUYUKI_LOCAL_BACKEND_EXECUTOR: "deterministic-reflection",
-        HARUYUKI_ENABLE_WINDOWS_AUTO_REFLECTION: "1",
         LETTA_TRANSCRIPT_ROOT: transcriptRoot,
         // This test exercises transcript-driven reflection, not kernel sandbox
         // behavior. Keep it independent of host bwrap/seatbelt availability.
