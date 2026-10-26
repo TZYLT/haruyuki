@@ -51,6 +51,7 @@ Haruyuki 把 agent 的记忆、身份与行为当作**可以长期演进的资�
 | **本地后端** | 单一后端模式（`--backend local`）：agent、会话、记忆、transcript 全在本机 |
 | **多 agent** | 任意 agent 可作为另一个 agent 的 subagent（含 fork、recall 等内置 subagent） |
 | **渠道与本地服务** | `haruyuki server` 提供本地 app-server ＋ WebSocket ＋ Slack/Telegram 渠道 |
+| **整机快照** | `haruyuki export` 把本机数据打成一个 `.hryk` 包，`haruyuki import` 整体还原：先校验、自动备份、失败回滚。**暂不保证跨平台**，操作前请务必自行备份 |
 | **完全本地诊断** | 无遥测；崩溃与边界错误、`/maintenance feedback` 都只写本地日志 |
 
 
@@ -81,7 +82,7 @@ bun run build        # 产出仓根 haruyuki.js（已 gitignore）
 node ./haruyuki.js   # 启动交互界面
 ```
 
-> 构建产物是**单文件 bundle**（约 14.0 MiB），它把生产依赖内联其中；`--version` 应打印 `0.4.1 (Haruyuki)`（版本号取自 `package.json` 的 `version`，且是**构建期内联**——改了版本号必须重新构建才会生效）。
+> 构建产物是**单文件 bundle**（约 14.2 MiB），它把生产依赖内联其中；`--version` 应打印 `0.4.2 (Haruyuki)`（版本号取自 `package.json` 的 `version`，且是**构建期内联**——改了版本号必须重新构建才会生效）。
 
 ### 方式二：npm 包（推荐）
 
@@ -179,7 +180,8 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 
 | 版本 | npm 上有同版本包 | 更新了什么、有什么好处 |
 |---|---|---|
-| `0.4.1` | - | **增加隐藏会话**：自动运行的会话会被自动隐藏 |
+| `0.4.2` | + | 增加数据导出导入功能：允许快照式导出导入全部数据，暂不保证跨平台，操作前请务必自行备份，以防数据损坏 |
+| `0.4.1` | + | 增加隐藏会话：自动运行的会话会被自动隐藏 |
 | `0.4.0` | + | **提示词优化，命令面收拢**：命令名全面收拢为 hub，提示词特化与优化。本版唯一的**破坏性变更** |
 | `0.3.1` | + | 修复TUI已知问题，优化操作体验。 |
 | `0.3.0` | + | **TUI全面升级**：升级 TUI 为全屏外壳，支持鼠标点击和标签页，增加设置和用量界面。 |

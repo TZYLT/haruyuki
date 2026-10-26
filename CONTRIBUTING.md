@@ -187,6 +187,7 @@ node scripts/generate-tutor-avatar.cjs          # → assets/tutor-profile.png
 | **工具与配置面** | `haruyuki model` 同时识别 `HARUYUKI_*` 与裸环境名（与 `cron`/`messages`/`memory` 对齐）；`app-paths` 的路径**调用期解析**（禁止模块级 `const` 快照） |
 | **测试工具** | 单测并行化：**~11–12 min → 162–180 s**（`HARUYUKI_TEST_PARALLEL` 可调，`=0` 走串行逃生舱） |
 | **隐藏会话与维护入口（0.4.1）** | `/maintenance sessions`：只列 `hidden === true` 的会话（`hidden_only`），只读详情按"最后一条继承 + 新增段"显示、旧记录标 `boundary unknown`，`d` 二次确认后按会话 id 物理删除单条；会话记录新增 `origin`／`parent_conversation_id`／`context_mode`／`inherited_message_count`／`inherited_through_message_id`；协议补 `conversation_delete` 与 `conversation_list` 的 `include_hidden`／`hidden_only`。需求编号 `44-1`（内部文档）。**替代方案**：无——这些后台会话此前没有任何入口，也不提供批量回收／撤销／转正。未改 `AppView`、设置面与 `/resume` |
+| **整机快照导出/导入（0.4.2）** | `haruyuki export` / `haruyuki import`：把用户级根、本地后端存储、可选项目级与密钥打进**一个** `.hryk` 包（gzip tar，根级 `manifest.json` ＋ `home/` ＋ `local-backend/` ＋ 可选 `project/` ＋ `secrets.json`，零新依赖、自研 ustar+gzip）。导入先校验（tar／manifest／schemaVersion／逐条 SHA-256 与字节／条目数）通过后才要确认词，随后自动备份到 `backups/pre-import.hryk`（只留 1 份、可直接再导入）、按快照语义接管受管目录、重写 `sessionsByServer` 桶键、写回密钥、清 cron 租约与记忆仓库 git lock、幂等重装 hook；落位后任一步失败自动回滚，回滚失败给出备份绝对路径与手工命令。需求编号 `44-2`（内部文档）。**替代方案**：无——`haruyuki memory export`／`memory backup` 只管记忆仓库，不覆盖设置、会话、渠道凭据与用量账本；上游与分家后都没有整机迁移入口。**已知限制**：跨平台不还原 POSIX 权限位／属主／符号链接／可执行位（同平台往返是硬承诺）；项目级只带六项 harness 数据（不含源码与 `.env`） |
 
 ### E. 文档、品牌素材与法务（⑮ 批次）
 

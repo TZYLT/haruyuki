@@ -70,6 +70,7 @@ to that end.
 | **Local backend** | A single backend mode (`--backend local`): agent, conversations, memory, and transcripts all live on this machine |
 | **Multi-agent** | Any agent can act as another agent's subagent (including built-in subagents such as fork and recall) |
 | **Channels and a local server** | `haruyuki server` provides a local app-server, WebSocket, and Slack/Telegram channels |
+| **Whole-machine snapshot** | `haruyuki export` writes one `.hryk` package of everything this machine holds, and `haruyuki import` restores it: validate first, back up automatically, roll back on failure. Cross-platform is **not** guaranteed yet, and you must keep your own backup before operating |
 | **Fully local diagnostics** | No telemetry; crashes, boundary errors, and `/maintenance feedback` are written to local logs only |
 
 ## 2. What changed relative to upstream
@@ -107,8 +108,8 @@ bun run build        # produces haruyuki.js at the repo root (gitignored)
 node ./haruyuki.js   # start the interactive UI
 ```
 
-> The build output is a **single-file bundle** (~14.0 MiB) with production dependencies inlined;
-> `--version` should print `0.4.1 (Haruyuki)`. The number comes from `package.json`'s `version`
+> The build output is a **single-file bundle** (~14.2 MiB) with production dependencies inlined;
+> `--version` should print `0.4.2 (Haruyuki)`. The number comes from `package.json`'s `version`
 > and is **inlined at build time**, so changing it requires a rebuild.
 
 ### Option 2 — the npm package (recommended)
@@ -219,7 +220,8 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
-| `0.4.1` | - | **Hidden sessions**: sessions that run automatically are hidden automatically |
+| `0.4.2` | + | **Data export and import**: snapshot-style export and import of all data. Cross-platform is not guaranteed yet; back up your data before you start, in case something goes wrong |
+| `0.4.1` | + | **Hidden sessions**: sessions that run automatically are hidden automatically |
 | `0.4.0` | + | **Prompt work and a collapsed command surface**: every command name now lives in a hub, and the agent prompts are specialised and tuned. The only **breaking change** in this version |
 | `0.3.1` | + | Fixes known TUI problems and improves the interactive experience. |
 | `0.3.0` | + | **A full TUI upgrade**: the TUI becomes a full-screen shell with mouse clicks and tabs, plus settings and usage pages |
