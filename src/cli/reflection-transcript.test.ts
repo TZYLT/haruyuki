@@ -6,7 +6,6 @@ import {
   appendExternalTranscriptEntries,
   appendTranscriptDeltaJsonl,
   applyPendingReflectionUserMessages,
-  buildParentMemorySnapshot,
   consumeReflectionUserMessageTrigger,
   getReflectionTranscriptPaths,
   getReflectionTranscriptState,
@@ -197,54 +196,5 @@ describe("reflection-transcript user-message accounting (F-03)", () => {
 
     expect(first).toEqual({ appended: 1, skipped: 0 });
     expect(second).toEqual({ appended: 1, skipped: 1 });
-  });
-});
-
-describe("buildParentMemorySnapshot", () => {
-  let testRoot: string;
-
-  beforeEach(async () => {
-    testRoot = await mkdtemp(join(tmpdir(), "letta-memory-snapshot-test-"));
-  });
-
-  afterEach(async () => {
-    await rm(testRoot, { recursive: true, force: true });
-  });
-
-  test("renders the tree and inlines system memory only", async () => {
-    const memoryDir = join(testRoot, "memory");
-    await mkdir(join(memoryDir, "system"), { recursive: true });
-    await mkdir(join(memoryDir, "reference"), { recursive: true });
-    await mkdir(join(memoryDir, "skills", "bird"), { recursive: true });
-
-    await writeFile(
-      join(memoryDir, "system", "human.md"),
-      "---\ndescription: User context\n---\nDr. Wooders prefers direct answers.\n",
-      "utf-8",
-    );
-    await writeFile(
-      join(memoryDir, "reference", "project.md"),
-      "---\ndescription: Project notes\n---\nletta-code CLI details\n",
-      "utf-8",
-    );
-    await writeFile(
-      join(memoryDir, "skills", "bird", "SKILL.md"),
-      "---\nname: bird\ndescription: X/Twitter CLI for posting\n---\nThis body should not be inlined into parent memory.\n",
-      "utf-8",
-    );
-
-    const snapshot = await buildParentMemorySnapshot(memoryDir);
-
-    expect(snapshot).toContain("<parent_memory>");
-    expect(snapshot).toContain("project.md (Project notes)");
-    expect(snapshot).toContain("<path>$MEMORY_DIR/system/human.md</path>");
-    expect(snapshot).toContain("Dr. Wooders prefers direct answers.");
-    expect(snapshot).not.toContain(
-      "<path>$MEMORY_DIR/reference/project.md</path>",
-    );
-    expect(snapshot).not.toContain(
-      "This body should not be inlined into parent memory.",
-    );
-    expect(snapshot).toContain("</parent_memory>");
   });
 });
