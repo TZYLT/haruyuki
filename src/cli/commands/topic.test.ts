@@ -4,6 +4,7 @@
  * spacing but never blocked by it.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,10 +19,13 @@ import {
   formatTopicCommandReceipt,
   handleTopicCommand,
   parseTopicCommandArgs,
+  parseTopicShowArgs,
   TOPIC_COMMAND_LOCAL_ONLY,
   TOPIC_COMMAND_USAGE,
+  TOPIC_SHOW_MATCH_LIMIT,
 } from "@/cli/commands/topic";
 import { settingsManager } from "@/settings-manager";
+import { topic_query } from "@/tools/impl/topic-query";
 
 const temporaryDirectories: string[] = [];
 
@@ -67,7 +71,10 @@ const okExecutor: HeadlessTurnExecutor = {
   },
 };
 
-async function backendWithTurns(turns: number): Promise<{
+async function backendWithTurns(
+  turns: number,
+  userText: (turn: number) => string = (turn) => `question ${turn}`,
+): Promise<{
   backend: LocalBackend;
   agentId: string;
   scope: { agentId: string; conversationId: string };
@@ -84,7 +91,7 @@ async function backendWithTurns(turns: number): Promise<{
   for (let turn = 0; turn < turns; turn += 1) {
     const stream = await backend.createConversationMessageStream("default", {
       agent_id: agent.id,
-      messages: [{ role: "user", content: `question ${turn}` }],
+      messages: [{ role: "user", content: userText(turn) }],
     } as ConversationMessageCreateBody);
     for await (const _chunk of stream) {
       // drain
@@ -299,6 +306,268 @@ describe("handleTopicCommand", () => {
       await settingsManager.reset();
       if (originalHome === undefined) delete process.env.HOME;
       else process.env.HOME = originalHome;
+    }
+  });
+});
+
+/**
+ * F-04 T-10's human face.
+ *
+ * The load-bearing claim is the third test: `/topic show` and `TopicQuery` must
+ * print the same characters for the same topic, because they render one shared
+ * projection. Everything else here is the resolution rule — a position, one title
+ * match, or a refusal — and the two places a long span is allowed to leave the
+ * terminal.
+ */
+describe("/topic show", () => {
+  test("parseTopicShowArgs reads a selector, --full and --out", () => {
+    expect(parseTopicShowArgs(["2"])).toEqual({
+      ok: true,
+      full: false,
+      selector: "2",
+    });
+    expect(parseTopicShowArgs(["auth", "token"])).toEqual({
+      ok: true,
+      full: false,
+      selector: "auth token",
+    });
+    expect(parseTopicShowArgs(["2", "--full"])).toEqual({
+      ok: true,
+      full: true,
+      selector: "2",
+    });
+    expect(parseTopicShowArgs(["2", "--out", "topic.txt"])).toEqual({
+      ok: true,
+      full: false,
+      selector: "2",
+      outPath: "topic.txt",
+    });
+  });
+
+  test("parseTopicShowArgs rejects an unknown option and a bare --out by name", () => {
+    const unknown = parseTopicShowArgs(["2", "--wide"]);
+    expect(unknown.ok).toBe(false);
+    expect(unknown.ok || unknown.content).toContain('Unknown option "--wide"');
+
+    const missing = parseTopicShowArgs(["2", "--out"]);
+    expect(missing.ok).toBe(false);
+    expect(missing.ok || missing.content).toContain(
+      "`--out` needs a file path",
+    );
+  });
+
+  test("a position number prints the conversation that marker covers", async () => {
+    const { backend, agentId, scope } = await backendWithTurns(2);
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Release notes",
+      createdBy: "user",
+    });
+
+    const result = await handleTopicCommand(["show", "1"], scope, { backend });
+
+    expect(result).toContain("Topic: Release notes");
+    expect(result).toContain("question 0");
+    expect(result).toContain("question 1");
+  });
+
+  test("showing writes no marker (the C-22 bug, one word over)", async () => {
+    const { backend, agentId, scope } = await backendWithTurns(2);
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Release notes",
+      createdBy: "user",
+    });
+
+    await handleTopicCommand(["show", "release"], scope, { backend });
+    await handleTopicCommand(["show", "1"], scope, { backend });
+    await handleTopicCommand(["show", "nope"], scope, { backend });
+
+    expect(
+      backend
+        .listTopicMarkers("default", agentId)
+        .map((marker) => marker.title),
+    ).toEqual(["Release notes"]);
+  });
+
+  test("agrees with TopicQuery at the same tier, byte for byte", async () => {
+    const { backend, agentId, scope } = await backendWithTurns(2);
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Release notes",
+      createdBy: "user",
+    });
+    const topicId = backend.listTopicMarkers("default", agentId)[0]?.id;
+    expect(topicId).toBeDefined();
+
+    const shown = await handleTopicCommand(["show", "1"], scope, { backend });
+    const queried = await topic_query(
+      { include: "full", topic_id: topicId },
+      { agentId, storageDir: backend.getLocalStorageDir() },
+    );
+
+    // One shared projection: not "similar", identical.
+    expect(queried.status).toBe("success");
+    expect(shown).toBe(queried.content);
+  });
+
+  test("refuses a position that is not there, naming the range", async () => {
+    const { backend, agentId, scope } = await backendWithTurns(2);
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Release notes",
+      createdBy: "user",
+    });
+
+    const result = await handleTopicCommand(["show", "9"], scope, { backend });
+
+    expect(result).toContain("There is no marker #9");
+    expect(result).toContain("has 1 (1–1)");
+  });
+
+  test("explains an empty conversation instead of printing a position error", async () => {
+    const { scope, backend } = await backendWithTurns(1);
+
+    const result = await handleTopicCommand(["show", "1"], scope, { backend });
+
+    expect(result).toContain("no topic markers yet");
+  });
+
+  test("resolves the one title containing the substring", async () => {
+    const { backend, agentId, scope } = await backendWithTurns(2);
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Release notes",
+      createdBy: "user",
+    });
+
+    const result = await handleTopicCommand(
+      ["show", "release", "notes"],
+      scope,
+      { backend },
+    );
+
+    expect(result).toContain("Topic: Release notes");
+  });
+
+  test("lists ambiguous matches and refuses to guess", async () => {
+    const { backend, agentId, scope } = await backendWithTurns(2);
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Release notes",
+      createdBy: "user",
+    });
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Release notes follow-up",
+      createdBy: "user",
+    });
+
+    const result = await handleTopicCommand(["show", "release"], scope, {
+      backend,
+    });
+
+    expect(result).toContain("matches 2 topics");
+    expect(result).toContain("Release notes follow-up");
+    // The refusal must not print a span: no conversation text leaks out.
+    expect(result).not.toContain("question 0");
+    expect(TOPIC_SHOW_MATCH_LIMIT).toBeGreaterThan(1);
+  });
+
+  test("the registry reaches the show handler and records no marker", async () => {
+    const { backend, agentId } = await backendWithTurns(2);
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Release notes",
+      createdBy: "user",
+    });
+    // The registry resolves its backend through `getBackend()`, not through deps.
+    __testSetBackend(backend);
+    const { executeCommand } = await import("@/cli/commands/registry");
+
+    const result = await executeCommand("/topic show 1", {
+      agentId,
+      conversationId: "default",
+    });
+
+    expect(result.output).toContain("Topic: Release notes");
+    // The C-22 shape: a subcommand that falls through becomes a marker title.
+    expect(backend.listTopicMarkers("default", agentId)).toHaveLength(1);
+  });
+
+  test("reports the local-only rule on a non-local backend", async () => {
+    __testSetBackend(new FakeHeadlessBackend());
+    expect(
+      await handleTopicCommand(["show", "1"], { agentId: "agent-x" }),
+    ).toBe(TOPIC_COMMAND_LOCAL_ONLY);
+  });
+
+  test("--out writes the complete text to the path it was given", async () => {
+    const { backend, agentId, scope } = await backendWithTurns(2);
+    const directory = await createStorageDirectory();
+    const path = join(directory, "topic.txt");
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Release notes",
+      createdBy: "user",
+    });
+
+    const result = await handleTopicCommand(
+      ["show", "1", "--out", path],
+      scope,
+      { backend },
+    );
+
+    expect(result).toContain(`Wrote `);
+    expect(result).toContain(path);
+    expect(existsSync(path)).toBe(true);
+    expect(readFileSync(path, "utf8")).toContain("Topic: Release notes");
+  });
+
+  test("a long span prints its ends, keeps the rest in a file, and says so", async () => {
+    const { backend, agentId, scope } = await backendWithTurns(
+      14,
+      (turn) => `${"x".repeat(700)} turn ${turn}`,
+    );
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Long one",
+      createdBy: "user",
+    });
+
+    const originalHome = process.env.HARUYUKI_HOME;
+    const home = await createStorageDirectory();
+    process.env.HARUYUKI_HOME = home;
+    try {
+      const result = await handleTopicCommand(["show", "1"], scope, {
+        backend,
+      });
+
+      expect(result).toContain("characters not shown");
+      const match = /is in (.+)$/m.exec(result);
+      expect(match).not.toBeNull();
+      const overflowPath = match?.[1]?.trim() ?? "";
+      // Red line A: the file has to land under the temporary root, never the real
+      // `~/.haruyuki`.
+      expect(overflowPath.startsWith(home)).toBe(true);
+      expect(existsSync(overflowPath)).toBe(true);
+      const written = readFileSync(overflowPath, "utf8");
+      expect(written.length).toBeGreaterThan(8000);
+      expect(written).toContain("turn 0");
+      expect(written).toContain("turn 13");
+    } finally {
+      if (originalHome === undefined) delete process.env.HARUYUKI_HOME;
+      else process.env.HARUYUKI_HOME = originalHome;
     }
   });
 });

@@ -117,17 +117,20 @@ describe("command routing", () => {
     }
   });
 
-  test("the two read-only /topic forms bypass the queue, and a marker does not", () => {
-    // §5.11.10/§5.11.9: browsing the topic list and searching it are reads that
-    // open over the transcript, so a running turn must not make them wait. Writing
-    // a marker (`/topic <title>`) changes state and keeps its place in the queue —
-    // which is why this is decided by the subcommand, not by `/topic` as a whole.
+  test("the read-only /topic forms bypass the queue, and a marker does not", () => {
+    // §5.11.10/§5.11.9: browsing the topic list, searching it and reading one
+    // marker's conversation back are reads, so a running turn must not make them
+    // wait. Writing a marker (`/topic <title>`) changes state and keeps its place
+    // in the queue — which is why this is decided by the subcommand, not by
+    // `/topic` as a whole.
     for (const input of [
       "/topic list",
       "/topic list --all",
       "/topic list help",
       "/topic search deploy",
       "/topic search",
+      "/topic show 2",
+      "/topic show auth token --full",
     ]) {
       expect({ input, bypass: isNonStateCommand(input) }).toEqual({
         input,
@@ -136,6 +139,7 @@ describe("command routing", () => {
     }
     for (const input of [
       "/topic Auth token refresh",
+      "/topic showcase",
       "/topics",
       "/topiclist",
       "/topic searchx",

@@ -19,6 +19,15 @@
       "minimum": 1,
       "maximum": 200,
       "description": "Keep only the newest N matching topics."
+    },
+    "topic_id": {
+      "type": "string",
+      "description": "One topic's id, as printed in the `topic_id` column of a `sections` result. Required for `include: \"full\"`; with `sections` or `excerpt` it narrows the result to that one topic."
+    },
+    "include": {
+      "type": "string",
+      "enum": ["sections", "excerpt", "full"],
+      "description": "How much to return. `sections` (default) lists rows. `excerpt` adds the first and last few cleaned messages of each matching topic, at most 1,000 characters per topic. `full` prints one topic's cleaned messages, addressed by `topic_id`, at most 8,000 characters — read the excerpt first, then ask for the one topic you need."
     }
   },
   "additionalProperties": false,

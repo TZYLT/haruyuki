@@ -1,15 +1,25 @@
 /**
- * `TopicQuery` — read the agent's topic index (requirement §5.11.8).
+ * `TopicQuery` — read the agent's topic index (requirement §5.11.8), and, on
+ * request, the messages a marker covers (F-04 T-10, decision §2.3).
  *
- * The index itself lives in `backend/local/topic-index.ts`; this module is the
+ * The index itself lives in `backend/local/topic-index.ts`; the span projection
+ * lives in `backend/local/topic-recall.ts` and is shared with `/topic show`, so
+ * the model and the user read the same text for the same tier. This module is the
  * model-facing layer: argument validation, the current-agent/storage resolution,
- * and the result copy. Two decisions live here and are pure functions so they can
- * be tested without a store — what counts as a valid query, and how the budget
- * cuts a result set.
+ * and the result copy. The decisions that matter are pure functions so they can be
+ * tested without a store — what counts as a valid query, and how the budget cuts a
+ * result set.
  *
  * The tool is read-only. It never writes a marker and never touches the context,
  * the frozen prefix, or the transcript; the only write in the whole path is the
  * index's own self-heal, which rewrites the derived file, never the source.
+ *
+ * ## Why `include` is a tier instead of three tools
+ *
+ * `sections` (the default) is the cheap listing this tool has always returned.
+ * `excerpt` costs one transcript read per topic it actually prints, and `full`
+ * addresses exactly one topic by id. Making the caller ask twice is the same
+ * two-step shape paging uses, and it keeps the zero-cost default zero-cost.
  */
 import { getCurrentAgentId } from "@/agent/context";
 import { type Backend, getBackend } from "@/backend";
@@ -18,6 +28,12 @@ import {
   queryTopicIndex,
   type TopicIndexEntry,
 } from "@/backend/local/topic-index";
+import {
+  readTopicRecallSpan,
+  recallTopicConversation,
+  renderTopicRecall,
+  TOPIC_RECALL_EXCERPT_MAX_CHARS,
+} from "@/backend/local/topic-recall";
 
 /**
  * Total character budget for one result set (requirement §5.11.8). The budget
@@ -33,11 +49,25 @@ export const TOPIC_QUERY_SECTION_PREVIEW_CHARS = 200;
 /** The largest `limit` the schema accepts. */
 export const TOPIC_QUERY_MAX_LIMIT = 200;
 
+/** The three tiers this tool answers in. */
+export type TopicQueryInclude = "sections" | "excerpt" | "full";
+
+export const TOPIC_QUERY_INCLUDE_VALUES: readonly TopicQueryInclude[] = [
+  "sections",
+  "excerpt",
+  "full",
+];
+
+/** Indent under a row, shared by the section preview and a message body. */
+const ROW_INDENT = "   ";
+
 export interface TopicQueryArgs {
   keyword?: unknown;
   days?: unknown;
   session?: unknown;
   limit?: unknown;
+  include?: unknown;
+  topic_id?: unknown;
 }
 
 export interface TopicQueryDeps {
@@ -57,10 +87,20 @@ export interface TopicQueryFilters {
   days?: number;
   conversationId?: string;
   limit?: number;
+  include: TopicQueryInclude;
+  /** The one topic `include: "full"` addresses; a filter for the other tiers. */
+  topicId?: string;
 }
 
 function collapseWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function isTopicQueryInclude(value: unknown): value is TopicQueryInclude {
+  return (
+    typeof value === "string" &&
+    (TOPIC_QUERY_INCLUDE_VALUES as readonly string[]).includes(value)
+  );
 }
 
 /**
@@ -71,7 +111,36 @@ function collapseWhitespace(value: string): string {
 export function validateTopicQueryArgs(
   args: TopicQueryArgs,
 ): ({ ok: true } & TopicQueryFilters) | { ok: false; content: string } {
-  const filters: TopicQueryFilters = {};
+  const filters: TopicQueryFilters = { include: "sections" };
+
+  if (args.include !== undefined) {
+    if (!isTopicQueryInclude(args.include)) {
+      return {
+        ok: false,
+        content: `\`include\` must be one of ${TOPIC_QUERY_INCLUDE_VALUES.map((value) => `"${value}"`).join(", ")}. It defaults to "sections", the listing this tool returns without it.`,
+      };
+    }
+    filters.include = args.include;
+  }
+
+  if (args.topic_id !== undefined) {
+    if (typeof args.topic_id !== "string") {
+      return {
+        ok: false,
+        content:
+          "`topic_id` must be a string when provided — the `topic_id` column of a `sections` result.",
+      };
+    }
+    const topicId = args.topic_id.trim();
+    if (topicId.length === 0) {
+      return {
+        ok: false,
+        content:
+          "`topic_id` was empty. Pass the `topic_id` value from a `sections` result, or drop the parameter.",
+      };
+    }
+    filters.topicId = topicId;
+  }
 
   if (args.keyword !== undefined) {
     if (typeof args.keyword !== "string") {
@@ -126,6 +195,33 @@ export function validateTopicQueryArgs(
     filters.limit = limit;
   }
 
+  if (filters.include === "full") {
+    // "full" is an address, not a search: it names one topic and returns one span.
+    if (filters.topicId === undefined) {
+      return {
+        ok: false,
+        content:
+          '`include: "full"` needs `topic_id`. It prints one topic\'s messages, so name which one — the `topic_id` column of a `sections` result. For a peek at several topics at once, use `include: "excerpt"`.',
+      };
+    }
+    const inapplicable = [
+      filters.keyword === undefined ? undefined : "keyword",
+      filters.days === undefined ? undefined : "days",
+      filters.conversationId === undefined ? undefined : "session",
+      filters.limit === undefined ? undefined : "limit",
+    ].filter((name): name is string => name !== undefined);
+    if (inapplicable.length > 0) {
+      return {
+        ok: false,
+        content: `\`include: "full"\` addresses one topic by \`topic_id\`, so ${inapplicable
+          .map((name) => `\`${name}\``)
+          .join(", ")} do not apply. Drop ${
+          inapplicable.length === 1 ? "it" : "them"
+        }, or use \`include: "sections"\`/\`"excerpt"\` to filter a list.`,
+      };
+    }
+  }
+
   return { ok: true, ...filters };
 }
 
@@ -148,12 +244,31 @@ function sectionFirstLine(section: string | undefined): string {
   return `${firstLine.slice(0, TOPIC_QUERY_SECTION_PREVIEW_CHARS - 1)}…`;
 }
 
-function formatEntryRow(entry: TopicIndexEntry, position: number): string {
+function indentBlock(body: string): string[] {
+  return body
+    .split("\n")
+    .map((line) =>
+      line.length === 0 ? ROW_INDENT.trimEnd() : `${ROW_INDENT}${line}`,
+    );
+}
+
+/**
+ * One row: identity, when it was marked, which conversation, who marked it, its
+ * `topic_id` (an identity, never a path), the section's first line, and — on
+ * request — the message projection under it.
+ */
+function formatEntryRow(
+  entry: TopicIndexEntry,
+  position: number,
+  body?: string,
+): string {
   const line = `${position}. ${entry.title} · ${formatTopicQueryTimestamp(
     entry.createdAt,
-  )} · session ${entry.conversationId} · by ${entry.createdBy}`;
+  )} · session ${entry.conversationId} · by ${entry.createdBy} · topic_id ${entry.topicId}`;
   const preview = sectionFirstLine(entry.section);
-  return preview.length > 0 ? `${line}\n   ${preview}` : line;
+  const lines = preview.length > 0 ? [line, `${ROW_INDENT}${preview}`] : [line];
+  if (body !== undefined) lines.push(...indentBlock(body));
+  return lines.join("\n");
 }
 
 function truncationNotice(shown: number, total: number): string {
@@ -181,15 +296,21 @@ function emptyResultHint(filters: TopicQueryFilters): string {
  * The notice is reserved *before* a row is accepted, so the returned string —
  * rows plus notice — never exceeds {@link TOPIC_QUERY_MAX_CHARS}. Rows arrive
  * newest-first from the index, so dropping from the tail drops the oldest.
+ *
+ * `bodyFor` is what makes `excerpt` affordable: it is called only for rows that are
+ * actually accepted, so a 200-topic listing costs zero transcript reads and a
+ * budget-limited excerpt costs at most a handful.
  */
 export function formatTopicQueryResults(input: {
   entries: readonly TopicIndexEntry[];
   keyword?: string;
   days?: number;
   conversationId?: string;
+  bodyFor?: (entry: TopicIndexEntry) => string | undefined;
 }): string {
-  const { entries } = input;
+  const { entries, bodyFor } = input;
   const filters: TopicQueryFilters = {
+    include: "sections",
     ...(input.keyword === undefined ? {} : { keyword: input.keyword }),
     ...(input.days === undefined ? {} : { days: input.days }),
     ...(input.conversationId === undefined
@@ -200,13 +321,15 @@ export function formatTopicQueryResults(input: {
 
   const total = entries.length;
   const header = `${total} topic${total === 1 ? "" : "s"}, newest first, times in UTC.`;
-  const rows = entries.map((entry, index) => formatEntryRow(entry, index + 1));
 
   let body = header;
   let shown = 0;
-  for (let index = 0; index < rows.length; index += 1) {
-    const next = `${body}\n\n${rows[index]}`;
-    const remaining = rows.length - (index + 1);
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (!entry) break;
+    const row = formatEntryRow(entry, index + 1, bodyFor?.(entry));
+    const next = `${body}\n\n${row}`;
+    const remaining = entries.length - (index + 1);
     // The notice only exists if a row is actually dropped, so it is reserved from
     // the budget only while rows remain after this one.
     const reserve =
@@ -218,6 +341,40 @@ export function formatTopicQueryResults(input: {
 
   if (shown === total) return body;
   return `${body}\n\n${truncationNotice(shown, total)}`;
+}
+
+/** What an `excerpt` row says when the marker's transcript is gone. */
+export const TOPIC_QUERY_SPAN_UNREADABLE =
+  "(this marker's span is not readable: the conversation transcript no longer holds it)";
+
+/**
+ * The message projection under one row, for `include: "excerpt"`.
+ *
+ * Returns the projection's `body` rather than its `text`: the row above it already
+ * carries the title, time, session and source, so repeating the recall header would
+ * print the same facts twice.
+ */
+export function topicQueryExcerptBody(input: {
+  storageDir: string;
+  agentId: string;
+  entry: TopicIndexEntry;
+}): string {
+  const span = readTopicRecallSpan({
+    storageDir: input.storageDir,
+    agentId: input.agentId,
+    conversationId: input.entry.conversationId,
+    topicId: input.entry.topicId,
+  });
+  if (!span) return TOPIC_QUERY_SPAN_UNREADABLE;
+  return renderTopicRecall({
+    span,
+    tier: "excerpt",
+    maxChars: TOPIC_RECALL_EXCERPT_MAX_CHARS,
+  }).body;
+}
+
+function topicNotFound(topicId: string): string {
+  return `No topic with id ${topicId} is indexed for this agent. Take \`topic_id\` from a \`sections\` result; an id from another agent's index will not resolve.`;
 }
 
 /**
@@ -261,7 +418,35 @@ export async function topic_query(
     storageDir = backend.getLocalStorageDir();
   }
 
-  const entries = queryTopicIndex({
+  if (validated.include === "full") {
+    // Addressed by id, so the listing filters are deliberately not applied (and
+    // validation already rejected them): one id, one span.
+    const entry = queryTopicIndex({ agentId, storageDir }).find(
+      (candidate) => candidate.topicId === validated.topicId,
+    );
+    if (!entry) {
+      return {
+        content: topicNotFound(validated.topicId ?? ""),
+        status: "error",
+      };
+    }
+    const recalled = recallTopicConversation({
+      storageDir,
+      agentId,
+      conversationId: entry.conversationId,
+      topicId: entry.topicId,
+      tier: "full",
+    });
+    if (!recalled) {
+      return {
+        content: `${TOPIC_QUERY_SPAN_UNREADABLE} The index still lists "${entry.title}" in session ${entry.conversationId}, but its marker is not in that transcript.`,
+        status: "error",
+      };
+    }
+    return { content: recalled.text, status: "success" };
+  }
+
+  let entries = queryTopicIndex({
     agentId,
     storageDir,
     ...(validated.keyword === undefined ? {} : { keyword: validated.keyword }),
@@ -271,6 +456,23 @@ export async function topic_query(
       : { conversationId: validated.conversationId }),
     ...(validated.limit === undefined ? {} : { limit: validated.limit }),
   });
+  if (validated.topicId !== undefined) {
+    entries = entries.filter((entry) => entry.topicId === validated.topicId);
+    if (entries.length === 0) {
+      return { content: topicNotFound(validated.topicId), status: "error" };
+    }
+  }
+
+  const excerptStorage = storageDir;
+  const bodyFor =
+    validated.include === "excerpt"
+      ? (entry: TopicIndexEntry) =>
+          topicQueryExcerptBody({
+            storageDir: excerptStorage,
+            agentId,
+            entry,
+          })
+      : undefined;
 
   return {
     content: formatTopicQueryResults({
@@ -282,6 +484,7 @@ export async function topic_query(
       ...(validated.conversationId === undefined
         ? {}
         : { conversationId: validated.conversationId }),
+      ...(bodyFor === undefined ? {} : { bodyFor }),
     }),
     status: "success",
   };

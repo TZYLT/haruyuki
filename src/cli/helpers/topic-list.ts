@@ -13,7 +13,7 @@ import type { TopicBlock } from "@/backend/local/topic-compaction";
 import type { TopicIndexEntry } from "@/backend/local/topic-index";
 
 export const TOPICS_COMMAND_USAGE = [
-  "/topic list [--all|--context] | /topic search <kw>",
+  "/topic list [--all|--context] | /topic search <kw> | /topic show <#n|title>",
   "",
   "List the topic blocks of the current context, oldest first.",
   "",
@@ -22,6 +22,7 @@ export const TOPICS_COMMAND_USAGE = [
   "  /topic list --all     — every marker this agent has recorded, newest first",
   "  /topic list --context — this conversation's markers, in conversation order",
   "  /topic search <kw>    — search this agent's topics by title or section",
+  "  /topic show <#n|title> — print the conversation a marker covers",
   "  /topic list help      — show this help",
   "",
   "/compact <n> keeps block n and summarizes everything before it. The numbers in",

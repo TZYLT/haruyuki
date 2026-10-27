@@ -15,9 +15,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TopicIndexEntry } from "@/backend/local/topic-index";
 import { refreshTopicIndexForConversation } from "@/backend/local/topic-index";
+import { recallTopicConversation } from "@/backend/local/topic-recall";
 import {
   formatTopicQueryResults,
   formatTopicQueryTimestamp,
+  TOPIC_QUERY_INCLUDE_VALUES,
   TOPIC_QUERY_MAX_CHARS,
   TOPIC_QUERY_MAX_LIMIT,
   TOPIC_QUERY_SECTION_PREVIEW_CHARS,
@@ -60,12 +62,14 @@ function entry(overrides: Partial<TopicIndexEntry> = {}): TopicIndexEntry {
 }
 
 describe("TopicQuery schema", () => {
-  test("declares exactly the four documented parameters", () => {
+  test("declares exactly the six documented parameters", () => {
     expect(Object.keys(TopicQuerySchema.properties).sort()).toEqual([
       "days",
+      "include",
       "keyword",
       "limit",
       "session",
+      "topic_id",
     ]);
     // A JSON import is a literal type, so an absent key is read through a
     // record view instead of through a property the type does not declare.
@@ -79,6 +83,17 @@ describe("TopicQuery schema", () => {
     expect(TopicQuerySchema.properties.limit).toMatchObject({
       minimum: 1,
       maximum: TOPIC_QUERY_MAX_LIMIT,
+    });
+  });
+
+  test("offers the three include tiers, defaulting to the listing", () => {
+    expect(TopicQuerySchema.properties.include).toMatchObject({
+      type: "string",
+      enum: [...TOPIC_QUERY_INCLUDE_VALUES],
+    });
+    expect(TOPIC_QUERY_INCLUDE_VALUES[0]).toBe("sections");
+    expect(TopicQuerySchema.properties.topic_id).toMatchObject({
+      type: "string",
     });
   });
 
@@ -108,6 +123,7 @@ describe("validateTopicQueryArgs", () => {
       }),
     ).toEqual({
       ok: true,
+      include: "sections",
       keyword: "deploy pipeline",
       days: 7,
       conversationId: "conv-1",
@@ -118,8 +134,54 @@ describe("validateTopicQueryArgs", () => {
   test("treats an empty keyword or session as no filter", () => {
     expect(validateTopicQueryArgs({ keyword: "   ", session: "  " })).toEqual({
       ok: true,
+      include: "sections",
     });
-    expect(validateTopicQueryArgs({})).toEqual({ ok: true });
+    expect(validateTopicQueryArgs({})).toEqual({
+      ok: true,
+      include: "sections",
+    });
+  });
+
+  test("accepts the three tiers and rejects anything else", () => {
+    for (const include of TOPIC_QUERY_INCLUDE_VALUES) {
+      if (include === "full") continue;
+      const validated = validateTopicQueryArgs({ include });
+      expect(validated.ok).toBe(true);
+      expect(validated.ok && validated.include).toBe(include);
+    }
+    for (const include of ["messages", "all", "", 7]) {
+      expect(validateTopicQueryArgs({ include }).ok).toBe(false);
+    }
+  });
+
+  test('rejects include:"full" without a topic_id, by name', () => {
+    const validated = validateTopicQueryArgs({ include: "full" });
+    expect(validated.ok).toBe(false);
+    if (validated.ok) return;
+    expect(validated.content).toContain('`include: "full"` needs `topic_id`');
+    // The reason names the fix, not just the rule.
+    expect(validated.content).toContain("excerpt");
+  });
+
+  test('rejects a listing filter alongside include:"full"', () => {
+    const validated = validateTopicQueryArgs({
+      include: "full",
+      topic_id: "t1",
+      keyword: "deploy",
+    });
+    expect(validated.ok).toBe(false);
+    if (validated.ok) return;
+    expect(validated.content).toContain("`keyword`");
+  });
+
+  test("accepts a topic_id on its own and trims it", () => {
+    expect(validateTopicQueryArgs({ topic_id: " t1 " })).toEqual({
+      ok: true,
+      include: "sections",
+      topicId: "t1",
+    });
+    expect(validateTopicQueryArgs({ topic_id: "  " }).ok).toBe(false);
+    expect(validateTopicQueryArgs({ topic_id: 7 }).ok).toBe(false);
   });
 
   test("rejects a keyword or session that is not a string", () => {
@@ -341,5 +403,378 @@ describe("topic_query", () => {
     expect(result.content).toContain(
       "No topics are indexed for this agent yet",
     );
+  });
+});
+
+/**
+ * F-04 T-10: the tiers that return the conversation itself.
+ *
+ * The fixtures write transcripts by hand — a genuinely streamed conversation
+ * cannot carry a reasoning part and a tool result beside a text part — and the
+ * index is then built by the production refresh, so the tool reads the same
+ * `(agent, conversation, topic_id)` it would in a real store.
+ */
+describe("TopicQuery include tiers", () => {
+  const CONVERSATION = "conv-recall";
+  const STAMP = Date.parse("2026-10-27T10:00:00.000Z");
+
+  function conversationKey(conversationId: string): string {
+    return Buffer.from(`conversation:${conversationId}`).toString("base64url");
+  }
+
+  function writeTranscript(input: {
+    storageDir: string;
+    conversationId: string;
+    inContextMessageIds: readonly string[];
+    rows: readonly Record<string, unknown>[];
+  }): void {
+    const directory = join(
+      input.storageDir,
+      "conversations",
+      conversationKey(input.conversationId),
+    );
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(
+      join(directory, "conversation.json"),
+      `${JSON.stringify({
+        id: input.conversationId,
+        agent_id: AGENT_ID,
+        in_context_message_ids: input.inContextMessageIds,
+      })}\n`,
+      "utf8",
+    );
+    writeFileSync(
+      join(directory, "messages.jsonl"),
+      `${input.rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+      "utf8",
+    );
+  }
+
+  function messageRow(
+    id: string,
+    message: Record<string, unknown>,
+    offsetMinutes = 0,
+  ): Record<string, unknown> {
+    return {
+      type: "message",
+      id: `entry-${id}`,
+      parentId: null,
+      timestamp: new Date(STAMP + offsetMinutes * 60_000).toISOString(),
+      message: { id, ...message, timestamp: STAMP + offsetMinutes * 60_000 },
+    };
+  }
+
+  function topicRow(input: {
+    id: string;
+    title: string;
+    anchorMessageId: string;
+    offsetMinutes?: number;
+  }): Record<string, unknown> {
+    return {
+      type: "topic",
+      id: input.id,
+      parentId: null,
+      timestamp: new Date(
+        STAMP + (input.offsetMinutes ?? 0) * 60_000,
+      ).toISOString(),
+      title: input.title,
+      createdBy: "agent",
+      anchorMessageId: input.anchorMessageId,
+      turnsSincePrevious: 1,
+    };
+  }
+
+  /** One topic spanning six messages, two of which clean to nothing. */
+  function seedRecallStorage(): string {
+    const storageDir = createStorageDirectory();
+    writeTranscript({
+      storageDir,
+      conversationId: CONVERSATION,
+      inContextMessageIds: ["m4", "m5", "m6"],
+      rows: [
+        messageRow("m1", {
+          role: "user",
+          content: [
+            { type: "text", text: "Where should the release notes live?" },
+          ],
+        }),
+        messageRow(
+          "m2",
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "PRIVATE-REASONING-TEXT" },
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "Write",
+                arguments: { path: "docs/releases.md" },
+              },
+              { type: "text", text: "In docs/releases.md." },
+            ],
+            api: "anthropic",
+            provider: "anthropic",
+            model: "fixture",
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                total: 0,
+              },
+            },
+            stopReason: "stop",
+          },
+          1,
+        ),
+        messageRow(
+          "m3",
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "Write",
+            content: [{ type: "text", text: "wrote 12 lines" }],
+            isError: false,
+          },
+          2,
+        ),
+        messageRow(
+          "m4",
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "<system-reminder>AUTO-CONTEXT</system-reminder>\nPublish to the wiki too?",
+              },
+            ],
+          },
+          3,
+        ),
+        messageRow(
+          "m5",
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Only on request." }],
+            api: "anthropic",
+            provider: "anthropic",
+            model: "fixture",
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                total: 0,
+              },
+            },
+            stopReason: "stop",
+          },
+          4,
+        ),
+        messageRow(
+          "m6",
+          {
+            role: "user",
+            content: [{ type: "text", text: "Keep it in the repo for now." }],
+          },
+          5,
+        ),
+        topicRow({
+          id: "t1",
+          title: "Release notes",
+          anchorMessageId: "m6",
+          offsetMinutes: 6,
+        }),
+      ],
+    });
+    refreshTopicIndexForConversation(AGENT_ID, CONVERSATION, storageDir);
+    return storageDir;
+  }
+
+  /** Eight topics, each large enough that four of them cannot share the budget. */
+  function seedManyTopics(): string {
+    const storageDir = createStorageDirectory();
+    const rows: Record<string, unknown>[] = [];
+    for (let topic = 1; topic <= 8; topic += 1) {
+      const prefix = `TOPIC-${topic}-`;
+      const userBody = `${prefix}question ${"q".repeat(380)}`;
+      const assistantBody = `${prefix}answer ${"a".repeat(380)}`;
+      rows.push(
+        messageRow(
+          `t${topic}-u`,
+          {
+            role: "user",
+            content: [{ type: "text", text: userBody }],
+          },
+          topic * 3,
+        ),
+        messageRow(
+          `t${topic}-a`,
+          {
+            role: "assistant",
+            content: [{ type: "text", text: assistantBody }],
+            api: "anthropic",
+            provider: "anthropic",
+            model: "fixture",
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                total: 0,
+              },
+            },
+            stopReason: "stop",
+          },
+          topic * 3 + 1,
+        ),
+        topicRow({
+          id: `tt${topic}`,
+          title: `Topic ${topic}`,
+          anchorMessageId: `t${topic}-a`,
+          offsetMinutes: topic * 3 + 2,
+        }),
+      );
+    }
+    writeTranscript({
+      storageDir,
+      conversationId: CONVERSATION,
+      inContextMessageIds: rows
+        .filter((row) => row.type === "message")
+        .map((row) => (row.message as { id: string }).id),
+      rows,
+    });
+    refreshTopicIndexForConversation(AGENT_ID, CONVERSATION, storageDir);
+    return storageDir;
+  }
+
+  test("the sections tier is unchanged apart from the identity column", async () => {
+    const storageDir = seedRecallStorage();
+
+    const result = await topic_query({}, { agentId: AGENT_ID, storageDir });
+
+    // Byte for byte the pre-T-10 listing: same header, same row order, same
+    // timestamp form, same section handling, same budget. The single addition is
+    // the mandated `topic_id` identity column at the end of the row.
+    expect(result.content).toBe(
+      [
+        "1 topic, newest first, times in UTC.",
+        "",
+        "1. Release notes · 2026-10-27 10:06 · session conv-recall · by agent · topic_id t1",
+      ].join("\n"),
+    );
+  });
+
+  test('include:"excerpt" adds cleaned messages and drops the noise', async () => {
+    const storageDir = seedRecallStorage();
+
+    const result = await topic_query(
+      { include: "excerpt" },
+      { agentId: AGENT_ID, storageDir },
+    );
+
+    expect(result.status).toBe("success");
+    expect(result.content).toContain("topic_id t1");
+    expect(result.content).toContain("Where should the release notes live?");
+    expect(result.content).toContain("In docs/releases.md.");
+    expect(result.content).toContain("Publish to the wiki too?");
+    expect(result.content).toContain("Keep it in the repo for now.");
+    // The four things a recall must never carry.
+    expect(result.content).not.toContain("PRIVATE-REASONING-TEXT");
+    expect(result.content).not.toContain('docs/releases.md"]');
+    expect(result.content).not.toContain("wrote 12 lines");
+    expect(result.content).not.toContain("AUTO-CONTEXT");
+    expect(result.content).not.toContain("<system-reminder>");
+  });
+
+  test('include:"full" returns the shared projection for one topic', async () => {
+    const storageDir = seedRecallStorage();
+
+    const result = await topic_query(
+      { include: "full", topic_id: "t1" },
+      { agentId: AGENT_ID, storageDir },
+    );
+    const expected = recallTopicConversation({
+      storageDir,
+      agentId: AGENT_ID,
+      conversationId: CONVERSATION,
+      topicId: "t1",
+      tier: "full",
+    });
+
+    expect(result.status).toBe("success");
+    expect(expected).not.toBeNull();
+    expect(result.content).toBe(expected?.text ?? "");
+    expect(result.content).toContain("Topic: Release notes");
+    expect(result.content).toContain("Keep it in the repo for now.");
+  });
+
+  test('include:"full" with an unknown topic_id fails by name', async () => {
+    const storageDir = seedRecallStorage();
+
+    const result = await topic_query(
+      { include: "full", topic_id: "t-absent" },
+      { agentId: AGENT_ID, storageDir },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.content).toContain("No topic with id t-absent");
+  });
+
+  test("a topic_id that is not indexed is named rather than silently empty", async () => {
+    const storageDir = seedRecallStorage();
+
+    const result = await topic_query(
+      { topic_id: "t-absent" },
+      { agentId: AGENT_ID, storageDir },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.content).toContain("No topic with id t-absent");
+  });
+
+  test("a topic_id narrows a listing instead of changing its shape", async () => {
+    const storageDir = seedRecallStorage();
+
+    const result = await topic_query(
+      { topic_id: "t1" },
+      { agentId: AGENT_ID, storageDir },
+    );
+
+    expect(result.status).toBe("success");
+    expect(result.content).toStartWith("1 topic, newest first");
+    expect(result.content).toContain("topic_id t1");
+  });
+
+  test("excerpts stay inside the shared budget and say what they dropped", async () => {
+    const storageDir = seedManyTopics();
+
+    const result = await topic_query(
+      { include: "excerpt" },
+      { agentId: AGENT_ID, storageDir },
+    );
+
+    expect(result.status).toBe("success");
+    expect(result.content.length).toBeLessThanOrEqual(TOPIC_QUERY_MAX_CHARS);
+    expect(result.content).toContain("[Output truncated: showing the newest");
+    expect(result.content).toContain("of 8 topics");
   });
 });

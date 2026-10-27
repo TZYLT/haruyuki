@@ -137,6 +137,31 @@ markers in the order they happened (conversation order, with position numbers).
 The numbers in `--context` are marker positions, not the block numbers
 `/compact` takes.
 
+### Reading a marker's conversation back
+
+A marker covers the messages between it and the marker before it, and that span
+is readable after the fact even when the anchor has left the context: the
+transcript only ever grows, and a compaction rewrites `in_context_message_ids`
+rather than deleting rows. Two faces project the same span, and they are the
+only supported way to read it:
+
+- `TopicQuery` gains `include: "excerpt"` (the first and last few messages of
+  each matching topic) and `include: "full"` (one topic, addressed by the
+  `topic_id` its rows print). The default, `include: "sections"`, is the listing
+  it always returned.
+- `/topic show <#n|title>` prints the same projection for a person: under 8k
+  characters verbatim, past that head + tail + a file, past 30k an outline. It
+  shares the projection with the tool, so the two cannot disagree about a topic.
+
+**Do not read a conversation's transcript file directly.** `messages.jsonl` is
+storage, not an interface: its shape is not a contract, it is mostly reasoning
+and tool traffic by volume, and it has no budget — a file read of a long
+conversation displaces the context it was meant to inform. The projection exists
+because a marker's span can be handed over cleaned and bounded:
+`src/backend/local/topic-recall.ts` (the one implementation, shared by both
+faces), `src/tools/impl/topic-query.ts` (the model face),
+`src/cli/commands/topic.ts` (the human face).
+
 ## Compaction: the rate is a compression rate
 
 `sliding_window_percentage` is the share **compressed away**, not the share

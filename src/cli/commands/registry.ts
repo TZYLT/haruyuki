@@ -649,13 +649,18 @@ export const commands: Record<string, Command> = {
     },
   },
   "/topic": {
-    desc: "Mark a topic boundary, or list/search the topic markers",
-    args: "<title> [summary] | list [--all] | search <kw>",
+    desc: "Mark a topic boundary, or list/search/show the topic markers",
+    args: "<title> [summary] | list [--all|--context] | search <kw> | show <#n|title> [--full] [--out <path>]",
     handler: (args, scope) => {
       // `list` and `search` are subcommands, not titles. Without this branch a
       // `/topic search deploy` was read as a marker titled "search" and quietly
       // written (route C-22). The two faces that need an overlay are claimed
       // earlier, in the submit layer (`submit-topic-commands.ts`).
+      //
+      // `show` is the third subcommand and is deliberately *not* branched here:
+      // it lives inside `handleTopicCommand`, which is where the fall-through it
+      // must intercept lives. It returns a string like any other registry answer,
+      // so no channel needs a face for it.
       const subcommand = args[0]?.toLowerCase();
       if (subcommand === "list") {
         return handleTopicsCommand(args.slice(1), scope);

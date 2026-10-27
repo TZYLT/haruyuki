@@ -115,15 +115,18 @@ export function isInteractiveCommand(msg: string): boolean {
 
 /**
  * `/topic` is a mixed bag, and it is the one command whose *subcommand* decides
- * whether it is a view: `list` and `search` only read (and the two faces open
- * over the transcript), while `/topic <title>` writes a marker. A busy agent must
- * not make a read-only browse wait behind a turn, and must not let a marker write
- * jump the queue — so the bypass is decided by the prefix, not by the command.
+ * whether it is a view: `list`, `search` and `show` only read (and the first two
+ * open a face over the transcript), while `/topic <title>` writes a marker. A busy
+ * agent must not make a read-only browse wait behind a turn, and must not let a
+ * marker write jump the queue — so the bypass is decided by the prefix, not by the
+ * command.
  */
 function isReadOnlyTopicForm(trimmed: string): boolean {
   if (!trimmed.startsWith("/topic ")) return false;
   const [subcommand] = trimmed.slice("/topic ".length).trim().split(/\s+/);
-  return subcommand === "list" || subcommand === "search";
+  return (
+    subcommand === "list" || subcommand === "search" || subcommand === "show"
+  );
 }
 
 export function isNonStateCommand(msg: string): boolean {
