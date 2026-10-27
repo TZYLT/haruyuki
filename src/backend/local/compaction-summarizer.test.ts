@@ -31,7 +31,9 @@ import type { ConversationMessageCreateBody } from "@/backend";
 import type { HeadlessTurnExecutor } from "@/backend/dev/headless-turn-executor";
 import { ProviderCompletionError } from "@/backend/dev/provider-completion";
 import {
+  COMPACTION_INSTRUCTION_WORDING,
   CompactionCancelledError,
+  DEGRADED_WHOLE_SECTION_LEAD_IN,
   type SummarizeInput,
   type SummarizeResult,
   summarizeConversation,
@@ -591,7 +593,7 @@ describe("failure taxonomy", () => {
           );
           expect(stub.chatRequests()).toHaveLength(2);
           expect(lastMessageText(stub, 1)).toContain(
-            "previous reply was rejected",
+            COMPACTION_INSTRUCTION_WORDING.retryHeading,
           );
           expect(lastMessageText(stub, 1)).toContain("not valid JSON");
         },
@@ -616,7 +618,9 @@ describe("failure taxonomy", () => {
             relationship: "",
             memoryIndex: "",
           });
-          expect(result.overview.narrative).toBe(LEGACY_SUMMARY);
+          expect(result.overview.narrative).toBe(
+            `${DEGRADED_WHOLE_SECTION_LEAD_IN}\n\n${LEGACY_SUMMARY}`,
+          );
           // attempt 1 + attempt 2 + the one-step fallback.
           expect(stub.chatRequests()).toHaveLength(3);
           // Both rejected attempts and the fallback call cost tokens, so the
@@ -640,7 +644,9 @@ describe("failure taxonomy", () => {
           const result = await summarize();
           expect(result.degraded).toBe("whole-section");
           expect(result.topics).toEqual([]);
-          expect(result.overview.narrative).toBe(LEGACY_SUMMARY);
+          expect(result.overview.narrative).toBe(
+            `${DEGRADED_WHOLE_SECTION_LEAD_IN}\n\n${LEGACY_SUMMARY}`,
+          );
           expect(stub.chatRequests()).toHaveLength(2);
         },
       );
@@ -682,7 +688,9 @@ describe("failure taxonomy", () => {
           const firstBody = JSON.stringify(stub.chatRequests()[0]?.body ?? {});
           const secondBody = JSON.stringify(stub.chatRequests()[1]?.body ?? {});
           expect(secondBody.length).toBeLessThan(firstBody.length);
-          expect(lastMessageText(stub, 1)).toContain("Truncated input");
+          expect(lastMessageText(stub, 1)).toContain(
+            COMPACTION_INSTRUCTION_WORDING.truncatedHeading,
+          );
           expect(secondBody).toContain("characters omitted");
         },
         { turns: 1, firstContent: "x".repeat(30_000) },
@@ -700,7 +708,9 @@ describe("failure taxonomy", () => {
         async ({ stub, summarize }) => {
           const result = await summarize();
           expect(result.degraded).toBe("whole-section");
-          expect(result.overview.narrative).toBe(LEGACY_SUMMARY);
+          expect(result.overview.narrative).toBe(
+            `${DEGRADED_WHOLE_SECTION_LEAD_IN}\n\n${LEGACY_SUMMARY}`,
+          );
           expect(stub.chatRequests()).toHaveLength(3);
         },
         { turns: 1, firstContent: "x".repeat(30_000) },
@@ -869,7 +879,9 @@ describe("output contract", () => {
           const result = await summarize();
           expect(result.degraded).toBe("whole-section");
           expect(result.topics).toEqual([]);
-          expect(result.overview.narrative).toBe(LEGACY_SUMMARY);
+          expect(result.overview.narrative).toBe(
+            `${DEGRADED_WHOLE_SECTION_LEAD_IN}\n\n${LEGACY_SUMMARY}`,
+          );
           expect(stub.chatRequests()).toHaveLength(3);
           expect(lastMessageText(stub, 1)).toContain(testCase.reason);
         },

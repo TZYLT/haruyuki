@@ -96,36 +96,36 @@ const TRUNCATED_DIGEST_CHARS = 6_000;
  * later). Keep the structural parts — the heading order, the frames that
  * interpolate ids and the reply shape — and replace only the sentences.
  */
-const INSTRUCTION_WORDING = {
+export const COMPACTION_INSTRUCTION_WORDING = {
   inputHeading: "## Conversation input",
   inputLead: (count: number): string =>
-    `The conversation's context above is ${count} message(s); their ids are listed here because a topic boundary is a message id.`,
+    `The context above is ${count} message(s). Their ids are listed here because a topic boundary is a message id.`,
   markersHeading: "## Existing topic boundaries (fixed)",
   markersLead:
     "These boundaries already exist. Do not define a topic across one, and do not mark an id that already has a marker.",
   markersEmpty: "(none)",
-  retryHeading: "## Your previous reply was rejected",
+  retryHeading: "## The previous reply was not usable",
   retryLead: (reason: string): string =>
-    `The reply was not usable: ${reason}\nReply again with a complete, valid JSON object.`,
+    `Reason: ${reason}\nReply again with one complete JSON object; do not explain, and do not apologise.`,
   truncatedHeading: "## Truncated input",
   truncatedLead:
-    "The message bodies below were middle-truncated to fit the context window; the id list is complete, so boundaries may still use any listed id.",
+    "The message bodies below were middle-truncated to fit the context window. The id list is complete, so boundaries may still use any listed id.",
   contractHeading: "## Reply",
   contractLead:
-    "Reply with exactly one JSON object and no other text. The first topic must start at the first listed id, every topic start must be a listed id later than the previous one, and every restricted field plus the narrative must be non-empty.",
+    "Reply with one JSON object and no other text. The first topic must start at the first listed id; every later topic must start at a listed id that comes after the previous one; every restricted field and the narrative must be non-empty.",
   contractShape: `{"topics":[{"title":"...","startMessageId":"<listed id>","section":"..."}],"overview":{"restricted":{"open":"...","errors":"...","relationship":"...","memoryIndex":"..."},"narrative":"..."}}`,
 } as const;
 
 /**
- * Placeholder for the degraded whole-section product (requirement §5.9.2). The
- * body is the retired one-step summary; this lead-in is the only prose of ours,
- * and it stays empty until the user replaces it.
+ * Lead-in for the degraded whole-section product (requirement §5.9.2). The body is
+ * the retired one-step summary; this is the only prose of ours in that message.
  */
-const DEGRADED_WHOLE_SECTION_LEAD_IN = "";
+export const DEGRADED_WHOLE_SECTION_LEAD_IN =
+  "(This run could not cut the conversation into topics; below is a summary of the whole segment.)";
 
-/** Placeholder for the note that replaces messages dropped by the overflow ladder. */
-const TRUNCATED_CONTEXT_NOTE =
-  "[Earlier messages omitted here after the context window overflowed; a compressed digest follows.]";
+/** The note that stands in for messages dropped by the overflow ladder. */
+export const TRUNCATED_CONTEXT_NOTE =
+  "[Earlier messages are omitted here: the context window overflowed and they were middle-truncated.]";
 
 /** Input for one compaction summarizer run. Frozen at M0 (route §2.3). */
 export interface SummarizeInput {
@@ -424,36 +424,38 @@ function buildInstruction(
   options: { rejection?: string; truncated?: boolean } = {},
 ): string {
   const lines: string[] = [assembled.template.trim(), ""];
-  lines.push(INSTRUCTION_WORDING.inputHeading);
-  lines.push(INSTRUCTION_WORDING.inputLead(assembled.entries.length));
+  lines.push(COMPACTION_INSTRUCTION_WORDING.inputHeading);
+  lines.push(
+    COMPACTION_INSTRUCTION_WORDING.inputLead(assembled.entries.length),
+  );
   for (const entry of assembled.entries) {
     lines.push(
       `[${entry.index}] ${entry.message.role} id=${entry.message.id}: ${previewOf(entry.message)}`,
     );
   }
   lines.push("");
-  lines.push(INSTRUCTION_WORDING.markersHeading);
-  lines.push(INSTRUCTION_WORDING.markersLead);
+  lines.push(COMPACTION_INSTRUCTION_WORDING.markersHeading);
+  lines.push(COMPACTION_INSTRUCTION_WORDING.markersLead);
   const markerLines = markerTable(assembled);
   lines.push(
     markerLines.length > 0
       ? markerLines.join("\n")
-      : INSTRUCTION_WORDING.markersEmpty,
+      : COMPACTION_INSTRUCTION_WORDING.markersEmpty,
   );
   if (options.truncated) {
     lines.push("");
-    lines.push(INSTRUCTION_WORDING.truncatedHeading);
-    lines.push(INSTRUCTION_WORDING.truncatedLead);
+    lines.push(COMPACTION_INSTRUCTION_WORDING.truncatedHeading);
+    lines.push(COMPACTION_INSTRUCTION_WORDING.truncatedLead);
   }
   if (options.rejection) {
     lines.push("");
-    lines.push(INSTRUCTION_WORDING.retryHeading);
-    lines.push(INSTRUCTION_WORDING.retryLead(options.rejection));
+    lines.push(COMPACTION_INSTRUCTION_WORDING.retryHeading);
+    lines.push(COMPACTION_INSTRUCTION_WORDING.retryLead(options.rejection));
   }
   lines.push("");
-  lines.push(INSTRUCTION_WORDING.contractHeading);
-  lines.push(INSTRUCTION_WORDING.contractLead);
-  lines.push(INSTRUCTION_WORDING.contractShape);
+  lines.push(COMPACTION_INSTRUCTION_WORDING.contractHeading);
+  lines.push(COMPACTION_INSTRUCTION_WORDING.contractLead);
+  lines.push(COMPACTION_INSTRUCTION_WORDING.contractShape);
   return lines.join("\n");
 }
 

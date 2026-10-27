@@ -16,9 +16,8 @@
 > 预计算不写任何东西；取消与失败都是零写入。话题从此可查：`/topic list`、`/topic search`，
 > 以及给模型用的只读工具 `TopicQuery`。
 >
-> **发版前必须补**：摘要器的提示词文案仍是占位（`src/agent/prompts/compaction-summarizer.md` 与
-> `INSTRUCTION_WORDING`／`DEGRADED_WHOLE_SECTION_LEAD_IN`／`TRUNCATED_CONTEXT_NOTE`）。
-> 在它被替换并复核之前，这个版本号不能打 tag。
+> **发版前还差两步**：L2／L3 实机实测（真凭据的真会话压缩、真 TUI 里开面板与键位）与一遍代码复核。
+> 摘要器提示词文案已定稿（模板 + 三处运行时常量），以后改文案不需要碰逻辑。
 
 ### 新增
 
