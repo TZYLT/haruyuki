@@ -204,25 +204,28 @@ polarity back: `Compression rate set to N%: each /compact compresses about N% of
 the conversation (keeps about 100−N%).` —
 `src/cli/app/compaction-settings.ts:48-62`.
 
-## Nothing compacts automatically
+## Only your own message triggers a rewrite
 
-There is no automatic history rewrite in the local path. The evidence is
-explicit rather than merely absent:
+There is no background rewrite in the local path. The evidence is explicit
+rather than merely absent:
 
 - `This product no longer splits context automatically.` —
-  `src/backend/dev/context-window-overflow.ts:65-66`.
-- An overflow is terminal: `the local backend no longer rewrites history to make
-  room` — `src/backend/dev/pi-stream-adapter.ts:731-737`.
+  `src/backend/dev/context-window-overflow.ts`. An overflow is terminal:
+  `the local backend no longer rewrites history to make room` —
+  `src/backend/dev/pi-stream-adapter.ts`.
 - A turn applies the prefix and never rewrites it —
-  `src/backend/local/local-backend.ts:967-986`.
-- When no block is selectable, the pre-send interception warns rather than
-  trimming: trimming without the user choosing would be exactly the automatic
-  rewrite this feature removed — `src/cli/app/submit-compact-commands.ts:96-100`.
-- The only callers that rewrite history are user commands: TUI `/compact` —
-  `src/cli/app/submit-compact-commands.ts:411` — the listener's `/compact` —
-  `src/websocket/listener/commands.ts:462` — and the `conversation_compact`
-  protocol command —
-  `src/websocket/listener/commands/agents-conversations.ts:548-553`.
+  `src/backend/local/local-backend.ts`.
+- The pre-send interception has two ratios, and only the hard one compacts.
+  Above the soft ratio it warns. At the hard ratio the message cannot be sent as
+  it stands, so it compacts by the compression rate through the same
+  `prepare → apply` as `/compact`, shows a receipt, and then sends — never in the
+  background, never without a receipt, and the message is never dropped —
+  `src/cli/app/submit-compact-commands.ts`.
+- The commands that rewrite history are user commands: TUI `/compact`, the
+  listener's `/compact`, and the `conversation_compact` protocol command —
+  `src/cli/app/submit-compact-commands.ts`,
+  `src/websocket/listener/commands.ts`,
+  `src/websocket/listener/commands/agents-conversations.ts`.
 
 One automatic request-level change exists and is not a history rewrite: when a
 retryable transport failure coincides with an oversized payload, old images are
