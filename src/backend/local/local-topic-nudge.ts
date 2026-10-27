@@ -8,16 +8,16 @@
  * shell that reads the facts, settles the one-shot flag, and reports the reason.
  *
  * The flag is written when the nudge goes out and cleared on every other
- * outcome: a new marker (or a trim) starts a new streak, so a flag left over
- * from the previous one must not suppress the next nudge. A *disabled* nudge
- * (`nudge_turns = 0`) is not an outcome that ends a streak, so it leaves the flag
- * exactly as it found it. Losing one delivery is acceptable; repeating one is not,
- * which is why the write happens here rather than after a reminder has been
- * rendered.
+ * outcome: a new marker (or a context rewrite) starts a new streak, so a flag
+ * left over from the previous one must not suppress the next nudge. A *disabled*
+ * nudge (`nudge_turns = 0`) is not an outcome that ends a streak, so it leaves
+ * the flag exactly as it found it. Losing one delivery is acceptable; repeating
+ * one is not, which is why the write happens here rather than after a reminder
+ * has been rendered.
  *
  * It runs against a port object rather than the backend so the "one write, and
  * only when it is due" ordering can be tested without a provider — the same
- * shape `local-topic-trim.ts` uses for the trim.
+ * shape `compaction-run.ts` uses for the rewrite.
  */
 import type { LocalMessage } from "./local-message";
 import type { LocalConversationContextManagement } from "./local-types";

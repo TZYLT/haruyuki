@@ -1,17 +1,17 @@
 /**
- * Backend-level coverage for listTopics / trimConversationToTopic (D-104).
+ * Backend-level coverage for listTopics (D-104).
  *
- * The trim is the one path that may rewrite a conversation's context on a user's
- * behalf, so the claims under test are: the picked boundary is honored, the kept
- * region is exactly what the plan chose, the trim lands as a "compaction"
- * application point (transcript row + refreshed frozen prefix), and a pick that
- * cannot be honored changes nothing at all.
+ * The list is read-only: it reports the blocks of the current context, the
+ * markers behind them, and the retention target the compression rate implies.
+ * The claims under test are that blocks are cut at the effective boundaries,
+ * that the rewind is a setting the backend resolves once for every channel, and
+ * that the compaction settings write path keeps the halves it was not asked to
+ * change.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { LettaStreamingResponse } from "@letta-ai/letta-client/resources/agents/messages";
 import type { ConversationMessageCreateBody } from "@/backend";
 import type {
@@ -19,8 +19,6 @@ import type {
   HeadlessTurnExecutorInput,
 } from "@/backend/dev/headless-turn-executor";
 import { LocalBackend } from "@/backend/local/local-backend";
-import { emptyLocalUsage } from "@/backend/local/local-message";
-import { searchLocalTranscriptMessages } from "@/backend/local/transcript-search";
 import { settingsManager } from "@/settings-manager";
 
 const temporaryDirectories: string[] = [];
@@ -38,19 +36,6 @@ afterEach(async () => {
       .map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
-
-function assistantMessage(text: string): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: "openai-responses",
-    provider: "openai",
-    model: "gpt-5.5",
-    usage: emptyLocalUsage(),
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
-}
 
 /** One assistant message per user turn, so each turn is two context messages. */
 function oneTurnExecutor(): HeadlessTurnExecutor {
@@ -77,7 +62,7 @@ function oneTurnExecutor(): HeadlessTurnExecutor {
 }
 
 /**
- * ~100 tokens of user content per turn. The trim target is a share of that
+ * ~100 tokens of user content per turn. The retention target is a share of that
  * transcript, so the window no longer decides how much a cut keeps.
  */
 function turnContent(label: string): string {
@@ -91,19 +76,10 @@ interface Fixture {
   sendTurn: (content: string) => Promise<void>;
 }
 
-async function fixture(input: {
-  storageDir: string;
-  contextWindow?: number;
-  percentage?: number;
-  summarizerCalls?: { count: number };
-}): Promise<Fixture> {
+async function fixture(input: { storageDir: string }): Promise<Fixture> {
   const backend = new LocalBackend({
     storageDir: input.storageDir,
     executor: oneTurnExecutor(),
-    complete: async () => {
-      if (input.summarizerCalls) input.summarizerCalls.count += 1;
-      return assistantMessage("summary of the evicted topic");
-    },
     memfsEnabled: false,
   });
   const agent = await backend.createAgent({
@@ -111,16 +87,8 @@ async function fixture(input: {
     model: "openai/gpt-5.5",
     model_settings: {
       provider_type: "openai",
-      context_window_limit: input.contextWindow ?? 2_000,
+      context_window_limit: 2_000,
     },
-    ...(input.percentage === undefined
-      ? {}
-      : {
-          compaction_settings: {
-            mode: "sliding_window",
-            sliding_window_percentage: input.percentage,
-          },
-        }),
   } as never);
   const conversation = await backend.createConversation({
     agent_id: agent.id,
@@ -142,75 +110,6 @@ async function fixture(input: {
       }
     },
   };
-}
-
-async function inContext(backend: LocalBackend, fixtureInput: Fixture) {
-  const page = await backend.listConversationMessages(
-    fixtureInput.conversationId,
-    { agent_id: fixtureInput.agentId, order: "asc" },
-  );
-  return page.getPaginatedItems() as unknown as { id: string; role: string }[];
-}
-
-/**
- * The public message list projects messages for display; the compaction metadata
- * that proves "this row is the trim's summary" only exists on the stored record.
- */
-function storedMessages(backend: LocalBackend, input: Fixture) {
-  const store = (
-    backend as unknown as {
-      store: {
-        listLocalMessages: (
-          conversationId: string,
-          agentId: string,
-        ) => { id: string; role: string; metadata?: unknown }[];
-      };
-    }
-  ).store;
-  return store.listLocalMessages(input.conversationId, input.agentId);
-}
-
-/** The compiled snapshot is where "the prefix was refreshed" is observable. */
-function frozenReason(backend: LocalBackend, input: Fixture): unknown {
-  const store = (
-    backend as unknown as {
-      store: {
-        getCompiledSystemPrompt: (
-          conversationId: string,
-          agentId: string,
-        ) => { frozenReason?: unknown } | undefined;
-      };
-    }
-  ).store;
-  return store.getCompiledSystemPrompt(input.conversationId, input.agentId)
-    ?.frozenReason;
-}
-
-function transcriptPath(
-  storageDir: string,
-  conversationId: string,
-  agentId: string,
-): string {
-  // Mirrors `LocalStore.conversationKey`: only the default conversation is
-  // keyed by agent, because every other conversation id is already unique.
-  const key =
-    conversationId === "default"
-      ? `default:${agentId}`
-      : `conversation:${conversationId}`;
-  return join(
-    storageDir,
-    "conversations",
-    Buffer.from(key).toString("base64url"),
-    "messages.jsonl",
-  );
-}
-
-function rowsWithType(raw: string, type: string): Record<string, unknown>[] {
-  return raw
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as Record<string, unknown>)
-    .filter((row) => row.type === type);
 }
 
 describe("LocalBackend.listTopics", () => {
@@ -251,291 +150,6 @@ describe("LocalBackend.listTopics", () => {
         anchorInContext: true,
       },
     ]);
-  });
-});
-
-describe("LocalBackend.trimConversationToTopic", () => {
-  test("summarizes the picked region, keeps the rest, and refreezes the prefix", async () => {
-    const storageDir = await createStorageDirectory();
-    const summarizerCalls = { count: 0 };
-    const f = await fixture({ storageDir, summarizerCalls });
-    for (const turn of ["one", "two", "three", "four", "five", "six"]) {
-      await f.sendTurn(turn);
-    }
-    f.backend.markTopic({
-      conversationId: f.conversationId,
-      agentId: f.agentId,
-      title: "Alpha",
-      createdBy: "agent",
-    });
-    await f.sendTurn("seven");
-    await f.sendTurn("eight");
-
-    const before = await inContext(f.backend, f);
-    expect(frozenReason(f.backend, f)).toBe("conversation_created");
-
-    // The block list is "keep from here": picking the trailing block asks for
-    // exactly the topic the marker closed to be summarized away.
-    const blocks = f.backend.listTopics(f.conversationId, f.agentId).blocks;
-    expect(blocks.map((block) => block.title)).toEqual(["Alpha", null]);
-
-    const outcome = await f.backend.trimConversationToTopic({
-      conversationId: f.conversationId,
-      agentId: f.agentId,
-      pick: { kind: "topic", index: 2 },
-    });
-
-    expect(outcome.executed).toBe(true);
-    expect(outcome.source).toBe("topic_pick");
-    expect(outcome.summarizedTitles).toEqual(["Alpha"]);
-    expect(outcome.rewindTurns).toBe(2);
-    expect(summarizerCalls.count).toBe(1);
-
-    const after = await inContext(f.backend, f);
-    expect(after.length).toBeLessThan(before.length);
-    // The new first message is the summary the trim wrote, and the trim audit
-    // rides on it exactly as it was persisted.
-    const stored = storedMessages(f.backend, f);
-    expect(
-      (
-        stored[0]?.metadata as {
-          compaction?: { stats?: { trim?: unknown } };
-        }
-      )?.compaction?.stats?.trim,
-    ).toMatchObject({
-      source: "topic_pick",
-      summarized_titles: ["Alpha"],
-      rewind_turns: 2,
-    });
-    expect(outcome.firstKeptMessageId).toBe(after[1]?.id);
-    expect(frozenReason(f.backend, f)).toBe("compaction");
-
-    // The trim row is appended to the transcript, not rewritten over it.
-    const raw = await readFile(
-      transcriptPath(storageDir, f.conversationId, f.agentId),
-      "utf8",
-    );
-    expect(rowsWithType(raw, "compaction")).toHaveLength(1);
-    // Markers are metadata that survives the trim.
-    expect(
-      f.backend.listTopicMarkers(f.conversationId, f.agentId),
-    ).toHaveLength(1);
-  });
-
-  test("survives a restart with the trimmed context and its markers", async () => {
-    const storageDir = await createStorageDirectory();
-    const f = await fixture({ storageDir });
-    for (const turn of ["one", "two", "three", "four", "five", "six"]) {
-      await f.sendTurn(turn);
-    }
-    f.backend.markTopic({
-      conversationId: f.conversationId,
-      agentId: f.agentId,
-      title: "Alpha",
-      createdBy: "agent",
-    });
-    await f.sendTurn("seven");
-    await f.sendTurn("eight");
-
-    const outcome = await f.backend.trimConversationToTopic({
-      conversationId: f.conversationId,
-      agentId: f.agentId,
-      pick: { kind: "ratio_suggestion" },
-    });
-    expect(outcome.executed).toBe(true);
-    const after = await inContext(f.backend, f);
-
-    const reopened = new LocalBackend({
-      storageDir,
-      executor: oneTurnExecutor(),
-      memfsEnabled: false,
-    });
-    const reloaded = await inContext(reopened, f);
-    expect(reloaded.map((message) => message.id)).toEqual(
-      after.map((message) => message.id),
-    );
-    // The marker's anchor survives a ratio trim (the newest messages are kept),
-    // so it stays in the current context's block structure.
-    const list = reopened.listTopics(f.conversationId, f.agentId);
-    expect(list.markers.map((view) => view.marker.title)).toEqual(["Alpha"]);
-    expect(list.markers.map((view) => view.anchorInContext)).toEqual([true]);
-    // The trim is a transcript row, so it is still there after a reload.
-    const raw = await readFile(
-      transcriptPath(storageDir, f.conversationId, f.agentId),
-      "utf8",
-    );
-    expect(rowsWithType(raw, "compaction")).toHaveLength(1);
-    const trimRows = rowsWithType(raw, "topic");
-    expect(trimRows).toHaveLength(1);
-    expect(trimRows[0]?.title).toBe("Alpha");
-  });
-
-  test("picking the first block is cut down to the rate", async () => {
-    const storageDir = await createStorageDirectory();
-    const summarizerCalls = { count: 0 };
-    const f = await fixture({ storageDir, summarizerCalls });
-    for (const turn of ["one", "two", "three", "four"]) await f.sendTurn(turn);
-
-    const before = await inContext(f.backend, f);
-
-    const outcome = await f.backend.trimConversationToTopic({
-      conversationId: f.conversationId,
-      agentId: f.agentId,
-      pick: { kind: "topic", index: 1 },
-    });
-
-    // Block 1 keeps everything; the rate caps every cut, so this is the rate's
-    // own boundary rather than a no-op.
-    expect(outcome.executed).toBe(true);
-    expect(outcome.source).toBe("ratio_cap");
-    expect(outcome.ratioCapApplied).toBe(true);
-    expect(outcome.requestedRetentionTokens).toBeGreaterThan(
-      outcome.retentionCapTokens ?? 0,
-    );
-    expect(outcome.retainedTokens).toBeLessThanOrEqual(
-      outcome.retentionCapTokens ?? 0,
-    );
-    expect(summarizerCalls.count).toBe(1);
-    expect((await inContext(f.backend, f)).length).toBeLessThan(before.length);
-    expect(frozenReason(f.backend, f)).toBe("compaction");
-    const raw = await readFile(
-      transcriptPath(storageDir, f.conversationId, f.agentId),
-      "utf8",
-    );
-    expect(rowsWithType(raw, "compaction")).toHaveLength(1);
-  });
-
-  test("an unmarked conversation can still be trimmed by ratio (D-119)", async () => {
-    const storageDir = await createStorageDirectory();
-    const f = await fixture({ storageDir });
-    for (const turn of ["one", "two", "three", "four", "five", "six"]) {
-      await f.sendTurn(turn);
-    }
-
-    const outcome = await f.backend.trimConversationToTopic({
-      conversationId: f.conversationId,
-      agentId: f.agentId,
-      pick: { kind: "ratio_suggestion" },
-    });
-
-    expect(outcome.executed).toBe(true);
-    expect(outcome.source).toBe("ratio_suggestion");
-    expect(outcome.topicTitle).toBeNull();
-    expect(outcome.summarizedTitles).toEqual([]);
-    expect(outcome.retainedTokens).toBeLessThanOrEqual(
-      outcome.retentionCapTokens ?? Number.POSITIVE_INFINITY,
-    );
-  });
-
-  test("a short context is still compressed: the rate is relative, not a threshold", async () => {
-    const storageDir = await createStorageDirectory();
-    const summarizerCalls = { count: 0 };
-    const f = await fixture({ storageDir, summarizerCalls });
-    await f.sendTurn("one");
-    await f.sendTurn("two");
-
-    const outcome = await f.backend.trimConversationToTopic({
-      conversationId: f.conversationId,
-      agentId: f.agentId,
-      pick: { kind: "ratio_suggestion" },
-    });
-
-    // Two turns are well inside the window: under the old "retention cap" rule
-    // this refused. The rate compresses a share of whatever is there, so the
-    // oldest messages are summarized even here.
-    expect(outcome.executed).toBe(true);
-    expect(outcome.summarizedMessageCount).toBeGreaterThan(0);
-    expect(outcome.summarizedTokens).toBeGreaterThan(0);
-    expect(summarizerCalls.count).toBe(1);
-  });
-
-  test("a high compression rate caps the kept region below the picked topic", async () => {
-    const storageDir = await createStorageDirectory();
-    const f = await fixture({ storageDir, percentage: 0.6 });
-    for (const turn of ["one", "two", "three", "four"]) await f.sendTurn(turn);
-    f.backend.markTopic({
-      conversationId: f.conversationId,
-      agentId: f.agentId,
-      title: "Alpha",
-      createdBy: "agent",
-    });
-    await f.sendTurn("five");
-
-    // Rewind 2 from turn 4 puts block 1's boundary on turn 2, so the pick asks to
-    // keep turns 2-5.
-    const blocks = f.backend.listTopics(f.conversationId, f.agentId).blocks;
-    expect(blocks.map((block) => block.title)).toEqual(["Alpha", null]);
-
-    const outcome = await f.backend.trimConversationToTopic({
-      conversationId: f.conversationId,
-      agentId: f.agentId,
-      pick: { kind: "topic", index: 2 },
-    });
-
-    // A 0.6 rate keeps at most 40% of the transcript, which is less than the
-    // picked topic asked for: the rate wins and the receipt says so.
-    expect(outcome.executed).toBe(true);
-    expect(outcome.source).toBe("ratio_cap");
-    expect(outcome.ratioCapApplied).toBe(true);
-    expect(outcome.retainedTokens).toBeLessThanOrEqual(
-      outcome.retentionCapTokens ?? 0,
-    );
-    expect(outcome.requestedRetentionTokens).toBeGreaterThan(
-      outcome.retentionCapTokens ?? 0,
-    );
-  });
-});
-
-/**
- * G8: a trim is one-way by design. The evicted messages leave the context, stay
- * on disk, and `/search` still finds them; nothing puts them back. The name
- * scan at the end is a speed bump, not the guarantee — the guarantee is that no
- * such code path exists — but it fails loudly if someone adds one.
- */
-describe("context trimming is one-way (G8)", () => {
-  test("evicted messages leave the context but stay searchable", async () => {
-    const storageDir = await createStorageDirectory();
-    const f = await fixture({ storageDir });
-    for (const turn of ["alpha", "bravo", "charlie", "delta", "echo"]) {
-      await f.sendTurn(turn);
-    }
-    f.backend.markTopic({
-      conversationId: f.conversationId,
-      agentId: f.agentId,
-      title: "Alpha",
-      createdBy: "agent",
-    });
-    await f.sendTurn("foxtrot");
-    await f.sendTurn("golf");
-
-    const before = await inContext(f.backend, f);
-    const evictedId = before[0]?.id ?? "";
-    const outcome = await f.backend.trimConversationToTopic({
-      conversationId: f.conversationId,
-      agentId: f.agentId,
-      pick: { kind: "topic", index: 2 },
-    });
-    expect(outcome.executed).toBe(true);
-    const after = await inContext(f.backend, f);
-
-    expect(evictedId).not.toBe("");
-    expect(after.map((message) => message.id)).not.toContain(evictedId);
-
-    // The transcript keeps it, so /search still finds the original text.
-    const hits = searchLocalTranscriptMessages(storageDir, {
-      query: "alpha",
-      agent_id: f.agentId,
-      conversation_id: f.conversationId,
-      limit: 10,
-    });
-    expect(hits.map((hit) => hit.message_id)).toContain(evictedId);
-
-    // No restore surface on the backend.
-    expect(
-      Object.getOwnPropertyNames(LocalBackend.prototype).filter((name) =>
-        /restore|undo|untrim|revert/i.test(name),
-      ),
-    ).toEqual([]);
   });
 });
 
@@ -598,83 +212,6 @@ describe("the boundary rewind follows topicBoundaryRewindTurns (D-115)", () => {
       byDefault.blocks[1]?.startIndex ?? -1,
     );
   });
-
-  test("a trim keeps fewer messages when the rewind is off", async () => {
-    const trimmed = async (rewindTurns: number) => {
-      settingsManager.updateSettings({ topicBoundaryRewindTurns: rewindTurns });
-      const f = await markedConversation();
-      const outcome = await f.backend.trimConversationToTopic({
-        conversationId: f.conversationId,
-        agentId: f.agentId,
-        pick: { kind: "topic", index: 2 },
-      });
-      expect(outcome.executed).toBe(true);
-      expect(outcome.rewindTurns).toBe(rewindTurns);
-      return outcome;
-    };
-
-    const tight = await trimmed(0);
-    const loose = await trimmed(2);
-
-    expect(tight.numMessagesBefore).toBe(loose.numMessagesBefore);
-    expect(loose.numMessagesAfter).toBeGreaterThan(tight.numMessagesAfter);
-  });
-});
-
-/**
- * M-4: a trim ends the unmarked stretch. The default threshold is 50 turns, so
- * the knob is driven through settings — the same wiring a user has — and the
- * kept region is deliberately left longer than the threshold.
- */
-describe("a trim ends the nudge stretch (M-4)", () => {
-  const originalHome = process.env.HOME;
-  let testHomeDir: string;
-
-  beforeEach(async () => {
-    await settingsManager.reset();
-    testHomeDir = await mkdtemp(join(tmpdir(), "topic-nudge-trim-settings-"));
-    process.env.HOME = testHomeDir;
-    await settingsManager.initialize();
-    settingsManager.updateSettings({ topicNudgeTurns: 3 });
-  });
-
-  afterEach(async () => {
-    await settingsManager.reset();
-    await rm(testHomeDir, { recursive: true, force: true });
-    process.env.HOME = originalHome;
-  });
-
-  test("the next nudge is due even though the kept region is still long", async () => {
-    const f = await fixture({ storageDir: await createStorageDirectory() });
-    for (const turn of ["one", "two", "three"]) await f.sendTurn(turn);
-    f.backend.markTopic({
-      conversationId: f.conversationId,
-      agentId: f.agentId,
-      title: "Alpha",
-      createdBy: "agent",
-    });
-    for (const turn of ["four", "five", "six"]) await f.sendTurn(turn);
-
-    // Three user turns past the marker, so the one-shot reminder has gone out.
-    expect(
-      f.backend.consumeTopicNudge(f.conversationId, f.agentId),
-    ).toMatchObject({ due: true, reason: "due" });
-
-    const outcome = await f.backend.trimConversationToTopic({
-      conversationId: f.conversationId,
-      agentId: f.agentId,
-      pick: { kind: "topic", index: 2 },
-      rewindTurns: 0,
-    });
-    expect(outcome.executed).toBe(true);
-
-    // The kept region still holds the marker's anchor and the three later user
-    // turns, so only the trim itself can have ended the stretch: without an
-    // explicit reset this stays `already_sent` for the rest of the conversation.
-    expect(
-      f.backend.consumeTopicNudge(f.conversationId, f.agentId),
-    ).toMatchObject({ due: true, reason: "due", turnsSinceLastMarker: 3 });
-  });
 });
 
 /**
@@ -690,7 +227,6 @@ describe("the compaction settings write path", () => {
     const backend = new LocalBackend({
       storageDir: await createStorageDirectory(),
       executor: oneTurnExecutor(),
-      complete: async () => assistantMessage("summary"),
       memfsEnabled: false,
     });
     const agent = await backend.createAgent({

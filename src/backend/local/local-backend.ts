@@ -76,11 +76,8 @@ import {
 } from "./local-topic-nudge";
 import {
   type LocalTopicList,
-  type LocalTopicTrimOutcome,
-  type LocalTopicTrimPick,
   type LocalTopicTrimPorts,
   listLocalTopics,
-  trimLocalConversationToTopic,
 } from "./local-topic-trim";
 import type { LocalTopicCreatedBy } from "./local-transcript-topic-entry";
 import {
@@ -679,27 +676,6 @@ export class LocalBackend extends HeadlessBackend {
     });
   }
 
-  /**
-   * Local-only: summarize everything before a user-picked boundary and keep the
-   * rest. This is the *only* path that may trim context on a user's behalf; it
-   * returns `executed: false` (having written nothing) when the pick cannot be
-   * honored.
-   */
-  trimConversationToTopic(input: {
-    conversationId: string;
-    agentId?: string;
-    pick: LocalTopicTrimPick;
-    rewindTurns?: number;
-    trigger?: string;
-  }): Promise<LocalTopicTrimOutcome> {
-    // The rewind default comes from settings, so every channel (CLI, listener,
-    // tool) cuts at the same boundary unless it passes an explicit value.
-    return trimLocalConversationToTopic(this.topicTrimPorts(), {
-      ...input,
-      rewindTurns: input.rewindTurns ?? readTopicSettings().boundaryRewindTurns,
-    });
-  }
-
   /** F-04: run the summarizer once on the frozen prefix; writes nothing. */
   prepareCompaction(input: {
     conversationId: string;
@@ -764,8 +740,6 @@ export class LocalBackend extends HeadlessBackend {
         this.store.contextRewrites.readTopicMarkers(conversationId, agentId),
       contextWindow: (conversationId, agentId) =>
         this.effectiveContextWindow(conversationId, agentId),
-      resolveSummarizerAgent: (conversationId, agentId) =>
-        this.frozenAgentForConversation(conversationId, agentId),
       compactionSettings: (conversationId, agentId) =>
         resolveLocalCompactionSettings(
           this.frozenAgentForConversation(conversationId, agentId),
@@ -779,13 +753,6 @@ export class LocalBackend extends HeadlessBackend {
           reason: "compaction",
         });
       },
-      onCompactionStart: (conversationId, agentId, trigger) =>
-        this.emitCompactStart(conversationId, agentId, trigger),
-      onCompactionEnd: (conversationId, agentId, trigger, stats) =>
-        this.emitCompactEnd(conversationId, agentId, trigger, stats),
-      complete: this.complete,
-      storageDir: this.storageDir,
-      modelsRuntime: this.piModelsRuntime,
     };
   }
 
