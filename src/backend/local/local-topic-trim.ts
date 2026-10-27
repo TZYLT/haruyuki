@@ -243,7 +243,7 @@ export function listLocalTopics(
 }
 
 /** The block the ratio suggestion lands in, or `1` when nothing would move. */
-function suggestionBlockIndex(
+export function suggestionBlockIndex(
   messages: readonly LocalMessage[],
   blocks: readonly TopicBlock[],
   retentionCapTokens: number,

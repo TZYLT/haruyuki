@@ -37,6 +37,13 @@ import {
   planLocalSlidingWindowCompaction,
   summarizeLocalMessagesSlidingWindow,
 } from "./compaction";
+import type { CompactionPreview, CompactPick } from "./compaction-preview";
+import {
+  applyCompaction as applyCompactionRun,
+  type CompactionApplyResult,
+  prepareCompaction as prepareCompactionRun,
+} from "./compaction-run";
+import { summarizeConversation } from "./compaction-summarizer";
 import { initialMemoryFilesFromCreateBody } from "./initial-memory";
 import {
   compactionSettingsRecord,
@@ -75,6 +82,7 @@ import {
   listLocalTopics,
   trimLocalConversationToTopic,
 } from "./local-topic-trim";
+import type { LocalTopicCreatedBy } from "./local-transcript-topic-entry";
 import {
   getLocalBackendMemoryFilesystemRoot,
   isLocalBackendMemfsDisabledForProcess,
@@ -105,6 +113,7 @@ import {
   type TopicNudgeDecision,
   userTurnsSinceLastTopicMarker,
 } from "./topic-compaction";
+import { refreshTopicIndexForConversation } from "./topic-index";
 
 export interface LocalBackendOptions {
   storageDir: string;
@@ -152,6 +161,7 @@ export class LocalBackend extends HeadlessBackend {
 
   private readonly memoryDir?: string;
   private readonly storageDir: string;
+  private readonly stateStorageDir?: string;
   private readonly piModelsRuntime: LocalPiModelsRuntime;
   private readonly complete?: LocalCompleteFunction;
   private readonly memfsEnabledOverride?: boolean;
@@ -197,6 +207,7 @@ export class LocalBackend extends HeadlessBackend {
     );
     localBackendRef.current = this;
     this.storageDir = options.storageDir;
+    this.stateStorageDir = options.stateStorageDir;
     this.memoryDir = options.memoryDir;
     this.complete = options.complete;
     this.memfsEnabledOverride = options.memfsEnabled;
@@ -271,6 +282,19 @@ export class LocalBackend extends HeadlessBackend {
 
   getLocalStorageDir(): string {
     return this.storageDir;
+  }
+
+  /**
+   * Refresh one conversation's entries in the agent's topic index (§5.11.3).
+   * The ephemeral backend keeps conversation state under `stateStorageDir`, so
+   * the index must follow that root rather than the permanent one.
+   */
+  private refreshTopicIndex(conversationId: string, agentId: string): void {
+    refreshTopicIndexForConversation(
+      agentId,
+      conversationId,
+      this.stateStorageDir ?? this.storageDir,
+    );
   }
 
   override async listModels() {
@@ -353,15 +377,17 @@ export class LocalBackend extends HeadlessBackend {
         message.id,
       ]),
     );
+    const targetAgentId =
+      args[1]?.agentId ?? this.store.resolveAgentIdForConversation(forked.id);
     this.store.contextRewrites.copyTopicMarkersForFork({
       sourceConversationId: args[0],
       sourceAgentId:
         args[1]?.agentId ?? this.store.resolveAgentIdForConversation(args[0]),
       targetConversationId: forked.id,
-      targetAgentId:
-        args[1]?.agentId ?? this.store.resolveAgentIdForConversation(forked.id),
+      targetAgentId,
       anchorIds,
     });
+    this.refreshTopicIndex(forked.id, targetAgentId);
     return forked;
   }
 
@@ -434,6 +460,8 @@ export class LocalBackend extends HeadlessBackend {
     const conversation =
       this.store.resolveConversationRecordForDelete(conversationId);
     this.store.deleteConversation(conversationId, conversation.agent_id);
+    // The transcript is gone, so this drops the conversation's index record.
+    this.refreshTopicIndex(conversationId, conversation.agent_id);
     await deleteLocalConversationSettings({
       agentId: conversation.agent_id,
       agentFree: conversation.agent_free === true,
@@ -530,18 +558,20 @@ export class LocalBackend extends HeadlessBackend {
     agentId?: string;
     title: string;
     summary?: string;
-    createdBy: "agent" | "user";
+    createdBy: LocalTopicCreatedBy;
   }): LocalTopicMarkerAppendResult {
     const agentId =
       input.agentId ??
       this.store.resolveAgentIdForConversation(input.conversationId);
-    return this.store.contextRewrites.appendTopicMarker({
+    const result = this.store.contextRewrites.appendTopicMarker({
       conversationId: input.conversationId,
       agentId,
       title: input.title,
       ...(input.summary === undefined ? {} : { summary: input.summary }),
       createdBy: input.createdBy,
     });
+    this.refreshTopicIndex(input.conversationId, agentId);
+    return result;
   }
 
   /** Local-only: every marker in the transcript, oldest first. */
@@ -668,6 +698,60 @@ export class LocalBackend extends HeadlessBackend {
       ...input,
       rewindTurns: input.rewindTurns ?? readTopicSettings().boundaryRewindTurns,
     });
+  }
+
+  /** F-04: run the summarizer once on the frozen prefix; writes nothing. */
+  prepareCompaction(input: {
+    conversationId: string;
+    agentId?: string;
+    signal?: AbortSignal;
+  }): Promise<CompactionPreview> {
+    const agentId =
+      input.agentId ??
+      this.store.resolveAgentIdForConversation(input.conversationId);
+    const ports = this.topicTrimPorts();
+    return prepareCompactionRun(
+      {
+        storageDir: this.storageDir,
+        listMessages: ports.listMessages,
+        readMarkers: ports.readMarkers,
+        compactionSettings: ports.compactionSettings,
+        frozenAgent: (conversationId, ownerAgentId) =>
+          this.frozenAgentForConversation(conversationId, ownerAgentId),
+        summarize: summarizeConversation,
+      },
+      {
+        conversationId: input.conversationId,
+        agentId,
+        ...(input.signal ? { signal: input.signal } : {}),
+      },
+    );
+  }
+
+  /** F-04: fold the preview's picked region; no model call, no write on a no-op. */
+  applyCompaction(input: {
+    preview: CompactionPreview;
+    pick: CompactPick;
+  }): Promise<CompactionApplyResult> {
+    const ports = this.topicTrimPorts();
+    return applyCompactionRun(
+      {
+        listMessages: ports.listMessages,
+        readMarkers: ports.readMarkers,
+        compactionSettings: ports.compactionSettings,
+        appendTopicMarker: (marker) =>
+          this.store.contextRewrites.appendTopicMarker(marker),
+        rewrite: ports.rewrite,
+        refreshFrozenPrefix: ports.refreshFrozenPrefix,
+        clearTopicNudgeStreak: ports.clearTopicNudgeStreak,
+        refreshIndex: () =>
+          this.refreshTopicIndex(
+            input.preview.conversationId,
+            input.preview.agentId,
+          ),
+      },
+      input,
+    );
   }
 
   private topicTrimPorts(): LocalTopicTrimPorts {

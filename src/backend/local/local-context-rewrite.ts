@@ -15,8 +15,11 @@ import { appendFileSync } from "node:fs";
 import type { LocalCompactionStats } from "./compaction";
 import type { LocalMessage } from "./local-message";
 import { cloneLocalMessage } from "./local-message-projection";
-import type { LocalTranscriptTopicEntry } from "./local-transcript";
 import { timestampFromIso } from "./local-transcript";
+import type {
+  LocalTopicCreatedBy,
+  LocalTranscriptTopicEntry,
+} from "./local-transcript-topic-entry";
 import { readLocalTranscriptTopicEntries } from "./local-transcript-topics";
 import type {
   LocalConversationContextManagement,
@@ -33,6 +36,28 @@ export interface LocalCompactionStoreResult {
   summaryMessage: LocalMessage;
 }
 
+/**
+ * The compaction audit numbers plus F-04's folded-topic list.
+ *
+ * The list rides inside `stats` because that is the only place the transcript's
+ * compaction row serialises audit data (`details.stats`) without changing the
+ * store's row writer; `trim.summarized_titles` already carries text there for
+ * the same reason.
+ */
+export interface LocalCompactionWriteStats extends LocalCompactionStats {
+  /**
+   * Append-only ids of the topic markers this compaction folded in.
+   *
+   * This is audit data, not a metric: it rides inside `stats` because the
+   * transcript row's writer (`appendConversationSessionCompactionEntry` in
+   * `local-store.ts`) copies this whole object into `details.stats`, so a sibling
+   * `details` field would mean editing that pinned 3356-line file. Do not drop it
+   * as "stats should only be numbers" — `trim.summarized_titles` lives here for
+   * the same reason.
+   */
+  folded_topic_ids?: string[];
+}
+
 export interface LocalConversationRewriteInput {
   conversationId: string;
   agentId: string;
@@ -40,7 +65,7 @@ export interface LocalConversationRewriteInput {
   summary: string;
   /** Packed summary content the model will read. */
   packedSummary: string;
-  stats?: LocalCompactionStats;
+  stats?: LocalCompactionWriteStats;
   /** Messages kept after the summary, in order. */
   remainingMessages?: LocalMessage[];
 }
@@ -50,7 +75,13 @@ export interface LocalTopicMarkerAppendInput {
   agentId: string;
   title: string;
   summary?: string;
-  createdBy: "agent" | "user";
+  createdBy: LocalTopicCreatedBy;
+  /**
+   * Boundary point to record instead of the newest in-context message. F-04's
+   * summarizer names a topic's first message, i.e. the exact boundary between
+   * two topics, so it cannot use the "newest message" default.
+   */
+  anchorMessageId?: string | null;
 }
 
 export interface LocalTopicMarkerAppendResult {
@@ -72,7 +103,7 @@ export interface LocalTranscriptPersistOptions {
     summary: string;
     firstKeptMessageId?: string;
     previousMessages?: readonly LocalMessage[];
-    stats?: LocalCompactionStats;
+    stats?: LocalCompactionWriteStats;
   };
 }
 
@@ -239,6 +270,7 @@ export class LocalContextRewrites {
       createdBy: entry.createdBy,
       anchorMessageId: entry.anchorMessageId,
       createdAt: entry.timestamp,
+      ...(entry.summary === undefined ? {} : { summary: entry.summary }),
     }));
   }
 
@@ -247,9 +279,10 @@ export class LocalContextRewrites {
    * the in-context id list, and the message index are untouched, so a marker
    * never disturbs the frozen request prefix.
    *
-   * The anchor is the newest in-context message at write time. An empty context
-   * yields a `null` anchor (and `contextMessageCount: 0`), which callers treat
-   * as "cannot mark here".
+   * The anchor defaults to the newest in-context message at write time. An empty
+   * context yields a `null` anchor (and `contextMessageCount: 0`), which callers
+   * treat as "cannot mark here". A caller that already knows the exact boundary
+   * passes `anchorMessageId` instead (F-04's summarizer).
    */
   appendTopicMarker(
     input: LocalTopicMarkerAppendInput,
@@ -270,11 +303,21 @@ export class LocalContextRewrites {
       input.agentId,
     );
     const existing = this.readTopicMarkers(conversation.id, input.agentId);
-    const anchorMessageId = messages.at(-1)?.id ?? null;
-    const turnsSincePrevious = userTurnsSinceLastTopicMarker(
-      messages,
-      existing,
-    );
+    const anchorMessageId =
+      input.anchorMessageId === undefined
+        ? (messages.at(-1)?.id ?? null)
+        : input.anchorMessageId;
+    const anchorIndex =
+      anchorMessageId === null
+        ? -1
+        : messages.findIndex((message) => message.id === anchorMessageId);
+    const turnsSincePrevious =
+      anchorIndex < 0 || input.anchorMessageId === undefined
+        ? userTurnsSinceLastTopicMarker(messages, existing)
+        : userTurnsSinceLastTopicMarker(
+            messages.slice(0, anchorIndex + 1),
+            existing,
+          );
     const timestamp = this.ports.now();
     const entry: LocalTranscriptTopicEntry = {
       type: "topic",
@@ -288,14 +331,16 @@ export class LocalContextRewrites {
       turnsSincePrevious,
     };
     this.appendTopicEntry(conversation, key, messagesPath, entry);
+    const marker: LocalTopicMarker = {
+      id: entry.id,
+      title: entry.title,
+      createdBy: entry.createdBy,
+      anchorMessageId,
+      createdAt: timestamp,
+      ...(entry.summary === undefined ? {} : { summary: entry.summary }),
+    };
     return {
-      marker: {
-        id: entry.id,
-        title: entry.title,
-        createdBy: entry.createdBy,
-        anchorMessageId,
-        createdAt: timestamp,
-      },
+      marker,
       entryId: entry.id,
       turnsSincePrevious,
       contextMessageCount: messages.length,

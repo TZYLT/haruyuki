@@ -23,6 +23,7 @@ import {
   estimateLocalMessageTokens,
 } from "./local-context-estimate";
 import type { LocalMessage } from "./local-message";
+import type { LocalTopicCreatedBy } from "./local-transcript-topic-entry";
 
 export const DEFAULT_TOPIC_BOUNDARY_REWIND_TURNS = 2;
 export const MAX_TOPIC_BOUNDARY_REWIND_TURNS = 3;
@@ -34,9 +35,11 @@ export const DEFAULT_TOPIC_NUDGE_TURNS = 50;
 export interface LocalTopicMarker {
   id: string;
   title: string;
-  createdBy: "agent" | "user";
+  createdBy: LocalTopicCreatedBy;
   anchorMessageId: string | null;
   createdAt: string;
+  /** F-04's per-topic section, when the marker carries one. */
+  summary?: string;
 }
 
 export interface TopicBlock {
@@ -48,7 +51,9 @@ export interface TopicBlock {
    */
   title: string | null;
   markerId: string | null;
-  createdBy: "agent" | "user" | null;
+  createdBy: LocalTopicCreatedBy | null;
+  /** The ending marker's section (F-04's summarizer record), when it has one. */
+  summary?: string;
   /** Where that ending marker was written (display only; boundaries are older). */
   anchorMessageId: string | null;
   /**
@@ -166,7 +171,8 @@ function lastPositionAtMost(values: readonly number[], target: number): number {
   return found;
 }
 
-function messageCreatedAt(message: LocalMessage): string {
+/** ISO creation time of a message, for the block's `startsAt` field. */
+export function localMessageCreatedAt(message: LocalMessage): string {
   const createdAt = message.metadata?.created_at;
   if (typeof createdAt === "string" && createdAt) return createdAt;
   return Number.isFinite(message.timestamp)
@@ -227,16 +233,24 @@ function effectiveBoundaries(
     let appliedRewind = 0;
 
     if (anchorIndex >= 0) {
-      const anchorTurn = lastPositionAtMost(starts, anchorIndex);
-      if (anchorTurn >= 0) {
-        const targetTurn = Math.max(0, anchorTurn - rewind);
-        target = starts[targetTurn] ?? 0;
-        appliedRewind = anchorTurn - targetTurn;
+      if (marker.createdBy === "summarizer") {
+        // F-04: a summarizer marker is anchored at the first message of the next
+        // topic — the exact boundary its output named. Rewinding it would move a
+        // boundary the summarizer had already resolved, so the anchor is used
+        // verbatim instead of being rewound.
+        target = anchorIndex;
       } else {
-        // The anchor precedes the first user turn: nothing older to rewind to.
-        target = 0;
+        const anchorTurn = lastPositionAtMost(starts, anchorIndex);
+        if (anchorTurn >= 0) {
+          const targetTurn = Math.max(0, anchorTurn - rewind);
+          target = starts[targetTurn] ?? 0;
+          appliedRewind = anchorTurn - targetTurn;
+        } else {
+          // The anchor precedes the first user turn: nothing older to rewind to.
+          target = 0;
+        }
+        target = Math.min(target, anchorIndex);
       }
-      target = Math.min(target, anchorIndex);
     }
 
     target = advanceToSafeStart(messages, Math.max(target, previous));
@@ -293,6 +307,9 @@ export function listTopicBlocks(
       title: endingMarker ? endingMarker.title : null,
       markerId: endingMarker ? endingMarker.id : null,
       createdBy: endingMarker ? endingMarker.createdBy : null,
+      ...(endingMarker?.summary === undefined
+        ? {}
+        : { summary: endingMarker.summary }),
       anchorMessageId: endingMarker ? endingMarker.anchorMessageId : null,
       absorbedTitles: leadingTitles.splice(0),
       boundaryMessageId: first.id,
@@ -302,7 +319,7 @@ export function listTopicBlocks(
       startMarkerAnchorMessageId,
       messageCount: slice.length,
       tokens: estimateLocalMessagesTokens(slice),
-      startsAt: messageCreatedAt(first),
+      startsAt: localMessageCreatedAt(first),
       sparse: slice.length <= 1,
     });
   };
@@ -441,7 +458,11 @@ function noopPlan(
 export function resolveTrimPlan(input: {
   messages: readonly LocalMessage[];
   blocks: readonly TopicBlock[];
-  pick: { kind: "topic"; index: number } | { kind: "ratio_suggestion" };
+  pick:
+    | { kind: "topic"; index: number }
+    | { kind: "ratio_suggestion" }
+    /** F-04's identity-first pick: a message id, never a row number. */
+    | { kind: "message"; messageId: string };
   retentionCapTokens: number;
 }): TrimPlan {
   const { messages, blocks, pick, retentionCapTokens } = input;
@@ -459,6 +480,9 @@ export function resolveTrimPlan(input: {
     topicTitle = block.title;
     candidateId = block.boundaryMessageId;
     source = "topic_pick";
+  } else if (pick.kind === "message") {
+    source = "topic_pick";
+    candidateId = pick.messageId;
   } else {
     source = "ratio_suggestion";
     candidateId = ratioSuggestionMessageId(messages, retentionCapTokens);
@@ -574,6 +598,10 @@ export function decideTopicNudge(input: {
  * User turns since the last marker's anchor, or since the start of the context
  * when there is no marker (or its anchor left the context). Feeds both the
  * frequency gate and the nudge.
+ *
+ * Summarizer markers are skipped: they must not satisfy the model's own reminder
+ * or its write-frequency gate, or the model could keep the nudge quiet forever by
+ * marking topics itself (requirement §5.5.5).
  */
 export function userTurnsSinceLastTopicMarker(
   messages: readonly LocalMessage[],
@@ -581,7 +609,9 @@ export function userTurnsSinceLastTopicMarker(
 ): number {
   let anchorIndex = -1;
   for (let position = markers.length - 1; position >= 0; position -= 1) {
-    const anchorMessageId = markers[position]?.anchorMessageId;
+    const marker = markers[position];
+    if (!marker || marker.createdBy === "summarizer") continue;
+    const anchorMessageId = marker.anchorMessageId;
     if (!anchorMessageId) continue;
     const index = messages.findIndex(
       (message) => message.id === anchorMessageId,

@@ -721,4 +721,22 @@ describe("userTurnsSinceLastTopicMarker", () => {
       userTurnsSinceLastTopicMarker(messages, [marker("t1", "A", "trimmed")]),
     ).toBe(4);
   });
+
+  test("a summarizer marker does not reset the count (Q-13)", () => {
+    const messages = conversation(5);
+    // Counted naively this would be one turn (u5). A marker the model wrote while
+    // summarizing must not satisfy its own nudge or write-frequency gate.
+    const summarizer = {
+      ...marker("t1", "auto topic", "a4"),
+      createdBy: "summarizer" as const,
+    };
+    expect(userTurnsSinceLastTopicMarker(messages, [summarizer])).toBe(5);
+    // A human marker in front of it still counts.
+    expect(
+      userTurnsSinceLastTopicMarker(messages, [
+        marker("t0", "human", "a2"),
+        summarizer,
+      ]),
+    ).toBe(3);
+  });
 });

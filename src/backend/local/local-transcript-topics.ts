@@ -13,7 +13,7 @@ import { StringDecoder } from "node:string_decoder";
 import {
   isLocalTranscriptTopicEntry,
   type LocalTranscriptTopicEntry,
-} from "./local-transcript";
+} from "./local-transcript-topic-entry";
 
 /** Read granularity for the scan below; not a knob, so it stays module-private. */
 const TOPIC_SCAN_CHUNK_BYTES = 256 * 1024;

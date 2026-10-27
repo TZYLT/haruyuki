@@ -2,7 +2,7 @@
   "src/agent/client-skills.test.ts": 1088,
   "src/agent/memory-git.ts": 1875,
   "src/backend/local-backend.test.ts": 2518,
-  "src/backend/local/local-backend.ts": 1049,
+  "src/backend/local/local-backend.ts": 1133,
   "src/backend/local/local-store.ts": 3356,
   "src/backend/pi-stream-adapter.test.ts": 1144,
   "src/cli/app/AppCoordinator.tsx": 4544,
