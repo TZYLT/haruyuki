@@ -15,8 +15,12 @@ import { __testSetBackend } from "@/backend";
 import { FakeHeadlessBackend } from "@/backend/dev/fake-headless-backend";
 import type { HeadlessTurnExecutor } from "@/backend/dev/headless-turn-executor";
 import { LocalBackend } from "@/backend/local/local-backend";
+import { refreshTopicIndexForConversation } from "@/backend/local/topic-index";
 import { TOPIC_COMMAND_LOCAL_ONLY } from "@/cli/commands/topic";
-import { handleTopicsCommand } from "@/cli/commands/topics";
+import {
+  handleTopicsCommand,
+  handleTopicsSearchCommand,
+} from "@/cli/commands/topics";
 import { settingsManager } from "@/settings-manager";
 
 const temporaryDirectories: string[] = [];
@@ -201,5 +205,146 @@ describe("handleTopicsCommand", () => {
       { backend },
     );
     expect(output).toBe("There is nothing in this conversation's context yet.");
+  });
+});
+
+describe("handleTopicsSearchCommand", () => {
+  test("finds a marker through the per-agent index", async () => {
+    const { backend, agentId, scope } = await backendWithTurns(4);
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Auth token refresh",
+      createdBy: "user",
+    });
+    // The index is the read path; the transcript is the source of truth (§5.11.1).
+    refreshTopicIndexForConversation(
+      agentId,
+      "default",
+      backend.getLocalStorageDir(),
+    );
+
+    const output = await handleTopicsSearchCommand(["auth"], scope, {
+      backend,
+    });
+
+    expect(output).toContain('Topic markers matching "auth" (1, newest first)');
+    expect(output).toContain("Auth token refresh");
+    expect(output).toContain("default");
+    expect(output).toContain("user");
+  });
+
+  test("an unmatched keyword says so instead of returning an empty string", async () => {
+    const { backend, agentId, scope } = await backendWithTurns(4);
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Auth token refresh",
+      createdBy: "user",
+    });
+    refreshTopicIndexForConversation(
+      agentId,
+      "default",
+      backend.getLocalStorageDir(),
+    );
+
+    const output = await handleTopicsSearchCommand(["deploy"], scope, {
+      backend,
+    });
+    expect(output).toBe('No topic markers match "deploy".');
+  });
+
+  test("no keyword lists every indexed topic", async () => {
+    const { backend, agentId, scope } = await backendWithTurns(4);
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Auth token refresh",
+      createdBy: "agent",
+    });
+    refreshTopicIndexForConversation(
+      agentId,
+      "default",
+      backend.getLocalStorageDir(),
+    );
+
+    const output = await handleTopicsSearchCommand([], scope, { backend });
+    expect(output).toContain("Topic markers for this agent (1, newest first)");
+    expect(output).toContain("Auth token refresh");
+  });
+
+  test("searching writes no marker (the C-22 bug)", async () => {
+    const { backend, agentId, scope } = await backendWithTurns(4);
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Auth token refresh",
+      createdBy: "user",
+    });
+    refreshTopicIndexForConversation(
+      agentId,
+      "default",
+      backend.getLocalStorageDir(),
+    );
+
+    await handleTopicsSearchCommand(["search"], scope, { backend });
+
+    // The registry used to read the first word of `/topic …` as a title, so this
+    // command recorded a topic called "search" (route C-22).
+    expect(
+      backend.listTopics("default", agentId).markers.map((v) => v.marker.title),
+    ).toEqual(["Auth token refresh"]);
+  });
+
+  test("requires an active agent", async () => {
+    await expect(
+      handleTopicsSearchCommand([], {
+        conversationId: "c",
+      } as DreamCommandScope),
+    ).rejects.toThrow("requires an active agent");
+  });
+
+  test("reports the local-only rule on a non-local backend", async () => {
+    __testSetBackend(new FakeHeadlessBackend());
+    expect(
+      await handleTopicsSearchCommand(["auth"], { agentId: "agent-x" }),
+    ).toBe(TOPIC_COMMAND_LOCAL_ONLY);
+  });
+
+  test("help prints the shared usage", async () => {
+    const output = await handleTopicsSearchCommand(["help"]);
+    expect(output).toContain("/topic search <kw>");
+  });
+});
+
+describe("the /topic registry dispatch", () => {
+  test("`search` reaches the search handler and records no marker", async () => {
+    const { backend, agentId } = await backendWithTurns(4);
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Auth token refresh",
+      createdBy: "user",
+    });
+    refreshTopicIndexForConversation(
+      agentId,
+      "default",
+      backend.getLocalStorageDir(),
+    );
+    // The registry resolves its backend through `getBackend()`, not through deps.
+    __testSetBackend(backend);
+    const { executeCommand } = await import("@/cli/commands/registry");
+
+    const result = await executeCommand("/topic search auth", {
+      agentId,
+      conversationId: "default",
+    } as DreamCommandScope);
+
+    expect(result.output).toContain("Topic markers matching");
+    expect(result.output).toContain("Auth token refresh");
+    // The marker count is the assertion that matters: the bug's damage was a row.
+    expect(
+      backend.listTopics("default", agentId).markers.map((v) => v.marker.title),
+    ).toEqual(["Auth token refresh"]);
   });
 });

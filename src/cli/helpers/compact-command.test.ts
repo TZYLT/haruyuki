@@ -6,7 +6,6 @@
  * rewound boundary, the ratio cap, the evicted topics — has an assertion here.
  */
 import { describe, expect, test } from "bun:test";
-import type { LocalTopicTrimOutcome } from "@/backend/local/local-topic-trim";
 import {
   COMPACT_COMMAND_USAGE,
   COMPACT_MODE_ARGUMENTS,
@@ -15,33 +14,8 @@ import {
   formatContextPressureHint,
   formatNoMarkerCompactHint,
   formatSingleBlockCompactHint,
-  formatTopicTrimReceipt,
   parseCompactCommandArgs,
 } from "@/cli/helpers/compact-command";
-
-function outcome(
-  overrides: Partial<LocalTopicTrimOutcome> = {},
-): LocalTopicTrimOutcome {
-  return {
-    executed: true,
-    source: "topic_pick",
-    topicTitle: null,
-    summarizedTitles: ["Alpha"],
-    boundaryAdjusted: false,
-    ratioCapApplied: false,
-    rewindTurns: 2,
-    numMessagesBefore: 12,
-    numMessagesAfter: 7,
-    summarizedMessageCount: 6,
-    summarizedTokens: 600,
-    requestedRetentionTokens: 600,
-    retainedTokens: 600,
-    retentionCapTokens: 30_000,
-    firstKeptMessageId: "msg-u4",
-    stats: {},
-    ...overrides,
-  };
-}
 
 describe("parseCompactCommandArgs", () => {
   test("no arguments means the interactive path", () => {
@@ -82,131 +56,6 @@ describe("parseCompactCommandArgs", () => {
       kind: "invalid",
       message: 'Unexpected argument "4".',
     });
-  });
-});
-
-describe("formatTopicTrimReceipt", () => {
-  test("reports the kept region, the evicted topics, and the source", () => {
-    const receipt = formatTopicTrimReceipt(outcome());
-
-    expect(receipt).toContain("Context trimmed.");
-    expect(receipt).toContain("kept:       7 messages (~600 tokens)");
-    expect(receipt).toContain("starting at msg-u4");
-    expect(receipt).toContain("summarized: 6 messages (~600 tokens)");
-    expect(receipt).toContain("cut point:  the topic block you picked");
-    expect(receipt).toContain("topics:     Alpha");
-    expect(receipt).toContain("rewound 2 user turns from the marker");
-    expect(receipt).toContain("before:     12 messages in context");
-    expect(receipt).toContain("evicts the provider cache");
-    expect(receipt).not.toContain("rate:");
-  });
-
-  test("the summarized figure is the evicted region, not the requested retention (M-6)", () => {
-    // The two numbers are different tokens: 900 were asked to be kept, 250 were
-    // actually summarized away.
-    const receipt = formatTopicTrimReceipt(
-      outcome({ requestedRetentionTokens: 900, summarizedTokens: 250 }),
-    );
-
-    expect(receipt).toContain("summarized: 6 messages (~250 tokens)");
-    expect(receipt).not.toContain("summarized: 6 messages (~900 tokens)");
-  });
-
-  test("a single rewound turn is not pluralised", () => {
-    const receipt = formatTopicTrimReceipt(outcome({ rewindTurns: 1 }));
-    expect(receipt).toContain("rewound 1 user turn from the marker");
-    expect(receipt).not.toContain("turns from the marker");
-  });
-
-  test("names the rate when the rate cut decided, with both numbers", () => {
-    const receipt = formatTopicTrimReceipt(
-      outcome({
-        source: "ratio_cap",
-        ratioCapApplied: true,
-        retentionCapTokens: 300,
-        requestedRetentionTokens: 600,
-      }),
-    );
-
-    expect(receipt).toContain(
-      "cut point:  the compression rate (the picked block kept more than the rate allows)",
-    );
-    expect(receipt).toContain(
-      "rate:       kept at most ~300 tokens (the pick asked for 600)",
-    );
-    // A rate cut is not a rewound marker boundary.
-    expect(receipt).not.toContain("rewound");
-  });
-
-  test("says so when the rate decided because nothing was marked", () => {
-    const receipt = formatTopicTrimReceipt(
-      outcome({ source: "ratio_suggestion", summarizedTitles: [] }),
-    );
-    expect(receipt).toContain(
-      "cut point:  the compression rate (no marker defines a boundary here",
-    );
-    expect(receipt).not.toContain("topics:");
-  });
-
-  test("reports a boundary that had to move to stay legal", () => {
-    const receipt = formatTopicTrimReceipt(outcome({ boundaryAdjusted: true }));
-    expect(receipt).toContain("moved to avoid splitting a tool call");
-  });
-
-  test("confirming the suggested row is reported as the rate's suggestion (V9)", () => {
-    const suggested = formatTopicTrimReceipt(outcome(), {
-      confirmedSuggestion: true,
-    });
-    expect(suggested).toContain(
-      "cut point:  compression rate (the block it points at",
-    );
-    expect(suggested).not.toContain("the topic block you picked");
-
-    const capped = formatTopicTrimReceipt(
-      outcome({ ratioCapApplied: true, source: "ratio_cap" }),
-      { confirmedSuggestion: true },
-    );
-    expect(capped).toContain(
-      "cut point:  compression rate (the suggested block kept more",
-    );
-  });
-
-  test("a refusal explains itself instead of reporting numbers", () => {
-    const nothingToTrim = formatTopicTrimReceipt(
-      outcome({
-        executed: false,
-        noopReason: "nothing_before_boundary",
-      }),
-    );
-    expect(nothingToTrim).toContain("Nothing to trim");
-    expect(nothingToTrim).not.toContain("kept:");
-    expect(nothingToTrim).toContain("Run /topic list");
-
-    // The rate only lands on the start of the context when there is nothing it
-    // can compress, so the copy is about length — not about a budget it fits in.
-    const ratioNoop = formatTopicTrimReceipt(
-      outcome({
-        executed: false,
-        source: "ratio_suggestion",
-        noopReason: "nothing_before_boundary",
-        retainedTokens: 250,
-        retentionCapTokens: 300,
-      }),
-    );
-    expect(ratioNoop).toContain("too short to compress");
-    expect(ratioNoop).toContain("Nothing was written");
-    expect(ratioNoop).not.toContain("already fits inside the retention ratio");
-
-    expect(
-      formatTopicTrimReceipt(
-        outcome({ executed: false, noopReason: "empty_context" }),
-      ),
-    ).toContain("nothing in this conversation's context");
-    expect(
-      formatTopicTrimReceipt(
-        outcome({ executed: false, noopReason: "unknown_block" }),
-      ),
-    ).toContain("Run /topic list");
   });
 });
 

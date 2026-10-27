@@ -45,10 +45,12 @@ describe("interactive reflection transcript wiring", () => {
       new URL("./submit-compact-commands.ts", import.meta.url),
     );
     const source = readFileSync(compactPath, "utf-8");
-    // Both paths (the local trim and the cloud compaction) must finish the
-    // context rewrite before the reminder is marked and reflection launches.
-    const localTrimIndex = source.indexOf(
-      "await backend.trimConversationToTopic({",
+    // Both paths (the local `prepare → apply` and the cloud compaction) must
+    // finish the context rewrite before the reminder is marked and reflection
+    // launches. The local anchor is the apply call: the preview is in memory until
+    // it lands, and that await is the moment the context actually changed.
+    const localApplyIndex = source.indexOf(
+      "const result = await runtime.apply({ preview, pick });",
     );
     const cloudCompactIndex = source.indexOf(
       "await getBackend().compactConversationMessages(",
@@ -65,9 +67,9 @@ describe("interactive reflection transcript wiring", () => {
     const tailCallIndex = source.indexOf("runPostCompactionTail({");
     const reflectIndex = source.indexOf("reflect: () =>");
 
-    expect(localTrimIndex).toBeGreaterThanOrEqual(0);
+    expect(localApplyIndex).toBeGreaterThanOrEqual(0);
     expect(cloudCompactIndex).toBeGreaterThanOrEqual(0);
-    expect(afterIndex).toBeGreaterThan(localTrimIndex);
+    expect(afterIndex).toBeGreaterThan(localApplyIndex);
     expect(afterIndex).toBeGreaterThan(cloudCompactIndex);
     expect(afterDefinitionIndex).toBeGreaterThanOrEqual(0);
     expect(afterDefinitionIndex).toBeLessThan(afterIndex);

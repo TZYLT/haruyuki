@@ -123,6 +123,7 @@ import { handleDiagnosticsCommand } from "./submit-diagnostics-commands";
 import type { SubmitHandlerContext } from "./submit-handler-context";
 import { handleNavigationCommand } from "./submit-navigation-commands";
 import { handleProfileCommand } from "./submit-profile-commands";
+import { handleTopicOverlayCommand } from "./submit-topic-commands";
 import { bindTuiClientPreferences, buildTuiTurnInput } from "./turn-input";
 
 async function findCustomCommandByName(
@@ -1738,6 +1739,10 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           return await handleCompactCommand(msg, ctx);
         }
 
+        // The two topic faces own an overlay a registry handler cannot open (C-23).
+        const topicOverlayResult = await handleTopicOverlayCommand(msg, ctx);
+        if (topicOverlayResult) return topicOverlayResult;
+
         // Special handling for /rename command - rename agent or conversation.
         // Reached as `/agent rename` and `/session rename`; `/rename` itself is
         // retired at the routing boundary.
@@ -2795,12 +2800,11 @@ ${SYSTEM_REMINDER_CLOSE}
 
         clearPlaceholdersInText(msg);
       };
-      // A context at the window's hard threshold offers a trim before the turn
-      // goes out; Esc skips it. The turn is sent either way, and its tail (memory
-      // sync, placeholder cleanup) travels with it (D-112, M-1).
-      if (await offerTrimBeforeSend(ctx, finishTurn)) {
-        return { submitted: true };
-      }
+      // A context at the window's hard threshold compacts before the turn goes
+      // out (prepare → apply by the rate); Esc cancels it. The turn is sent
+      // either way, and its tail (memory sync, placeholder cleanup) travels with
+      // it (D-112, M-1).
+      await offerTrimBeforeSend(ctx);
       await finishTurn();
 
       return { submitted: true };

@@ -12,7 +12,6 @@
  * Everything here is pure: the CLI and the listener share the parsing and the
  * receipts, and tests cover them without a backend.
  */
-import type { LocalTopicTrimOutcome } from "@/backend/local/local-topic-trim";
 
 /** Mode words the cloud backend still accepts. */
 export const COMPACT_MODE_ARGUMENTS = [
@@ -46,83 +45,6 @@ export const COMPACT_COMMAND_USAGE = [
   "allows — so block 1, which keeps the whole context, is cut down to the rate's",
   "own point. `/topic list` lists the blocks, numbered oldest first.",
 ].join("\n");
-
-/**
- * What a trim did, or refused to do.
- *
- * `confirmedSuggestion` covers the picker's default row: the cut is still
- * topic-aligned (the suggestion *is* a block), but the user did not choose it —
- * the compression rate did — and the receipt has to say so (V9,
- * `ratio_suggestion`).
- */
-export function formatTopicTrimReceipt(
-  outcome: LocalTopicTrimOutcome,
-  options: { confirmedSuggestion?: boolean } = {},
-): string {
-  if (!outcome.executed) return formatTopicTrimRefusal(outcome);
-
-  const confirmedSuggestion = options.confirmedSuggestion === true;
-  const source = confirmedSuggestion
-    ? outcome.ratioCapApplied
-      ? "compression rate (the suggested block kept more, so the rate cut earlier)"
-      : "compression rate (the block it points at, confirmed as it was)"
-    : {
-        topic_pick: "the topic block you picked",
-        ratio_suggestion:
-          "the compression rate (no marker defines a boundary here, so it decided)",
-        ratio_cap:
-          "the compression rate (the picked block kept more than the rate allows)",
-      }[outcome.source];
-  const lines = [
-    "Context trimmed.",
-    `  kept:       ${outcome.numMessagesAfter} messages (~${outcome.retainedTokens} tokens), starting at ${outcome.firstKeptMessageId ?? "the summary"}`,
-    `  summarized: ${outcome.summarizedMessageCount} messages (~${outcome.summarizedTokens} tokens)`,
-    `  cut point:  ${source}`,
-  ];
-  if (outcome.summarizedTitles.length > 0) {
-    lines.push(`  topics:     ${outcome.summarizedTitles.join(", ")}`);
-  }
-  if (outcome.source === "topic_pick" && outcome.rewindTurns > 0) {
-    lines.push(
-      `  boundary:   rewound ${outcome.rewindTurns} user turn${outcome.rewindTurns === 1 ? "" : "s"} from the marker, so the new topic keeps its opening`,
-    );
-  }
-  if (outcome.boundaryAdjusted) {
-    lines.push(
-      "  adjusted:   the requested cut point was moved to avoid splitting a tool call",
-    );
-  }
-  if (outcome.ratioCapApplied) {
-    lines.push(
-      `  rate:       kept at most ~${outcome.retentionCapTokens ?? 0} tokens (the pick asked for ${outcome.requestedRetentionTokens})`,
-    );
-  }
-  lines.push(
-    `  before:     ${outcome.numMessagesBefore} messages in context`,
-    "",
-    "The evicted messages stay on disk: /search still finds them, and the summary replaces them in context.",
-    "(warning: this evicts the provider cache and increases cost on the next turn)",
-  );
-  return lines.join("\n");
-}
-
-function formatTopicTrimRefusal(outcome: LocalTopicTrimOutcome): string {
-  switch (outcome.noopReason) {
-    case "empty_context":
-    case "no_suggestion":
-      return "There is nothing in this conversation's context to trim.";
-    case "unknown_block":
-      return "That topic block does not exist. Run /topic list to list the current blocks.";
-    default:
-      // The cut point resolved to the start of the context. The rate only does
-      // that when there is nothing it can compress (one message, or a length it
-      // cannot measure), so the advice is about length, not about a budget.
-      if (outcome.source === "ratio_suggestion") {
-        return `Nothing to trim: this conversation is too short to compress — the cut point is the start of the context, so the summary would replace nothing. Nothing was written.`;
-      }
-      return "Nothing to trim: that cut point is the start of the context, so everything in it is already kept. Run /topic list to see the blocks you can cut at. Nothing was written.";
-  }
-}
 
 /**
  * `/compact` on a conversation that has no markers (D-119): the rate decides, so

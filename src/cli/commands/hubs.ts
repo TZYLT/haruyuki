@@ -12,7 +12,10 @@
 // nothing user-facing is reachable under the old spelling.
 //
 // The eight hubs are the ones 《42-1》 §2–§8 settled. `/topic` is not a hub: it
-// keeps its title argument and grows a `list` subcommand in `topic.ts`.
+// keeps its title argument and grows `list` and `search` subcommands in
+// `topic.ts` / `topics.ts` (the two that open a face are claimed in the submit
+// layer — a hub rewrites to a command string, and a command string cannot carry
+// an overlay).
 
 export interface HubSubcommand {
   /** Word typed after the hub name. */

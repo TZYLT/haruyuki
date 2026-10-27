@@ -24,7 +24,8 @@ export const TOPIC_COMMAND_USAGE = [
   '  /topic "Auth token refresh bug" Details  — quote the title to add a summary',
   "",
   "The marker points at the newest message in the context and never changes",
-  "the context itself. `/topic list` lists the topic blocks it defines.",
+  "the context itself. `/topic list` lists the topic blocks it defines, and",
+  "`/topic search <kw>` searches every topic this agent has recorded.",
 ].join("\n");
 
 /**

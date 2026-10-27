@@ -40,6 +40,8 @@ import { SleeptimeSelector } from "@/cli/components/SleeptimeSelector";
 import { SubagentManager } from "@/cli/components/SubagentManager";
 import { SystemPromptSelector } from "@/cli/components/SystemPromptSelector";
 import { ToolsetSelector } from "@/cli/components/ToolsetSelector";
+import { TopicListOverlay } from "@/cli/components/TopicListOverlay";
+import { TopicSearchOverlay } from "@/cli/components/TopicSearchOverlay";
 import { WindowTitlePicker } from "@/cli/components/WindowTitlePicker";
 import { WorktreeDiffSelector } from "@/cli/components/WorktreeDiffSelector";
 import { type Buffers, type Line, toLines } from "@/cli/helpers/accumulator";
@@ -611,6 +613,22 @@ export function AppView(props: AppViewRenderProps) {
                 settings={readRecallSettings()}
                 onSave={handleRecallOverlaySave}
                 onCancel={closeOverlay}
+              />
+            )}
+
+            {/* `/topic list --all`: every marker, newest first (§5.11.10). */}
+            {activeOverlay === "topic-list" && (
+              <TopicListOverlay agentId={agentId} onClose={closeOverlay} />
+            )}
+
+            {/* `/topic search <kw>`: the per-agent topic index (§5.11.9). The
+                keyword rides the same one-shot slot `/search` uses for its own
+                initial query, so no new coordinator state is involved. */}
+            {activeOverlay === "topic-search" && (
+              <TopicSearchOverlay
+                agentId={agentId}
+                onClose={closeOverlay}
+                initialQuery={searchQuery || undefined}
               />
             )}
 

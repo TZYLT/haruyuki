@@ -10,9 +10,6 @@
  * until a user opens `/compact`.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { Readable, Writable } from "node:stream";
-import { render } from "ink";
-import stripAnsi from "strip-ansi";
 import type { TopicBlock } from "@/backend/local/topic-compaction";
 import {
   buildTopicPickItems,
@@ -73,6 +70,24 @@ describe("buildTopicPickRows", () => {
     expect(rows[0]?.disabled).toBeUndefined();
     expect(rows[1]?.label).toBe("2. Current topic (not marked finished)");
     expect(rows[1]?.disabled).toBeUndefined();
+  });
+
+  test("leads the description with the summarizer's section when there is one", () => {
+    // F-04's reason for touching this face at all: the user decides on the
+    // summary, so it comes before the counts and the boundary note.
+    const rows = buildTopicPickRows([
+      block({
+        index: 1,
+        title: "Auth token refresh",
+        summary: "  The refresh landed;\n  the retry storm is unresolved.  ",
+        messageCount: 8,
+        tokens: 612,
+      }),
+    ]);
+
+    expect(rows[0]?.description).toBe(
+      "The refresh landed; the retry storm is unresolved. · 8 messages · ~612 tokens · from 2026-01-01 10:00 · the start of the context",
+    );
   });
 
   test("describes size, time, and how the boundary was derived", () => {
@@ -173,95 +188,106 @@ describe("initialTopicPickIndex", () => {
   });
 });
 
-class CaptureStream extends Writable {
-  columns: number;
-  rows = 24;
-  isTTY = true;
-  chunks: string[] = [];
-
-  constructor(columns: number) {
-    super();
-    this.columns = columns;
-  }
-
-  override _write(
-    chunk: Buffer | string,
-    _encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ) {
-    this.chunks.push(String(chunk));
-    callback();
-  }
-}
-
-/** Renders the picker into a captured TTY and returns the stripped output. */
-async function renderTopicSelector(columns = 100): Promise<string> {
-  const stdout = new CaptureStream(columns) as CaptureStream &
-    NodeJS.WriteStream;
-  const stdin = new Readable({ read() {} }) as NodeJS.ReadStream;
-  stdin.isTTY = true;
-  stdin.setRawMode = () => stdin;
-  stdin.ref = () => stdin;
-  stdin.unref = () => stdin;
-
+/** Mounts the picker against a pinned fake TTY, at both widths. */
+function mountPicker(columns: number, rows = 24) {
   const request: TopicTrimRequest = {
     blocks: BLOCKS,
     suggestionIndex: 2,
     onPick: () => {},
   };
-
-  const instance = render(
-    <TopicSelector request={request} onCancel={() => {}} />,
-    {
-      stdout,
-      stdin,
-      debug: false,
-      patchConsole: false,
-      exitOnCtrlC: false,
-    },
-  );
-
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  instance.unmount();
-  instance.cleanup();
-
-  return stripAnsi(stdout.chunks.join(""));
+  return mountInkTty(<TopicSelector request={request} onCancel={() => {}} />, {
+    columns,
+    rows,
+  });
 }
 
 describe("TopicSelector mount", () => {
   afterEach(resetInkTtyState);
 
   test("renders the hint line in a narrow terminal without an Ink text error", async () => {
-    const output = await renderTopicSelector(100);
+    const tty = mountPicker(100);
+    try {
+      const rows = await tty.rows();
+      const output = rows.join("\n");
 
-    // The hint line is the regression: it is passed as a plain string prop, so
-    // the picker must wrap it in `<Text>`. Rendered raw, Ink throws during
-    // commit and the tree never paints — which fails every assertion below.
-    expect(output).toContain("Enter trim");
-    expect(output).toContain("navigate");
-    expect(output).toContain("Esc cancel");
-    expect(output).not.toContain("must be rendered inside");
+      // The hint line is the regression: it is passed as a plain string prop, so
+      // the picker must wrap it in `<Text>`. Rendered raw, Ink throws during
+      // commit and the tree never paints — which fails every assertion below.
+      expect(output).toContain("Enter trim");
+      expect(output).toContain("navigate");
+      expect(output).toContain("Esc cancel");
+      expect(output).not.toContain("must be rendered inside");
 
-    // Still paints the overlay and every row when the row copy has to wrap.
-    expect(output).toContain("Choose the topic block to keep");
-    expect(output).toContain("1. Auth token refresh");
-    expect(output).toContain("Current topic (not marked");
-    expect(output).toContain('marker "Auth');
-    expect(output).toContain("Cancel · keep the context as it is");
-    // The footer carries the rule that caps a greedy pick.
-    expect(output).toContain("compression rate");
+      // Still paints the overlay and every row when the row copy is clipped.
+      expect(output).toContain("Choose the topic block to keep");
+      expect(output).toContain("1. Auth token refresh");
+      expect(output).toContain("Current topic (not marked");
+      expect(output).toContain("Cancel · keep the context as it is");
+      // The footer carries the rule that caps a greedy pick.
+      expect(output).toContain("compression rate");
+
+      // The point of `renderItem`: a long description is clipped, not wrapped.
+      // Two blocks and Cancel are three rows, and every one of them is one line
+      // — the window's height budget is built on that.
+      const pickRows = rows.filter((row) => /^\s*>?\s*\d+\. /.test(row));
+      expect(pickRows).toHaveLength(2);
+      for (const row of pickRows) {
+        expect(row.length).toBeLessThanOrEqual(100);
+      }
+      expect(rows.some((row) => row.endsWith("..."))).toBe(true);
+    } finally {
+      tty.stop();
+    }
   });
 
   test("shows the full row copy in a wide terminal", async () => {
-    const output = await renderTopicSelector(200);
+    const tty = mountPicker(200);
+    try {
+      const output = (await tty.rows()).join("\n");
 
-    expect(output).toContain(
-      "2. Current topic (not marked finished) · 6 messages · ~480 tokens",
+      expect(output).toContain(
+        "2. Current topic (not marked finished) · 6 messages · ~480 tokens",
+      );
+      expect(output).toContain(
+        'marker "Auth token refresh" at message-local-anchor, rewound 2 user turns',
+      );
+      expect(output).toContain(" Enter trim · ↑↓/jk navigate · Esc cancel");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("puts the summary on the row and keeps the row one line long", async () => {
+    // The face's whole reason for changing (F-04 §5.1 step 3): the summary is
+    // visible *and* the row does not grow, so ten rows stay ten lines.
+    const request: TopicTrimRequest = {
+      blocks: [
+        block({
+          index: 1,
+          title: "Auth token refresh",
+          summary: "The refresh landed; the retry storm is still unresolved.",
+        }),
+        block({ index: 2, startIndex: 4, endIndex: 6 }),
+      ],
+      suggestionIndex: 1,
+      onPick: () => {},
+    };
+    const tty = mountInkTty(
+      <TopicSelector request={request} onCancel={() => {}} />,
+      { columns: 100, rows: 24 },
     );
-    expect(output).toContain(
-      'marker "Auth token refresh" at message-local-anchor, rewound 2 user turns',
-    );
-    expect(output).toContain(" Enter trim · ↑↓/jk navigate · Esc cancel");
+    try {
+      const rows = await tty.rows();
+      const summaryRow = rows.findIndex((row) =>
+        row.includes("1. Auth token refresh"),
+      );
+      expect(summaryRow).toBeGreaterThan(-1);
+      expect(rows[summaryRow]).toContain("The refresh landed; the retry");
+      // The row after it is the *next* block, not the rest of this one.
+      expect(rows[summaryRow + 1]).toContain("2. Current topic");
+    } finally {
+      tty.stop();
+    }
   });
 
   test("windows a long block list at ten and says what is below", async () => {

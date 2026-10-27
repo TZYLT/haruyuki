@@ -78,6 +78,8 @@ export type ActiveOverlay =
   | "tabs"
   | "message-history"
   | "hidden-sessions"
+  | "topic-list"
+  | "topic-search"
   | "diff"
   | null;
 
