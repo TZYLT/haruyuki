@@ -44,6 +44,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Message } from "@earendil-works/pi-ai";
 import { toPiMessages, toPiTools } from "@/backend/dev/pi-stream-adapter";
+import {
+  comparePrefixProbeTurns,
+  type PrefixProbeRecord,
+} from "@/backend/dev/prefix-probe";
 import { completeProviderOnce } from "@/backend/dev/provider-completion";
 import { LocalStore } from "@/backend/local/local-store";
 import {
@@ -590,15 +594,6 @@ function requestSettingsOf(
   return settings;
 }
 
-function commonPrefixLength(a: unknown[], b: unknown[]): number {
-  const max = Math.min(a.length, b.length);
-  let index = 0;
-  while (index < max && canonicalJson(a[index]) === canonicalJson(b[index])) {
-    index += 1;
-  }
-  return index;
-}
-
 function bytes(text: string): string {
   return `${Buffer.byteLength(text, "utf8")} bytes`;
 }
@@ -677,8 +672,22 @@ function comparePayloads(input: {
 
   const turnMessages = messagesOf(input.turn.payload);
   const summarizerMessages = messagesOf(input.summarizer.payload);
-  const shared = commonPrefixLength(turnMessages, summarizerMessages);
-  if (shared < turnMessages.length) {
+  // Reuse the sheet's own comparison (the tested definition of "the earlier
+  // message list is a byte-identical prefix of the later") rather than a local
+  // copy: the probe record shape is all it needs.
+  const turnRecord: PrefixProbeRecord = {
+    conversationId: "turn",
+    seq: 1,
+    payload: input.turn.payload,
+  };
+  const summarizerRecord: PrefixProbeRecord = {
+    conversationId: "summarizer",
+    seq: 2,
+    payload: input.summarizer.payload,
+  };
+  const probe = comparePrefixProbeTurns(turnRecord, summarizerRecord);
+  const shared = probe.commonMessagePrefix;
+  if (!probe.messagesAppended) {
     lines.push(
       `  message prefix     DIFF       (diverges at index ${shared}, turn ${turnMessages.length} / summarizer ${summarizerMessages.length})`,
     );
