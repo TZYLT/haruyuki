@@ -76,6 +76,7 @@ import type {
 } from "./schedule-protocol";
 import type * as SubagentProtocol from "./subagent-protocol";
 import type {
+  CompactionTopicReport,
   ExecuteCommandCommand,
   ExecuteCommandResponseMessage,
   MonitorStopCommand,
@@ -522,6 +523,11 @@ export interface SlashCommandEndMessage extends UmiLifecycleMessageBase {
   input: string;
   output: string;
   success: boolean;
+  /**
+   * F-04: present only for a local `/compact` that got as far as a preview.
+   * Optional so a client compiled against the older shape keeps working.
+   */
+  topic_report?: CompactionTopicReport;
 }
 
 export type StreamDelta =
@@ -1700,6 +1706,12 @@ export interface ConversationCompactCommand {
   conversation_id: string;
   /** Body forwarded to the Letta conversation messages compact API. */
   body?: MessageCompactParams;
+  /**
+   * F-04: keep block `n` of this conversation's cut-point table (1-based, oldest
+   * first). Omitted means "the default choice": the compression rate decides,
+   * which is what a desktop client gets when it has not shown a picker.
+   */
+  topic_block?: number;
 }
 
 export interface GetReflectionSettingsCommand {
@@ -2021,6 +2033,12 @@ export interface ConversationCompactResponseMessage {
   request_id: string;
   success: boolean;
   compaction: CompactionResponse | null;
+  /**
+   * F-04: the overview and cut-point table of a local compaction. Additive on
+   * purpose — `protocol_v2` is what external clients compile against, so an
+   * older client that never reads this field keeps the legacy `compaction`.
+   */
+  topic_report?: CompactionTopicReport;
   error?: string;
 }
 

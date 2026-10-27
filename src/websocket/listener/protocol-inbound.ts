@@ -1319,12 +1319,19 @@ export function isConversationCompactCommand(
     request_id?: unknown;
     conversation_id?: unknown;
     body?: unknown;
+    topic_block?: unknown;
   };
   return (
     c.type === "conversation_compact" &&
     typeof c.request_id === "string" &&
     typeof c.conversation_id === "string" &&
-    (c.body === undefined || isObjectRecord(c.body))
+    (c.body === undefined || isObjectRecord(c.body)) &&
+    // F-04: an optional 1-based block number; when present it must actually name
+    // a block, because silently dropping it would compact by the rate instead.
+    (c.topic_block === undefined ||
+      (typeof c.topic_block === "number" &&
+        Number.isInteger(c.topic_block) &&
+        c.topic_block >= 1))
   );
 }
 export function isGetReflectionSettingsCommand(

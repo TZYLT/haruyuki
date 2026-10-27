@@ -488,6 +488,72 @@ describe("app-server client", () => {
     ]);
   });
 
+  test("wraps conversation compaction, including the F-04 topic report", async () => {
+    const { client, control } = createFakeClient();
+    control.open();
+    await client.connect();
+
+    const responsePromise = client.conversationCompact({
+      conversation_id: "conv-1",
+      topic_block: 2,
+    });
+
+    expect(JSON.parse(control.sent[0] ?? "{}")).toMatchObject({
+      type: "conversation_compact",
+      request_id: "conversation-compact-1",
+      conversation_id: "conv-1",
+      topic_block: 2,
+    });
+
+    const topicReport = {
+      model: "openai/gpt-5.5",
+      overview: "## 故事梗概\nThey talked.",
+      blocks: [
+        {
+          index: 1,
+          title: "Alpha",
+          summary: "alpha",
+          created_by: "summarizer" as const,
+          boundary_message_id: "msg-1",
+          message_count: 3,
+          tokens: 90,
+          starts_at: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      suggestion_index: 1,
+      numbered_blocks: 1,
+      degraded: false,
+      usage: {
+        prompt_tokens: 10,
+        cached_input_tokens: 0,
+        completion_tokens: 5,
+        wall_ms: 100,
+      },
+      applied: {
+        executed: true,
+        kept_topic: "Alpha",
+        folded_topics: ["Alpha"],
+        messages_before: 4,
+        messages_after: 2,
+      },
+    };
+    control.receive({
+      type: "conversation_compact_response",
+      request_id: "conversation-compact-1",
+      success: true,
+      compaction: {
+        num_messages_before: 4,
+        num_messages_after: 2,
+        summary: "They talked.",
+      },
+      topic_report: topicReport,
+    });
+
+    const response = await responsePromise;
+    expect(response.success).toBe(true);
+    expect(response.topic_report).toEqual(topicReport);
+  });
+
   test("wraps conversation delete requests", async () => {
     const { client, control } = createFakeClient();
     control.open();

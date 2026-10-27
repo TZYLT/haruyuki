@@ -7,6 +7,8 @@ import type {
   AbortMessageCommand,
   AbortMessageResponseMessage,
   AppServerInfoResponseMessage,
+  ConversationCompactCommand,
+  ConversationCompactResponseMessage,
   ConversationDeleteCommand,
   ConversationDeleteResponseMessage,
   ConversationListCommand,
@@ -29,6 +31,11 @@ import type {
   SyncResponseMessage,
   WsProtocolCommand,
   WsProtocolMessage,
+} from "./types/app-server-protocol";
+
+export type {
+  CompactionTopicBlock,
+  CompactionTopicReport,
 } from "./types/app-server-protocol";
 
 export type AppServerChannel = "control" | "stream";
@@ -682,6 +689,38 @@ export class AppServerClient {
         ...options,
         predicate: (message): message is ConversationDeleteResponseMessage =>
           message.type === "conversation_delete_response",
+      },
+    );
+  }
+
+  /**
+   * Compact a conversation.
+   *
+   * F-04: on the local backend this runs the same `prepare → pick → apply` as
+   * `/compact`, and the response carries the overview and cut-point table in
+   * `topic_report`. `topic_block` names a 1-based block to keep; omitting it
+   * takes the compression rate's default cut.
+   */
+  conversationCompact(
+    command: Omit<ConversationCompactCommand, "type" | "request_id"> & {
+      request_id?: string;
+    },
+    options: Omit<
+      AppServerRequestOptions<ConversationCompactResponseMessage>,
+      "predicate"
+    > = {},
+  ): Promise<ConversationCompactResponseMessage> {
+    return this.request(
+      {
+        type: "conversation_compact",
+        request_id:
+          command.request_id ?? this.nextRequestId("conversation-compact"),
+        ...command,
+      },
+      {
+        ...options,
+        predicate: (message): message is ConversationCompactResponseMessage =>
+          message.type === "conversation_compact_response",
       },
     );
   }

@@ -30,6 +30,10 @@ export const SUPPORTED_REMOTE_COMMANDS: readonly string[] = [
   // (`/reflection` was retired into the `/reflect` command).
   "reflection",
   "init",
+  // F-04: local `/compact` is `prepare → pick → apply`. A numbered block keeps
+  // that block; a bare `/compact` compresses by the rate, and the response
+  // carries the overview and cut-point table (`topic_report`) so a client
+  // without a terminal can choose on its next call.
   "compact",
   "reload",
   "context-limit",

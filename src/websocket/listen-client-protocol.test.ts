@@ -296,21 +296,7 @@ describe("listen-client parseServerMessage", () => {
     test("lists, retrieves, and creates agents and conversations", async () => {
       const storageDir = await mkdtemp(join(os.tmpdir(), "ws-management-"));
       try {
-        class ManagementBackend extends LocalBackend {
-          override async compactConversationMessages(
-            ..._args: Parameters<LocalBackend["compactConversationMessages"]>
-          ): ReturnType<LocalBackend["compactConversationMessages"]> {
-            return {
-              num_messages_before: 4,
-              num_messages_after: 2,
-              summary: "compacted summary",
-            } as Awaited<
-              ReturnType<LocalBackend["compactConversationMessages"]>
-            >;
-          }
-        }
-
-        const backend = new ManagementBackend({
+        const backend = new LocalBackend({
           storageDir,
           executionMode: "deterministic",
         });
@@ -505,24 +491,9 @@ describe("listen-client parseServerMessage", () => {
           messages: expect.any(Array),
         });
 
-        await __listenClientTestUtils.handleAgentConversationManagementCommand(
-          {
-            type: "conversation_compact",
-            request_id: "conversation-compact-1",
-            conversation_id: conversationId,
-          },
-          socket as unknown as WebSocket,
-        );
-        expect(JSON.parse(socket.sentPayloads.at(-1) ?? "{}")).toMatchObject({
-          type: "conversation_compact_response",
-          request_id: "conversation-compact-1",
-          success: true,
-          compaction: {
-            num_messages_before: 4,
-            num_messages_after: 2,
-            summary: "compacted summary",
-          },
-        });
+        // F-04 moved `conversation_compact` onto the shared
+        // `prepare → pick → apply`; its contract is covered in
+        // commands-conversation-compact.test.ts rather than grown here.
 
         await __listenClientTestUtils.handleAgentConversationManagementCommand(
           {
@@ -1811,62 +1782,10 @@ describe("listen-client parseServerMessage", () => {
     }
   });
 
-  test("a local /compact that cannot trim does not trigger reflection", async () => {
-    const storageDir = await mkdtemp(join(os.tmpdir(), "ws-compact-same-"));
-    try {
-      // Throwing documents the route: the legacy method must not be reached.
-      class NoopCompactBackend extends LocalBackend {
-        override async compactConversationMessages(
-          ..._args: Parameters<LocalBackend["compactConversationMessages"]>
-        ): ReturnType<LocalBackend["compactConversationMessages"]> {
-          throw {
-            status: 400,
-            error: {
-              detail: "Summarization failed to reduce the number of messages",
-            },
-          };
-        }
-      }
-
-      const backend = new NoopCompactBackend({
-        storageDir,
-        executionMode: "deterministic",
-      });
-      __testSetBackend(backend);
-      const agent = await backend.createAgent({
-        name: "WS Noop Compact Agent",
-        model: "anthropic/claude-sonnet-4-6",
-      } as AgentCreateBody);
-      const listener = __listenClientTestUtils.createListenerRuntime();
-      const runtime = __listenClientTestUtils.getOrCreateConversationRuntime(
-        listener,
-        agent.id,
-        "default",
-      );
-      const socket = new MockSocket(WebSocket.OPEN);
-
-      await handleExecuteCommand(
-        {
-          type: "execute_command",
-          command_id: "compact",
-          request_id: "compact-noop-run-1",
-          runtime: { agent_id: agent.id, conversation_id: "default" },
-        },
-        socket as unknown as WebSocket,
-        runtime,
-        {},
-      );
-
-      // Nothing in the context: the trim refuses and reports it, and no
-      // reflection work is queued for a compaction that changed nothing.
-      expect(runtime.contextTracker.pendingReflectionTrigger).toBe(false);
-      expect(socket.sentPayloads.join("\n")).toContain(
-        "nothing in this conversation's context to trim",
-      );
-    } finally {
-      await rm(storageDir, { recursive: true, force: true });
-    }
-  });
+  // F-04 moved the local `/compact` contract onto the shared
+  // `prepare → pick → apply`. Its coverage — including "a cut the write-back
+  // refuses does not trigger reflection" — lives in
+  // listener/commands-compact.test.ts rather than growing this monolith.
 
   test("runs remote context-limit and legacy set-max-context execute_command", async () => {
     const storageDir = await mkdtemp(join(os.tmpdir(), "ws-max-context-"));

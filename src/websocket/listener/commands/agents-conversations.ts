@@ -5,6 +5,10 @@ import {
   DEFAULT_CONVERSATION_MESSAGE_ORDER,
   getBackend,
 } from "@/backend";
+import { renderCompactionOverview } from "@/backend/local/compaction-preview";
+import { LocalBackend } from "@/backend/local/local-backend";
+import { formatCompactPlanningFailure } from "@/cli/helpers/compact-command";
+import { runLocalCompaction } from "@/cli/helpers/headless-compact";
 import { toHiddenConversationSummary } from "@/types/conversation-provenance";
 import type {
   AgentCreateCommand,
@@ -655,6 +659,62 @@ export async function handleAgentConversationManagementCommand(
 
   if (parsed.type === "conversation_compact") {
     try {
+      const local = backend instanceof LocalBackend ? backend : null;
+      if (local) {
+        // F-04 §5.12.2: the desktop's compaction is the same
+        // `prepare → pick → apply` as `/compact`. The request may name a block
+        // (1-based); without one the compression rate takes the default cut.
+        const bodyRecord = (parsed.body ?? {}) as Record<string, unknown>;
+        const requestedAgentId =
+          typeof bodyRecord.agent_id === "string" &&
+          bodyRecord.agent_id.length > 0
+            ? bodyRecord.agent_id
+            : undefined;
+        const outcome = await runLocalCompaction({
+          backend: local,
+          conversationId: parsed.conversation_id,
+          ...(requestedAgentId === undefined
+            ? {}
+            : { agentId: requestedAgentId }),
+          ...(parsed.topic_block === undefined
+            ? {}
+            : { blockIndex: parsed.topic_block }),
+        });
+        if (outcome.kind === "cancelled") {
+          safeSocketSend(
+            socket,
+            {
+              type: "conversation_compact_response",
+              request_id: parsed.request_id,
+              success: false,
+              compaction: null,
+              error: outcome.receipt,
+            },
+            "listener_conversation_management_send_failed",
+            "listener_conversation_management",
+          );
+          return true;
+        }
+        safeSocketSend(
+          socket,
+          {
+            type: "conversation_compact_response",
+            request_id: parsed.request_id,
+            success: true,
+            // The legacy shape, so a client that has not learned
+            // `topic_report` still renders the two counts and a summary.
+            compaction: {
+              num_messages_before: outcome.result.numMessagesBefore,
+              num_messages_after: outcome.result.numMessagesAfter,
+              summary: renderCompactionOverview(outcome.preview.overview),
+            },
+            topic_report: outcome.report,
+          },
+          "listener_conversation_management_send_failed",
+          "listener_conversation_management",
+        );
+        return true;
+      }
       const compaction = await backend.compactConversationMessages(
         parsed.conversation_id,
         parsed.body,
@@ -678,7 +738,7 @@ export async function handleAgentConversationManagementCommand(
           request_id: parsed.request_id,
           success: false,
           compaction: null,
-          error: getErrorMessage(error, "Failed to compact conversation"),
+          error: formatCompactPlanningFailure(error),
         },
         "listener_conversation_management_send_failed",
         "listener_conversation_management",

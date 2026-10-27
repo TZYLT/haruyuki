@@ -103,6 +103,12 @@ import {
 import { classifyApprovals } from "./cli/helpers/approval-classification";
 import { createContextTracker } from "./cli/helpers/context-tracker";
 import { formatErrorDetails } from "./cli/helpers/error-formatter";
+import {
+  emitHeadlessCompactResult,
+  HEADLESS_SLASH_COMMANDS,
+  handleHeadlessCompactCommand,
+  parseHeadlessCompactInput,
+} from "./cli/helpers/headless-compact";
 import type { ReflectionSettings } from "./cli/helpers/memory-reminder";
 import {
   maybeLaunchPostTurnReflection,
@@ -1637,7 +1643,9 @@ export async function handleHeadlessCommand(
       cwd: getCurrentWorkingDirectory(),
       mcp_servers: [],
       permission_mode: "",
-      slash_commands: [],
+      // F-04: `/compact` is answered on the input path; this is the report an
+      // SDK client reads to know it may send it.
+      slash_commands: [...HEADLESS_SLASH_COMMANDS],
       memfs_enabled: settingsManager.isMemfsEnabled(agent.id),
       skill_sources: resolvedSkillSources,
       system_info_reminder_enabled: systemInfoReminderEnabled,
@@ -1842,6 +1850,36 @@ export async function handleHeadlessCommand(
           },
         },
       ),
+    );
+  }
+
+  // F-04: headless has no slash-command registry, so `/compact` is recognised
+  // here on the input path itself (§8-6). It is a command, not a turn: it must
+  // not become a user message, and it must not start one. A conversation whose
+  // turns run in another environment is not compacted from here — its context
+  // lives with the listener that serves it (§6.2-7).
+  const compactRequest = usesRemoteEnvironment
+    ? null
+    : parseHeadlessCompactInput(prompt);
+  if (compactRequest) {
+    const compactResult = await handleHeadlessCompactCommand({
+      backend,
+      conversationId,
+      agentId: agent.id,
+      request: compactRequest,
+    });
+    await emitHeadlessCompactResult(compactResult, {
+      outputFormat,
+      sessionId,
+      agentId: publicAgentId,
+      conversationId,
+      writeWire: writeWireMessage,
+      writeStdout: writeFinalHeadlessStdout,
+      writeStderr: (text) => console.error(text),
+    });
+    return await exitHeadless(
+      compactResult.success ? 0 : 1,
+      "headless_compact_complete",
     );
   }
 
@@ -3259,7 +3297,8 @@ async function runBidirectionalMode(
     cwd: getCurrentWorkingDirectory(),
     mcp_servers: [],
     permission_mode: "",
-    slash_commands: [],
+    // F-04: same report as the one-shot init — `/compact` is a real command here.
+    slash_commands: [...HEADLESS_SLASH_COMMANDS],
     memfs_enabled: settingsManager.isMemfsEnabled(agent.id),
     skill_sources: skillSources,
     system_info_reminder_enabled: systemInfoReminderEnabled,
@@ -4125,6 +4164,36 @@ async function runBidirectionalMode(
       if (userContent === null) {
         // No turn will start — clear the pre-controller window so a latched
         // interrupt doesn't carry over to a later, unrelated turn.
+        turnStarting = false;
+        pendingInterrupt = false;
+        continue;
+      }
+
+      // F-04: `/compact` is a command, not a turn (§8-6). Running it here is
+      // what lets a session that hit the window compact and keep going — the
+      // next input line starts an ordinary turn on the shorter context.
+      const compactRequest = parseHeadlessCompactInput(
+        extractTelemetryInputText(userContent),
+      );
+      if (compactRequest) {
+        // No cancel channel is offered: a command here owns no interrupt path.
+        await emitHeadlessCompactResult(
+          await handleHeadlessCompactCommand({
+            backend,
+            conversationId,
+            agentId: agent.id,
+            request: compactRequest,
+          }),
+          {
+            outputFormat: "stream-json",
+            sessionId,
+            agentId: agent.id,
+            conversationId,
+            writeWire: writeWireMessage,
+            writeStdout: writeFinalHeadlessStdout,
+            writeStderr: (text) => console.error(text),
+          },
+        );
         turnStarting = false;
         pendingInterrupt = false;
         continue;

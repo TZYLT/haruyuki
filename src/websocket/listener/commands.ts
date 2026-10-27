@@ -10,16 +10,18 @@ import { requestCloudReflectionRun } from "@/agent/reflection-runs";
 import type { ConversationMessageCompactBody } from "@/backend";
 import { getBackend } from "@/backend";
 import { LocalBackend } from "@/backend/local/local-backend";
-import { hasSelectableTopicBlocks } from "@/backend/local/local-topic-trim";
 import { refreshCustomCommands } from "@/cli/commands/custom";
 import {
   COMPACT_COMMAND_USAGE,
   COMPACT_MODE_LOCAL_UNSUPPORTED,
-  formatTopicTrimReceipt,
   parseCompactCommandArgs,
 } from "@/cli/helpers/compact-command";
 import { buildDoctorMessage } from "@/cli/helpers/doctor-command";
 import { formatErrorDetails } from "@/cli/helpers/error-formatter";
+import {
+  formatLocalCompactionReceipt,
+  runLocalCompaction,
+} from "@/cli/helpers/headless-compact";
 import {
   buildInitMessage,
   gatherInitGitContext,
@@ -42,6 +44,7 @@ import type {
   SlashCommandStartMessage,
   StreamDelta,
 } from "@/types/protocol_v2";
+import type { CompactionTopicReport } from "@/types/task-control-protocol";
 import { debugLog } from "@/utils/debug";
 import { markSecretsReminderRefreshPending } from "./commands/secrets";
 import { getConversationWorkingDirectory } from "./cwd";
@@ -114,6 +117,10 @@ export async function handleExecuteCommand(
 
   try {
     let output: string;
+    // F-04: only a local `/compact` has an overview and a cut-point table to
+    // report; every other command leaves it unset, so the response keeps its
+    // old shape byte for byte.
+    let topicReport: CompactionTopicReport | undefined;
 
     switch (command.command_id) {
       case "clear":
@@ -169,13 +176,16 @@ export async function handleExecuteCommand(
         output = await handleInitCommand(socket, conversationRuntime, opts);
         break;
 
-      case "compact":
-        output = await handleCompactCommand(
+      case "compact": {
+        const compacted = await handleCompactCommand(
           socket,
           conversationRuntime,
           trimmedArgs,
         );
+        output = compacted.output;
+        topicReport = compacted.topic_report;
         break;
+      }
 
       case "reload":
         output = await handleReloadCommand(conversationRuntime);
@@ -266,8 +276,13 @@ export async function handleExecuteCommand(
       input,
       output,
       success: true,
+      ...(topicReport === undefined ? {} : { topic_report: topicReport }),
     });
-    emitExecuteCommandResponse(socket, command, { success: true, output });
+    emitExecuteCommandResponse(socket, command, {
+      success: true,
+      output,
+      ...(topicReport === undefined ? {} : { topic_report: topicReport }),
+    });
   } catch (error) {
     trackBoundaryError({
       errorType: "listener_execute_command_failed",
@@ -405,7 +420,7 @@ function emitSlashCommandEnd(
   scope: { agent_id: string | null; conversation_id: string },
   fields: Pick<
     SlashCommandEndMessage,
-    "command_id" | "input" | "output" | "success"
+    "command_id" | "input" | "output" | "success" | "topic_report"
   >,
 ): void {
   const endDelta: SlashCommandEndMessage = {
@@ -418,7 +433,11 @@ function emitSlashCommandEnd(
 function emitExecuteCommandResponse(
   socket: WebSocket,
   command: ExecuteCommandCommand,
-  result: { success: boolean; output: string },
+  result: {
+    success: boolean;
+    output: string;
+    topic_report?: CompactionTopicReport;
+  },
 ): void {
   socket.send(
     JSON.stringify({
@@ -430,9 +449,23 @@ function emitExecuteCommandResponse(
 }
 
 /**
- * `/compact` has no interactive channel here: a local conversation must name the
- * block to keep, and the block list comes from `/topic list`. The cloud backend keeps
- * its mode-based behaviour unchanged.
+ * `/compact` on a local conversation, for a client with no picker.
+ *
+ * Same three steps the TUI runs (`prepare → pick → apply`, requirement §5.12.2):
+ * a block number keeps that block, and without one the compression rate decides
+ * — the desktop client gets the overview and the cut-point table back in the
+ * response and chooses on its next call. The cloud backend keeps its mode-based
+ * behaviour unchanged.
+ *
+ * The model call holds no turn lease and no `command` lifecycle, deliberately.
+ * The window is not new: the path this replaced (`trimConversationToTopic`) also
+ * spent one model call without owning a lifecycle. What keeps it safe is the
+ * budget, not a lock — `applyCompaction` re-reads the context and recomputes the
+ * cut before writing back (route §6.1 row 5), so a message that arrives while
+ * the summarizer runs falls inside the retained tail instead of being dropped.
+ * If that window ever stretches to minutes, the conversation must hold its
+ * `command` lifecycle instead, or a queued turn would wait on nothing. With no
+ * interactive channel here there is also no cancel to offer (requirement §5.12.2).
  */
 async function compactLocalFromListener(
   socket: WebSocket,
@@ -440,34 +473,18 @@ async function compactLocalFromListener(
   agentId: string,
   backend: LocalBackend,
   request: { kind: "auto" } | { kind: "block"; index: number },
-): Promise<string> {
+): Promise<{ output: string; topic_report?: CompactionTopicReport }> {
   const conversationId = conversationRuntime.conversationId;
-  const list = backend.listTopics(conversationId, agentId);
-  if (request.kind === "block" && request.index > list.blocks.length) {
-    const count = `${list.blocks.length} block${list.blocks.length === 1 ? "" : "s"}`;
-    throw new Error(
-      `There is no topic block ${request.index}: this context has ${count}. Run /topic list to list them, or /compact with no number to compress by the rate.`,
-    );
-  }
-  // There is no interactive channel here, so a *choice* needs a number from
-  // /topic list. When there is no choice to make — fewer than two blocks, exactly the
-  // state bare `/compact` finds on the TUI — the compression rate decides, which is
-  // the same decision the TUI would have made without asking (H-2).
-  if (request.kind === "auto" && hasSelectableTopicBlocks(list)) {
-    throw new Error(
-      "Choosing a cut point needs a terminal. Run /topic list to list the blocks, then /compact <n> with the block to keep.",
-    );
-  }
-
-  const outcome = await backend.trimConversationToTopic({
+  const outcome = await runLocalCompaction({
+    backend,
     conversationId,
     agentId,
-    pick:
-      request.kind === "block"
-        ? { kind: "topic", index: request.index }
-        : { kind: "ratio_suggestion" },
+    ...(request.kind === "block" ? { blockIndex: request.index } : {}),
   });
-  if (!outcome.executed) return formatTopicTrimReceipt(outcome);
+  if (outcome.kind === "cancelled") return { output: outcome.receipt };
+  if (!outcome.result.executed) {
+    return { output: outcome.receipt, topic_report: outcome.report };
+  }
 
   // F-03: this compaction is the trigger. Consume the pending flag so the
   // turn-end check does not launch a second reflection for it.
@@ -506,7 +523,10 @@ async function compactLocalFromListener(
       void regenerateConversationDescription(conversationId);
     },
   });
-  return formatTopicTrimReceipt(outcome);
+  return {
+    output: formatLocalCompactionReceipt(outcome.preview, outcome.result),
+    topic_report: outcome.report,
+  };
 }
 
 /** /compact — Summarize conversation history through the active Backend. */
@@ -514,7 +534,7 @@ async function handleCompactCommand(
   socket: WebSocket,
   conversationRuntime: ConversationRuntime,
   args: string | undefined,
-): Promise<string> {
+): Promise<{ output: string; topic_report?: CompactionTopicReport }> {
   const agentId = conversationRuntime.agentId;
   if (!agentId) {
     throw new Error("No agent ID available for /compact command");
@@ -523,7 +543,7 @@ async function handleCompactCommand(
   const parsed = parseCompactCommandArgs(
     args?.trim() ? args.trim().split(/\s+/) : [],
   );
-  if (parsed.kind === "help") return COMPACT_COMMAND_USAGE;
+  if (parsed.kind === "help") return { output: COMPACT_COMMAND_USAGE };
   if (parsed.kind === "invalid") {
     throw new Error(`${parsed.message}\n\n${COMPACT_COMMAND_USAGE}`);
   }
@@ -625,11 +645,13 @@ async function handleCompactCommand(
       },
     });
 
-    return [
-      `Compaction completed${modeDisplay}. Message buffer length reduced from ${result.num_messages_before} to ${result.num_messages_after}.`,
-      "",
-      `Summary: ${result.summary}`,
-    ].join("\n");
+    return {
+      output: [
+        `Compaction completed${modeDisplay}. Message buffer length reduced from ${result.num_messages_before} to ${result.num_messages_after}.`,
+        "",
+        `Summary: ${result.summary}`,
+      ].join("\n"),
+    };
   } catch (error) {
     const apiError = error as {
       status?: number;
@@ -640,7 +662,9 @@ async function handleCompactCommand(
       apiError?.status === 400 &&
       detail?.includes("Summarization failed to reduce the number of messages")
     ) {
-      return "Compaction run, but the number of messages is the same";
+      return {
+        output: "Compaction run, but the number of messages is the same",
+      };
     }
 
     // This catch only ever sees cloud failures (the local branch returned above),
