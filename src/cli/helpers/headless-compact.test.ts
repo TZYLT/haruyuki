@@ -1,15 +1,18 @@
 /**
  * F-04's `/compact` for the paths without a picker (M5).
  *
- * Three things are pinned here, in the order the milestone asks for them:
+ * Two things are pinned here, in the order the milestone asks for them:
  *
  * 1. the input path recognises `/compact` and nothing else (§8-6: headless has
  *    no slash registry, so the string itself is the entry point);
- * 2. `prepare → pick → apply` is one shared run, and the 1-based block number is
- *    resolved to the block's boundary message id before `apply` sees it;
- * 3. the ledger records all three outcomes — completed, failed, cancelled — with
+ * 2. the ledger records all three outcomes — completed, failed, cancelled — with
  *    the preview's model and numbers, into a temporary file (never the real
  *    `~/.haruyuki`: 《31》red line A).
+ *
+ * The shared `prepare → pick → apply` run itself moved to
+ * `@/agent/compaction-execute`, and its own suite is `src/agent/compaction-execute.test.ts`.
+ * What is left to prove here is the headless caller: that it writes exactly one
+ * row per attempt, including the spend a failed run carried out on its error.
  *
  * Plus the self-rescue smoke: a conversation that could not send another turn
  * compacts through this path and keeps going.
@@ -24,19 +27,18 @@ import type { HeadlessTurnExecutor } from "@/backend/dev/headless-turn-executor"
 import type {
   CompactionPreview,
   CompactPick,
+  CompactUsage,
 } from "@/backend/local/compaction-preview";
 import type { CompactionApplyResult } from "@/backend/local/compaction-run";
 import { CompactionCancelledError } from "@/backend/local/compaction-summarizer";
+import { withCompactUsage } from "@/backend/local/compaction-usage-error";
 import { LocalBackend } from "@/backend/local/local-backend";
 import type { LocalTopicList } from "@/backend/local/local-topic-trim";
 import {
-  buildCompactionTopicReport,
   buildHeadlessCompactResultEnvelope,
   HEADLESS_SLASH_COMMANDS,
   handleHeadlessCompactCommand,
   parseHeadlessCompactInput,
-  resolveCompactionPick,
-  runLocalCompaction,
 } from "@/cli/helpers/headless-compact";
 import { readUsageLedger } from "@/usage/ledger";
 
@@ -172,6 +174,8 @@ function applyResultFixture(
  * driven without a provider. */
 class ScriptedCompactionBackend extends LocalBackend {
   mode: "completed" | "failed" | "cancelled" = "completed";
+  /** The spend a failed `prepare` carries out on its error (§5.14). */
+  failureUsage: CompactUsage | undefined;
   seenPick: CompactPick | null = null;
 
   /**
@@ -193,7 +197,12 @@ class ScriptedCompactionBackend extends LocalBackend {
 
   override async prepareCompaction(): Promise<CompactionPreview> {
     if (this.mode === "cancelled") throw new CompactionCancelledError();
-    if (this.mode === "failed") throw new Error("provider refused");
+    if (this.mode === "failed") {
+      const failure = new Error("provider refused");
+      throw this.failureUsage === undefined
+        ? failure
+        : withCompactUsage(failure, this.failureUsage);
+    }
     return previewFixture();
   }
 
@@ -257,44 +266,20 @@ describe("parseHeadlessCompactInput", () => {
   });
 });
 
-describe("resolveCompactionPick", () => {
-  test("no number means the rate's default selection", () => {
-    expect(resolveCompactionPick(previewFixture().blocks, undefined)).toEqual({
-      kind: "ratio_suggestion",
-    });
-  });
-
-  test("a block number becomes that block's boundary message id", () => {
-    // 1-based: block 2 is the second row, never `blocks[2]`.
-    expect(resolveCompactionPick(previewFixture().blocks, 2)).toEqual({
-      kind: "message",
-      messageId: "m2",
-    });
-  });
-
-  test("an out-of-range number is refused by name, with the table size", () => {
-    expect(() => resolveCompactionPick(previewFixture().blocks, 9)).toThrow(
-      "There is no topic block 9: this context has 2 blocks",
-    );
-    expect(() => resolveCompactionPick(previewFixture().blocks, 9)).toThrow(
-      "compress by the rate",
-    );
-  });
-});
-
-describe("runLocalCompaction ledger", () => {
+describe("handleHeadlessCompactCommand ledger", () => {
   test("records a completed run with the preview's model and numbers", async () => {
     const backend = await scriptedBackend();
     const ledgerPath = join(await createStorageDirectory(), "usage.jsonl");
 
-    const outcome = await runLocalCompaction({
+    const result = await handleHeadlessCompactCommand({
       backend,
       conversationId: "conv-1",
       agentId: "agent-1",
+      request: { kind: "compact" },
       ledgerPath,
     });
 
-    expect(outcome.kind).toBe("completed");
+    expect(result.success).toBe(true);
     const rows = await ledgerRows(ledgerPath);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.source).toBe("compaction");
@@ -311,15 +296,16 @@ describe("runLocalCompaction ledger", () => {
     backend.mode = "failed";
     const ledgerPath = join(await createStorageDirectory(), "usage.jsonl");
 
-    await expect(
-      runLocalCompaction({
-        backend,
-        conversationId: "conv-1",
-        agentId: "agent-1",
-        ledgerPath,
-      }),
-    ).rejects.toThrow("provider refused");
+    const result = await handleHeadlessCompactCommand({
+      backend,
+      conversationId: "conv-1",
+      agentId: "agent-1",
+      request: { kind: "compact" },
+      ledgerPath,
+    });
 
+    expect(result.success).toBe(false);
+    expect(result.output).toContain("provider refused");
     const rows = await ledgerRows(ledgerPath);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.outcome).toBe("failed");
@@ -329,22 +315,55 @@ describe("runLocalCompaction ledger", () => {
     expect(rows[0]?.prompt).toBe(0);
   });
 
+  test("records a failed run's spend from the error, not as zero (T-3)", async () => {
+    // A summarizer that burned 1,200 prompt tokens before the call failed: the
+    // preview that would carry the usage is never produced, so the number
+    // travels on the error. A zero row would be the defect T-3 records.
+    const backend = await scriptedBackend();
+    backend.mode = "failed";
+    backend.failureUsage = {
+      promptTokens: 1_200,
+      cachedInputTokens: 900,
+      completionTokens: 0,
+      wallMs: 4_000,
+    };
+    const ledgerPath = join(await createStorageDirectory(), "usage.jsonl");
+
+    const result = await handleHeadlessCompactCommand({
+      backend,
+      conversationId: "conv-1",
+      agentId: "agent-1",
+      request: { kind: "compact" },
+      ledgerPath,
+    });
+
+    expect(result.success).toBe(false);
+    const rows = await ledgerRows(ledgerPath);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.outcome).toBe("failed");
+    expect(rows[0]?.prompt).toBe(1_200);
+    expect(rows[0]?.cachedInput).toBe(900);
+    expect(rows[0]?.wallMs).toBe(4_000);
+    // Still no model: a failed call names none, and the spend is the only fact
+    // the error can carry.
+    expect(rows[0]?.model).toBe("");
+  });
+
   test("records a cancelled run and writes nothing else", async () => {
     const backend = await scriptedBackend();
     backend.mode = "cancelled";
     const ledgerPath = join(await createStorageDirectory(), "usage.jsonl");
 
-    const outcome = await runLocalCompaction({
+    const result = await handleHeadlessCompactCommand({
       backend,
       conversationId: "conv-1",
       agentId: "agent-1",
+      request: { kind: "compact" },
       ledgerPath,
     });
 
-    expect(outcome).toEqual({
-      kind: "cancelled",
-      receipt: "Cancelled: the context is unchanged.",
-    });
+    expect(result.success).toBe(false);
+    expect(result.output).toBe("Cancelled: the context is unchanged.");
     const rows = await ledgerRows(ledgerPath);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.outcome).toBe("cancelled");
@@ -353,15 +372,15 @@ describe("runLocalCompaction ledger", () => {
   test("a numbered run hands apply the message id, never the row number", async () => {
     const backend = await scriptedBackend();
 
-    const outcome = await runLocalCompaction({
+    const result = await handleHeadlessCompactCommand({
       backend,
       conversationId: "conv-1",
       agentId: "agent-1",
-      blockIndex: 2,
+      request: { kind: "compact", blockIndex: 2 },
       ledgerPath: join(await createStorageDirectory(), "usage.jsonl"),
     });
 
-    expect(outcome.kind).toBe("completed");
+    expect(result.success).toBe(true);
     expect(backend.seenPick).toEqual({ kind: "message", messageId: "m2" });
   });
 
@@ -370,14 +389,14 @@ describe("runLocalCompaction ledger", () => {
     backend.mode = "failed";
     const ledgerPath = join(await createStorageDirectory(), "usage.jsonl");
 
-    await expect(
-      runLocalCompaction({
-        backend,
-        conversationId: "conversation-that-does-not-exist",
-        ledgerPath,
-      }),
-    ).rejects.toThrow("provider refused");
+    const result = await handleHeadlessCompactCommand({
+      backend,
+      conversationId: "conversation-that-does-not-exist",
+      request: { kind: "compact" },
+      ledgerPath,
+    });
 
+    expect(result.success).toBe(false);
     // Bookkeeping must not reach for `retrieveConversation`: on the local backend
     // that *creates* an unknown conversation, which would turn a zero-write
     // failure into a write (§5.9.1).
@@ -392,38 +411,6 @@ describe("runLocalCompaction ledger", () => {
       []
     ).map((conversation) => conversation.id);
     expect(ids).not.toContain("conversation-that-does-not-exist");
-  });
-});
-
-describe("buildCompactionTopicReport", () => {
-  test("carries the overview, the table, and what the write-back did", () => {
-    const report = buildCompactionTopicReport(
-      previewFixture(),
-      applyResultFixture(),
-    );
-
-    expect(report.overview).toContain("They talked it through.");
-    expect(report.blocks.map((block) => block.boundary_message_id)).toEqual([
-      "m1",
-      "m2",
-    ]);
-    expect(report.blocks[0]?.summary).toBe("section one");
-    expect(report.suggestion_index).toBe(2);
-    expect(report.numbered_blocks).toBe(1);
-    expect(report.degraded).toBe(false);
-    expect(report.usage).toEqual({
-      prompt_tokens: 120,
-      cached_input_tokens: 80,
-      completion_tokens: 30,
-      wall_ms: 1500,
-    });
-    expect(report.applied).toEqual({
-      executed: true,
-      kept_topic: "two",
-      folded_topics: ["one"],
-      messages_before: 6,
-      messages_after: 3,
-    });
   });
 });
 

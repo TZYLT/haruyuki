@@ -24,13 +24,19 @@ import type { ConversationMessageCreateBody } from "@/backend";
 import { __testSetBackend, type AgentCreateBody } from "@/backend";
 import type { HeadlessTurnExecutor } from "@/backend/dev/headless-turn-executor";
 import { LocalBackend } from "@/backend/local";
-import type { CompactionPreview } from "@/backend/local/compaction-preview";
+import type {
+  CompactionPreview,
+  CompactUsage,
+} from "@/backend/local/compaction-preview";
 import type { CompactionApplyResult } from "@/backend/local/compaction-run";
+import { withCompactUsage } from "@/backend/local/compaction-usage-error";
 import type { LocalTopicList } from "@/backend/local/local-topic-trim";
 import type { TopicBlock } from "@/backend/local/topic-compaction";
 import { COMPACT_MODE_LOCAL_UNSUPPORTED } from "@/cli/helpers/compact-command";
+import { readUsageLedger } from "@/usage/ledger";
 import { __listenClientTestUtils } from "@/websocket/listener/client";
 import { handleExecuteCommand } from "@/websocket/listener/commands";
+import { __testResetLocalCompactionLocks } from "@/websocket/listener/local-compaction";
 
 class CompactTestSocket {
   readonly sentPayloads: string[] = [];
@@ -52,6 +58,7 @@ async function createStorageDirectory(): Promise<string> {
 
 afterEach(async () => {
   __testSetBackend(null);
+  __testResetLocalCompactionLocks();
   // 《31》red line A: the ledger this path writes must never land in the real
   // `~/.haruyuki`. Each fixture points HARUYUKI_HOME at its own temp root.
   if (originalHaruyukiHome === undefined) delete process.env.HARUYUKI_HOME;
@@ -142,10 +149,18 @@ function topicBlockRow(
  * message list: by default two topics ("Alpha" then "Beta"), or one unmarked
  * block when `unmarked` is set — the state a bare `/compact` finds before any
  * marker exists.
+ *
+ * `prepareSpend` makes `prepare` fail after burning that many tokens (the spend
+ * rides on the error, §5.14), and `prepareGate` holds `prepare` open so a test
+ * can send a second `/compact` into the window it covers (T-6).
  */
 async function localFixture(
   turns: number,
-  options: { unmarked?: boolean } = {},
+  options: {
+    unmarked?: boolean;
+    prepareSpend?: CompactUsage;
+    prepareGate?: { started: () => void; wait: Promise<void> };
+  } = {},
 ): Promise<{
   backend: LocalBackend;
   agentId: string;
@@ -199,6 +214,16 @@ async function localFixture(
       agentId?: string;
       signal?: AbortSignal;
     }): Promise<CompactionPreview> {
+      if (options.prepareGate) {
+        options.prepareGate.started();
+        await options.prepareGate.wait;
+      }
+      if (options.prepareSpend) {
+        throw withCompactUsage(
+          new Error("provider refused"),
+          options.prepareSpend,
+        );
+      }
       const agentId =
         input.agentId ??
         (
@@ -370,6 +395,15 @@ function responsePayload(
     .find((payload) => payload.includes('"execute_command_response"'));
   if (!raw) throw new Error("no execute_command_response was sent");
   return JSON.parse(raw) as Record<string, unknown>;
+}
+
+/** A promise plus the function that settles it, for holding `prepare` open. */
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }
 
 describe("listener compact command", () => {
@@ -578,5 +612,56 @@ describe("listener compact command", () => {
 
     expect(runtime.contextTracker.pendingReflectionTrigger).toBe(false);
     expect(socket.sentPayloads.join("\n")).toContain("Nothing was written");
+  });
+
+  test("a failed prepare still records the tokens it burned (T-3)", async () => {
+    // The preview that normally carries the usage is never produced, so the
+    // spend rides on the error. Recording `0` here is the defect T-3 records.
+    const fixture = await localFixture(8, {
+      prepareSpend: {
+        promptTokens: 1_200,
+        cachedInputTokens: 900,
+        completionTokens: 0,
+        wallMs: 3_000,
+      },
+    });
+
+    const output = await runCompact(fixture);
+
+    expect(output).toContain("Failed: provider refused");
+    const rows = await readUsageLedger({ prune: false });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.source).toBe("compaction");
+    expect(rows[0]?.outcome).toBe("failed");
+    expect(rows[0]?.sessionId).toBe("default");
+    expect(rows[0]?.prompt).toBe(1_200);
+    expect(rows[0]?.cachedInput).toBe(900);
+    expect(rows[0]?.wallMs).toBe(3_000);
+  });
+
+  test("a second /compact while one is preparing is refused, and the first still finishes (T-6)", async () => {
+    const started = deferred();
+    const release = deferred();
+    const fixture = await localFixture(8, {
+      prepareGate: { started: started.resolve, wait: release.promise },
+    });
+
+    const first = runCompact(fixture, "2");
+    await started.promise;
+
+    // The preparation is still in flight: a second run must not start another
+    // model call, and must not write a ledger row of its own.
+    const secondOutput = await runCompact(fixture);
+    expect(secondOutput).toContain("already running");
+    expect(await readUsageLedger({ prune: false })).toHaveLength(0);
+
+    release.resolve();
+
+    const firstOutput = await first;
+    expect(firstOutput).toContain("Compaction complete.");
+    // Exactly one row: the run that actually happened.
+    const rows = await readUsageLedger({ prune: false });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.outcome).toBe("completed");
   });
 });

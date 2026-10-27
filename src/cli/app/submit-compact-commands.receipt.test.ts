@@ -18,6 +18,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { __testSetBackend } from "@/backend";
 import type { CompactionApplyResult } from "@/backend/local/compaction-run";
+import { withCompactUsage } from "@/backend/local/compaction-usage-error";
 import {
   cancelCompactionPreparation,
   formatCompactionReceipt,
@@ -203,7 +204,7 @@ describe("the zero-write exits", () => {
     });
   });
 
-  test("a failed preparation writes nothing, records the failure, and says why", async () => {
+  test("a failed preparation writes nothing, records the spend and the failure", async () => {
     const local = await localConversation(8);
     const h = harness({
       conversationId: local.conversationId,
@@ -214,10 +215,21 @@ describe("the zero-write exits", () => {
       local.conversationId,
       local.agentId,
     );
+    // T-3: a summarizer that burned tokens before failing. The preview that would
+    // have carried the usage is never produced, so the numbers ride on the error —
+    // a 0-token row for this run is the defect.
     const { runtime, calls } = fixtureRuntime({
       blocks,
       suggestionIndex: 1,
-      prepareError: new Error("provider refused the request"),
+      prepareError: withCompactUsage(
+        new Error("provider refused the request"),
+        {
+          promptTokens: 1_200,
+          cachedInputTokens: 900,
+          completionTokens: 0,
+          wallMs: 4_000,
+        },
+      ),
     });
     h.ctx.compaction = runtime;
 
@@ -227,10 +239,18 @@ describe("the zero-write exits", () => {
     expect(h.commands[0]?.failed).toBe(true);
     expect(h.commands[0]?.output).toContain("provider refused the request");
     expect(h.overlays).toEqual(["compaction", null]);
-    expect((await readUsageLedger()).at(-1)).toMatchObject({
+    const rows = (await readUsageLedger()).filter(
+      (record) => record.source === "compaction",
+    );
+    // Exactly one row, and it carries what the failed call actually spent.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
       source: "compaction",
       outcome: "failed",
       sessionId: local.conversationId,
+      prompt: 1_200,
+      cachedInput: 900,
+      wallMs: 4_000,
     });
   });
 

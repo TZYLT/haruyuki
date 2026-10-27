@@ -878,9 +878,9 @@ Commands marked hidden still work but are kept out of autocomplete.
 | `/help` | — | Show available commands | `src/cli/commands/registry.ts:513` |
 | `/exit` | — | Exit this session | `src/cli/commands/registry.ts:614` |
 | `/compact` | `[n\|help]` | Trim older context at a topic boundary you pick | `src/cli/commands/registry.ts:643` |
-| `/topic` | `<title> [summary] \| list [--all]` | Mark a topic boundary, or list the topic blocks (/topic list [--all]) | `src/cli/commands/registry.ts:651` |
-| `/recall` | `[setting] [value]` | Configure passive recall of earlier conversations and memory | `src/cli/commands/registry.ts:664` |
-| `/resume` | `[conversation_id]` | Resume a previous conversation | `src/cli/commands/registry.ts:670` |
+| `/topic` | `<title> [summary] \| list [--all\|--context] \| search <kw> \| show <#n\|title> [--full] [--out <path>]` | Mark a topic boundary, or list/search/show the topic markers | `src/cli/commands/registry.ts:651` |
+| `/recall` | `[setting] [value]` | Configure passive recall of earlier conversations and memory | `src/cli/commands/registry.ts:683` |
+| `/resume` | `[conversation_id]` | Resume a previous conversation | `src/cli/commands/registry.ts:689` |
 
 ## Hub subcommands
 

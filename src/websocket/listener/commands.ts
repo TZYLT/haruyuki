@@ -19,10 +19,6 @@ import {
 import { buildDoctorMessage } from "@/cli/helpers/doctor-command";
 import { formatErrorDetails } from "@/cli/helpers/error-formatter";
 import {
-  formatLocalCompactionReceipt,
-  runLocalCompaction,
-} from "@/cli/helpers/headless-compact";
-import {
   buildInitMessage,
   gatherInitGitContext,
 } from "@/cli/helpers/init-command";
@@ -48,6 +44,7 @@ import type { CompactionTopicReport } from "@/types/task-control-protocol";
 import { debugLog } from "@/utils/debug";
 import { markSecretsReminderRefreshPending } from "./commands/secrets";
 import { getConversationWorkingDirectory } from "./cwd";
+import { runListenerLocalCompaction } from "./local-compaction";
 import {
   ensureListenerAgentModAdapter,
   reloadListenerModAdapter,
@@ -460,12 +457,18 @@ function emitExecuteCommandResponse(
  * The model call holds no turn lease and no `command` lifecycle, deliberately.
  * The window is not new: the path this replaced (`trimConversationToTopic`) also
  * spent one model call without owning a lifecycle. What keeps it safe is the
- * budget, not a lock — `applyCompaction` re-reads the context and recomputes the
- * cut before writing back (route §6.1 row 5), so a message that arrives while
- * the summarizer runs falls inside the retained tail instead of being dropped.
- * If that window ever stretches to minutes, the conversation must hold its
- * `command` lifecycle instead, or a queued turn would wait on nothing. With no
- * interactive channel here there is also no cancel to offer (requirement §5.12.2).
+ * budget plus two narrower guards, not a lease — `runListenerLocalCompaction`
+ * refuses a second run on the same conversation instead of queueing one, and
+ * `applyCompaction` re-reads the context and recomputes the cut before writing
+ * back (route §6.1 row 5), so a message that arrives while the summarizer runs
+ * falls inside the retained tail instead of being dropped. If that window ever
+ * stretches to minutes, the conversation must hold its `command` lifecycle
+ * instead, or a queued turn would wait on nothing. With no interactive channel
+ * here there is also no cancel to offer (requirement §5.12.2).
+ *
+ * The post-compaction tail runs *after* the claim is released: it launches
+ * reflection and regenerates the description, and neither may hold the next
+ * compaction off (nor turn into a second, "failed" ledger row if it throws).
  */
 async function compactLocalFromListener(
   socket: WebSocket,
@@ -475,7 +478,7 @@ async function compactLocalFromListener(
   request: { kind: "auto" } | { kind: "block"; index: number },
 ): Promise<{ output: string; topic_report?: CompactionTopicReport }> {
   const conversationId = conversationRuntime.conversationId;
-  const outcome = await runLocalCompaction({
+  const outcome = await runListenerLocalCompaction({
     backend,
     conversationId,
     agentId,
@@ -524,7 +527,7 @@ async function compactLocalFromListener(
     },
   });
   return {
-    output: formatLocalCompactionReceipt(outcome.preview, outcome.result),
+    output: outcome.receipt,
     topic_report: outcome.report,
   };
 }

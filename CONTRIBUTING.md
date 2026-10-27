@@ -182,6 +182,7 @@ node scripts/generate-tutor-avatar.cjs          # → assets/tutor-profile.png
 |---|---|
 | **前缀冻结** | 提示/工具/记忆/模型的改动不立即写入上下文前缀；`/context-pending` 查看待应用项，`/recompile` 显式应用；施加点契约由检查项 `check-recompile-callsites` 守住 |
 | **话题裁切** | `/topic`、`/topics`、`/compact`：按话题边界裁上下文（含 `topicBoundaryRewindTurns` 等设置） |
+| **压缩重设计（0.4.4）** | `/compact` 从「一句概括完直接裁」变成 `prepare → pick → apply` 三步：先在会话的**冻结前缀**上跑一次摘要器（system／工具集／模型与采样与上一回合逐字节相同，只多一条尾部指令，因此命中热缓存），产出概况（四类受限节 ＋ 叙述）、话题草稿与块表，**不落盘**；确认后才写回「概况 + 刚裁的节」并重编前缀。选点面按消息 id 锁定（`/compact <n>` 在解析命令那一刻映射成 id），块表是「你打的标记 ∪ 摘要器找到的话题」的合并，两边同权。取消与失败都是零写入，失败分三类（拒答／格式／认证网络）且降级原因在收据与 `topic_report.degraded_kind` 里说得出来。话题索引 `<storageDir>/agents/<agentId>.topics.json` 是派生数据（原子写、按会话幂等重建、查询前自愈、不进导出包）；`TopicQuery` 只读并新增 `include:"sections"\|"excerpt"\|"full"` 与 `topic_id`，`/topic show` 与它共用**同一份**清洗投影（reasoning／工具调用／系统提醒都丢弃，压缩摘要解包），**不给模型任何路径或消息 id**。需求编号 `44-4`（内部文档）。**替代方案**：无——旧一步式裁切路径已删除，不留双轨 |
 | **后台反思** | 反思 agent 独立运行并整理记忆；`/reflect`、`/dream`、`/sleeptime` 控制触发；Windows 默认关闭自动反思 |
 | **本地后端** | 单一后端模式（`--backend local`）：agent / 会话 / 记忆 / transcript 全在本机；MemFS 由 git 版本化 |
 | **工具与配置面** | `haruyuki model` 同时识别 `HARUYUKI_*` 与裸环境名（与 `cron`/`messages`/`memory` 对齐）；`app-paths` 的路径**调用期解析**（禁止模块级 `const` 快照） |

@@ -15,6 +15,11 @@
  */
 import type { AgentState } from "@letta-ai/letta-client/resources/agents/agents";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import {
+  formatCompactionDegradedNote,
+  formatCompactNoopReason,
+  formatCompactPlanningFailure,
+} from "@/agent/compaction-execute";
 import { isActiveMemfsEnabled } from "@/agent/memory-runtime";
 import { type Backend, getBackend } from "@/backend";
 import { contextPressureLevel } from "@/backend/dev/provider-turn-executor";
@@ -24,6 +29,7 @@ import type {
 } from "@/backend/local/compaction-preview";
 import { renderCompactionOverview } from "@/backend/local/compaction-preview";
 import type { CompactionApplyResult } from "@/backend/local/compaction-run";
+import { compactUsageOf } from "@/backend/local/compaction-usage-error";
 import { LocalBackend } from "@/backend/local/local-backend";
 import { hasSelectableTopicBlocks } from "@/backend/local/local-topic-trim";
 import type { ActiveOverlay, AppCommandRunner } from "@/cli/app/types";
@@ -31,9 +37,6 @@ import type { CompactModeArgument } from "@/cli/helpers/compact-command";
 import {
   COMPACT_COMMAND_USAGE,
   COMPACT_MODE_LOCAL_UNSUPPORTED,
-  formatCompactionDegradedNote,
-  formatCompactNoopReason,
-  formatCompactPlanningFailure,
   formatContextPressureHint,
   formatNoMarkerCompactHint,
   formatSingleBlockCompactHint,
@@ -475,16 +478,20 @@ export function cancelCompactionPreparation(): void {
  * did — it is deliberately not wrapped in `try`/`catch` (swallowing here would
  * hide the one failure mode the caller is supposed to ignore anyway).
  *
- * A call that never answered has no model to name: it stays empty rather than
- * guessing, because a guessed model would be aggregated as if the summarizer had
- * really run on it.
+ * A run that threw produced no preview, but the spend is still real: the numbers
+ * rode up on the error (`compactUsageOf`, §5.14). A call that never reached a
+ * provider has neither, and only then is the row 0 — its model stays empty rather
+ * than guessing, because a guessed model would be aggregated as if the summarizer
+ * had really run on it.
  */
 async function recordCompactionRun(
   ctx: CompactCommandContext,
   preview: CompactionPreview | null,
   outcome: "completed" | "cancelled" | "failed",
+  error?: unknown,
 ): Promise<void> {
-  const usage = preview?.usage;
+  const usage =
+    preview?.usage ?? (error === undefined ? undefined : compactUsageOf(error));
   await recordCompactionUsage({
     agentId: ctx.agentId,
     conversationId: ctx.conversationIdRef.current,
@@ -668,10 +675,10 @@ async function runPreparation(
     return { kind: "preview", preview };
   } catch (error) {
     if (controller.signal.aborted) {
-      await recordCompactionRun(ctx, null, "cancelled");
+      await recordCompactionRun(ctx, null, "cancelled", error);
       return { kind: "cancelled" };
     }
-    await recordCompactionRun(ctx, null, "failed");
+    await recordCompactionRun(ctx, null, "failed", error);
     return { kind: "failed", message: formatCompactPlanningFailure(error) };
   } finally {
     if (inFlightPreparation === controller) inFlightPreparation = null;

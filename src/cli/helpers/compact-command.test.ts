@@ -10,7 +10,6 @@ import {
   COMPACT_COMMAND_USAGE,
   COMPACT_MODE_ARGUMENTS,
   COMPACT_MODE_LOCAL_UNSUPPORTED,
-  formatCompactPlanningFailure,
   formatContextPressureHint,
   formatNoMarkerCompactHint,
   formatSingleBlockCompactHint,
@@ -175,35 +174,6 @@ describe("formatContextPressureHint", () => {
       expect(hint).not.toContain("would write nothing");
       expect(hint).not.toContain("Nothing to trim");
     }
-  });
-});
-
-describe("formatCompactPlanningFailure", () => {
-  test("translates the planner's 'too little context' errors", () => {
-    expect(
-      formatCompactPlanningFailure(
-        new Error("Not enough messages for sliding window compaction."),
-      ),
-    ).toContain("too short to summarize");
-    expect(
-      formatCompactPlanningFailure(
-        new Error("No assistant message found for sliding window compaction."),
-      ),
-    ).toContain("too short to summarize");
-    expect(
-      formatCompactPlanningFailure(
-        new Error(
-          "Assistant message index 3 is at the end of the message buffer, skipping compaction.",
-        ),
-      ),
-    ).toContain("newest messages are already the whole context");
-  });
-
-  test("passes an unrelated failure through unchanged", () => {
-    expect(formatCompactPlanningFailure(new Error("provider exploded"))).toBe(
-      "provider exploded",
-    );
-    expect(formatCompactPlanningFailure("plain string")).toBe("plain string");
   });
 });
 

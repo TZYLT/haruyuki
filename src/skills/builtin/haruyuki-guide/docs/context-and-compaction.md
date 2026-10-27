@@ -123,9 +123,9 @@ compaction can cut at.
   `src/backend/local/topic-compaction.ts:251-334`. A block's `createdBy` comes
   from the marker that *ends* it — `src/backend/local/topic-compaction.ts:295`.
 - Whether the picker opens depends on one thing only, `blocks.length > 1` —
-  `src/backend/local/local-topic-trim.ts:199-201`. Markers alone are not the
+  `src/backend/local/local-topic-trim.ts:132-134`. Markers alone are not the
   test: a marker whose boundary clamps to the start of the context produces no
-  block of its own — `src/backend/local/local-topic-trim.ts:190-198`.
+  block of its own — `src/backend/local/topic-compaction.ts:339-352`.
 - The topic-marking section of the prompt is itself part of the frozen prefix,
   so a settings change to it lands at the next application point —
   `src/backend/local/system-prompt-compilation.ts:500-504`.
@@ -200,9 +200,9 @@ The same formula drives the listener path as `goalTokens` —
 
 | Invocation | Behavior | Source |
 | --- | --- | --- |
-| bare `/compact` | Resolves to `{ kind: "auto" }`. With two or more blocks it opens the topic picker and trims nothing yet; with a single block it trims by the compression rate and explains why | `src/cli/helpers/compact-command.ts:221-225`, `src/cli/app/submit-compact-commands.ts:477-531` |
+| bare `/compact` | Resolves to `{ kind: "auto" }`. With two or more blocks it opens the topic picker and trims nothing yet; with a single block it trims by the compression rate and explains why | `src/cli/helpers/compact-command.ts:131-137`, `src/cli/app/submit-compact-commands.ts:764-800` |
 | `/compact <n>` | Requires a positive integer; out of range is refused by name with the block count. Resolves `n` against the `/topic list` table **at command time** and locks that message id, so the boundaries the summarizer adds afterwards cannot move what `n` meant | `src/cli/helpers/compact-command.ts`, `src/cli/app/submit-compact-commands.ts` |
-| `/compact help` | Prints usage | `src/cli/helpers/compact-command.ts:226-232` |
+| `/compact help` | Prints usage | `src/cli/app/submit-compact-commands.ts:844-850` |
 | `/compact config` | Opens the mode panel, where the **Compression rate** row is editable | `src/cli/app/use-submit-handler.ts:718-729`, `src/cli/components/CompactionSelector.tsx:145-164` |
 
 Two further facts worth knowing:
@@ -292,7 +292,7 @@ Both thresholds measure the **whole request**, which is why the two numbers can
 look inconsistent: the percentage compares the complete context against the
 window, while a trim compares only the transcript against the rate. The source
 states the mismatch is intentional —
-`src/cli/helpers/compact-command.ts:159-175`.
+`src/agent/compaction-execute.ts:263-280`.
 
 The percentage itself is `round(usedTokens / contextWindowSize × 100)` clamped
 to 0–100 — `src/cli/helpers/cli-mod-context.ts:35-48` — with `/context` using
@@ -314,9 +314,9 @@ is the classic way to write a wrong explanation:
 | `estimateProviderPromptFloorTokens` | system prompt + tools, the part compaction can never touch | `src/backend/dev/provider-turn-executor.ts:206-220` |
 
 Trimming and the retention cap use the transcript-only number —
-`src/backend/local/local-topic-trim.ts:354-358`. Pressure levels and hard
+`src/backend/local/local-topic-trim.ts:145-155`. Pressure levels and hard
 refusals use the whole-request number —
-`src/cli/app/submit-compact-commands.ts:115-120`.
+`src/cli/app/submit-compact-commands.ts:130-142`.
 
 Note the name collision: `estimateLocalMessageTokens` in
 `src/backend/local/compaction.ts:664-666` takes an array, while the function of

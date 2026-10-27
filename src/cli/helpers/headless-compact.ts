@@ -1,34 +1,33 @@
 /**
- * F-04's `/compact` for the paths that have no picker: the listener and
- * headless.
+ * F-04's `/compact` for headless: recognition, the ledger row, the result
+ * envelope, and the output sinks.
  *
- * Both paths run the same three steps as the TUI — `prepare` once, resolve a
- * pick, `apply` — and differ only in what they do with the answer. This module
- * owns that shared run, the ledger row it owes (§5.14), the receipt, and the
- * wire report, so neither caller re-implements the ordering:
+ * Headless is the path with no slash registry (§8-6), so `/compact` is
+ * recognised on the input path itself — that is why the parser lives here and
+ * not with the command registry. The three execution steps
+ * (`prepare → pick → apply`) are **not** here: they moved to
+ * `@/agent/compaction-execute`, because the websocket listener runs the same
+ * steps and may not import a `cli/` module (AGENTS.md layer table). The receipt
+ * copy moved with them.
  *
- * ```
- * prepare ──cancelled──→ nothing written, one "cancelled" ledger row
- *    └──preview──→ pick (block n, or the rate's default) ──→ apply
- *                                                        └──→ ledger + receipt
- * ```
+ * What stays is what only this mode has: the input-path parser, the usage copy a
+ * headless client actually gets, the `result` envelope (§8-6: no transcript to
+ * write a command row into), and the choice between the three output formats.
  *
- * It deliberately lives outside `headless.ts` (on the size ratchet) and outside
- * the TUI's `submit-compact-commands.ts` (that module owns the picker): headless
- * has no slash registry (§8-6), so `/compact` has to be recognised on the input
- * path itself, and the listener needs the same execution.
+ * The ledger row is written *here*, not in the executor — §5.14 makes the caller
+ * the writer, and headless has its own ledger path (tests point it at a temporary
+ * file).
  */
 import { randomUUID } from "node:crypto";
-import type { Backend } from "@/backend";
 import {
-  type CompactionPreview,
-  type CompactPick,
-  renderCompactionOverview,
-} from "@/backend/local/compaction-preview";
-import type { CompactionApplyResult } from "@/backend/local/compaction-run";
-import { CompactionCancelledError } from "@/backend/local/compaction-summarizer";
+  compactionUsageFactsFromFailure,
+  formatCompactPlanningFailure,
+  type LocalCompactionFacts,
+  type LocalCompactionOutcome,
+  runLocalCompaction,
+} from "@/agent/compaction-execute";
+import type { Backend } from "@/backend";
 import { LocalBackend } from "@/backend/local/local-backend";
-import type { TopicBlock } from "@/backend/local/topic-compaction";
 import type { ResultMessage } from "@/types/protocol";
 import type { CompactionTopicReport } from "@/types/task-control-protocol";
 import {
@@ -37,9 +36,6 @@ import {
 } from "@/usage/compaction-usage";
 import {
   COMPACT_MODE_LOCAL_UNSUPPORTED,
-  formatCompactionDegradedNote,
-  formatCompactNoopReason,
-  formatCompactPlanningFailure,
   parseCompactCommandArgs,
 } from "./compact-command";
 
@@ -109,246 +105,6 @@ export function parseHeadlessCompactInput(
   }
 }
 
-/**
- * Where a `/compact <n>` points, as the frozen `CompactPick` the write-back takes.
- *
- * The block number is 1-based and resolved against the table the caller was
- * looking at *before* the summarizer ran — `/topic list`'s numbering
- * (requirement §5.6.3, Q-08). That lock has to happen before `prepare`, because
- * the summarizer adds boundaries of its own and a number resolved afterwards
- * would name a block the user never saw. The identity handed to `apply` is the
- * block's boundary message id, never the row.
- */
-export function resolveCompactionPick(
-  blocks: readonly TopicBlock[],
-  blockIndex: number | undefined,
-): CompactPick {
-  if (blockIndex === undefined) return { kind: "ratio_suggestion" };
-  const block = blocks[blockIndex - 1];
-  if (!block) {
-    const count = `${blocks.length} block${blocks.length === 1 ? "" : "s"}`;
-    throw new Error(
-      `There is no topic block ${blockIndex}: this context has ${count}. Run /topic list to list them, or /compact with no number to compress by the rate.`,
-    );
-  }
-  return { kind: "message", messageId: block.boundaryMessageId };
-}
-
-export interface LocalCompactionRunInput {
-  backend: LocalBackend;
-  conversationId: string;
-  /** When omitted the preview's own agent id is used (and the ledger's too). */
-  agentId?: string;
-  /** 1-based block from `/compact <n>`; omitted = the rate's default choice. */
-  blockIndex?: number;
-  signal?: AbortSignal;
-  /** Tests point this at a temporary ledger; production reads the default. */
-  ledgerPath?: string;
-}
-
-export type LocalCompactionOutcome =
-  | {
-      kind: "completed";
-      preview: CompactionPreview;
-      result: CompactionApplyResult;
-      receipt: string;
-      report: CompactionTopicReport;
-    }
-  | { kind: "cancelled"; receipt: string };
-
-/** The one sentence a cancelled compaction says, in every path that can cancel. */
-const COMPACT_CANCELLED_TEXT = "Cancelled: the context is unchanged.";
-
-/**
- * Run `prepare → pick → apply` and record the ledger row, whatever happens.
- *
- * A cancelled or failed run writes nothing but the ledger: the preview is
- * dropped whole (requirement §5.9.1), so there is nothing to undo. The ledger
- * row is written *before* the caller reports, so the receipt and the ledger
- * cannot disagree about whether the run happened (§5.14).
- */
-export async function runLocalCompaction(
-  input: LocalCompactionRunInput,
-): Promise<LocalCompactionOutcome> {
-  let preview: CompactionPreview | null = null;
-  let outcome: CompactionUsageOutcome = "completed";
-  try {
-    // §5.6.3: resolve `n` against the numbering table the user was looking at
-    // and lock the identity *before* the summarizer adds boundaries of its own.
-    // A number this context does not have refuses here, without paying for a
-    // provider call. Without a number there is nothing to lock, so the backend
-    // is not touched at all.
-    const pick =
-      input.blockIndex === undefined
-        ? { kind: "ratio_suggestion" as const }
-        : resolveCompactionPick(
-            input.backend.listTopics(input.conversationId, input.agentId)
-              .blocks,
-            input.blockIndex,
-          );
-    preview = await input.backend.prepareCompaction({
-      conversationId: input.conversationId,
-      ...(input.agentId === undefined ? {} : { agentId: input.agentId }),
-      ...(input.signal === undefined ? {} : { signal: input.signal }),
-    });
-    const result = await input.backend.applyCompaction({ preview, pick });
-    return {
-      kind: "completed",
-      preview,
-      result,
-      receipt: formatLocalCompactionReceipt(preview, result),
-      report: buildCompactionTopicReport(preview, result),
-    };
-  } catch (error) {
-    if (error instanceof CompactionCancelledError) {
-      outcome = "cancelled";
-      return { kind: "cancelled", receipt: COMPACT_CANCELLED_TEXT };
-    }
-    outcome = "failed";
-    throw error;
-  } finally {
-    await recordCompactionRun(input, preview, outcome);
-  }
-}
-
-/**
- * One ledger row per attempt (§5.14): numbers and ids only.
- *
- * A call that never answered has no model to name. It stays empty rather than
- * guessing, because a guessed model would be aggregated as if the summarizer had
- * really run on it — the same rule the TUI's path follows.
- *
- * The agent id has to come from the caller or the preview. It is deliberately not
- * looked up through `retrieveConversation`: on the local backend that call
- * *creates* an unknown conversation, so bookkeeping on a failed compaction would
- * turn a zero-write exit into a write (§5.9.1). A caller that cannot name the
- * agent therefore writes no row for a failure that never reached a preview —
- * but every successful run and every failed write-back still lands.
- */
-async function recordCompactionRun(
-  input: LocalCompactionRunInput,
-  preview: CompactionPreview | null,
-  outcome: CompactionUsageOutcome,
-): Promise<void> {
-  const agentId = input.agentId ?? preview?.agentId;
-  if (agentId === undefined) return;
-  const usage = preview?.usage;
-  await recordCompactionUsage(
-    {
-      agentId,
-      conversationId: input.conversationId,
-      model: preview?.model ?? "",
-      promptTokens: usage?.promptTokens ?? 0,
-      cachedInputTokens: usage?.cachedInputTokens ?? 0,
-      completionTokens: usage?.completionTokens ?? 0,
-      wallMs: usage?.wallMs ?? 0,
-      outcome,
-    },
-    input.ledgerPath === undefined ? {} : { path: input.ledgerPath },
-  );
-}
-
-/** Which cut the receipt should name, in the words the old receipt used. */
-function cutPointLabel(result: CompactionApplyResult): string {
-  switch (result.source) {
-    case "topic_pick":
-      return "the topic block you picked";
-    case "ratio_cap":
-      return "compression rate (the picked block kept more than the rate allows)";
-    default:
-      return "compression rate (no marker defines a boundary here, so it decided)";
-  }
-}
-
-/**
- * The receipt (§5.14): what the summarizer wrote, what the context weighs now,
- * and what the call cost.
- *
- * Mirrors the TUI's `formatCompactionReceipt` copy. The two live apart because
- * that one is inside the picker's module; consolidating them into
- * `cli/helpers/compact-command.ts` is a follow-up, not a reason for the
- * listener to import the TUI shell.
- */
-export function formatLocalCompactionReceipt(
-  preview: CompactionPreview,
-  result: CompactionApplyResult,
-): string {
-  if (!result.executed) {
-    return [
-      "Nothing was written: there is no cut point to take here.",
-      `  reason:     ${formatCompactNoopReason(result.noopReason)}`,
-      `  context:    ${result.numMessagesBefore} messages · ~${result.retainedTokens} tokens`,
-    ].join("\n");
-  }
-
-  const overview = renderCompactionOverview(preview.overview);
-  const folded = result.foldedTitles.length;
-  const cap =
-    result.retentionCapTokens === null
-      ? ""
-      : ` · cap ~${result.retentionCapTokens}`;
-  const lines = [
-    "Compaction complete.",
-    `  summary:    ${overview.length} characters · ${folded} topic${folded === 1 ? "" : "s"} folded${folded > 0 ? ` (${result.foldedTitles.join(", ")})` : ""}`,
-    `  tokens:     ~${result.summarizedTokens} → ~${result.retainedTokens} (${result.numMessagesBefore} → ${result.numMessagesAfter} messages${cap})`,
-    `  cut point:  ${cutPointLabel(result)}`,
-    `  model:      ${preview.model} · ${(preview.usage.wallMs / 1000).toFixed(1)}s`,
-    `  usage:      ${preview.usage.promptTokens} prompt (${preview.usage.cachedInputTokens} cached) · ${preview.usage.completionTokens} completion`,
-  ];
-  const degradedNote = formatCompactionDegradedNote(preview.degraded);
-  if (degradedNote !== null) {
-    lines.push(`  note:       ${degradedNote}`);
-  }
-  lines.push(
-    "  note:       the next turn re-reads the prefix, so it evicts the provider cache",
-  );
-  return lines.join("\n");
-}
-
-/**
- * The overview and cut-point table, as a client without a picker reads them.
- *
- * Purely derived from the preview and the apply result: it names the default the
- * rate took (`suggestion_index`) and what the write-back actually did, so a
- * desktop client can show the same story the TUI's receipt tells.
- */
-export function buildCompactionTopicReport(
-  preview: CompactionPreview,
-  result: CompactionApplyResult,
-): CompactionTopicReport {
-  return {
-    model: preview.model,
-    overview: renderCompactionOverview(preview.overview),
-    blocks: preview.blocks.map((block) => ({
-      index: block.index,
-      title: block.title,
-      summary: block.summary ?? null,
-      created_by: block.createdBy,
-      boundary_message_id: block.boundaryMessageId,
-      message_count: block.messageCount,
-      tokens: block.tokens,
-      starts_at: block.startsAt,
-    })),
-    suggestion_index: preview.suggestionIndex,
-    numbered_blocks: preview.numberedBlocks,
-    degraded: preview.degraded !== null,
-    degraded_kind: preview.degraded,
-    usage: {
-      prompt_tokens: preview.usage.promptTokens,
-      cached_input_tokens: preview.usage.cachedInputTokens,
-      completion_tokens: preview.usage.completionTokens,
-      wall_ms: preview.usage.wallMs,
-    },
-    applied: {
-      executed: result.executed,
-      kept_topic: result.topicTitle,
-      folded_topics: [...result.foldedTitles],
-      messages_before: result.numMessagesBefore,
-      messages_after: result.numMessagesAfter,
-    },
-  };
-}
-
 export interface HeadlessCompactCommandInput {
   backend: Backend;
   conversationId: string;
@@ -363,6 +119,41 @@ export interface HeadlessCompactResult {
   success: boolean;
   output: string;
   topic_report?: CompactionTopicReport;
+}
+
+/**
+ * One ledger row per attempt (§5.14): numbers and ids only.
+ *
+ * A run that never answered has no model to name. It stays empty rather than
+ * guessing, because a guessed model would be aggregated as if the summarizer had
+ * really run on it — the same rule the TUI's path follows.
+ *
+ * The agent id has to come from the caller or the preview: looking it up through
+ * `retrieveConversation` would *create* an unknown conversation on the local
+ * backend, so bookkeeping on a failed compaction would turn a zero-write exit
+ * into a write (§5.9.1). A caller that cannot name the agent therefore writes no
+ * row for a failure that never reached a preview — but every successful run and
+ * every failed write-back still lands.
+ */
+async function recordCompactionRun(
+  input: HeadlessCompactCommandInput,
+  facts: LocalCompactionFacts,
+  outcome: CompactionUsageOutcome,
+): Promise<void> {
+  if (facts.agentId === null) return;
+  await recordCompactionUsage(
+    {
+      agentId: facts.agentId,
+      conversationId: input.conversationId,
+      model: facts.model,
+      promptTokens: facts.usage?.promptTokens ?? 0,
+      cachedInputTokens: facts.usage?.cachedInputTokens ?? 0,
+      completionTokens: facts.usage?.completionTokens ?? 0,
+      wallMs: facts.usage?.wallMs ?? 0,
+      outcome,
+    },
+    input.ledgerPath === undefined ? {} : { path: input.ledgerPath },
+  );
 }
 
 /**
@@ -384,6 +175,9 @@ export async function handleHeadlessCompactCommand(
       output: `${input.request.message}\n\n${HEADLESS_COMPACT_USAGE}`,
     };
   }
+  // The local form of the check the executor cannot make for itself: it takes
+  // the three calls, not a `Backend`, so an untyped backend would fail inside
+  // the run instead of here with a sentence.
   if (!(input.backend instanceof LocalBackend)) {
     return {
       success: false,
@@ -391,8 +185,9 @@ export async function handleHeadlessCompactCommand(
         "Compaction needs the local backend, and this session is not running on it.",
     };
   }
+  let outcome: LocalCompactionOutcome;
   try {
-    const outcome = await runLocalCompaction({
+    outcome = await runLocalCompaction({
       backend: input.backend,
       conversationId: input.conversationId,
       ...(input.agentId === undefined ? {} : { agentId: input.agentId }),
@@ -400,24 +195,31 @@ export async function handleHeadlessCompactCommand(
         ? {}
         : { blockIndex: input.request.blockIndex }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
-      ...(input.ledgerPath === undefined
-        ? {}
-        : { ledgerPath: input.ledgerPath }),
     });
-    if (outcome.kind === "cancelled") {
-      return { success: false, output: outcome.receipt };
-    }
-    return {
-      success: true,
-      output: outcome.receipt,
-      topic_report: outcome.report,
-    };
   } catch (error) {
+    // A failed run's spend rides on the error; the row is written before the
+    // failure is reported, so the receipt and the ledger cannot disagree.
+    await recordCompactionRun(
+      input,
+      compactionUsageFactsFromFailure(error, input.agentId),
+      "failed",
+    );
     return {
       success: false,
       output: `Failed: ${formatCompactPlanningFailure(error)}`,
     };
   }
+  // Outside the failure branch: a ledger write that did not land must not be
+  // re-reported as a failed compaction.
+  await recordCompactionRun(input, outcome, outcome.kind);
+  if (outcome.kind === "cancelled") {
+    return { success: false, output: outcome.receipt };
+  }
+  return {
+    success: true,
+    output: outcome.receipt,
+    topic_report: outcome.report,
+  };
 }
 
 /**

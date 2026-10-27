@@ -25,8 +25,10 @@ import type {
   CompactPick,
 } from "@/backend/local/compaction-preview";
 import { LocalBackend } from "@/backend/local/local-backend";
+import { readUsageLedger } from "@/usage/ledger";
 import { handleAgentConversationManagementCommand } from "@/websocket/listener/commands/agents-conversations";
 import type { SafeSocketSend } from "@/websocket/listener/commands/types";
+import { __testResetLocalCompactionLocks } from "@/websocket/listener/local-compaction";
 
 const temporaryDirectories: string[] = [];
 const originalHaruyukiHome = process.env.HARUYUKI_HOME;
@@ -39,6 +41,7 @@ async function createStorageDirectory(): Promise<string> {
 
 afterEach(async () => {
   __testSetBackend(null);
+  __testResetLocalCompactionLocks();
   // 《31》red line A: the ledger must never reach the real `~/.haruyuki`.
   if (originalHaruyukiHome === undefined) delete process.env.HARUYUKI_HOME;
   else process.env.HARUYUKI_HOME = originalHaruyukiHome;
@@ -276,6 +279,13 @@ describe("conversation_compact on the local backend", () => {
     expect(response.compaction).toMatchObject({
       summary: expect.stringContaining("They talked through Alpha."),
     });
+    // One row for this attempt (§5.14): the desktop path is one of the two
+    // listeners that write it, so losing it here would silently empty the view.
+    const rows = await readUsageLedger({ prune: false });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.source).toBe("compaction");
+    expect(rows[0]?.outcome).toBe("completed");
+    expect(rows[0]?.sessionId).toBe(f.conversationId);
   });
 
   test("a stray topic_block is ignored: this path has no picker (§5.12.2)", async () => {

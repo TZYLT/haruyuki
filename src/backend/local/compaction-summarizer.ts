@@ -153,12 +153,12 @@ export interface SummarizeInput {
  * What one summarizer run produced.
  *
  * On a clean run, `topics` are the boundaries the write-back will turn into
- * markers and `overview` is the new overview. On `degraded: "whole-section"`
- * the structured product could not be used: `topics` is empty (nothing to
- * mark — "no topics were generated this run") and `overview.narrative` carries
- * the one-step summary for the whole segment; the restricted fields are empty
- * because no structured reply produced them, and no section headings are
- * invented for them.
+ * markers and `overview` is the new overview. On a non-null `degraded` the
+ * structured product could not be used: `topics` is empty (nothing to mark — "no
+ * topics were generated this run") and `overview.narrative` carries the one-step
+ * summary for the whole segment; the restricted fields are empty because no
+ * structured reply produced them, and no section headings are invented for them.
+ * `degraded` names which of §5.9.3's two causes it was.
  */
 export interface SummarizeResult {
   topics: CompactionTopicDraft[];

@@ -236,8 +236,8 @@ const META_MARKER = "##SUMMARY_META##";
 interface SummarizerMeta {
   /** `toPiMessages` over the stored conversation (pre-instruction). */
   projectedMessageCount: number;
-  /** `null` when the structured reply was accepted. */
-  degraded: "whole-section" | null;
+  /** `null` when the structured reply was accepted; otherwise why it was not. */
+  degraded: "refusal" | "format" | null;
   topicCount: number;
   promptTokens: number;
   cachedInputTokens: number;

@@ -197,7 +197,7 @@ function packWithMeasuredTokens(input: {
  * Run the summarizer and shape its answer into the frozen preview.
  *
  * A degraded or structurally invalid answer is *not* thrown away silently: the
- * preview says `degraded: "whole-section"`, carries no topics, and leaves the
+ * preview carries no topics, says which cause it was, and leaves the
  * marker-derived blocks in place, so the picker still shows something the user
  * can cut on and the write-back still runs (requirement §5.9.2, §5.12.2).
  */

@@ -10,10 +10,11 @@
  * rejects them.
  *
  * Everything here is pure: the CLI and the listener share the parsing and the
- * receipts, and tests cover them without a backend.
+ * hints, and tests cover them without a backend. The receipt copy and the
+ * planning-failure translation moved to `@/agent/compaction-execute` with the
+ * execution body they belong to — the listener runs that body, and a listener
+ * may not import a `cli/` module (AGENTS.md layer table).
  */
-import type { CompactionDegraded } from "@/backend/local/compaction-preview";
-import type { TrimNoopReason } from "@/backend/local/topic-compaction";
 
 /** Mode words the cloud backend still accepts. */
 export const COMPACT_MODE_ARGUMENTS = [
@@ -51,53 +52,6 @@ export const COMPACT_COMMAND_USAGE = [
   "allows — so block 1, which keeps the whole context, is cut down to the rate's",
   "own point. `/topic list` lists the blocks, numbered oldest first.",
 ].join("\n");
-
-/**
- * Why a compaction wrote nothing, in the receipt's own words.
- *
- * The structured reason stays structured in the backend; this is the one place
- * it becomes prose, so all three `/compact` paths say the same thing. A raw
- * token in a receipt is a receipt that needs a code lookup.
- */
-export function formatCompactNoopReason(
-  reason: TrimNoopReason | undefined,
-): string {
-  switch (reason) {
-    case undefined:
-      return "the plan kept everything";
-    case "empty_context":
-      return "there is nothing in the context to trim";
-    case "nothing_before_boundary":
-      return "the kept block starts at the first message, so nothing older could be folded";
-    case "unknown_block":
-      return "the block this run was told to keep is no longer in the context";
-    case "stale_preview":
-      return "the context changed while it was being summarized, so this preview was dropped whole — run /compact again";
-    case "no_suggestion":
-      return "the compression rate found no cut point";
-  }
-}
-
-/**
- * The receipt's one line when a run produced no topics (§5.9.2, §5.9.3).
- *
- * The two causes carry the same product but not the same story, and a user
- * deciding whether to retry needs to know which one happened: a refusal means the
- * model would not answer this request at all, a format failure means it answered
- * twice with something unusable.
- */
-export function formatCompactionDegradedNote(
-  degraded: CompactionDegraded | null,
-): string | null {
-  switch (degraded) {
-    case null:
-      return null;
-    case "refusal":
-      return "the summarizer refused or was unavailable, so this run used the old one-step summary (no topics)";
-    case "format":
-      return "the summarizer's structured answer was unusable twice, so this run kept one whole-section summary (no topics)";
-  }
-}
 
 /**
  * `/compact` on a conversation that has no markers (D-119): the rate decides, so
@@ -171,25 +125,6 @@ export function formatContextPressureHint(input: {
     ? "/topic <title> to mark a fresh boundary"
     : "/topic <title> to mark a boundary for a cleaner cut";
   return `${usage} This is past the point where a turn this large can be sent, and ${why}. Run /compact to compress the older part, or ${wayOut}.`;
-}
-
-/**
- * Turn a planning failure into something actionable. Local compaction refuses
- * to plan when there is too little context to summarize, which used to surface
- * as the planner's own error text.
- */
-export function formatCompactPlanningFailure(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (
-    message.includes("Not enough messages") ||
-    message.includes("No assistant message found")
-  ) {
-    return "Nothing to trim: this conversation is too short to summarize. Nothing was written.";
-  }
-  if (message.includes("at the end of the message buffer")) {
-    return "Nothing to trim: the newest messages are already the whole context.";
-  }
-  return message;
 }
 
 /** Parse the arguments after the command word. */
