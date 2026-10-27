@@ -12,11 +12,11 @@
  *   2. runs one real headless turn with `HARUYUKI_PREFIX_PROBE_DIR` set, so the
  *      turn's provider payload is captured;
  *   3. re-invokes this script with `--summarize-only` in a second child with the
- *      same isolated root: that child reads the conversation's frozen snapshot
- *      and messages, assembles the summarizer context exactly as M1 will
- *      (snapshot system prompt + frozen skills block + frozen tools + projected
- *      messages + one appended instruction), and makes the one
- *      `completeProviderOnce()` call, capturing its payload too;
+ *      same isolated root: that child calls the shipping summarizer
+ *      (`summarizeConversation()`), whose frozen-prefix assembly and one
+ *      provider call are captured by the same probe. The stub answers the
+ *      output-contract request with a valid JSON product, so the real validator
+ *      accepts it: one provider call, no retry, no degradation;
  *   4. compares the two captured payloads: `system`, `tools`, `model` + request
  *      settings byte-identical; the turn's messages a byte-identical prefix of
  *      the summarizer's; and the summarizer's context exactly one message
@@ -25,10 +25,9 @@
  * Usage:
  *   bun scripts/verify-compaction-prefix.ts [--keep] [--cli <path-to-src/index.ts>]
  *
- * Exit codes: 0 PASS · 1 DIFF · 2 setup/usage error.
- *
- * The summarizer's real prompt (M1) replaces the stand-in instruction below;
- * this gate only checks the wire bytes, which do not depend on its wording.
+ * Exit codes: 0 PASS · 1 DIFF · 2 setup/usage error. The wire bytes do not
+ * depend on the summarizer prompt's wording: the instruction comes from the
+ * module itself.
  */
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import {
@@ -42,55 +41,23 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Message } from "@earendil-works/pi-ai";
-import { toPiMessages, toPiTools } from "@/backend/dev/pi-stream-adapter";
+import { toPiMessages } from "@/backend/dev/pi-stream-adapter";
 import {
   comparePrefixProbeTurns,
   type PrefixProbeRecord,
 } from "@/backend/dev/prefix-probe";
-import { completeProviderOnce } from "@/backend/dev/provider-completion";
+import { summarizeConversation } from "@/backend/local/compaction-summarizer";
 import { LocalStore } from "@/backend/local/local-store";
-import {
-  applyFrozenAgentOverrides,
-  canonicalJson,
-  frozenToolsArray,
-} from "@/backend/local/prefix-freeze";
-import { appendCompiledSkillsBlock } from "@/backend/local/system-prompt-compilation";
+import { canonicalJson } from "@/backend/local/prefix-freeze";
 import { createIsolatedCliTestEnv } from "@/test-utils/test-process-env";
+import {
+  AMBIENT_PROVIDER_KEYS,
+  DEFAULT_STUB_MODEL as DEFAULT_MODEL,
+  startStubProvider,
+} from "./verify-compaction-lib";
 
-const STUB_MODEL_ID = "verify-compact-model";
-const DEFAULT_MODEL = `lmstudio/${STUB_MODEL_ID}`;
 const TURN_TIMEOUT_MS = 120_000;
 const CHILD_TIMEOUT_MS = 180_000;
-
-/**
- * Stand-in for M1's tail instruction. It is one user message, appended after
- * the projected context — the same shape the real summarizer prompt will have.
- */
-const TAIL_INSTRUCTION = [
-  "Compaction summarizer (M0 prefix-gate stub).",
-  "Read the conversation above and reply with one JSON object of this shape:",
-  '{"topics":[{"title":"","startMessageId":"","section":""}],"overview":{"restricted":{"open":"","errors":"","relationship":"","memoryIndex":""},"narrative":""}}',
-  "The product prompt and the parser land with the summarizer milestone; this request only exists to capture the provider payload.",
-].join("\n");
-
-/**
- * Provider credentials that may be present in the operator's shell. The gate
- * must not be able to reach a real endpoint even if one is configured; the
- * explicit `--model` already fixes routing, this makes that a guarantee.
- */
-const AMBIENT_PROVIDER_KEYS = [
-  "OPENAI_API_KEY",
-  "ANTHROPIC_API_KEY",
-  "GOOGLE_GENERATIVE_AI_API_KEY",
-  "GEMINI_API_KEY",
-  "OPENROUTER_API_KEY",
-  "DEEPSEEK_API_KEY",
-  "MISTRAL_API_KEY",
-  "XAI_API_KEY",
-  "GROQ_API_KEY",
-  "HARUYUKI_DISABLE_LOCAL_MODEL_DISCOVERY",
-] as const;
 
 const childProcesses = new Set<ChildProcessWithoutNullStreams>();
 
@@ -155,90 +122,6 @@ function required(values: Map<string, string>, key: string): string {
   const value = values.get(key);
   if (!value) throw new Error(`${key} is required`);
   return value;
-}
-
-// --- stub provider ---------------------------------------------------------
-
-interface StubProvider {
-  port: number;
-  stop: () => void;
-}
-
-/**
- * Minimal OpenAI-compatible endpoint the local backend can complete one turn
- * against. `/api/v0/models` is the LM Studio discovery surface, `/v1/models` is
- * the OpenAI-compatible fallback, and `/v1/chat/completions` returns one plain
- * assistant reply as SSE — no tool calls, so a request finishes in one shot.
- */
-function startStubProvider(): StubProvider {
-  const server = Bun.serve({
-    port: 0,
-    idleTimeout: 60,
-    async fetch(req) {
-      const url = new URL(req.url);
-      if (url.pathname.endsWith("/api/v0/models")) {
-        return Response.json({
-          data: [
-            {
-              id: STUB_MODEL_ID,
-              type: "llm",
-              state: "loaded",
-              loaded_context_length: 128000,
-              max_context_length: 128000,
-            },
-          ],
-        });
-      }
-      if (url.pathname.endsWith("/models")) {
-        return Response.json({
-          object: "list",
-          data: [{ id: STUB_MODEL_ID, object: "model" }],
-        });
-      }
-      if (!url.pathname.endsWith("/chat/completions")) {
-        return new Response("not found", { status: 404 });
-      }
-
-      await req.json().catch(() => undefined);
-      const base = {
-        id: "chatcmpl-verify-compact",
-        object: "chat.completion.chunk",
-        created: 1,
-        model: STUB_MODEL_ID,
-      };
-      const frames = [
-        {
-          ...base,
-          choices: [
-            {
-              index: 0,
-              delta: { role: "assistant", content: "ok" },
-              finish_reason: null,
-            },
-          ],
-        },
-        {
-          ...base,
-          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-          usage: {
-            prompt_tokens: 1,
-            completion_tokens: 1,
-            total_tokens: 2,
-          },
-        },
-      ];
-      const body = frames
-        .map((frame) => `data: ${JSON.stringify(frame)}\n\n`)
-        .join("");
-      return new Response(`${body}data: [DONE]\n\n`, {
-        headers: { "content-type": "text/event-stream" },
-      });
-    },
-  });
-  return {
-    port: server.port,
-    stop: () => server.stop(true),
-  };
 }
 
 // --- one headless turn -----------------------------------------------------
@@ -351,19 +234,23 @@ function readInitEvent(
 const META_MARKER = "##SUMMARY_META##";
 
 interface SummarizerMeta {
+  /** `toPiMessages` over the stored conversation (pre-instruction). */
   projectedMessageCount: number;
-  requestMessageCount: number;
-  stopReason: string;
+  /** `null` when the structured reply was accepted. */
+  degraded: "whole-section" | null;
+  topicCount: number;
   promptTokens: number;
   cachedInputTokens: number;
+  completionTokens: number;
+  wallMs: number;
 }
 
 /**
- * The summarizer leg, run in its own process so the isolated environment holds
- * for the provider discovery and so nothing here can disturb the orchestrator.
- * The assembly is a stand-in for M1's `compaction-summarizer.ts`: same four
- * frozen pieces (snapshot system prompt + frozen skills block + frozen tools +
- * frozen agent), same projection helpers, same one-appended-instruction shape.
+ * The summarizer leg. It calls the shipping module — `summarizeConversation()`
+ * — instead of copying its assembly, so the payload under test is the one the
+ * product sends. Its own derived number is only the expected message count,
+ * which the parent holds against the bytes the provider received. Run in its
+ * own process so the isolated environment holds for provider discovery.
  */
 async function runSummarizerOnly(input: {
   storage: string;
@@ -374,49 +261,36 @@ async function runSummarizerOnly(input: {
     storageDir: input.storage,
     seedDefaultAgent: false,
   });
-  const liveAgent = store.retrieveAgentRecord(input.agentId);
-  const snapshot = store.getCompiledSystemPrompt(
-    input.conversationId,
-    input.agentId,
-  );
-  if (!snapshot) {
-    console.error(
-      `no compiled system prompt for ${input.conversationId}; run the turn first`,
-    );
-    return 2;
-  }
+  const agent = store.retrieveAgentRecord(input.agentId);
   const storedMessages = store.listLocalMessages(
     input.conversationId,
     input.agentId,
   );
   const projected = toPiMessages(storedMessages);
-  const tools = toPiTools(frozenToolsArray(snapshot) ?? []);
-  const instruction: Message = {
-    role: "user",
-    content: TAIL_INSTRUCTION,
-    timestamp: Date.now(),
-  };
-  const messages: Message[] = [...projected, instruction];
-  const context = {
-    systemPrompt: appendCompiledSkillsBlock(
-      snapshot.content,
-      snapshot.frozenSkillsBlock,
-    ),
-    messages,
-    ...(tools ? { tools } : {}),
-  };
-  const result = await completeProviderOnce({
-    agent: applyFrozenAgentOverrides(liveAgent, snapshot),
-    context,
-    conversationId: input.conversationId,
-    storageDir: input.storage,
-  });
+  let result: Awaited<ReturnType<typeof summarizeConversation>>;
+  try {
+    result = await summarizeConversation({
+      agent,
+      agentId: input.agentId,
+      conversationId: input.conversationId,
+      storageDir: input.storage,
+    });
+  } catch (error) {
+    console.error(
+      `summarizeConversation failed for ${input.conversationId}: ${
+        error instanceof Error ? (error.stack ?? error.message) : String(error)
+      }`,
+    );
+    return 2;
+  }
   const meta: SummarizerMeta = {
     projectedMessageCount: projected.length,
-    requestMessageCount: messages.length,
-    stopReason: result.message.stopReason,
+    degraded: result.degraded,
+    topicCount: result.topics.length,
     promptTokens: result.usage.promptTokens,
     cachedInputTokens: result.usage.cachedInputTokens,
+    completionTokens: result.usage.completionTokens,
+    wallMs: result.usage.wallMs,
   };
   console.log(`${META_MARKER} ${JSON.stringify(meta)}`);
   return 0;
@@ -502,25 +376,28 @@ function sanitizeSegment(value: string): string {
   return sanitized.length > 0 ? sanitized : "conversation";
 }
 
-function loadPayload(
+/** Captured requests for this conversation, in probe sequence order. */
+function loadPayloads(
   probeDir: string,
   conversationId: string,
-): CapturedPayload | undefined {
-  if (!existsSync(probeDir)) return undefined;
+): CapturedPayload[] {
+  if (!existsSync(probeDir)) return [];
   const prefix = `payload-${sanitizeSegment(conversationId)}-`;
-  const files = readdirSync(probeDir)
+  return readdirSync(probeDir)
     .filter((name) => name.startsWith(prefix) && name.endsWith(".json"))
-    .sort();
-  const file = files[0];
-  if (!file) return undefined;
-  const parsed = JSON.parse(readFileSync(join(probeDir, file), "utf8")) as {
-    payload?: unknown;
-  };
-  if (!parsed.payload || typeof parsed.payload !== "object") return undefined;
-  return {
-    file,
-    payload: parsed.payload as Record<string, unknown>,
-  };
+    .sort()
+    .map((file) => {
+      const parsed = JSON.parse(readFileSync(join(probeDir, file), "utf8")) as {
+        payload?: unknown;
+      };
+      if (!parsed.payload || typeof parsed.payload !== "object") {
+        throw new Error(`probe payload ${file} has no request object`);
+      }
+      return {
+        file,
+        payload: parsed.payload as Record<string, unknown>,
+      };
+    });
 }
 
 const SYSTEM_MESSAGE_ROLES = new Set(["system", "developer"]);
@@ -720,28 +597,23 @@ function comparePayloads(input: {
     );
   }
 
-  // The provider payload carries the system prompt as a leading message in this
-  // shape, so the wire count is the assembled context plus that lead.
+  // The system prompt is a leading message here, so the wire count is the
+  // assembled context plus that lead. The carried count comes from the bytes
+  // the provider received, not from the child's own claim.
   const systemLead =
     turnSystem?.location === "leading-message" ? (turnSystem.count ?? 1) : 0;
   const carried = summarizerMessages.length - systemLead;
-  if (input.meta.requestMessageCount !== input.meta.projectedMessageCount + 1) {
+  const expected = input.meta.projectedMessageCount + 1;
+  if (carried !== expected) {
     lines.push(
-      `  instruction only   DIFF       (projected ${input.meta.projectedMessageCount} messages, request carried ${input.meta.requestMessageCount})`,
+      `  instruction only   DIFF       (projected ${input.meta.projectedMessageCount} + 1 instruction = ${expected}, provider carried ${carried} after ${systemLead} system lead(s))`,
     );
     diffs.push(
       "the summarizer request is not the projected context + one instruction",
     );
-  } else if (carried !== input.meta.requestMessageCount) {
-    lines.push(
-      `  instruction only   DIFF       (child assembled ${input.meta.requestMessageCount}, provider carried ${carried} after the system lead)`,
-    );
-    diffs.push(
-      "the sent payload does not match the assembled summarizer context",
-    );
   } else {
     lines.push(
-      `  instruction only   APPENDED   (${input.meta.projectedMessageCount} projected + 1 instruction = ${input.meta.requestMessageCount}, provider carries ${summarizerMessages.length} incl. system)`,
+      `  instruction only   APPENDED   (${input.meta.projectedMessageCount} projected + 1 instruction = ${carried}, provider carries ${summarizerMessages.length} incl. ${systemLead} system lead(s))`,
     );
   }
 
@@ -852,11 +724,16 @@ async function runScenario(options: {
       };
     }
 
-    const turnPayload = loadPayload(turnProbeDir, turn.conversationId);
-    const summarizerPayload = loadPayload(
+    const turnPayloads = loadPayloads(turnProbeDir, turn.conversationId);
+    const summarizerPayloads = loadPayloads(
       summarizerProbeDir,
       turn.conversationId,
     );
+    const turnPayload = turnPayloads[0];
+    // The first summarizer request is the structured attempt on the projected
+    // context. A second one is a retry with the rejection text appended — a
+    // different request, which the clean-run check below refuses to compare.
+    const summarizerPayload = summarizerPayloads[0];
     if (!turnPayload || !summarizerPayload) {
       return {
         kind: "error",
@@ -868,6 +745,28 @@ async function runScenario(options: {
       };
     }
 
+    const stubStats = provider.stats();
+    const degraded = summarizer.meta.degraded;
+    // The stub answers the contract so the real validator accepts the first
+    // reply. A second provider call therefore means a retry or the degraded
+    // fallback, and there is no single request whose bytes prove the gate.
+    if (summarizerPayloads.length > 1 && degraded === null) {
+      return {
+        kind: "error",
+        report: [
+          ...header,
+          `summarizer leg made ${summarizerPayloads.length} provider calls (expected exactly 1): ${summarizerPayloads.map((entry) => entry.file).join(", ")}`,
+          `stub saw ${stubStats.summarizerRequests} summarizer request(s); the reply was rejected and the module retried.`,
+        ].join("\n"),
+      };
+    }
+    const stubNotice =
+      degraded === null
+        ? []
+        : [
+            `  STUB FORCED DEGRADATION — the stub's reply was rejected by the real parser, so the module retried and fell back (degraded=${degraded}, payloads=${summarizerPayloads.length}, requests=${stubStats.summarizerRequests}); comparing the first (structured) request.`,
+          ];
+
     const comparison = comparePayloads({
       turn: turnPayload,
       summarizer: summarizerPayload,
@@ -875,9 +774,11 @@ async function runScenario(options: {
     });
     const report = [
       ...header,
+      ...stubNotice,
       `  conversation: ${turn.conversationId} (${turn.agentId})`,
+      `  summarizer module: summarizeConversation → degraded=${degraded ?? "none"}, topics=${summarizer.meta.topicCount}, promptTokens=${summarizer.meta.promptTokens}, completionTokens=${summarizer.meta.completionTokens}, wallMs=${summarizer.meta.wallMs} (stub: ${stubStats.summarizerRequests} summarizer / ${stubStats.turnRequests} other request(s))`,
       `  turn payload:       ${turnPayload.file} (${messagesOf(turnPayload.payload).length} message(s))`,
-      `  summarizer payload: ${summarizerPayload.file} (${messagesOf(summarizerPayload.payload).length} message(s), stop=${summarizer.meta.stopReason})`,
+      `  summarizer payload: ${summarizerPayload.file} (${messagesOf(summarizerPayload.payload).length} message(s), ${summarizerPayloads.length} captured)`,
       "",
       "frozen-prefix items (requirement §8.1 #1, route §3 M0):",
       ...comparison.lines,
