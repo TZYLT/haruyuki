@@ -48,6 +48,7 @@ const AUTOMATED_USAGE_SOURCES: readonly AutomatedUsageSource[] = [
   "dream",
   "cron",
   "subagent",
+  "compaction",
   "other",
 ];
 

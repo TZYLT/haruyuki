@@ -76,6 +76,7 @@ export type UsageSource =
   | "dream"
   | "cron"
   | "subagent"
+  | "compaction"
   | "other";
 
 const USAGE_SOURCES: readonly UsageSource[] = [
@@ -84,6 +85,7 @@ const USAGE_SOURCES: readonly UsageSource[] = [
   "dream",
   "cron",
   "subagent",
+  "compaction",
   "other",
 ];
 

@@ -17,6 +17,7 @@ import {
 } from "@/backend/local/local-message";
 import { removeOrphanLocalToolResults } from "@/backend/local/local-message-projection";
 import { resolveAvailableLocalModelForTurn } from "@/backend/local/local-model-config";
+import type { LocalAgentRecord } from "@/backend/local/local-store";
 import type { ClientTool } from "@/tools/manager";
 import { debugLog } from "@/utils/debug";
 import { isRecord } from "@/utils/type-guards";
@@ -37,6 +38,7 @@ import {
 } from "./pi-image-elision";
 import {
   applyPiEnvOverrides,
+  type ResolvedPiModel,
   reasoningForSettings,
   resolvePiModelForAgent,
 } from "./pi-model-factory";
@@ -132,7 +134,14 @@ function isClientTool(value: unknown): value is ClientTool {
   return isRecord(value) && typeof value.name === "string";
 }
 
-function toPiTools(clientTools: unknown[]): Tool[] | undefined {
+/**
+ * Project a frozen `client_tools` declaration set to pi-ai tools.
+ *
+ * Exported for F-04's compaction summarizer: it must send the *same* tool
+ * declarations a turn sends, so both paths share this one projection
+ * (requirement §5.2.2) instead of keeping two copies in sync.
+ */
+export function toPiTools(clientTools: unknown[]): Tool[] | undefined {
   const tools: Tool[] = [];
   for (const value of clientTools) {
     if (!isClientTool(value)) continue;
@@ -239,7 +248,15 @@ function toPiMessage(message: LocalMessage): Message | undefined {
   } satisfies Message;
 }
 
-function toPiMessages(messages: readonly LocalMessage[]): Message[] {
+/**
+ * Project stored local messages to the provider-facing pi-ai message list.
+ *
+ * Exported for F-04's compaction summarizer for the same reason as
+ * {@link toPiTools}: the summarizer's context is the turn's context plus one
+ * appended instruction, and "the same context" means this exact projection —
+ * including orphan-tool-result removal and trailing-assistant stripping.
+ */
+export function toPiMessages(messages: readonly LocalMessage[]): Message[] {
   const providerSafeMessages = removeOrphanLocalToolResults(messages).messages;
   let normalized = providerSafeMessages.flatMap((message) => {
     const piMessage = toPiMessage(message);
@@ -437,6 +454,122 @@ function serviceTierForSettings(
   return modelSettings.service_tier === "priority" ? "priority" : undefined;
 }
 
+/** The provider request a turn and an in-process single-shot call share. */
+export interface AssembledPiProviderRequest {
+  resolved: ResolvedPiModel;
+  options: SimpleStreamOptions & Record<string, unknown>;
+}
+
+/**
+ * Resolve the model and build the stream options for one provider request.
+ *
+ * F-04's compaction summarizer must send the *same bytes* the conversation's
+ * own turn sends (requirement §5.2.2): system prompt, frozen tool set, model
+ * and sampling settings all come from the same frozen snapshot. Building the
+ * options once here — instead of duplicating the block in the summarizer — is
+ * what makes that a property of the code rather than a promise. The gate that
+ * proves it is `scripts/verify-compaction-prefix.ts`.
+ *
+ * The D-008 prefix probe is attached last, so it observes the payload before
+ * the provider-specific rewrites below touch it, exactly like a turn does.
+ */
+export async function assemblePiProviderRequest(input: {
+  agent: LocalAgentRecord;
+  conversationId: string;
+  storageDir?: string;
+  modelsRuntime: LocalPiModelsRuntime;
+  signal?: AbortSignal;
+  onPayload?: SimpleStreamOptions["onPayload"];
+}): Promise<AssembledPiProviderRequest> {
+  const localModel = await resolveAvailableLocalModelForTurn({
+    model: input.agent.model,
+    modelSettings: input.agent.model_settings,
+    storageDir: input.storageDir,
+    modelsRuntime: input.modelsRuntime,
+  });
+  const resolved = await resolvePiModelForAgent(
+    localModel.model,
+    localModel.modelSettings,
+    {
+      localProviderAuthStorageDir: input.storageDir,
+      modelsRuntime: input.modelsRuntime,
+      ...(input.signal ? { abortSignal: input.signal } : {}),
+    },
+  );
+  const reasoning = reasoningForSettings(
+    input.agent.model_settings,
+    input.agent.model,
+    resolved.model,
+  );
+  const headers = resolvePiRequestHeaders({
+    provider: resolved.model.provider,
+    configuredHeaders: resolved.headers,
+    conversationId: input.conversationId,
+  });
+  const options: SimpleStreamOptions & Record<string, unknown> = {
+    ...resolved.providerOptions,
+    ...(resolved.apiKey ? { apiKey: resolved.apiKey } : {}),
+    ...(resolved.timeout !== false ? { timeoutMs: resolved.timeout } : {}),
+    ...(headers ? { headers } : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
+    maxRetries: 0,
+    sessionId: input.conversationId,
+    // streamSimple drops provider-specific named options; samplingParams is
+    // pi-ai's supported pass-through for explicit provider request overrides.
+    ...(isRecord(input.agent.model_settings.sampling_params)
+      ? { samplingParams: input.agent.model_settings.sampling_params }
+      : {}),
+    ...(reasoning ? { reasoning } : {}),
+    ...(maxTokensForSettings(input.agent.model_settings)
+      ? { maxTokens: maxTokensForSettings(input.agent.model_settings) }
+      : {}),
+    ...(serviceTierForSettings(resolved.model, input.agent.model_settings)
+      ? {
+          serviceTier: serviceTierForSettings(
+            resolved.model,
+            input.agent.model_settings,
+          ),
+        }
+      : {}),
+    ...(boolValue(input.agent.model_settings.parallel_tool_calls) !== undefined
+      ? {
+          parallelToolCalls: boolValue(
+            input.agent.model_settings.parallel_tool_calls,
+          ),
+        }
+      : {}),
+  };
+
+  let onPayload = input.onPayload;
+  if (resolved.model.api === "openai-responses") {
+    // pi-ai replays OpenAI Responses output items from transcript history.
+    // Those upstream item IDs (rs_*, msg_*, fc_*) are not retrievable when the
+    // request uses store:false, so remove them and replay the full item bodies.
+    onPayload = withOpenAIResponsesReplayIdSanitizer(onPayload);
+  }
+  if (resolved.model.api === "anthropic-messages") {
+    if (
+      resolved.model.id.includes("claude-fable-5") &&
+      anthropicEffortForSettings(input.agent.model_settings) === "max"
+    ) {
+      // pi-ai's public ThinkingLevel type currently tops out at xhigh, but
+      // Anthropic accepts Fable's max effort through output_config.effort.
+      onPayload = withAnthropicOutputEffort(onPayload, "max");
+    }
+  }
+
+  // Prefix-freeze payload probe (D-008): wraps the provider-specific onPayload
+  // hooks above so the exact bytes sent are captured last. No-op unless
+  // HARUYUKI_PREFIX_PROBE_DIR is set.
+  onPayload = withPrefixProbe(onPayload, {
+    conversationId: input.conversationId,
+    modelId: resolved.model.id,
+  });
+  if (onPayload) options.onPayload = onPayload;
+
+  return { resolved, options };
+}
+
 function toLocalAssistantMessage(
   message: AssistantMessage,
   input: ProviderTurnInput,
@@ -523,21 +656,15 @@ export class PiStreamAdapter implements ProviderStreamAdapter {
     input: ProviderTurnInput,
   ): AsyncIterable<ProviderStreamEvent> {
     const tools = toPiTools(input.clientTools);
-    const localModel = await resolveAvailableLocalModelForTurn({
-      model: input.agent.model,
-      modelSettings: input.agent.model_settings,
-      storageDir: this.localProviderAuthStorageDir,
+    const { resolved, options } = await assemblePiProviderRequest({
+      agent: input.agent,
+      conversationId: input.conversationId,
+      ...(this.localProviderAuthStorageDir
+        ? { storageDir: this.localProviderAuthStorageDir }
+        : {}),
       modelsRuntime: this.modelsRuntime,
+      ...(this.abortSignal ? { signal: this.abortSignal } : {}),
     });
-    const resolved = await resolvePiModelForAgent(
-      localModel.model,
-      localModel.modelSettings,
-      {
-        localProviderAuthStorageDir: this.localProviderAuthStorageDir,
-        modelsRuntime: this.modelsRuntime,
-        ...(this.abortSignal ? { abortSignal: this.abortSignal } : {}),
-      },
-    );
     assertPromptFloorFitsContextWindow(input, resolved.model);
     assertContextFitsContextWindow(input, resolved.model);
     const messages = toPiMessages(input.uiMessages);
@@ -546,77 +673,6 @@ export class PiStreamAdapter implements ProviderStreamAdapter {
       messages,
       ...(tools ? { tools } : {}),
     };
-    const reasoning = reasoningForSettings(
-      input.agent.model_settings,
-      input.agent.model,
-      resolved.model,
-    );
-    const headers = resolvePiRequestHeaders({
-      provider: resolved.model.provider,
-      configuredHeaders: resolved.headers,
-      conversationId: input.conversationId,
-    });
-    const options: SimpleStreamOptions & Record<string, unknown> = {
-      ...resolved.providerOptions,
-      ...(resolved.apiKey ? { apiKey: resolved.apiKey } : {}),
-      ...(resolved.timeout !== false ? { timeoutMs: resolved.timeout } : {}),
-      ...(headers ? { headers } : {}),
-      ...(this.abortSignal ? { signal: this.abortSignal } : {}),
-      maxRetries: 0,
-      sessionId: input.conversationId,
-      // streamSimple drops provider-specific named options; samplingParams is
-      // pi-ai's supported pass-through for explicit provider request overrides.
-      ...(isRecord(input.agent.model_settings.sampling_params)
-        ? { samplingParams: input.agent.model_settings.sampling_params }
-        : {}),
-      ...(reasoning ? { reasoning } : {}),
-      ...(maxTokensForSettings(input.agent.model_settings)
-        ? { maxTokens: maxTokensForSettings(input.agent.model_settings) }
-        : {}),
-      ...(serviceTierForSettings(resolved.model, input.agent.model_settings)
-        ? {
-            serviceTier: serviceTierForSettings(
-              resolved.model,
-              input.agent.model_settings,
-            ),
-          }
-        : {}),
-      ...(boolValue(input.agent.model_settings.parallel_tool_calls) !==
-      undefined
-        ? {
-            parallelToolCalls: boolValue(
-              input.agent.model_settings.parallel_tool_calls,
-            ),
-          }
-        : {}),
-    };
-    if (resolved.model.api === "openai-responses") {
-      // pi-ai replays OpenAI Responses output items from transcript history.
-      // Those upstream item IDs (rs_*, msg_*, fc_*) are not retrievable when the
-      // request uses store:false, so remove them and replay the full item bodies.
-      options.onPayload = withOpenAIResponsesReplayIdSanitizer(
-        options.onPayload,
-      );
-    }
-    if (resolved.model.api === "anthropic-messages") {
-      if (
-        resolved.model.id.includes("claude-fable-5") &&
-        anthropicEffortForSettings(input.agent.model_settings) === "max"
-      ) {
-        // pi-ai's public ThinkingLevel type currently tops out at xhigh, but
-        // Anthropic accepts Fable's max effort through output_config.effort.
-        options.onPayload = withAnthropicOutputEffort(options.onPayload, "max");
-      }
-    }
-
-    // Prefix-freeze payload probe (D-008): wraps the provider-specific
-    // onPayload hooks above so the exact bytes sent are captured last. No-op
-    // unless HARUYUKI_PREFIX_PROBE_DIR is set.
-    const probedOnPayload = withPrefixProbe(options.onPayload, {
-      conversationId: input.conversationId,
-      modelId: resolved.model.id,
-    });
-    if (probedOnPayload) options.onPayload = probedOnPayload;
 
     const restoreEnv = applyPiEnvOverrides(resolved.envOverrides);
     const llmStartedAt = Date.now();
