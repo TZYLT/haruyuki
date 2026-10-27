@@ -436,7 +436,7 @@ describe("resolveTrimPlan", () => {
     const plan = resolveTrimPlan({
       messages,
       blocks,
-      pick: { kind: "topic", index: 2 },
+      pick: { kind: "message", messageId: "u4" },
       retentionCapTokens: 10_000,
     });
 
@@ -468,7 +468,7 @@ describe("resolveTrimPlan", () => {
     const plan = resolveTrimPlan({
       messages,
       blocks,
-      pick: { kind: "topic", index: 1 },
+      pick: { kind: "message", messageId: "u1" },
       retentionCapTokens: 10_000,
     });
 
@@ -477,15 +477,19 @@ describe("resolveTrimPlan", () => {
     expect(plan.keep).toHaveLength(messages.length);
   });
 
-  test("an unknown block is a no-op", () => {
+  test("a pick pointing at a message that is not in the context is a no-op", () => {
+    // The command layer refuses this before the planner; the planner still has
+    // to answer for a caller that did not (a stale preview).
     const plan = resolveTrimPlan({
       messages,
       blocks,
-      pick: { kind: "topic", index: 9 },
+      pick: { kind: "message", messageId: "gone" },
       retentionCapTokens: 10_000,
     });
 
-    expect(plan.noopReason).toBe("unknown_block");
+    expect(plan.noop).toBe(true);
+    expect(plan.noopReason).toBe("nothing_before_boundary");
+    expect(plan.keep).toHaveLength(messages.length);
   });
 
   test("the retention cap overrides a topic boundary that keeps too much", () => {
@@ -493,7 +497,7 @@ describe("resolveTrimPlan", () => {
     const plan = resolveTrimPlan({
       messages,
       blocks,
-      pick: { kind: "topic", index: 2 },
+      pick: { kind: "message", messageId: "u4" },
       retentionCapTokens: 250,
     });
 
@@ -549,7 +553,7 @@ describe("resolveTrimPlan", () => {
     const plan = resolveTrimPlan({
       messages,
       blocks: stale,
-      pick: { kind: "topic", index: 2 },
+      pick: { kind: "message", messageId: "gone" },
       retentionCapTokens: 10_000,
     });
 

@@ -471,7 +471,6 @@ export function resolveTrimPlan(input: {
   messages: readonly LocalMessage[];
   blocks: readonly TopicBlock[];
   pick:
-    | { kind: "topic"; index: number }
     | { kind: "ratio_suggestion" }
     /** F-04's identity-first pick: a message id, never a row number. */
     | { kind: "message"; messageId: string };
@@ -479,20 +478,14 @@ export function resolveTrimPlan(input: {
 }): TrimPlan {
   const { messages, blocks, pick, retentionCapTokens } = input;
   if (messages.length === 0) {
-    return noopPlan(messages, "topic_pick", "empty_context");
+    return noopPlan(messages, "ratio_suggestion", "empty_context");
   }
 
   let candidateId: string | null;
   let source: TrimStartSource;
-  let topicTitle: string | null = null;
+  const topicTitle: string | null = null;
 
-  if (pick.kind === "topic") {
-    const block = blocks.find((candidate) => candidate.index === pick.index);
-    if (!block) return noopPlan(messages, "topic_pick", "unknown_block");
-    topicTitle = block.title;
-    candidateId = block.boundaryMessageId;
-    source = "topic_pick";
-  } else if (pick.kind === "message") {
+  if (pick.kind === "message") {
     source = "topic_pick";
     candidateId = pick.messageId;
   } else {

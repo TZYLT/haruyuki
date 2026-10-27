@@ -12,6 +12,7 @@
  * Everything here is pure: the CLI and the listener share the parsing and the
  * receipts, and tests cover them without a backend.
  */
+import type { CompactionDegraded } from "@/backend/local/compaction-preview";
 import type { TrimNoopReason } from "@/backend/local/topic-compaction";
 
 /** Mode words the cloud backend still accepts. */
@@ -74,6 +75,27 @@ export function formatCompactNoopReason(
       return "the context changed while it was being summarized, so this preview was dropped whole — run /compact again";
     case "no_suggestion":
       return "the compression rate found no cut point";
+  }
+}
+
+/**
+ * The receipt's one line when a run produced no topics (§5.9.2, §5.9.3).
+ *
+ * The two causes carry the same product but not the same story, and a user
+ * deciding whether to retry needs to know which one happened: a refusal means the
+ * model would not answer this request at all, a format failure means it answered
+ * twice with something unusable.
+ */
+export function formatCompactionDegradedNote(
+  degraded: CompactionDegraded | null,
+): string | null {
+  switch (degraded) {
+    case null:
+      return null;
+    case "refusal":
+      return "the summarizer refused or was unavailable, so this run used the old one-step summary (no topics)";
+    case "format":
+      return "the summarizer's structured answer was unusable twice, so this run kept one whole-section summary (no topics)";
   }
 }
 

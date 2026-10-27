@@ -74,10 +74,28 @@ export interface CompactUsage {
  *   move what the user meant.
  * - `suggestionIndex` — the block the compression rate would keep; this is the
  *   picker's default row and the listener/headless default selection.
- * - `degraded` — `null` on a clean run, `"whole-section"` when the summarizer's
- *   output could not be used and the write-back falls back to one whole-section
- *   summary (requirement §5.9.2).
+ * - `degraded` — `null` on a clean run; otherwise *why* the structured product
+ *   could not be used (§5.9.2, §5.9.3). Both causes end in the same product (the
+ *   retired one-step whole-section summary), but they are not the same event: a
+ *   model that refused the request at all (§5.9.3①) is a different thing to
+ *   report than a model that answered twice with an unusable shape (§5.9.3②).
  */
+/**
+ * Why a run produced no topics (§5.9.2, §5.9.3).
+ *
+ * - `"refusal"` — the model refused the request or was unavailable, so the old
+ *   one-step summary took over before the structured product could be judged
+ *   (§5.9.3①). The attempt ladder never completed.
+ * - `"format"` — the structured attempt was made and its answer was unusable
+ *   (bad JSON, holes, missing sections, or an overflow that the truncated retry
+ *   did not rescue), twice (§5.9.2, §5.9.3②).
+ *
+ * The two produce the same summary text — the retired one-step fallback — so the
+ * distinction exists for the receipt and for `topic_report`, not for the
+ * write-back.
+ */
+export type CompactionDegraded = "refusal" | "format";
+
 export interface CompactionPreview {
   conversationId: string;
   agentId: string;
@@ -98,7 +116,7 @@ export interface CompactionPreview {
   numberedBlocks: number;
   suggestionIndex: number;
   usage: CompactUsage;
-  degraded: "whole-section" | null;
+  degraded: CompactionDegraded | null;
 }
 
 /**
@@ -301,6 +319,114 @@ export function previewStaleness(
   ];
   if (anchored.length === 0) return null;
   return anchored.some((id) => !live.has(id)) ? "stale_preview" : null;
+}
+
+/**
+ * Merge several cut-point tables into the single table the picker shows.
+ *
+ * Requirement §5.5.1 makes a summarizer's topic a first-class marker, *equal in
+ * weight* to a user's or the agent's own: neither table may erase the other. So
+ * the picker's table is the union of every boundary point either table knows,
+ * in message order, renumbered from 1 — a boundary is a point, and two points
+ * do not conflict.
+ *
+ * Overlap is resolved by the table, never by refusing the summarizer's answer
+ * (requirement §5.5.3 asks the model to respect existing boundaries; it does not
+ * ask the host to reject it when the model does not). Where both tables end a
+ * block at the same point, the *earlier* table names it: callers pass the
+ * pre-existing marker table first, so a boundary someone actually named keeps
+ * its title and the summarizer's own title for the same point is not invented
+ * over it. A block that only one table ends takes that table's title, which is
+ * what splits a summarizer topic that spans a marker into two blocks: the part
+ * before the marker is titled by the marker, the part after it by the topic.
+ *
+ * `compaction`, `messageCount`, `tokens`, `startsAt` and `sparse` are recomputed
+ * from the messages themselves: a block created by the merge need not exist in
+ * either input table verbatim.
+ */
+export function mergeCompactionBlocks(
+  messages: readonly LocalMessage[],
+  tables: readonly (readonly TopicBlock[])[],
+): TopicBlock[] {
+  const ends = new Set<number>();
+  for (const table of tables) {
+    for (const block of table) {
+      if (block.endIndex > 0) ends.add(block.endIndex);
+    }
+  }
+  const breaks = [...ends].sort((left, right) => left - right);
+  const blocks: TopicBlock[] = [];
+  let start = 0;
+
+  for (const end of breaks) {
+    if (end <= start) continue;
+    const slice = messages.slice(start, end);
+    const first = slice[0];
+    if (!first) break;
+    const endings = tables
+      .map((table) => table.find((block) => block.endIndex === end))
+      .filter((block): block is TopicBlock => block !== undefined);
+    // The first table that names this boundary owns it; an unnamed trailing
+    // block (the current topic) yields to a table that does name it.
+    const primary = endings.find((block) => block.title !== null) ?? endings[0];
+    const absorbedTitles: string[] = [];
+    for (const ending of endings) {
+      for (const title of ending.absorbedTitles) {
+        if (!absorbedTitles.includes(title)) absorbedTitles.push(title);
+      }
+    }
+    blocks.push({
+      index: blocks.length + 1,
+      title: primary?.title ?? null,
+      markerId: primary?.markerId ?? null,
+      createdBy: primary?.createdBy ?? null,
+      ...(primary?.summary === undefined ? {} : { summary: primary.summary }),
+      ...(first.metadata?.compaction === undefined ? {} : { compaction: true }),
+      anchorMessageId: primary?.anchorMessageId ?? null,
+      absorbedTitles,
+      boundaryMessageId: first.id,
+      startIndex: start,
+      endIndex: end,
+      rewindTurns: primary?.rewindTurns ?? 0,
+      startMarkerAnchorMessageId: primary?.startMarkerAnchorMessageId ?? null,
+      messageCount: slice.length,
+      tokens: estimateLocalMessagesTokens(slice),
+      startsAt: localMessageCreatedAt(first),
+      sparse: slice.length <= 1,
+    });
+    start = end;
+  }
+
+  if (start < messages.length) {
+    // Nothing in any table ends at the end of the context: the trailing current
+    // topic still needs a row, or the picker would hide the newest messages.
+    const slice = messages.slice(start);
+    const first = slice[0];
+    if (first) {
+      blocks.push({
+        index: blocks.length + 1,
+        title: null,
+        markerId: null,
+        createdBy: null,
+        ...(first.metadata?.compaction === undefined
+          ? {}
+          : { compaction: true }),
+        anchorMessageId: null,
+        absorbedTitles: [],
+        boundaryMessageId: first.id,
+        startIndex: start,
+        endIndex: messages.length,
+        rewindTurns: 0,
+        startMarkerAnchorMessageId: null,
+        messageCount: slice.length,
+        tokens: estimateLocalMessagesTokens(slice),
+        startsAt: localMessageCreatedAt(first),
+        sparse: slice.length <= 1,
+      });
+    }
+  }
+
+  return blocks;
 }
 
 /**

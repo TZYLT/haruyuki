@@ -182,6 +182,12 @@ The same formula drives the listener path as `goalTokens` —
 
 Two further facts worth knowing:
 
+- **The picker's table is a merge, not a replacement.** A boundary you marked with
+  `/topic` and a topic the summarizer found weigh the same: both end a block, and
+  a summarizer topic that crosses one of your markers is *split* at the marker
+  rather than dropping either — `src/backend/local/compaction-preview.ts`
+  (`mergeCompactionBlocks`). The titles shown for the split halves are the
+  marker's for the first and the summarizer's for the second.
 - **The rate wins over a pick that would keep too much.** In `resolveTrimPlan`,
   the cap is applied *before* the no-op check, and a pick exceeding it is
   reported with `source: "ratio_cap"`. This is why picking the first block —

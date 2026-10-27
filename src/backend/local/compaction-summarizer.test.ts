@@ -610,7 +610,8 @@ describe("failure taxonomy", () => {
           streamText(callIndex < 2 ? "still not json" : LEGACY_SUMMARY),
         async ({ stub, summarize }) => {
           const result = await summarize();
-          expect(result.degraded).toBe("whole-section");
+          // Two judged attempts: the cause is a format outcome, not a refusal.
+          expect(result.degraded).toBe("format");
           expect(result.topics).toEqual([]);
           expect(result.overview.restricted).toEqual({
             open: "",
@@ -642,7 +643,9 @@ describe("failure taxonomy", () => {
           callIndex === 0 ? refusalResponse() : streamText(LEGACY_SUMMARY),
         async ({ stub, summarize }) => {
           const result = await summarize();
-          expect(result.degraded).toBe("whole-section");
+          // The model refused the request itself, so no structured attempt was
+          // ever judged (§5.9.3①).
+          expect(result.degraded).toBe("refusal");
           expect(result.topics).toEqual([]);
           expect(result.overview.narrative).toBe(
             `${DEGRADED_WHOLE_SECTION_LEAD_IN}\n\n${LEGACY_SUMMARY}`,
@@ -707,7 +710,9 @@ describe("failure taxonomy", () => {
           callIndex < 2 ? overflowResponse() : streamText(LEGACY_SUMMARY),
         async ({ stub, summarize }) => {
           const result = await summarize();
-          expect(result.degraded).toBe("whole-section");
+          // The structured product could not be produced after the truncation
+          // ladder, which is the format outcome (§5.9.2).
+          expect(result.degraded).toBe("format");
           expect(result.overview.narrative).toBe(
             `${DEGRADED_WHOLE_SECTION_LEAD_IN}\n\n${LEGACY_SUMMARY}`,
           );
@@ -877,7 +882,7 @@ describe("output contract", () => {
           ),
         async ({ stub, summarize }) => {
           const result = await summarize();
-          expect(result.degraded).toBe("whole-section");
+          expect(result.degraded).toBe("format");
           expect(result.topics).toEqual([]);
           expect(result.overview.narrative).toBe(
             `${DEGRADED_WHOLE_SECTION_LEAD_IN}\n\n${LEGACY_SUMMARY}`,

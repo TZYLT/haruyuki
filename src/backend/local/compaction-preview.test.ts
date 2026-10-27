@@ -1,7 +1,8 @@
 /**
  * The pure shape helpers F-04's preview relies on: boundary validation (§5.9.2),
  * the overview / write-back rendering (§5.8.1), which topics a cut folds
- * (§5.8.2), and the exact blocks the summarizer's topics imply (§5.6.5).
+ * (§5.8.2), the exact blocks the summarizer's topics imply (§5.6.5), and the
+ * merge that makes a marker and a summarizer topic weigh the same (§5.5.1).
  */
 import { describe, expect, test } from "bun:test";
 import {
@@ -10,12 +11,14 @@ import {
   type CompactionOverview,
   type CompactionTopicDraft,
   foldedCompactionTopics,
+  mergeCompactionBlocks,
   renderCompactionOverview,
   renderCompactionSummary,
   topicBlocksFromDrafts,
   validateCompactionTopics,
 } from "@/backend/local/compaction-preview";
 import type { LocalMessage } from "@/backend/local/local-message";
+import { listTopicBlocks } from "@/backend/local/topic-compaction";
 
 function userMessage(id: string, text = `text ${id}`): LocalMessage {
   return {
@@ -271,5 +274,116 @@ describe("topicBlocksFromDrafts", () => {
       true,
     );
     expect(blocks.every((block) => block.markerId === null)).toBe(true);
+  });
+});
+
+describe("mergeCompactionBlocks", () => {
+  /**
+   * §5.5.1: a summarizer topic weighs the same as a marker someone wrote. The
+   * picker's table is the union of both, so neither can erase the other.
+   */
+  test("keeps both a human marker's boundary and the summarizer's", () => {
+    const messages = conversation();
+    // A user marker ending at u2. `rewindTurns: 0` keeps the boundary exact; a
+    // rewind would pull it onto the start of the context and absorb the title.
+    const markerTable = listTopicBlocks(
+      messages,
+      [
+        {
+          id: "m1",
+          title: "the human's topic",
+          createdBy: "user",
+          anchorMessageId: "u2",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      { rewindTurns: 0 },
+    );
+    const draftTable = topicBlocksFromDrafts(messages, [
+      draft("one", "u1"),
+      draft("two", "u3"),
+    ]);
+
+    const merged = mergeCompactionBlocks(messages, [markerTable, draftTable]);
+
+    // Three points, three blocks: the marker's boundary splits the summarizer's
+    // first topic in two, and each half keeps the title that ends it.
+    expect(merged.map((block) => block.title)).toEqual([
+      "the human's topic",
+      "one",
+      "two",
+    ]);
+    expect(merged.map((block) => block.index)).toEqual([1, 2, 3]);
+    expect(merged.map((block) => block.endIndex)).toEqual([2, 4, 6]);
+  });
+
+  test("splits a summarizer topic that spans a marker into two blocks", () => {
+    const messages = conversation();
+    const markerTable = listTopicBlocks(
+      messages,
+      [
+        {
+          id: "m1",
+          title: "middle",
+          createdBy: "agent",
+          anchorMessageId: "a2",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      { rewindTurns: 0 },
+    );
+    // One topic covering everything: it crosses the marker, and the merge
+    // resolves the conflict by letting the marker end a block — the overlap is
+    // resolved by the table rather than by refusing the summarizer's answer.
+    const draftTable = topicBlocksFromDrafts(messages, [draft("whole", "u1")]);
+
+    const merged = mergeCompactionBlocks(messages, [markerTable, draftTable]);
+
+    expect(merged.map((block) => block.title)).toEqual(["middle", "whole"]);
+    // The marker's boundary snaps to the start of the user turn that holds its
+    // anchor (`a2` is in the turn starting at `u2`, index 2).
+    expect(merged.map((block) => block.startIndex)).toEqual([0, 2]);
+    expect(merged.map((block) => block.endIndex)).toEqual([2, 6]);
+    // The summarizer's own record still names the part after the marker.
+    expect(merged[1]?.summary).toBe("section: whole");
+  });
+
+  test("a single table comes back unchanged (renumbered from 1)", () => {
+    const messages = conversation();
+    const draftTable = topicBlocksFromDrafts(messages, [
+      draft("one", "u1"),
+      draft("two", "u3"),
+    ]);
+
+    const merged = mergeCompactionBlocks(messages, [draftTable]);
+
+    expect(merged.map((block) => block.title)).toEqual(["one", "two"]);
+    expect(merged.map((block) => block.endIndex)).toEqual([4, 6]);
+    expect(merged.map((block) => block.messageCount)).toEqual([4, 2]);
+  });
+
+  test("a table that ends before the context keeps the trailing current topic", () => {
+    const messages = conversation();
+    // Only block 1 of the marker table ends inside the context; the rest of the
+    // messages are not covered by any boundary and must still be pickable.
+    const markerTable = listTopicBlocks(
+      messages,
+      [
+        {
+          id: "m1",
+          title: "early",
+          createdBy: "user",
+          anchorMessageId: "u2",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      { rewindTurns: 0 },
+    );
+    const partial = markerTable.slice(0, 1);
+
+    const merged = mergeCompactionBlocks(messages, [partial]);
+
+    expect(merged.map((block) => block.title)).toEqual(["early", null]);
+    expect(merged.at(-1)?.endIndex).toBe(messages.length);
   });
 });

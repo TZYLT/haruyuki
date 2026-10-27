@@ -714,8 +714,6 @@ export class LocalBackend extends HeadlessBackend {
         listMessages: ports.listMessages,
         readMarkers: ports.readMarkers,
         compactionSettings: ports.compactionSettings,
-        appendTopicMarker: (marker) =>
-          this.store.contextRewrites.appendTopicMarker(marker),
         rewrite: ports.rewrite,
         refreshFrozenPrefix: ports.refreshFrozenPrefix,
         clearTopicNudgeStreak: ports.clearTopicNudgeStreak,

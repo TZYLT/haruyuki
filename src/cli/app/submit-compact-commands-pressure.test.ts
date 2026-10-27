@@ -173,14 +173,14 @@ describe("offerTrimBeforeSend (D-112)", () => {
     const { runtime } = fixtureRuntime({
       blocks: h.blocks,
       suggestionIndex: 2,
-      degraded: "whole-section",
+      degraded: "refusal",
     });
     h.ctx.compaction = runtime;
 
     await offerTrimBeforeSend(h.ctx);
 
     expect(h.commands.at(-1)?.output).toContain(
-      "this run produced no topics (one whole-section summary)",
+      "the summarizer refused or was unavailable",
     );
   });
 

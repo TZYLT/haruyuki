@@ -302,7 +302,7 @@ async function localFixture(
           completionTokens: 120,
           wallMs: 2000,
         },
-        degraded: options.unmarked ? "whole-section" : null,
+        degraded: options.unmarked ? "format" : null,
       };
     }
   })({
@@ -432,12 +432,14 @@ describe("listener compact command", () => {
 
     expect(output).toContain("Compaction complete.");
     expect(output).toContain("no marker defines a boundary here");
-    expect(output).toContain("this run produced no topics");
+    expect(output).toContain("structured answer was unusable twice");
     const report = responsePayload(fixture).topic_report as {
       degraded: boolean;
+      degraded_kind: "refusal" | "format" | null;
       blocks: unknown[];
     };
     expect(report.degraded).toBe(true);
+    expect(report.degraded_kind).toBe("format");
     expect(report.blocks).toHaveLength(1);
   });
 
@@ -519,7 +521,7 @@ describe("listener compact command", () => {
             completionTokens: 0,
             wallMs: 0,
           },
-          degraded: "whole-section",
+          degraded: "format",
         };
       }
 

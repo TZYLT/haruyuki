@@ -31,6 +31,7 @@ import type { CompactModeArgument } from "@/cli/helpers/compact-command";
 import {
   COMPACT_COMMAND_USAGE,
   COMPACT_MODE_LOCAL_UNSUPPORTED,
+  formatCompactionDegradedNote,
   formatCompactNoopReason,
   formatCompactPlanningFailure,
   formatContextPressureHint,
@@ -552,10 +553,9 @@ export function formatCompactionReceipt(
     `  model:      ${preview.model} · ${(preview.usage.wallMs / 1000).toFixed(1)}s`,
     `  usage:      ${preview.usage.promptTokens} prompt (${preview.usage.cachedInputTokens} cached) · ${preview.usage.completionTokens} completion`,
   ];
-  if (preview.degraded === "whole-section") {
-    lines.push(
-      "  note:       this run produced no topics (one whole-section summary)",
-    );
+  const degradedNote = formatCompactionDegradedNote(preview.degraded);
+  if (degradedNote !== null) {
+    lines.push(`  note:       ${degradedNote}`);
   }
   lines.push(
     "  note:       the next turn re-reads the prefix, so it evicts the provider cache",

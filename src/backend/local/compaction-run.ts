@@ -14,24 +14,28 @@
  */
 import { packageLocalSummaryMessage } from "./compaction";
 import {
+  type CompactionDegraded,
   type CompactionOverview,
   type CompactionPreview,
   type CompactionTopicDraft,
   type CompactPick,
   type CompactUsage,
   foldedCompactionTopics,
+  mergeCompactionBlocks,
   previewStaleness,
   renderCompactionSummary,
   topicBlocksFromDrafts,
   validateCompactionTopics,
 } from "./compaction-preview";
-import { estimateLocalMessagesTokens } from "./local-context-estimate";
+import {
+  estimateLocalMessagesTokens,
+  estimateLocalMessageTokens,
+} from "./local-context-estimate";
 import type {
   LocalCompactionStoreResult,
   LocalCompactionWriteStats,
   LocalConversationRewriteInput,
-  LocalTopicMarkerAppendInput,
-  LocalTopicMarkerAppendResult,
+  LocalTopicMarkerDraft,
 } from "./local-context-rewrite";
 import type { LocalMessage } from "./local-message";
 import {
@@ -65,7 +69,7 @@ export interface CompactionSummarizeInput {
 export interface CompactionSummarizeResult {
   topics: CompactionTopicDraft[];
   overview: CompactionOverview;
-  degraded: "whole-section" | null;
+  degraded: CompactionDegraded | null;
   usage: CompactUsage;
 }
 
@@ -100,9 +104,6 @@ export interface PrepareCompactionPorts extends CompactionPortsBase {
 }
 
 export interface ApplyCompactionPorts extends CompactionPortsBase {
-  appendTopicMarker(
-    input: LocalTopicMarkerAppendInput,
-  ): LocalTopicMarkerAppendResult;
   rewrite(input: LocalConversationRewriteInput): LocalCompactionStoreResult;
   /** Re-apply the frozen prefix after the context changed (§5.8.4). */
   refreshFrozenPrefix(conversationId: string, agentId: string): Promise<void>;
@@ -149,6 +150,49 @@ function emptyUsage(): CompactUsage {
   };
 }
 
+/** Tokens of the one message a fold writes back, measured the way the next turn
+ * will measure it: the packed text, not the bare summary. */
+function estimatePackedSummaryTokens(packedSummary: string): number {
+  return estimateLocalMessageTokens({
+    id: "packed-summary",
+    role: "user",
+    content: [{ type: "text", text: packedSummary }],
+    timestamp: 0,
+  });
+}
+
+/**
+ * Pack the summary and report the context weight the write-back will have.
+ *
+ * §5.14's "tokens after" is the pressure baseline for the next send, so it has to
+ * describe the message that is actually persisted and re-estimated — the packed
+ * `system_alert` text — rather than the bare summary that is only an input to it.
+ * The packed body *contains* these stats, so the measurement is taken in
+ * fixed-point passes: a pass can change a digit and therefore the length, and the
+ * loop stops as soon as it stops moving.
+ */
+function packWithMeasuredTokens(input: {
+  summary: string;
+  retainedTokens: number;
+  stats: LocalCompactionWriteStats;
+}): { stats: LocalCompactionWriteStats; packedSummary: string } {
+  let contextTokensAfter = input.retainedTokens;
+  let packedSummary = "";
+  for (let pass = 0; pass < 4; pass += 1) {
+    const stats = { ...input.stats, context_tokens_after: contextTokensAfter };
+    packedSummary = packageLocalSummaryMessage(input.summary, stats);
+    const measured =
+      input.retainedTokens + estimatePackedSummaryTokens(packedSummary);
+    if (measured === contextTokensAfter) break;
+    contextTokensAfter = measured;
+  }
+  const stats = { ...input.stats, context_tokens_after: contextTokensAfter };
+  return {
+    stats,
+    packedSummary: packageLocalSummaryMessage(input.summary, stats),
+  };
+}
+
 /**
  * Run the summarizer and shape its answer into the frozen preview.
  *
@@ -188,7 +232,9 @@ export async function prepareCompaction(
     suggestionIndex:
       suggestionBlockIndex(messages, existingBlocks, retentionCapTokens) ?? 1,
     usage: emptyUsage(),
-    degraded: "whole-section",
+    // Nothing in the context, nothing to degrade: no call was made and the
+    // apply path refuses with `empty_context` before writing anything.
+    degraded: null,
   };
   // Nothing to summarize: do not spend a provider call on an empty context.
   if (messages.length === 0) return degradedPreview;
@@ -203,8 +249,14 @@ export async function prepareCompaction(
   const usable =
     result.degraded === null &&
     validateCompactionTopics(messages, result.topics).length === 0;
+  // §5.5.1: a summarizer topic weighs the same as a marker someone wrote, so the
+  // picker's table is the union of both. Losing a user's own boundary because the
+  // summarizer drew its own lines is exactly the defect this merge removes.
   const blocks = usable
-    ? topicBlocksFromDrafts(messages, result.topics)
+    ? mergeCompactionBlocks(messages, [
+        existingBlocks,
+        topicBlocksFromDrafts(messages, result.topics),
+      ])
     : existingBlocks;
   return {
     conversationId,
@@ -218,7 +270,7 @@ export async function prepareCompaction(
     suggestionIndex:
       suggestionBlockIndex(messages, blocks, retentionCapTokens) ?? 1,
     usage: result.usage,
-    degraded: usable ? null : "whole-section",
+    degraded: usable ? null : (result.degraded ?? "format"),
   };
 }
 
@@ -337,7 +389,12 @@ export async function applyCompaction(
       .map((marker) => marker.anchorMessageId)
       .filter((anchor): anchor is string => anchor !== null),
   );
-  const foldedTopicIds: string[] = [];
+  // The markers are handed to the rewrite rather than written here: the rewrite
+  // is the single write path for a fold, so the topic rows and the `compaction`
+  // row that supersedes them can only land in one order (§5.8.3). Writing them
+  // first also means the audit ids exist before `stats` is serialised — which is
+  // why `folded_topic_ids` is filled in by the rewrite, not by this loop.
+  const topicMarkers: LocalTopicMarkerDraft[] = [];
   preview.topics.forEach((topic, position) => {
     if (!foldedTitlesByStart.has(topic.startMessageId)) return;
     // A summarizer marker records the exact boundary between two topics, which
@@ -345,19 +402,16 @@ export async function applyCompaction(
     const anchorMessageId =
       preview.topics[position + 1]?.startMessageId ?? keep[0]?.id ?? null;
     // §5.5.4: never double-mark one anchor.
-    if (anchorMessageId !== null && existingAnchors.has(anchorMessageId)) {
+    if (anchorMessageId === null || existingAnchors.has(anchorMessageId)) {
       return;
     }
-    const written = ports.appendTopicMarker({
-      conversationId,
-      agentId,
+    existingAnchors.add(anchorMessageId);
+    topicMarkers.push({
       title: topic.title,
       ...(topic.section.trim().length > 0 ? { summary: topic.section } : {}),
       createdBy: "summarizer",
       anchorMessageId,
     });
-    foldedTopicIds.push(written.entryId);
-    if (anchorMessageId !== null) existingAnchors.add(anchorMessageId);
   });
 
   const summary = renderCompactionSummary({
@@ -365,35 +419,41 @@ export async function applyCompaction(
     folded,
   });
   const retainedTokens = estimateLocalMessagesTokens(keep);
-  const stats: LocalCompactionWriteStats = {
-    context_tokens_before: estimateLocalMessagesTokens(messages),
-    context_tokens_after: Math.ceil(summary.length / 4) + retainedTokens,
-    messages_count_before: messages.length,
-    messages_count_after: 1 + keep.length,
-    trim: {
-      source: plan.source,
-      topic_title: topicTitle,
-      summarized_titles: foldedTitles,
-      // Summarizer boundaries are exact; nothing was rewound for this cut.
-      rewind_turns: 0,
-      requested_retention_tokens: estimateLocalMessagesTokens(
-        messages.slice(plan.requestedStartIndex),
-      ),
-      retention_tokens: retainedTokens,
-      retention_cap_tokens: Number.isFinite(retentionCapTokens)
-        ? retentionCapTokens
-        : null,
+  const measured = packWithMeasuredTokens({
+    summary,
+    retainedTokens,
+    stats: {
+      context_tokens_before: estimateLocalMessagesTokens(messages),
+      messages_count_before: messages.length,
+      messages_count_after: 1 + keep.length,
+      trim: {
+        source: plan.source,
+        topic_title: topicTitle,
+        summarized_titles: foldedTitles,
+        // Summarizer boundaries are exact; nothing was rewound for this cut.
+        rewind_turns: 0,
+        requested_retention_tokens: estimateLocalMessagesTokens(
+          messages.slice(plan.requestedStartIndex),
+        ),
+        retention_tokens: retainedTokens,
+        retention_cap_tokens: Number.isFinite(retentionCapTokens)
+          ? retentionCapTokens
+          : null,
+      },
     },
-    folded_topic_ids: foldedTopicIds,
-  };
+  });
   const written = ports.rewrite({
     conversationId,
     agentId,
     summary,
-    packedSummary: packageLocalSummaryMessage(summary, stats),
-    stats,
+    packedSummary: measured.packedSummary,
+    stats: measured.stats,
     remainingMessages: keep,
+    topicMarkers,
   });
+  // The rewrite fills in `folded_topic_ids` (it is the only writer that knows
+  // them), so its copy is what the receipt reports.
+  const stats = written.stats ?? measured.stats;
   // The rewrite is the one atomic step, and it is already done: everything below
   // is bookkeeping that must not turn a completed fold into a reported failure.
   // Failing here used to reach the user as `Failed: …` while the context *had*
@@ -420,7 +480,7 @@ export async function applyCompaction(
     executed: true,
     source: plan.source,
     topicTitle,
-    foldedTopicIds,
+    foldedTopicIds: written.topicEntryIds,
     foldedTitles,
     numMessagesBefore: written.numMessagesBefore,
     numMessagesAfter: written.numMessagesAfter,

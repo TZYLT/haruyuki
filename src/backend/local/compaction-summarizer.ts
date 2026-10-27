@@ -30,13 +30,18 @@
  * prose in one placeholder block so wording can change without the structure.
  *
  * Failure taxonomy (requirement §5.9.3, route §6.2-4): refusal / unavailable →
- * degrade to the retired one-step summary (`degraded: "whole-section"`, no
- * topics, narrative carries it; that path keeps the old prompt and Fable's model
+ * degrade to the retired one-step summary (`degraded: "refusal"`, no topics,
+ * narrative carries it; that path keeps the old prompt and Fable's model
  * substitution, this call does not); format → retry once, then the same
- * degradation; auth / network → throw (zero writes); overflow → middle-truncate
- * the message bodies once and retry, a second overflow degrades; cancelled
- * (`stopReason: "aborted"` or an abort during the request) →
- * `CompactionCancelledError`, never retried or degraded.
+ * degradation (`degraded: "format"`); auth / network → throw (zero writes);
+ * overflow → middle-truncate the message bodies once and retry, a second
+ * overflow degrades; cancelled (`stopReason: "aborted"` or an abort during the
+ * request) → `CompactionCancelledError`, never retried or degraded.
+ *
+ * Two outcomes of a *failed* run survive the throw, because a caller cannot
+ * recompute them: the tokens already spent ({@link withCompactUsage}: failed
+ * spend is still spend, §5.14) and the reason. Neither may be reconstructed by
+ * the caller from the message text.
  */
 import type { AssistantMessage, Context, Message } from "@earendil-works/pi-ai";
 
@@ -54,10 +59,12 @@ import {
   summarizeLocalMessagesWholeSection,
 } from "./compaction";
 import type {
+  CompactionDegraded,
   CompactionOverview,
   CompactionTopicDraft,
   CompactUsage,
 } from "./compaction-preview";
+import { withCompactUsage } from "./compaction-usage-error";
 import { resolveLocalCompactionSettings } from "./local-compaction-settings";
 import type {
   LocalImageContent,
@@ -156,7 +163,7 @@ export interface SummarizeInput {
 export interface SummarizeResult {
   topics: CompactionTopicDraft[];
   overview: CompactionOverview;
-  degraded: "whole-section" | null;
+  degraded: CompactionDegraded | null;
   usage: CompactUsage;
 }
 
@@ -226,8 +233,8 @@ type StructuredAttempt =
  *
  * Throws (never writes) on a missing frozen snapshot, an aborted call, auth or
  * network failures, and any transport error the provider layer did not classify.
- * Returns `degraded: "whole-section"` when the structured product is unusable
- * and the retired one-step fallback answered instead.
+ * Returns a non-null `degraded` when the structured product could not be used
+ * and the retired one-step fallback answered instead, naming the cause.
  */
 export async function summarizeConversation(
   input: SummarizeInput,
@@ -256,72 +263,84 @@ export async function summarizeConversation(
       messages,
     });
 
-  const first = await run([
-    ...assembled.projected,
-    userMessage(buildInstruction(assembled)),
-  ]);
-  usage = addUsage(usage, first.usage);
+  const degrade = (degraded: CompactionDegraded): Promise<SummarizeResult> =>
+    degradeToWholeSection({ input, assembled, usage, degraded });
 
-  if (first.kind === "providerError") {
-    if (isAuthOrNetworkFailure(first.error.message)) {
-      // Network/auth: the compaction aborts with zero writes (§5.9.3③).
-      throw first.error;
-    }
-    // Refusal / model unavailable: the old one-step summary takes over (§5.9.3①).
-    return finish(await degradeToWholeSection({ input, assembled, usage }));
-  }
-
-  let retryMessages: Message[] | undefined;
-  let rejection: string | undefined;
-  if (first.kind === "overflow") {
-    retryMessages = [
-      ...toPiMessages(truncateContextMessages(storedMessagesOf(assembled))),
-      userMessage(buildInstruction(assembled, { truncated: true })),
-    ];
-  } else if (first.kind === "format") {
-    rejection = first.reason;
-  } else {
-    const parsed = parseSummarizerReply(first.text, assembled.entries);
-    if (parsed.ok) {
-      return finish({
-        topics: parsed.topics,
-        overview: parsed.overview,
-        degraded: null,
-        usage,
-      });
-    }
-    rejection = parsed.reason;
-  }
-
-  const second = await run(
-    retryMessages ?? [
+  try {
+    const first = await run([
       ...assembled.projected,
-      userMessage(
-        buildInstruction(assembled, {
-          ...(rejection ? { rejection } : {}),
-        }),
-      ),
-    ],
-  );
-  usage = addUsage(usage, second.usage);
+      userMessage(buildInstruction(assembled)),
+    ]);
+    usage = addUsage(usage, first.usage);
 
-  if (second.kind === "providerError") {
-    if (isAuthOrNetworkFailure(second.error.message)) throw second.error;
-    return finish(await degradeToWholeSection({ input, assembled, usage }));
-  }
-  if (second.kind === "text") {
-    const parsed = parseSummarizerReply(second.text, assembled.entries);
-    if (parsed.ok) {
-      return finish({
-        topics: parsed.topics,
-        overview: parsed.overview,
-        degraded: null,
-        usage,
-      });
+    if (first.kind === "providerError") {
+      if (isAuthOrNetworkFailure(first.error.message)) {
+        // Network/auth: the compaction aborts with zero writes (§5.9.3③).
+        throw first.error;
+      }
+      // Refusal / model unavailable: the old one-step summary takes over
+      // (§5.9.3①). The structured attempt never produced a judgement about its
+      // own output, which is what separates this from the format degradation.
+      return finish(await degrade("refusal"));
     }
+
+    let retryMessages: Message[] | undefined;
+    let rejection: string | undefined;
+    if (first.kind === "overflow") {
+      retryMessages = [
+        ...toPiMessages(truncateContextMessages(storedMessagesOf(assembled))),
+        userMessage(buildInstruction(assembled, { truncated: true })),
+      ];
+    } else if (first.kind === "format") {
+      rejection = first.reason;
+    } else {
+      const parsed = parseSummarizerReply(first.text, assembled.entries);
+      if (parsed.ok) {
+        return finish({
+          topics: parsed.topics,
+          overview: parsed.overview,
+          degraded: null,
+          usage,
+        });
+      }
+      rejection = parsed.reason;
+    }
+
+    const second = await run(
+      retryMessages ?? [
+        ...assembled.projected,
+        userMessage(
+          buildInstruction(assembled, {
+            ...(rejection ? { rejection } : {}),
+          }),
+        ),
+      ],
+    );
+    usage = addUsage(usage, second.usage);
+
+    if (second.kind === "providerError") {
+      if (isAuthOrNetworkFailure(second.error.message)) throw second.error;
+      return finish(await degrade("refusal"));
+    }
+    if (second.kind === "text") {
+      const parsed = parseSummarizerReply(second.text, assembled.entries);
+      if (parsed.ok) {
+        return finish({
+          topics: parsed.topics,
+          overview: parsed.overview,
+          degraded: null,
+          usage,
+        });
+      }
+    }
+    // A second unusable reply (format, overflow, or empty) ends the ladder
+    // (§5.9.2). The attempts were made and judged; that is a format outcome.
+    return finish(await degrade("format"));
+  } catch (error) {
+    // Failed spend is still spend (§5.14): the ladder's running total rides up
+    // on the error, because the preview that would carry it is never produced.
+    throw withCompactUsage(error, { ...usage, wallMs: Date.now() - startedAt });
   }
-  // A second unusable reply (format, overflow, or empty) ends the ladder (§5.9.2).
-  return finish(await degradeToWholeSection({ input, assembled, usage }));
 }
 
 // --- context assembly ------------------------------------------------------
@@ -749,6 +768,7 @@ async function degradeToWholeSection(input: {
   input: SummarizeInput;
   assembled: AssembledContext;
   usage: CompactUsage;
+  degraded: CompactionDegraded;
 }): Promise<SummarizeResult> {
   throwIfCancelled(input.input.signal);
   let fallback: LocalCompactionSummaryResult;
@@ -778,7 +798,7 @@ async function degradeToWholeSection(input: {
       restricted: { open: "", errors: "", relationship: "", memoryIndex: "" },
       narrative,
     },
-    degraded: "whole-section",
+    degraded: input.degraded,
     usage: addUsage(input.usage, fallback.usage),
   };
 }

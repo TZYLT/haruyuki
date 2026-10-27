@@ -3,8 +3,8 @@
  *
  * The claims under test are the ones the frozen seam is for: prepare is a pure
  * read plus one injected summarizer call, apply is a no-model write whose order
- * is markers → rewrite → prefix → index, and a pick that cannot be honored
- * writes nothing at all.
+ * is rewrite → prefix → index (the fold and its markers travel together), and a
+ * pick that cannot be honored writes nothing at all.
  */
 import { describe, expect, test } from "bun:test";
 import type {
@@ -20,10 +20,7 @@ import {
   type PrepareCompactionPorts,
   prepareCompaction,
 } from "@/backend/local/compaction-run";
-import type {
-  LocalConversationRewriteInput,
-  LocalTopicMarkerAppendInput,
-} from "@/backend/local/local-context-rewrite";
+import type { LocalConversationRewriteInput } from "@/backend/local/local-context-rewrite";
 import type { LocalMessage } from "@/backend/local/local-message";
 import type { LocalAgentRecord } from "@/backend/local/local-types";
 import type { LocalTopicMarker } from "@/backend/local/topic-compaction";
@@ -129,7 +126,6 @@ function preview(
 interface ApplyFixture {
   ports: ApplyCompactionPorts;
   calls: string[];
-  written: LocalTopicMarkerAppendInput[];
   rewrites: LocalConversationRewriteInput[];
   markers: LocalTopicMarker[];
 }
@@ -140,12 +136,10 @@ function applyFixture(input: {
   percentage?: number;
 }): ApplyFixture {
   const calls: string[] = [];
-  const written: LocalTopicMarkerAppendInput[] = [];
   const rewrites: LocalConversationRewriteInput[] = [];
   const markers = [...(input.markers ?? [])];
   return {
     calls,
-    written,
     rewrites,
     markers,
     ports: {
@@ -154,31 +148,32 @@ function applyFixture(input: {
       compactionSettings: () => ({
         slidingWindowPercentage: input.percentage ?? 0.3,
       }),
-      appendTopicMarker: (marker) => {
-        calls.push("marker");
-        written.push(marker);
-        const projected: LocalTopicMarker = {
-          id: `entry-${written.length}`,
-          title: marker.title,
-          createdBy: marker.createdBy,
-          anchorMessageId: marker.anchorMessageId ?? null,
-          createdAt: "2026-01-01T00:00:00.000Z",
-          ...(marker.summary === undefined ? {} : { summary: marker.summary }),
-        };
-        markers.push(projected);
-        return {
-          marker: projected,
-          entryId: projected.id,
-          turnsSincePrevious: 1,
-          contextMessageCount: input.messages.length,
-        };
-      },
       rewrite: (rewrite) => {
         calls.push("rewrite");
         rewrites.push(rewrite);
+        const drafts = rewrite.topicMarkers ?? [];
+        const topicEntryIds = drafts.map(
+          (_marker, position) => `entry-${position + 1}`,
+        );
+        drafts.forEach((marker, position) => {
+          markers.push({
+            id: `entry-${position + 1}`,
+            title: marker.title,
+            createdBy: marker.createdBy,
+            anchorMessageId: marker.anchorMessageId,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            ...(marker.summary === undefined
+              ? {}
+              : { summary: marker.summary }),
+          });
+        });
         return {
           numMessagesBefore: input.messages.length,
           numMessagesAfter: (rewrite.remainingMessages?.length ?? 0) + 1,
+          topicEntryIds,
+          ...(rewrite.stats === undefined
+            ? {}
+            : { stats: { ...rewrite.stats, folded_topic_ids: topicEntryIds } }),
           summaryMessage: {
             id: "summary-1",
             role: "user",
@@ -205,6 +200,13 @@ function packedSummaryOf(rewrite: LocalConversationRewriteInput): {
   message: string;
 } {
   return JSON.parse(rewrite.packedSummary) as { type: string; message: string };
+}
+
+/** Every marker any apply attempt handed to the rewrite (there may be none). */
+function topicMarkersOf(
+  fixture: ApplyFixture,
+): LocalConversationRewriteInput["topicMarkers"] {
+  return fixture.rewrites.flatMap((rewrite) => rewrite.topicMarkers ?? []);
 }
 
 describe("prepareCompaction", () => {
@@ -326,7 +328,7 @@ describe("prepareCompaction", () => {
       agentId: "agent-1",
     });
 
-    expect(prepared.degraded).toBe("whole-section");
+    expect(prepared.degraded).toBe("format");
     expect(prepared.topics).toEqual([]);
     // A marker rewound onto the start of the context produces no block of its
     // own: its title is absorbed into the single trailing block.
@@ -335,7 +337,7 @@ describe("prepareCompaction", () => {
     expect(prepared.numberedBlocks).toBe(1);
   });
 
-  test("honours the summarizer's own degradation", async () => {
+  test("honours the summarizer's own degradation and keeps its cause", async () => {
     const fixture = prepareFixture({
       messages: conversation(),
       result: {
@@ -349,7 +351,7 @@ describe("prepareCompaction", () => {
           },
           narrative: "one whole-section summary",
         },
-        degraded: "whole-section",
+        degraded: "refusal",
         usage: {
           promptTokens: 1,
           cachedInputTokens: 0,
@@ -362,7 +364,7 @@ describe("prepareCompaction", () => {
       conversationId: "conv-1",
       agentId: "agent-1",
     });
-    expect(prepared.degraded).toBe("whole-section");
+    expect(prepared.degraded).toBe("refusal");
     expect(prepared.topics).toEqual([]);
   });
 
@@ -378,7 +380,9 @@ describe("prepareCompaction", () => {
       topics: [],
       blocks: [],
       numberedBlocks: 0,
-      degraded: "whole-section",
+      // No call was made, so nothing degraded: the apply path refuses with
+      // `empty_context` before writing anything.
+      degraded: null,
     });
   });
 });
@@ -405,24 +409,17 @@ describe("applyCompaction", () => {
 
     // §5.5.2/§5.5.4: one marker, anchored on the exact boundary (the next
     // topic's first message), carrying the section, created by the summarizer.
-    expect(fixture.written).toEqual([
+    // It travels *with* the rewrite instead of as an earlier separate write, so
+    // the fold and its boundary map can only be written in one order (T-5).
+    expect(fixture.rewrites[0]?.topicMarkers).toEqual([
       {
-        conversationId: "conv-1",
-        agentId: "agent-1",
         title: "one",
         summary: "section: one",
         createdBy: "summarizer",
         anchorMessageId: "u3",
       },
     ]);
-    // Markers are inert metadata, so they go in before the atomic rewrite.
-    expect(fixture.calls).toEqual([
-      "marker",
-      "rewrite",
-      "nudge",
-      "prefix",
-      "index",
-    ]);
+    expect(fixture.calls).toEqual(["rewrite", "nudge", "prefix", "index"]);
 
     const rewrite = fixture.rewrites[0];
     expect(rewrite?.remainingMessages?.map((message) => message.id)).toEqual([
@@ -455,7 +452,7 @@ describe("applyCompaction", () => {
     expect(result.noopReason).toBe("unknown_block");
     expect(result.stats).toEqual({});
     expect(fixture.calls).toEqual([]);
-    expect(fixture.written).toEqual([]);
+    expect(topicMarkersOf(fixture)).toEqual([]);
     expect(fixture.rewrites).toEqual([]);
   });
 
@@ -476,7 +473,7 @@ describe("applyCompaction", () => {
     expect(result.executed).toBe(false);
     expect(result.noopReason).toBe("stale_preview");
     expect(fixture.calls).toEqual([]);
-    expect(fixture.written).toEqual([]);
+    expect(topicMarkersOf(fixture)).toEqual([]);
     expect(fixture.rewrites).toEqual([]);
   });
 
@@ -528,7 +525,7 @@ describe("applyCompaction", () => {
     });
 
     expect(result.executed).toBe(true);
-    expect(fixture.written).toEqual([]);
+    expect(topicMarkersOf(fixture)).toEqual([]);
     expect(result.foldedTopicIds).toEqual([]);
     // The section still rides on the write-back; only the duplicate marker is
     // suppressed.
@@ -545,7 +542,7 @@ describe("applyCompaction", () => {
     const result: CompactionApplyResult = await applyCompaction(fixture.ports, {
       preview: preview({
         topics: [],
-        degraded: "whole-section",
+        degraded: "format",
         overview: {
           restricted: {
             open: "",
@@ -561,13 +558,34 @@ describe("applyCompaction", () => {
 
     expect(result.executed).toBe(true);
     expect(result.foldedTopicIds).toEqual([]);
-    expect(fixture.written).toEqual([]);
+    expect(topicMarkersOf(fixture)).toEqual([]);
     const packed = packedSummaryOf(
       fixture.rewrites[0] as LocalConversationRewriteInput,
     );
     expect(packed.message).toContain("one whole-section summary");
     expect(packed.message).not.toContain("## 未决与后续");
     expect(packed.message).not.toContain("折叠话题");
+  });
+
+  test("reports the packed summary's weight, not the bare summary's", async () => {
+    const messages = conversation();
+    const fixture = applyFixture({ messages });
+    const result = await applyCompaction(fixture.ports, {
+      preview: preview(),
+      pick: { kind: "message", messageId: "u3" },
+    });
+
+    const rewrite = fixture.rewrites[0] as LocalConversationRewriteInput;
+    // §5.14: "tokens after" is the *pressure baseline* for the next send, and
+    // what the next turn re-estimates is the packed `system_alert` message.
+    // Measuring the bare summary (the old behaviour) under-reported by the size
+    // of the envelope the message actually carries.
+    expect(result.stats.context_tokens_after).toBe(
+      result.retainedTokens + Math.ceil(rewrite.packedSummary.length / 4),
+    );
+    expect(rewrite.packedSummary.length).toBeGreaterThan(
+      packedSummaryOf(rewrite).message.length,
+    );
   });
 
   test("does not call the model while applying", async () => {
@@ -580,7 +598,6 @@ describe("applyCompaction", () => {
     });
     expect(result.executed).toBe(true);
     expect(Object.keys(fixture.ports).sort()).toEqual([
-      "appendTopicMarker",
       "clearTopicNudgeStreak",
       "compactionSettings",
       "listMessages",

@@ -55,6 +55,16 @@ export interface CompactionTopicReport {
   numbered_blocks: number;
   /** True when the summarizer's output was unusable and one section was kept. */
   degraded: boolean;
+  /**
+   * Why, when `degraded` is true: `"refusal"` for a model that refused or was
+   * unavailable (§5.9.3①), `"format"` for a structured answer that was unusable
+   * twice (§5.9.3②). `null` on a clean run.
+   *
+   * Additive: `degraded` stays the boolean an older client reads, and this names
+   * the cause so a client can say which of the two happened instead of reporting
+   * both as "one whole-section summary".
+   */
+  degraded_kind?: "refusal" | "format" | null;
   /** Numbers only; the calling layer writes the ledger row (§5.14). */
   usage: {
     prompt_tokens: number;

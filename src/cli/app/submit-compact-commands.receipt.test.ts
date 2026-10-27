@@ -91,17 +91,17 @@ describe("formatCompactionReceipt", () => {
     expect(receipt).toContain("evicts the provider cache");
   });
 
-  test("a degraded run says it produced no topics", () => {
+  test("a degraded run says it produced no topics and why", () => {
     const preview = previewFor({
       conversationId: "conv",
       agentId: "agent",
       blocks: [],
       suggestionIndex: 1,
-      degraded: "whole-section",
+      degraded: "format",
     });
 
     expect(formatCompactionReceipt(preview, APPLIED)).toContain(
-      "this run produced no topics (one whole-section summary)",
+      "the summarizer's structured answer was unusable twice",
     );
   });
 

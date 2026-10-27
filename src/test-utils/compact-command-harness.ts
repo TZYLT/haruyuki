@@ -281,7 +281,7 @@ export function previewFor(input: {
   agentId: string;
   blocks: readonly TopicBlock[];
   suggestionIndex: number;
-  degraded?: "whole-section" | null;
+  degraded?: "refusal" | "format" | null;
   model?: string;
 }): CompactionPreview {
   return {
@@ -320,7 +320,7 @@ export interface RuntimeCalls {
 export function fixtureRuntime(options: {
   blocks: readonly TopicBlock[];
   suggestionIndex: number;
-  degraded?: "whole-section" | null;
+  degraded?: "refusal" | "format" | null;
   prepareError?: Error;
   applyError?: Error;
   applyResult?: Partial<CompactionApplyResult>;

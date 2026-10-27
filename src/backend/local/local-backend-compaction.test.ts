@@ -198,7 +198,7 @@ function previewFor(
   split: number,
   overrides: {
     topics?: CompactionTopicDraft[];
-    degraded?: "whole-section" | null;
+    degraded?: "refusal" | "format" | null;
     overview?: CompactionOverview;
   } = {},
 ) {
@@ -489,7 +489,7 @@ describe("LocalBackend.applyCompaction", () => {
     const f = await fixture(storageDir, 6);
     const preview = previewFor(f, 4, {
       topics: [],
-      degraded: "whole-section",
+      degraded: "format",
       overview: {
         restricted: { open: "", errors: "", relationship: "", memoryIndex: "" },
         narrative: "one whole-section summary",

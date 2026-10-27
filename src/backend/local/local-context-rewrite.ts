@@ -34,6 +34,24 @@ export interface LocalCompactionStoreResult {
   numMessagesBefore: number;
   numMessagesAfter: number;
   summaryMessage: LocalMessage;
+  /**
+   * Append-only ids of the topic markers written in the same call, in order.
+   *
+   * Returned rather than pre-computed by the caller because the rewrite allocates
+   * them: the ids are needed inside `stats` (which is serialised into the
+   * `compaction` row) *and* as the `compaction` row's own predecessor chain, and
+   * only the module that writes the transcript can promise both are the same
+   * entries.
+   */
+  topicEntryIds: string[];
+  /**
+   * The stats the `compaction` row actually recorded.
+   *
+   * Returned for the same reason as the ids: this call fills in
+   * `folded_topic_ids`, so a caller holding only its own input stats would report
+   * a different record to the user than the transcript holds.
+   */
+  stats?: LocalCompactionWriteStats;
 }
 
 /**
@@ -58,6 +76,21 @@ export interface LocalCompactionWriteStats extends LocalCompactionStats {
   folded_topic_ids?: string[];
 }
 
+/**
+ * One topic marker to write as part of a fold.
+ *
+ * Same fields as {@link LocalTopicMarkerAppendInput} minus the conversation (the
+ * rewrite already owns it) and plus nothing: the point of the type is that these
+ * travel *with* the rewrite, so the boundary map and the fold cannot be written
+ * in two orders.
+ */
+export interface LocalTopicMarkerDraft {
+  title: string;
+  summary?: string;
+  createdBy: LocalTopicCreatedBy;
+  anchorMessageId: string | null;
+}
+
 export interface LocalConversationRewriteInput {
   conversationId: string;
   agentId: string;
@@ -68,6 +101,17 @@ export interface LocalConversationRewriteInput {
   stats?: LocalCompactionWriteStats;
   /** Messages kept after the summary, in order. */
   remainingMessages?: LocalMessage[];
+  /**
+   * Topic markers for the topics this fold covers, written in the same call.
+   *
+   * Ordering is the whole reason they are here (§5.8.3, audit T-5): written
+   * after the fold, a crash leaves a summary with no topic records; written by a
+   * separate earlier call, a failed rewrite leaves a boundary map for a fold that
+   * never happened. One call, markers first, `compaction` row second: a crash
+   * between them can only leave markers whose boundaries are still in the
+   * context, which is a truthful state rather than a lost one.
+   */
+  topicMarkers?: readonly LocalTopicMarkerDraft[];
 }
 
 export interface LocalTopicMarkerAppendInput {
@@ -303,47 +347,80 @@ export class LocalContextRewrites {
       input.agentId,
     );
     const existing = this.readTopicMarkers(conversation.id, input.agentId);
-    const anchorMessageId =
-      input.anchorMessageId === undefined
-        ? (messages.at(-1)?.id ?? null)
-        : input.anchorMessageId;
-    const anchorIndex =
-      anchorMessageId === null
-        ? -1
-        : messages.findIndex((message) => message.id === anchorMessageId);
-    const turnsSincePrevious =
-      anchorIndex < 0 || input.anchorMessageId === undefined
-        ? userTurnsSinceLastTopicMarker(messages, existing)
-        : userTurnsSinceLastTopicMarker(
-            messages.slice(0, anchorIndex + 1),
-            existing,
-          );
-    const timestamp = this.ports.now();
-    const entry: LocalTranscriptTopicEntry = {
-      type: "topic",
-      id: this.ports.nextSessionEntryId(key),
-      parentId: this.ports.lastSessionEntryId(key),
-      timestamp,
+    const entry = this.buildTopicEntry({
+      key,
+      messages,
+      existing,
       title: input.title,
       ...(input.summary === undefined ? {} : { summary: input.summary }),
       createdBy: input.createdBy,
-      anchorMessageId,
-      turnsSincePrevious,
-    };
+      anchorMessageId:
+        input.anchorMessageId === undefined
+          ? (messages.at(-1)?.id ?? null)
+          : input.anchorMessageId,
+      explicitAnchor: input.anchorMessageId !== undefined,
+    });
     this.appendTopicEntry(conversation, key, messagesPath, entry);
     const marker: LocalTopicMarker = {
       id: entry.id,
       title: entry.title,
       createdBy: entry.createdBy,
-      anchorMessageId,
-      createdAt: timestamp,
+      anchorMessageId: entry.anchorMessageId,
+      createdAt: entry.timestamp,
       ...(entry.summary === undefined ? {} : { summary: entry.summary }),
     };
     return {
       marker,
       entryId: entry.id,
-      turnsSincePrevious,
+      turnsSincePrevious: entry.turnsSincePrevious,
       contextMessageCount: messages.length,
+    };
+  }
+
+  /**
+   * Build one `topic` transcript row without writing it.
+   *
+   * Shared by the standalone `/topic` mark and by a fold's markers so the two
+   * cannot disagree about how `turnsSincePrevious` is counted — the number a
+   * frequency gate reads, and one that would otherwise be copied.
+   *
+   * `explicitAnchor` distinguishes "the caller named the boundary" from "the
+   * anchor defaulted to the newest message": only the latter counts turns across
+   * the whole context instead of up to the boundary.
+   */
+  private buildTopicEntry(input: {
+    key: string;
+    messages: readonly LocalMessage[];
+    existing: readonly LocalTopicMarker[];
+    title: string;
+    summary?: string;
+    createdBy: LocalTopicCreatedBy;
+    anchorMessageId: string | null;
+    explicitAnchor: boolean;
+  }): LocalTranscriptTopicEntry {
+    const anchorIndex =
+      input.anchorMessageId === null
+        ? -1
+        : input.messages.findIndex(
+            (message) => message.id === input.anchorMessageId,
+          );
+    const turnsSincePrevious =
+      anchorIndex < 0 || !input.explicitAnchor
+        ? userTurnsSinceLastTopicMarker(input.messages, input.existing)
+        : userTurnsSinceLastTopicMarker(
+            input.messages.slice(0, anchorIndex + 1),
+            input.existing,
+          );
+    return {
+      type: "topic",
+      id: this.ports.nextSessionEntryId(input.key),
+      parentId: this.ports.lastSessionEntryId(input.key),
+      timestamp: this.ports.now(),
+      title: input.title,
+      ...(input.summary === undefined ? {} : { summary: input.summary }),
+      createdBy: input.createdBy,
+      anchorMessageId: input.anchorMessageId,
+      turnsSincePrevious,
     };
   }
 
@@ -434,6 +511,41 @@ export class LocalContextRewrites {
       conversation.id,
       input.agentId,
     );
+    const messagesPath = this.ports.conversationMessagesPath(key);
+    const drafts = input.topicMarkers ?? [];
+    if (drafts.length > 0 && !messagesPath) {
+      throw new Error(
+        "Topic markers need a local storage directory to append to a transcript.",
+      );
+    }
+    // Markers first, and by this method rather than by an earlier call: the ids
+    // are both `stats.folded_topic_ids` (serialised into the row below) and the
+    // chain the `compaction` row hangs off. Read the existing markers *before*
+    // appending anything, or the turns-since number would count this batch.
+    const existingMarkers = this.readTopicMarkers(
+      conversation.id,
+      input.agentId,
+    );
+    const topicEntryIds: string[] = [];
+    for (const draft of drafts) {
+      if (!messagesPath) break;
+      const entry = this.buildTopicEntry({
+        key,
+        messages: previousMessages,
+        existing: existingMarkers,
+        title: draft.title,
+        ...(draft.summary === undefined ? {} : { summary: draft.summary }),
+        createdBy: draft.createdBy,
+        anchorMessageId: draft.anchorMessageId,
+        explicitAnchor: true,
+      });
+      this.appendTopicEntry(conversation, key, messagesPath, entry);
+      topicEntryIds.push(entry.id);
+    }
+    const stats =
+      input.stats === undefined
+        ? undefined
+        : { ...input.stats, folded_topic_ids: topicEntryIds };
     const date = this.ports.currentLocalMessageDate();
     const summaryMessage: LocalMessage = {
       id: this.ports.nextLocalMessageId(),
@@ -445,7 +557,7 @@ export class LocalContextRewrites {
         conversation_id: conversation.id,
         compaction: {
           summary: input.summary,
-          ...(input.stats ? { stats: input.stats } : {}),
+          ...(stats ? { stats } : {}),
         },
       },
       content: [{ type: "text", text: input.packedSummary }],
@@ -469,7 +581,7 @@ export class LocalContextRewrites {
         summary: input.summary,
         firstKeptMessageId: input.remainingMessages?.[0]?.id,
         previousMessages,
-        ...(input.stats ? { stats: input.stats } : {}),
+        ...(stats ? { stats } : {}),
       },
     });
     this.ports.rebuildMessageIndex();
@@ -477,6 +589,8 @@ export class LocalContextRewrites {
       numMessagesBefore: previousMessages.length,
       numMessagesAfter: compactedMessages.length,
       summaryMessage: cloneLocalMessage(summaryMessage),
+      topicEntryIds,
+      ...(stats === undefined ? {} : { stats }),
     };
   }
 
