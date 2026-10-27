@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "keyword": {
+      "type": "string",
+      "description": "Match title and section text, case-insensitively. Separate words are combined with AND, so `deploy token` finds a topic whose title and section mention both."
+    },
+    "days": {
+      "type": "number",
+      "minimum": 1,
+      "description": "Only topics marked within the last N days (1 = the last 24 hours)."
+    },
+    "session": {
+      "type": "string",
+      "description": "Restrict to one conversation id. Hidden conversations are excluded unless one is named explicitly."
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200,
+      "description": "Keep only the newest N matching topics."
+    }
+  },
+  "additionalProperties": false,
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

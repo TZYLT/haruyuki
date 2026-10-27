@@ -126,7 +126,10 @@ describe("the declaration layer", () => {
   test("declares TopicMark on the local backend with the switch on", async () => {
     useLocalBackend();
     expect(shouldDeclareTopicMarkingTool()).toBe(true);
-    expect(await declaredToolNames()).toContain("TopicMark");
+    const declared = await declaredToolNames();
+    expect(declared).toContain("TopicMark");
+    // The reader rides with the writer: they are one feature.
+    expect(declared).toContain("TopicQuery");
   });
 
   test("stops declaring it when the switch is off", async () => {
@@ -135,6 +138,7 @@ describe("the declaration layer", () => {
 
     const declared = await declaredToolNames();
     expect(declared).not.toContain("TopicMark");
+    expect(declared).not.toContain("TopicQuery");
     // The rest of the preset is untouched.
     expect(declared).toContain("Read");
   });
@@ -142,7 +146,9 @@ describe("the declaration layer", () => {
   test("never declares it on a non-local backend", async () => {
     __testSetBackend(new FakeHeadlessBackend());
     expect(shouldDeclareTopicMarkingTool()).toBe(false);
-    expect(await declaredToolNames()).not.toContain("TopicMark");
+    const declared = await declaredToolNames();
+    expect(declared).not.toContain("TopicMark");
+    expect(declared).not.toContain("TopicQuery");
   });
 
   test("keeps the tool loaded so a stale declaration can still be refused", async () => {

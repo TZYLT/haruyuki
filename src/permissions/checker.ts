@@ -806,6 +806,8 @@ function getDefaultDecision(
     // Writes one metadata row to the local transcript and is rate limited by
     // the topic-marker frequency gate; it never changes the context.
     "TopicMark",
+    // Reads the derived topic index. No transcript writes, no context change.
+    "TopicQuery",
   ];
 
   if (autoAllowTools.includes(toolName)) {

@@ -23,6 +23,10 @@ export const WORKTREE_TOOL_NAMES = new Set<ToolName>([
  * `declaration-gates.ts` removes it again on the cloud backend and when the switch
  * is off. The `none` preset declares no built-in tools at all, which is why
  * `shouldAdvertiseTopicMarking` also consults the toolset.
+ *
+ * `TopicQuery` rides with it: a marker the model cannot look up is a write with no
+ * reader. It needs no setting gate of its own — reading the index is harmless — so
+ * it is listed wherever markers are.
  */
 export const TOOLSET_CATALOG: Readonly<Record<ToolsetName, ToolsetDefinition>> =
   {
@@ -55,6 +59,7 @@ export const TOOLSET_CATALOG: Readonly<Record<ToolsetName, ToolsetDefinition>> =
         "ViewImage",
         "UpdatePlan",
         "TopicMark",
+        "TopicQuery",
       ],
     },
     none: {
@@ -90,6 +95,7 @@ export const TOOLSET_CATALOG: Readonly<Record<ToolsetName, ToolsetDefinition>> =
         "TaskUpdate",
         "Write",
         "TopicMark",
+        "TopicQuery",
       ],
     },
     codex: {
@@ -114,6 +120,7 @@ export const TOOLSET_CATALOG: Readonly<Record<ToolsetName, ToolsetDefinition>> =
         "ApplyPatch",
         "UpdatePlan",
         "TopicMark",
+        "TopicQuery",
       ],
     },
   };
