@@ -155,6 +155,8 @@ describe("formatTopicBlockList", () => {
     );
 
     expect(output).toContain("absorbed markers: Beta, Gamma");
+    // The phrase needs explaining once, and only when a block has absorbed names.
+    expect(output).toContain("did not get a row of their own");
   });
 
   test("says when a block starts at a compaction summary", () => {

@@ -52,6 +52,20 @@ export const MARKER_POSITION_NOTE =
 /** The trailing block's label: a topic nobody has marked finished yet. */
 export const CURRENT_TOPIC_LABEL = "Current topic (not marked finished)";
 
+/**
+ * What "absorbed markers" means, printed only when a block has any.
+ *
+ * The phrase is the one place the block view explains that a marker without a row
+ * has not been deleted: its boundary landed on the same point as another marker's
+ * (or its anchor message was folded away), so one block has to carry both names.
+ */
+export const ABSORBED_MARKERS_NOTE = [
+  '"absorbed markers" are markers that did not get a row of their own: their',
+  "boundary fell on the same point as another marker's, or the message they were",
+  "anchored to was folded away by a compaction. They still name their topic — the",
+  "block they belong to already has a title, so the later names ride along with it.",
+].join("\n");
+
 /** What the user can do when a list has no markers at all. */
 export function topicMarkerHint(topicMarkingEnabled: boolean): string {
   if (!topicMarkingEnabled) {
@@ -176,6 +190,14 @@ export function formatTopicBlockList(
     "/compact <n> keeps block n and summarizes everything before it. Block 1 keeps the whole context, so there is nothing to trim there.",
   );
   lines.push("* = a block you can trim from.");
+  if (
+    rows.some(
+      (row) => (list.blocks[row.index - 1]?.absorbedTitles.length ?? 0) > 0,
+    )
+  ) {
+    lines.push("");
+    lines.push(ABSORBED_MARKERS_NOTE);
+  }
   return lines.join("\n");
 }
 
