@@ -15,6 +15,7 @@ import { LocalPiModelsRuntime } from "@/backend/dev/pi-models-runtime";
 import { resolvePiRequestHeaders } from "@/backend/dev/pi-request-headers";
 import { estimateLocalMessagesTokens } from "@/backend/local/local-context-estimate";
 import { isRecord } from "@/utils/type-guards";
+import type { CompactUsage } from "./compaction-preview";
 import type { LocalMessage } from "./local-message";
 import { resolveAvailableLocalModelForTurn } from "./local-model-config";
 import type { LocalAgentRecord } from "./local-types";
@@ -58,6 +59,17 @@ export function isLocalSlidingWindowCompactionPlanningError(
   return error instanceof LocalSlidingWindowCompactionPlanningError;
 }
 
+/**
+ * The former one-step compaction prompt.
+ *
+ * F-04 (requirement §5.1.1) retires the one-step flow as the normal path: the
+ * multi-step `/compact` runs the structured summarizer. This prompt survives
+ * only as the **degraded fallback** — when the structured summarizer cannot
+ * produce a usable reply (refusal/unavailable, or two rejected replies), the
+ * whole segment is summarized with this prompt and one plain section is written
+ * back (requirement §5.9.2–§5.9.3①, route §6.2-4). Nothing else should reach
+ * for it; `summarizeLocalMessagesWholeSection` is the fallback's entry point.
+ */
 export const LOCAL_SLIDING_WINDOW_COMPACTION_PROMPT = `The following messages are being evicted from the BEGINNING of your context window. Write a detailed summary that captures what happened in these messages to appear BEFORE the remaining recent messages in context, providing background for what comes after. Include the following sections:
 
 1.**High level goals**: What is the high level goal and ongoing task? Capture the user's explicit requests and intent in detail. If there is an existing summary in the transcript, make sure to take it into consideration to continue tracking the higher level goals and long-term progress.
@@ -393,11 +405,43 @@ function fableCompactionSummaryFallbackSettings(
   };
 }
 
+/**
+ * One one-step summary plus what it cost. The degraded fallback reports the
+ * usage so the compaction's ledger/receipt does not read as "0 tokens"
+ * (requirement §5.14).
+ */
+export interface LocalCompactionSummaryResult {
+  text: string;
+  usage: CompactUsage;
+}
+
+function emptyCompactUsage(): CompactUsage {
+  return {
+    promptTokens: 0,
+    cachedInputTokens: 0,
+    completionTokens: 0,
+    wallMs: 0,
+  };
+}
+
+function compactUsageOf(
+  message: AssistantMessage,
+  wallMs: number,
+): CompactUsage {
+  return {
+    promptTokens: message.usage.input,
+    cachedInputTokens: message.usage.cacheRead,
+    completionTokens: message.usage.output,
+    wallMs,
+  };
+}
+
 async function runGenerateText(
   input: LocalCompactionSummaryInput,
   transcript: string,
   defaultPrompt: string,
-): Promise<{ text: string }> {
+): Promise<LocalCompactionSummaryResult> {
+  const startedAt = Date.now();
   const systemPrompt = input.prompt ?? defaultPrompt;
   const modelsRuntime =
     input.modelsRuntime ??
@@ -488,18 +532,26 @@ async function runGenerateText(
   if (result.stopReason === "error" || result.stopReason === "aborted") {
     throw new Error(result.errorMessage ?? "Local compaction failed");
   }
-  return { text: assistantMessageText(result) };
+  return {
+    text: assistantMessageText(result),
+    usage: compactUsageOf(result, Date.now() - startedAt),
+  };
 }
 
 async function summarizeLocalMessagesWithPrompt(
   input: LocalCompactionSummaryInput,
   defaultPrompt: string,
-): Promise<string> {
-  if (input.messages.length === 0) return "No prior conversation messages.";
+): Promise<LocalCompactionSummaryResult> {
+  if (input.messages.length === 0) {
+    return {
+      text: "No prior conversation messages.",
+      usage: emptyCompactUsage(),
+    };
+  }
   const primaryTranscript = formatLocalMessagesForSummary(input.messages, {
     truncationChars: LOCAL_SUMMARY_TOOL_RETURN_TRUNCATION_CHARS,
   });
-  let result: { text: string } | undefined;
+  let result: LocalCompactionSummaryResult | undefined;
   try {
     result = await runGenerateText(input, primaryTranscript, defaultPrompt);
   } catch (error) {
@@ -536,7 +588,7 @@ async function summarizeLocalMessagesWithPrompt(
   if (clipChars !== null && summary.length > clipChars) {
     summary = `${summary.slice(0, clipChars)}${SUMMARY_TRUNCATION_SUFFIX}`;
   }
-  return summary;
+  return { text: summary, usage: result.usage };
 }
 
 /**
@@ -655,8 +707,52 @@ export function planLocalSlidingWindowCompaction(
 export async function summarizeLocalMessagesSlidingWindow(
   input: LocalCompactionSummaryInput,
 ): Promise<string> {
-  return summarizeLocalMessagesWithPrompt(
+  const { text } = await summarizeLocalMessagesWithPrompt(
     input,
+    LOCAL_SLIDING_WINDOW_COMPACTION_PROMPT,
+  );
+  return text;
+}
+
+/** What the degraded whole-section fallback needs from the caller. */
+export interface LocalWholeSectionSummaryInput {
+  conversationId: string;
+  /** The agent the frozen prefix pinned (`applyFrozenAgentOverrides`). */
+  agent: LocalAgentRecord;
+  /** The messages to summarize — the whole in-context list, not a plan slice. */
+  messages: LocalMessage[];
+  /** Local-backend storage root (provider credentials live under it). */
+  storageDir: string;
+  signal?: AbortSignal;
+}
+
+/**
+ * F-04's degraded fallback: summarize the whole segment as one section.
+ *
+ * This is the retired one-step summarizer, demoted to a fallback by
+ * requirement §5.9.2–§5.9.3① (route §6.2-4). It deliberately keeps the old
+ * behavior it was allowed to keep: the old prompt (`LOCAL_SLIDING_WINDOW_COMPACTION_PROMPT`)
+ * and, on model refusal, the Fable substitution inside `runGenerateText`
+ * (route C-9 — allowed here, never on the primary structured call). It also
+ * keeps the old overflow ladder, so an oversized context still yields a
+ * summary instead of failing the compaction.
+ *
+ * Returns the summary **and** its usage: the degraded compaction's receipt and
+ * ledger must show what the fallback call actually cost (requirement §5.14).
+ * Callers: `compaction-summarizer.ts` only. A failure here propagates and
+ * aborts the compaction with zero writes.
+ */
+export async function summarizeLocalMessagesWholeSection(
+  input: LocalWholeSectionSummaryInput,
+): Promise<LocalCompactionSummaryResult> {
+  return summarizeLocalMessagesWithPrompt(
+    {
+      conversationId: input.conversationId,
+      agent: input.agent,
+      messages: input.messages,
+      localProviderAuthStorageDir: input.storageDir,
+      ...(input.signal ? { abortSignal: input.signal } : {}),
+    },
     LOCAL_SLIDING_WINDOW_COMPACTION_PROMPT,
   );
 }
