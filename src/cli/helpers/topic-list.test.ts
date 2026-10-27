@@ -157,6 +157,34 @@ describe("formatTopicBlockList", () => {
     expect(output).toContain("absorbed markers: Beta, Gamma");
   });
 
+  test("says when a block starts at a compaction summary", () => {
+    // After a `/compact` the folded region is one message, and the marker that
+    // ends the block was written before the fold — so without this line the row
+    // looks like an ordinary topic that happens to have no messages left.
+    const output = formatTopicBlockList(
+      list({
+        blocks: [
+          block({ index: 1, title: "Alpha", compaction: true }),
+          block({ index: 2 }),
+        ],
+        markers: [
+          {
+            marker: {
+              id: "t1",
+              title: "Alpha",
+              createdBy: "user",
+              anchorMessageId: null,
+              createdAt: "2026-01-01T10:00:00.000Z",
+            },
+            anchorInContext: false,
+          },
+        ],
+      }),
+    );
+
+    expect(output).toContain("starts at a compaction summary");
+  });
+
   test("a single rewind turn is not pluralised", () => {
     const rows = buildTopicBlockRows(
       list({

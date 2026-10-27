@@ -174,7 +174,7 @@ The same formula drives the listener path as `goalTokens` —
 | Invocation | Behavior | Source |
 | --- | --- | --- |
 | bare `/compact` | Resolves to `{ kind: "auto" }`. With two or more blocks it opens the topic picker and trims nothing yet; with a single block it trims by the compression rate and explains why | `src/cli/helpers/compact-command.ts:221-225`, `src/cli/app/submit-compact-commands.ts:477-531` |
-| `/compact <n>` | Requires a positive integer; out of range is refused by name with the block count. Sends `{ kind: "topic", index: n }` | `src/cli/helpers/compact-command.ts:236-239`, `src/cli/app/submit-compact-commands.ts:456-471` |
+| `/compact <n>` | Requires a positive integer; out of range is refused by name with the block count. Resolves `n` against the `/topic list` table **at command time** and locks that message id, so the boundaries the summarizer adds afterwards cannot move what `n` meant | `src/cli/helpers/compact-command.ts`, `src/cli/app/submit-compact-commands.ts` |
 | `/compact help` | Prints usage | `src/cli/helpers/compact-command.ts:226-232` |
 | `/compact config` | Opens the mode panel, where the **Compression rate** row is editable | `src/cli/app/use-submit-handler.ts:718-729`, `src/cli/components/CompactionSelector.tsx:145-164` |
 

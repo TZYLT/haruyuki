@@ -162,6 +162,11 @@ export function formatTopicBlockList(
     );
     lines.push(`      boundary: ${row.boundary}`);
     const block = list.blocks[row.index - 1];
+    if (block?.compaction) {
+      lines.push(
+        "      starts at a compaction summary: the history before it was folded, so the title is an older marker",
+      );
+    }
     if (block && block.absorbedTitles.length > 0) {
       lines.push(`      absorbed markers: ${block.absorbedTitles.join(", ")}`);
     }

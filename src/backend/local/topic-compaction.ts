@@ -54,6 +54,16 @@ export interface TopicBlock {
   createdBy: LocalTopicCreatedBy | null;
   /** The ending marker's section (F-04's summarizer record), when it has one. */
   summary?: string;
+  /**
+   * The block starts at a compaction summary message, so its content is history
+   * folded by `/compact` rather than messages someone wrote.
+   *
+   * Without this, a reader of `/topic list` cannot tell a one-message block titled
+   * by an old marker from a block that *is* the compaction: the marker ending it
+   * was written before the fold, and the summarizer's own marker lands on the same
+   * boundary (so it is absorbed, not the title).
+   */
+  compaction?: true;
   /** Where that ending marker was written (display only; boundaries are older). */
   anchorMessageId: string | null;
   /**
@@ -311,6 +321,7 @@ export function listTopicBlocks(
       ...(endingMarker?.summary === undefined
         ? {}
         : { summary: endingMarker.summary }),
+      ...(first.metadata?.compaction === undefined ? {} : { compaction: true }),
       anchorMessageId: endingMarker ? endingMarker.anchorMessageId : null,
       absorbedTitles: leadingTitles.splice(0),
       boundaryMessageId: first.id,
