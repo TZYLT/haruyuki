@@ -88,6 +88,7 @@ export type TrimNoopReason =
   | "empty_context"
   | "nothing_before_boundary"
   | "unknown_block"
+  | "stale_preview"
   | "no_suggestion";
 
 export type TrimBoundaryAdjustReason =

@@ -195,6 +195,12 @@ const EXPECTED_INCLUDE: readonly ExpectedRule[] = [
 
 const EXPECTED_EXCLUDE: readonly ExpectedRule[] = [
   {
+    pattern: "local-backend/agents/*.topics.json",
+    scope: "local-backend",
+    reason:
+      "per-agent topic index: derived from the transcripts and rebuilt on demand, so a package must not carry it (or the agent id the file name would imply)",
+  },
+  {
     pattern: "home/logs/**",
     scope: "home",
     reason:
@@ -322,13 +328,13 @@ test("SCOPE_RULES: the 26 include rules, asserted one by one", () => {
   assertRuleTable(EXPECTED_INCLUDE, true);
 });
 
-test("SCOPE_RULES: the 20 exclude rules, asserted one by one", () => {
+test("SCOPE_RULES: the 21 exclude rules, asserted one by one", () => {
   assertRuleTable(EXPECTED_EXCLUDE, false);
 });
 
-test("SCOPE_RULES: 46 unique rows, each filed under its own scope", () => {
-  expect(SCOPE_RULES).toHaveLength(46);
-  expect(new Set(SCOPE_RULES.map((rule) => rule.pattern)).size).toBe(46);
+test("SCOPE_RULES: 47 unique rows, each filed under its own scope", () => {
+  expect(SCOPE_RULES).toHaveLength(47);
+  expect(new Set(SCOPE_RULES.map((rule) => rule.pattern)).size).toBe(47);
   for (const rule of SCOPE_RULES) {
     const prefix = rule.scope === "secrets" ? "secrets.json" : rule.scope;
     expect(
@@ -339,9 +345,9 @@ test("SCOPE_RULES: 46 unique rows, each filed under its own scope", () => {
   }
 });
 
-test("scopeExclusions: the 20 exclude rows in table order", () => {
+test("scopeExclusions: the 21 exclude rows in table order", () => {
   const exclusions = scopeExclusions();
-  expect(exclusions).toHaveLength(20);
+  expect(exclusions).toHaveLength(21);
   expect(exclusions).toEqual(
     SCOPE_RULES.filter((rule) => !rule.include).map((rule) => ({
       path: rule.pattern,
@@ -450,6 +456,12 @@ function createFixture(): Fixture {
 
   // B. storage root
   writeFileAt(storageDir, join("agents", "agent-1.json"), '{"id":"agent-1"}');
+  // F-04's per-agent topic index: derived, so the walk must skip and report it.
+  writeFileAt(
+    storageDir,
+    join("agents", "agent-1.topics.json"),
+    '{"agentId":"agent-1","conversations":{}}',
+  );
   for (const key of ["conversation-1", "conversation-2"]) {
     writeFileAt(
       storageDir,

@@ -12,6 +12,7 @@
  * Everything here is pure: the CLI and the listener share the parsing and the
  * receipts, and tests cover them without a backend.
  */
+import type { TrimNoopReason } from "@/backend/local/topic-compaction";
 
 /** Mode words the cloud backend still accepts. */
 export const COMPACT_MODE_ARGUMENTS = [
@@ -36,15 +37,45 @@ export const COMPACT_COMMAND_USAGE = [
   "Summarize the older part of this conversation and keep the rest.",
   "",
   "USAGE",
-  "  /compact        — pick a topic block to keep (compresses by the rate when nothing is marked)",
+  "  /compact        — summarize first, then pick a topic block to keep",
+  "                    (compresses by the rate when nothing is marked)",
   "  /compact <n>    — keep block n straight away (works without a terminal)",
   "  /compact help   — show this help",
+  "",
+  "Nothing is written until you confirm: the topics and the new summary are",
+  "shown before anything is cut, and cancelling leaves the context untouched.",
   "",
   "Every trim compresses this conversation's own history by the compression rate",
   "(sliding_window_percentage), and a cut may never keep more than that rate",
   "allows — so block 1, which keeps the whole context, is cut down to the rate's",
   "own point. `/topic list` lists the blocks, numbered oldest first.",
 ].join("\n");
+
+/**
+ * Why a compaction wrote nothing, in the receipt's own words.
+ *
+ * The structured reason stays structured in the backend; this is the one place
+ * it becomes prose, so all three `/compact` paths say the same thing. A raw
+ * token in a receipt is a receipt that needs a code lookup.
+ */
+export function formatCompactNoopReason(
+  reason: TrimNoopReason | undefined,
+): string {
+  switch (reason) {
+    case undefined:
+      return "the plan kept everything";
+    case "empty_context":
+      return "there is nothing in the context to trim";
+    case "nothing_before_boundary":
+      return "the kept block starts at the first message, so nothing older could be folded";
+    case "unknown_block":
+      return "the block this run was told to keep is no longer in the context";
+    case "stale_preview":
+      return "the context changed while it was being summarized, so this preview was dropped whole — run /compact again";
+    case "no_suggestion":
+      return "the compression rate found no cut point";
+  }
+}
 
 /**
  * `/compact` on a conversation that has no markers (D-119): the rate decides, so

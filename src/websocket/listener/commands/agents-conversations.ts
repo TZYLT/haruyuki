@@ -676,9 +676,6 @@ export async function handleAgentConversationManagementCommand(
           ...(requestedAgentId === undefined
             ? {}
             : { agentId: requestedAgentId }),
-          ...(parsed.topic_block === undefined
-            ? {}
-            : { blockIndex: parsed.topic_block }),
         });
         if (outcome.kind === "cancelled") {
           safeSocketSend(

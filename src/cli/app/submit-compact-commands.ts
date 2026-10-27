@@ -31,6 +31,7 @@ import type { CompactModeArgument } from "@/cli/helpers/compact-command";
 import {
   COMPACT_COMMAND_USAGE,
   COMPACT_MODE_LOCAL_UNSUPPORTED,
+  formatCompactNoopReason,
   formatCompactPlanningFailure,
   formatContextPressureHint,
   formatNoMarkerCompactHint,
@@ -532,7 +533,7 @@ export function formatCompactionReceipt(
   if (!result.executed) {
     return [
       "Nothing was written: there is no cut point to take here.",
-      `  reason:     ${result.noopReason ?? "the plan kept everything"}`,
+      `  reason:     ${formatCompactNoopReason(result.noopReason)}`,
       `  context:    ${result.numMessagesBefore} messages · ~${result.retainedTokens} tokens`,
     ].join("\n");
   }

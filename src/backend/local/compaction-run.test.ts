@@ -459,6 +459,27 @@ describe("applyCompaction", () => {
     expect(fixture.rewrites).toEqual([]);
   });
 
+  test("a preview computed on an older context is refused, not applied", async () => {
+    const messages = conversation();
+    const fixture = applyFixture({ messages });
+    // Every anchor the preview named is gone: another rewrite (a second
+    // `/compact`, or the turn's own auto-compaction) landed while the summarizer
+    // was running. Applying it would write the older overview over the newer one
+    // and drop the sections the first fold had already recorded.
+    const result = await applyCompaction(fixture.ports, {
+      preview: preview({
+        topics: [draft("one", "gone-1"), draft("two", "gone-2")],
+      }),
+      pick: { kind: "ratio_suggestion" },
+    });
+
+    expect(result.executed).toBe(false);
+    expect(result.noopReason).toBe("stale_preview");
+    expect(fixture.calls).toEqual([]);
+    expect(fixture.written).toEqual([]);
+    expect(fixture.rewrites).toEqual([]);
+  });
+
   test("an empty context is a no-op", async () => {
     const fixture = applyFixture({ messages: [] });
     const result = await applyCompaction(fixture.ports, {

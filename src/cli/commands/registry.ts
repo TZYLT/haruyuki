@@ -667,8 +667,12 @@ export const commands: Record<string, Command> = {
     },
   },
   "/topics": {
-    desc: "List the topic blocks of the current context",
+    desc: "Retired alias of /topic list (kept working, not advertised)",
     args: "[--all]",
+    // Requirement §5.11.11 / Q-47: `/topics` is the retired spelling of
+    // `/topic list`. It must keep working for muscle memory and for anything
+    // still calling it, but the autocomplete only offers live names.
+    hidden: true,
     handler: (args, scope) => handleTopicsCommand(args, scope),
   },
   "/recall": {

@@ -229,7 +229,14 @@ export const SCOPE_RULES: ScopeRule[] = [
     reason: "settings tokens, agent secrets and channel credentials",
   },
 
-  // E. exclusions (20 rows)
+  // E. exclusions (21 rows)
+  {
+    pattern: "local-backend/agents/*.topics.json",
+    scope: "local-backend",
+    include: false,
+    reason:
+      "per-agent topic index: derived from the transcripts and rebuilt on demand, so a package must not carry it (or the agent id the file name would imply)",
+  },
   {
     pattern: "home/logs/**",
     scope: "home",

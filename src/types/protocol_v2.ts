@@ -1706,12 +1706,6 @@ export interface ConversationCompactCommand {
   conversation_id: string;
   /** Body forwarded to the Letta conversation messages compact API. */
   body?: MessageCompactParams;
-  /**
-   * F-04: keep block `n` of this conversation's cut-point table (1-based, oldest
-   * first). Omitted means "the default choice": the compression rate decides,
-   * which is what a desktop client gets when it has not shown a picker.
-   */
-  topic_block?: number;
 }
 
 export interface GetReflectionSettingsCommand {

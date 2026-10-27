@@ -281,11 +281,8 @@ export class LocalBackend extends HeadlessBackend {
     return this.storageDir;
   }
 
-  /**
-   * Refresh one conversation's entries in the agent's topic index (§5.11.3).
-   * The ephemeral backend keeps conversation state under `stateStorageDir`, so
-   * the index must follow that root rather than the permanent one.
-   */
+  /** Refresh one conversation's entries in the topic index (§5.11.3), on the
+   * same root as the store: the ephemeral backend keeps state under it. */
   private refreshTopicIndex(conversationId: string, agentId: string): void {
     refreshTopicIndexForConversation(
       agentId,
@@ -688,7 +685,9 @@ export class LocalBackend extends HeadlessBackend {
     const ports = this.topicTrimPorts();
     return prepareCompactionRun(
       {
-        storageDir: this.storageDir,
+        // The summarizer opens its own store, so it must sit on the same root
+        // as this backend's: the ephemeral one keeps state in stateStorageDir.
+        storageDir: this.stateStorageDir ?? this.storageDir,
         listMessages: ports.listMessages,
         readMarkers: ports.readMarkers,
         compactionSettings: ports.compactionSettings,

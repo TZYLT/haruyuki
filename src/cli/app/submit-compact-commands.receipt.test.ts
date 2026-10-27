@@ -151,7 +151,8 @@ describe("formatCompactionReceipt", () => {
     });
 
     expect(receipt).toContain("Nothing was written");
-    expect(receipt).toContain("nothing_before_boundary");
+    // The structured reason becomes prose: a receipt is read, not decoded.
+    expect(receipt).toContain("starts at the first message");
     expect(receipt).not.toContain("Compaction complete.");
   });
 

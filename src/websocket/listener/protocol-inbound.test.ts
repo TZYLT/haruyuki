@@ -396,13 +396,6 @@ describe("agent/conversation management protocol-inbound validators", () => {
       conversation_id: "conv-1",
       body: { agent_id: "agent-1" },
     },
-    {
-      // F-04: the optional 1-based block the client wants to keep.
-      type: "conversation_compact",
-      request_id: "r14",
-      conversation_id: "conv-1",
-      topic_block: 2,
-    },
   ])("accepts $type", (message) => {
     const parsed = parseServerMessage(Buffer.from(JSON.stringify(message)));
     expect(parsed).toEqual(message);
@@ -554,26 +547,6 @@ describe("agent/conversation management protocol-inbound validators", () => {
       request_id: "r11",
       conversation_id: "conv-1",
       body: [],
-    },
-    {
-      // F-04: block numbers are 1-based, so 0 and non-integers are refused
-      // rather than silently compacting by the rate.
-      type: "conversation_compact",
-      request_id: "r12",
-      conversation_id: "conv-1",
-      topic_block: 0,
-    },
-    {
-      type: "conversation_compact",
-      request_id: "r13",
-      conversation_id: "conv-1",
-      topic_block: 1.5,
-    },
-    {
-      type: "conversation_compact",
-      request_id: "r14",
-      conversation_id: "conv-1",
-      topic_block: "2",
     },
   ])("rejects invalid $type", (message) => {
     const parsed = parseServerMessage(Buffer.from(JSON.stringify(message)));

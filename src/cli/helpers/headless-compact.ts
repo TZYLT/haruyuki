@@ -28,6 +28,7 @@ import {
 import type { CompactionApplyResult } from "@/backend/local/compaction-run";
 import { CompactionCancelledError } from "@/backend/local/compaction-summarizer";
 import { LocalBackend } from "@/backend/local/local-backend";
+import type { TopicBlock } from "@/backend/local/topic-compaction";
 import type { ResultMessage } from "@/types/protocol";
 import type { CompactionTopicReport } from "@/types/task-control-protocol";
 import {
@@ -36,6 +37,7 @@ import {
 } from "@/usage/compaction-usage";
 import {
   COMPACT_MODE_LOCAL_UNSUPPORTED,
+  formatCompactNoopReason,
   formatCompactPlanningFailure,
   parseCompactCommandArgs,
 } from "./compact-command";
@@ -109,19 +111,21 @@ export function parseHeadlessCompactInput(
 /**
  * Where a `/compact <n>` points, as the frozen `CompactPick` the write-back takes.
  *
- * The block number is 1-based and resolved against the preview's own table: the
- * listener's caller sees exactly that table, and the summarizer's own additions
- * cannot move the meaning of the number it was told (requirement §5.6.3). The
- * identity handed to `apply` is the block's boundary message id, never the row.
+ * The block number is 1-based and resolved against the table the caller was
+ * looking at *before* the summarizer ran — `/topic list`'s numbering
+ * (requirement §5.6.3, Q-08). That lock has to happen before `prepare`, because
+ * the summarizer adds boundaries of its own and a number resolved afterwards
+ * would name a block the user never saw. The identity handed to `apply` is the
+ * block's boundary message id, never the row.
  */
 export function resolveCompactionPick(
-  preview: CompactionPreview,
+  blocks: readonly TopicBlock[],
   blockIndex: number | undefined,
 ): CompactPick {
   if (blockIndex === undefined) return { kind: "ratio_suggestion" };
-  const block = preview.blocks[blockIndex - 1];
+  const block = blocks[blockIndex - 1];
   if (!block) {
-    const count = `${preview.blocks.length} block${preview.blocks.length === 1 ? "" : "s"}`;
+    const count = `${blocks.length} block${blocks.length === 1 ? "" : "s"}`;
     throw new Error(
       `There is no topic block ${blockIndex}: this context has ${count}. Run /topic list to list them, or /compact with no number to compress by the rate.`,
     );
@@ -168,12 +172,24 @@ export async function runLocalCompaction(
   let preview: CompactionPreview | null = null;
   let outcome: CompactionUsageOutcome = "completed";
   try {
+    // §5.6.3: resolve `n` against the numbering table the user was looking at
+    // and lock the identity *before* the summarizer adds boundaries of its own.
+    // A number this context does not have refuses here, without paying for a
+    // provider call. Without a number there is nothing to lock, so the backend
+    // is not touched at all.
+    const pick =
+      input.blockIndex === undefined
+        ? { kind: "ratio_suggestion" as const }
+        : resolveCompactionPick(
+            input.backend.listTopics(input.conversationId, input.agentId)
+              .blocks,
+            input.blockIndex,
+          );
     preview = await input.backend.prepareCompaction({
       conversationId: input.conversationId,
       ...(input.agentId === undefined ? {} : { agentId: input.agentId }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
-    const pick = resolveCompactionPick(preview, input.blockIndex);
     const result = await input.backend.applyCompaction({ preview, pick });
     return {
       kind: "completed",
@@ -259,7 +275,7 @@ export function formatLocalCompactionReceipt(
   if (!result.executed) {
     return [
       "Nothing was written: there is no cut point to take here.",
-      `  reason:     ${result.noopReason ?? "the plan kept everything"}`,
+      `  reason:     ${formatCompactNoopReason(result.noopReason)}`,
       `  context:    ${result.numMessagesBefore} messages · ~${result.retainedTokens} tokens`,
     ].join("\n");
   }

@@ -500,7 +500,7 @@ haruyuki import --from ./work.hryk                   # 正式恢复（手敲 ove
 
 | 命令 | 参数 | 说明 |
 |---|---|---|
-| `/compact` | `[n\|help]` | 先算概况与切点（不落盘），你选完再裁；`n` 直接选第 n 个块 |
+| `/compact` | `[n\|help]` | 先算概况与切点（不落盘），你选完再裁；`n` 按 `/topic list` 的编号直接选第 n 块 |
 | `/compact config` | — | 压缩模式设置（原 `/compaction`） |
 | `/topic` | `<标题> [摘要]` | 在当前会话标记一个话题边界 |
 | `/topic list` | `[--all]` | 列出当前上下文的话题块；`--all` 打开全屏分页查看器（`q` 退出） |

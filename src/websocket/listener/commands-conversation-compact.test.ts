@@ -6,9 +6,8 @@
  * as `/compact`, so this file pins the two things that make the desktop path
  * whole:
  *
- * - the default selection (no `topic_block`) compresses by the rate;
- * - a 1-based `topic_block` keeps exactly that block, resolved to its boundary
- *   message id before `apply` sees it;
+ * - the default selection compresses by the rate (§5.12.2: this path has no
+ *   picker, so it accepts no block number either);
  * - the response carries the legacy `compaction` shape *and* the additive
  *   `topic_report`, so a client compiled against the old protocol keeps working.
  */
@@ -279,31 +278,17 @@ describe("conversation_compact on the local backend", () => {
     });
   });
 
-  test("a 1-based topic_block keeps exactly that block", async () => {
+  test("a stray topic_block is ignored: this path has no picker (§5.12.2)", async () => {
     const f = await fixture(8);
 
+    // `conversation_compact` carries no block number. The response hands the
+    // client the overview and the cut-point table; choosing a different cut is
+    // the terminal's `/compact <n>`, whose number is resolved against the
+    // pre-summarizer table (§5.6.3). An extra field is therefore ignored rather
+    // than honoured against a table the client never saw.
     const response = await runCompactProtocol(f, { topicBlock: 2 });
 
     expect(response.success).toBe(true);
-    expect(f.seenPicks).toEqual([
-      { kind: "message", messageId: expect.any(String) },
-    ]);
-    const report = response.topic_report as {
-      applied: { folded_topics: string[]; executed: boolean };
-    };
-    expect(report.applied.executed).toBe(true);
-    expect(report.applied.folded_topics).toEqual(["Alpha"]);
-  });
-
-  test("an out-of-range block fails softly instead of compacting by the rate", async () => {
-    const f = await fixture(4);
-
-    const response = await runCompactProtocol(f, { topicBlock: 9 });
-
-    expect(response.success).toBe(false);
-    expect(response.compaction).toBeNull();
-    expect(String(response.error)).toContain("There is no topic block 9");
-    // A refused number must not fall through to the default selection.
-    expect(f.seenPicks).toEqual([]);
+    expect(f.seenPicks).toEqual([{ kind: "ratio_suggestion" }]);
   });
 });

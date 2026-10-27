@@ -26,6 +26,8 @@ import type { HeadlessTurnExecutor } from "@/backend/dev/headless-turn-executor"
 import { LocalBackend } from "@/backend/local";
 import type { CompactionPreview } from "@/backend/local/compaction-preview";
 import type { CompactionApplyResult } from "@/backend/local/compaction-run";
+import type { LocalTopicList } from "@/backend/local/local-topic-trim";
+import type { TopicBlock } from "@/backend/local/topic-compaction";
 import { COMPACT_MODE_LOCAL_UNSUPPORTED } from "@/cli/helpers/compact-command";
 import { __listenClientTestUtils } from "@/websocket/listener/client";
 import { handleExecuteCommand } from "@/websocket/listener/commands";
@@ -108,6 +110,33 @@ function inContextIds(
     .map((message) => message.id);
 }
 
+/** One row of the numbering table a numbered `/compact` resolves against. */
+function topicBlockRow(
+  index: number,
+  title: string | null,
+  boundaryMessageId: string,
+  startIndex: number,
+  endIndex: number,
+): TopicBlock {
+  return {
+    index,
+    title,
+    markerId: null,
+    createdBy: title === null ? null : "summarizer",
+    anchorMessageId: null,
+    absorbedTitles: [],
+    boundaryMessageId,
+    startIndex,
+    endIndex,
+    rewindTurns: 0,
+    startMarkerAnchorMessageId: null,
+    messageCount: endIndex - startIndex,
+    tokens: 450,
+    startsAt: "2026-01-01T00:00:00.000Z",
+    sparse: endIndex - startIndex <= 1,
+  };
+}
+
 /**
  * A local conversation with `turns` turns. `prepare` is scripted from the live
  * message list: by default two topics ("Alpha" then "Beta"), or one unmarked
@@ -128,6 +157,43 @@ async function localFixture(
   const storageDir = await createStorageDirectory();
   process.env.HARUYUKI_HOME = storageDir;
   const backend = new (class extends LocalBackend {
+    /**
+     * The numbering table `/compact <n>` resolves against (§5.6.3): the blocks
+     * the user could see *before* the summarizer ran. `prepare` is scripted
+     * below, so the table it will publish is scripted here too — the two must
+     * agree for a numbered pick to name the same cut.
+     */
+    override listTopics(
+      conversationId: string,
+      agentIdInput?: string,
+    ): LocalTopicList {
+      const agentId =
+        agentIdInput ??
+        (
+          this as unknown as {
+            store: { resolveAgentIdForConversation(id: string): string };
+          }
+        ).store.resolveAgentIdForConversation(conversationId);
+      const ids = inContextIds(this, conversationId, agentId);
+      const splitIndex = Math.max(1, Math.floor(ids.length / 2));
+      const first = ids[0] ?? "";
+      const split = ids[splitIndex] ?? first;
+      const blocks: TopicBlock[] = options.unmarked
+        ? [topicBlockRow(1, null, first, 0, ids.length)]
+        : [
+            topicBlockRow(1, "Alpha", first, 0, splitIndex),
+            topicBlockRow(2, "Beta", split, splitIndex, ids.length),
+          ];
+      return {
+        blocks,
+        markers: [],
+        contextMessageCount: ids.length,
+        contextTokens: 900,
+        retentionCapTokens: 450,
+        suggestedBlockIndex: options.unmarked ? 1 : 2,
+      };
+    }
+
     override async prepareCompaction(input: {
       conversationId: string;
       agentId?: string;

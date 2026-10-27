@@ -457,7 +457,7 @@ test("export then import restores the same data under a second set of roots", as
   expect(imported.notRemapped.length).toBeGreaterThanOrEqual(3);
   // The import report carries the manifest's rule table, so a reader can see
   // what a restore leaves alone without opening the package.
-  expect(imported.excluded).toHaveLength(20);
+  expect(imported.excluded).toHaveLength(21);
 
   // ── settings: restored, token written back, bucket key rewritten ──
   const restoredSettings = readJsonAt(targetHome, "settings.json");

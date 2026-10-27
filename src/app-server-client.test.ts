@@ -495,14 +495,12 @@ describe("app-server client", () => {
 
     const responsePromise = client.conversationCompact({
       conversation_id: "conv-1",
-      topic_block: 2,
     });
 
     expect(JSON.parse(control.sent[0] ?? "{}")).toMatchObject({
       type: "conversation_compact",
       request_id: "conversation-compact-1",
       conversation_id: "conv-1",
-      topic_block: 2,
     });
 
     const topicReport = {

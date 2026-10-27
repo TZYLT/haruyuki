@@ -277,6 +277,33 @@ export function renderCompactionSummary(input: {
 }
 
 /**
+ * Whether the context moved under a preview between `prepare` and `apply`.
+ *
+ * A preview is computed once and applied later, and nothing serialises the two
+ * (the listener holds no lease, and a turn may run while the summarizer works).
+ * Every block boundary and every topic start is an anchor into the message list
+ * the preview described; an ordinary turn only *appends*, so a missing anchor
+ * means the list was rewritten in between — most likely by another compaction.
+ *
+ * Applying such a preview would write its (older) overview over the newer one
+ * and, because the folded topics' ids are gone, silently drop the sections the
+ * first fold recorded. Refusing is the only safe answer: the caller reports a
+ * no-op and the user retries against the current context.
+ */
+export function previewStaleness(
+  preview: CompactionPreview,
+  messages: readonly LocalMessage[],
+): "stale_preview" | null {
+  const live = new Set(messages.map((message) => message.id));
+  const anchored: string[] = [
+    ...preview.blocks.map((block) => block.boundaryMessageId),
+    ...preview.topics.map((topic) => topic.startMessageId),
+  ];
+  if (anchored.length === 0) return null;
+  return anchored.some((id) => !live.has(id)) ? "stale_preview" : null;
+}
+
+/**
  * The drafts whose start falls inside the summarized region — "刚裁话题".
  * A draft that begins before the cut counts even when the cut lands inside it:
  * its section describes content that just left the context.

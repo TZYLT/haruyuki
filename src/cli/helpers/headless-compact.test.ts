@@ -28,6 +28,7 @@ import type {
 import type { CompactionApplyResult } from "@/backend/local/compaction-run";
 import { CompactionCancelledError } from "@/backend/local/compaction-summarizer";
 import { LocalBackend } from "@/backend/local/local-backend";
+import type { LocalTopicList } from "@/backend/local/local-topic-trim";
 import {
   buildCompactionTopicReport,
   buildHeadlessCompactResultEnvelope,
@@ -173,6 +174,23 @@ class ScriptedCompactionBackend extends LocalBackend {
   mode: "completed" | "failed" | "cancelled" = "completed";
   seenPick: CompactPick | null = null;
 
+  /**
+   * The numbering table `/compact <n>` resolves against (§5.6.3): the
+   * pre-summarizer blocks. Scripted here rather than walked from a transcript,
+   * because this suite drives the ledger and the pick, not the store.
+   */
+  override listTopics(): LocalTopicList {
+    const blocks = previewFixture().blocks;
+    return {
+      blocks,
+      markers: [],
+      contextMessageCount: 6,
+      contextTokens: 600,
+      retentionCapTokens: 400,
+      suggestedBlockIndex: 1,
+    };
+  }
+
   override async prepareCompaction(): Promise<CompactionPreview> {
     if (this.mode === "cancelled") throw new CompactionCancelledError();
     if (this.mode === "failed") throw new Error("provider refused");
@@ -241,24 +259,24 @@ describe("parseHeadlessCompactInput", () => {
 
 describe("resolveCompactionPick", () => {
   test("no number means the rate's default selection", () => {
-    expect(resolveCompactionPick(previewFixture(), undefined)).toEqual({
+    expect(resolveCompactionPick(previewFixture().blocks, undefined)).toEqual({
       kind: "ratio_suggestion",
     });
   });
 
   test("a block number becomes that block's boundary message id", () => {
     // 1-based: block 2 is the second row, never `blocks[2]`.
-    expect(resolveCompactionPick(previewFixture(), 2)).toEqual({
+    expect(resolveCompactionPick(previewFixture().blocks, 2)).toEqual({
       kind: "message",
       messageId: "m2",
     });
   });
 
   test("an out-of-range number is refused by name, with the table size", () => {
-    expect(() => resolveCompactionPick(previewFixture(), 9)).toThrow(
+    expect(() => resolveCompactionPick(previewFixture().blocks, 9)).toThrow(
       "There is no topic block 9: this context has 2 blocks",
     );
-    expect(() => resolveCompactionPick(previewFixture(), 9)).toThrow(
+    expect(() => resolveCompactionPick(previewFixture().blocks, 9)).toThrow(
       "compress by the rate",
     );
   });

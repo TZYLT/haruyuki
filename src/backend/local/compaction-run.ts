@@ -20,6 +20,7 @@ import {
   type CompactPick,
   type CompactUsage,
   foldedCompactionTopics,
+  previewStaleness,
   renderCompactionSummary,
   topicBlocksFromDrafts,
   validateCompactionTopics,
@@ -269,6 +270,18 @@ export async function applyCompaction(
     estimateLocalMessagesTokens(messages),
     ports.compactionSettings(conversationId, agentId).slidingWindowPercentage,
   );
+  // Checked before the pick: a preview whose context was rewritten underneath it
+  // would otherwise report "unknown_block" for a pick that *was* valid, and then
+  // (on the rate path) write its older overview over the newer one.
+  const staleness = previewStaleness(preview, messages);
+  if (staleness !== null) {
+    return noopApplyResult({
+      messages,
+      source: pick.kind === "message" ? "topic_pick" : "ratio_suggestion",
+      noopReason: staleness,
+      retentionCapTokens,
+    });
+  }
   // A pick whose message is gone cannot be honored: the pick's identity is the
   // id, so refuse rather than let the rate silently choose a different cut.
   if (
@@ -381,9 +394,27 @@ export async function applyCompaction(
     stats,
     remainingMessages: keep,
   });
-  ports.clearTopicNudgeStreak?.(conversationId, agentId);
-  await ports.refreshFrozenPrefix(conversationId, agentId);
-  ports.refreshIndex?.();
+  // The rewrite is the one atomic step, and it is already done: everything below
+  // is bookkeeping that must not turn a completed fold into a reported failure.
+  // Failing here used to reach the user as `Failed: …` while the context *had*
+  // been rewritten, which also skipped the post-compaction tail (reflection,
+  // tracker rebase, nudge reset) and recorded the run as failed in the ledger.
+  try {
+    ports.clearTopicNudgeStreak?.(conversationId, agentId);
+  } catch {
+    // A stale nudge flag costs one extra reminder, never correctness.
+  }
+  try {
+    await ports.refreshFrozenPrefix(conversationId, agentId);
+  } catch {
+    // Recorded as debt: the next turn re-compiles on its own path when the
+    // snapshot is missing, but a *stale* snapshot would not self-heal here.
+  }
+  try {
+    ports.refreshIndex?.();
+  } catch {
+    // The index is a derived cache; its own self-heal rebuilds it on next read.
+  }
 
   return {
     executed: true,
