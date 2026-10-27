@@ -13,18 +13,19 @@ import type { TopicBlock } from "@/backend/local/topic-compaction";
 import type { TopicIndexEntry } from "@/backend/local/topic-index";
 
 export const TOPICS_COMMAND_USAGE = [
-  "/topic list [--all] | /topic search <kw>",
+  "/topic list [--all|--context] | /topic search <kw>",
   "",
   "List the topic blocks of the current context, oldest first.",
   "",
   "USAGE",
-  "  /topic list         — blocks that still define the current context",
-  "  /topic list --all   — every marker in the conversation, in a full-screen panel",
-  "  /topic search <kw>  — search this agent's topics by title or section",
-  "  /topic list help    — show this help",
+  "  /topic list           — blocks that still define the current context",
+  "  /topic list --all     — every marker this agent has recorded, newest first",
+  "  /topic list --context — this conversation's markers, in conversation order",
+  "  /topic search <kw>    — search this agent's topics by title or section",
+  "  /topic list help      — show this help",
   "",
   "/compact <n> keeps block n and summarizes everything before it. The numbers in",
-  "--all are marker positions, not block numbers.",
+  "--context are marker positions, not block numbers.",
 ].join("\n");
 
 /**
@@ -51,6 +52,30 @@ export const MARKER_POSITION_NOTE =
 
 /** The trailing block's label: a topic nobody has marked finished yet. */
 export const CURRENT_TOPIC_LABEL = "Current topic (not marked finished)";
+
+/**
+ * `/topic list --all` printed as text (the channels with no full-screen face).
+ *
+ * Same rows as the panel — `buildTopicIndexRows` is the one row model — so the
+ * text and the panel cannot disagree about a marker's title, time or source. No
+ * `#n` column on purpose: this list is newest first, and a `#1` here would name a
+ * different marker than the `--context` table's `#1`.
+ */
+export function formatTopicIndexList(
+  entries: readonly TopicIndexEntry[],
+): string {
+  if (entries.length === 0) {
+    return "No topic markers are indexed for this agent yet. Topics exist only where someone marked one — the TopicMark tool or the user's /topic command.";
+  }
+  const rows = buildTopicIndexRows(entries);
+  return [
+    `Every topic marker this agent has recorded (${rows.length}, newest first):`,
+    "",
+    ...rows.map((row) => `  ${row.line}`),
+    "",
+    ...TOPIC_LIST_ALL_NOTES,
+  ].join("\n");
+}
 
 /**
  * What "absorbed markers" means, printed only when a block has any.

@@ -27,6 +27,8 @@
   （编号就是 `/topic list` 那张表，命令解析那一刻锁定；摘要器随后补的边界不会移动这个数）；
   `preparing` 阶段显示已耗时，**Esc 取消**（abort → 零写入 → 账本记 `cancelled`）。
 - **`/topic list --all`**：全屏分页浏览全部标记（↑↓／PgUp·PgDn／q），行=标题·时间·会话·来源。
+- **`/topic list --context`**：按**对话顺序**打印本会话的全部标记（带位置号，并标出锚点还在不在上下文）；
+  `--all` 仍是「本 agent 全部标记、最新在前」，两者回答的是不同问题，不能同时给。
 - **`/topic search <kw>`**：走派生索引检索标题与节，命中可展开；**搜索不写标记**。
 - **话题索引**：`<storageDir>/agents/<agentId>.topics.json`，`tmp`+`rename` 原子写、按会话幂等重建、
   查询前按 `(mtime, size, 条数)` 自愈；删掉索引不丢信息。

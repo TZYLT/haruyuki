@@ -503,7 +503,7 @@ haruyuki import --from ./work.hryk                   # 正式恢复（手敲 ove
 | `/compact` | `[n\|help]` | 先算概况与切点（不落盘），你选完再裁；`n` 按 `/topic list` 的编号直接选第 n 块 |
 | `/compact config` | — | 压缩模式设置（原 `/compaction`） |
 | `/topic` | `<标题> [摘要]` | 在当前会话标记一个话题边界 |
-| `/topic list` | `[--all]` | 列出当前上下文的话题块；`--all` 打开全屏分页查看器（`q` 退出） |
+| `/topic list` | `[--all\|--context]` | 列出当前上下文的话题块；`--all` 打开全屏分页查看器（本 agent 全部标记、最新在前、`q` 退出）；`--context` 按对话顺序打印本会话的全部标记（带位置号） |
 | `/topic search` | `<关键词>` | 在全部会话的话题里检索标题与节（只读，不写标记） |
 | `/clear` | — | 清空**上下文内**消息 |
 | `/recall` | `[设置] [值]` | 配置被动召回（同 `/memory recall`） |

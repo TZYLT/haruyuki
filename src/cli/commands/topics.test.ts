@@ -156,7 +156,7 @@ describe("handleTopicsCommand", () => {
     expect(output).toContain("/compact <n> keeps block n");
   });
 
-  test("--all lists the markers themselves", async () => {
+  test("--context lists this conversation's markers in conversation order", async () => {
     const { backend, agentId, scope } = await backendWithTurns(4);
     backend.markTopic({
       conversationId: "default",
@@ -165,11 +165,54 @@ describe("handleTopicsCommand", () => {
       createdBy: "agent",
     });
 
-    const output = await handleTopicsCommand(["--all"], scope, { backend });
+    const output = await handleTopicsCommand(["--context"], scope, {
+      backend,
+    });
     expect(output).toContain("Every topic marker in this conversation (1,");
+    expect(output).toContain("oldest first");
     expect(output).toContain("Auth token refresh");
     expect(output).toContain("agent");
     expect(output).toContain("in the current context");
+  });
+
+  test("--all lists this agent's markers newest first, across conversations", async () => {
+    const { backend, agentId, scope } = await backendWithTurns(2);
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "First topic",
+      createdBy: "user",
+    });
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Second topic",
+      createdBy: "user",
+    });
+
+    const output = await handleTopicsCommand(["--all"], scope, { backend });
+    expect(output).toContain("newest first");
+    // A time-ordered list: the marker written last comes first.
+    expect(output.indexOf("Second topic")).toBeLessThan(
+      output.indexOf("First topic"),
+    );
+  });
+
+  test("--all and --context are different views, not synonyms", async () => {
+    const { backend, agentId, scope } = await backendWithTurns(2);
+    backend.markTopic({
+      conversationId: "default",
+      agentId,
+      title: "Only topic",
+      createdBy: "user",
+    });
+
+    const all = await handleTopicsCommand(["--all"], scope, { backend });
+    const context = await handleTopicsCommand(["--context"], scope, {
+      backend,
+    });
+    expect(all).toContain("newest first");
+    expect(context).toContain("oldest first");
   });
 
   test("an unmarked context explains both marking channels", async () => {

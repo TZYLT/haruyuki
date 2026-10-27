@@ -130,10 +130,12 @@ compaction can cut at.
   so a settings change to it lands at the next application point —
   `src/backend/local/system-prompt-compilation.ts:500-504`.
 
-`/topic list` prints the block table, marking trimmable blocks with `*` —
-`src/cli/commands/topics.ts:23-51`. `/topic list --all` instead lists every
-marker, and says plainly that those numbers are marker positions, not the block
-numbers `/compact` takes — `src/cli/helpers/topic-list.ts:178-211`.
+`/topic list` prints the block table, marking trimmable blocks with `*`.
+Two marker views answer different questions: `--all` is every marker this agent
+has recorded, newest first (time order); `--context` is this conversation's
+markers in the order they happened (conversation order, with position numbers).
+The numbers in `--context` are marker positions, not the block numbers
+`/compact` takes.
 
 ## Compaction: the rate is a compression rate
 

@@ -12,6 +12,7 @@ import { queryTopicIndex } from "@/backend/local/topic-index";
 import { TOPIC_COMMAND_LOCAL_ONLY } from "@/cli/commands/topic";
 import {
   formatTopicBlockList,
+  formatTopicIndexList,
   formatTopicMarkerHistory,
   formatTopicSearchResults,
   TOPICS_COMMAND_USAGE,
@@ -28,9 +29,16 @@ export async function handleTopicsCommand(
   deps: TopicsCommandDeps = {},
 ): Promise<string> {
   if (args[0] === "help") return TOPICS_COMMAND_USAGE;
-  const unknown = args.filter((arg) => arg !== "--all");
+  const unknown = args.filter((arg) => arg !== "--all" && arg !== "--context");
   if (unknown.length > 0) {
     return `Unknown option "${unknown[0]}".\n\n${TOPICS_COMMAND_USAGE}`;
+  }
+  // Two orders, two questions: `--all` is "what has this agent recorded" (time,
+  // newest first, every conversation), `--context` is "what did this
+  // conversation mark, in the order it happened" (oldest first, with positions).
+  // Asking for both in one command has no single answer.
+  if (args.includes("--all") && args.includes("--context")) {
+    return `--all and --context are different views; pick one.\n\n${TOPICS_COMMAND_USAGE}`;
   }
 
   if (!scope?.agentId) {
@@ -47,9 +55,17 @@ export async function handleTopicsCommand(
     scope.agentId,
     conversationId,
   );
-  return args.includes("--all")
-    ? formatTopicMarkerHistory(list, { topicMarkingEnabled })
-    : formatTopicBlockList(list, { topicMarkingEnabled });
+  if (args.includes("--context")) {
+    return formatTopicMarkerHistory(list, { topicMarkingEnabled });
+  }
+  if (args.includes("--all")) {
+    const storageDir = backend.getLocalStorageDir?.();
+    if (!storageDir) return TOPIC_COMMAND_LOCAL_ONLY;
+    return formatTopicIndexList(
+      queryTopicIndex({ agentId: scope.agentId, storageDir }),
+    );
+  }
+  return formatTopicBlockList(list, { topicMarkingEnabled });
 }
 
 /**
