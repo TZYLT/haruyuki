@@ -456,16 +456,21 @@ These open a selector instead of running in the transcript:
 - `/context pending [full]` lists registered-but-unapplied prefix changes, and
   `/recompile` applies them. See the `context-and-compaction` document for the
   details, including why the prefix is frozen in the first place.
-- `/compact [n|help]` compacts: bare `/compact` opens the topic picker when
-  there is more than one block and otherwise trims by the compression rate —
+- `/compact [n|help]` compacts: it first runs the summarizer on the frozen
+  prefix and shows the overview with the cut-point table — nothing is written
+  before you pick. Bare `/compact` opens the topic picker when the preview has
+  more than one block and otherwise trims by the compression rate; `/compact <n>`
+  picks the block numbered by `/topic list`; Esc cancels with zero writes —
   `src/cli/app/submit-compact-commands.ts`.
 - `/compact config` opens the mode panel, where the **Compression rate** row is
   editable — `src/cli/app/use-submit-handler.ts:718-729`.
-- `/topic <title> [summary]` marks a boundary; `/topic list` opens the topic
-  panel — blocks of the current context, `--context` for this conversation's
-  markers in context order, `--all` for every marker this agent has recorded;
-  Tab switches views, Enter opens a row. Registered in
-  `src/cli/commands/registry.ts:645-657`.
+- `/topic <title> [summary]` marks a boundary; `/topic list` opens one panel with
+  three views — the blocks of the current context, `--context` for this
+  conversation's markers in context order, `--all` for every marker this agent
+  has recorded (Tab switches views, Enter opens a row). `/topic search <kw>`
+  reads the derived index and never writes a marker; `/topic show <#n|title>`
+  prints the conversation a marker covers. Registered in
+  `src/cli/commands/registry.ts`.
 - `/clear` empties the in-context transcript; `/messages clear` resets all of
   the agent's messages — `src/cli/commands/registry.ts:262-279`.
 - `/memory memfs [enable|disable|sync|reset]` manages the filesystem backend,
