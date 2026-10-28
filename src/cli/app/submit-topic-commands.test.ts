@@ -182,6 +182,8 @@ describe("handleTopicOverlayCommand", () => {
       "/topic list --all --context",
       "/topics",
       "/topic searchx",
+      // Another command whose second word happens to be "list" is not this one.
+      "/anything list",
     ]) {
       expect(await handleTopicOverlayCommand(input, ctx)).toBeNull();
     }

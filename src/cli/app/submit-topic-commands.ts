@@ -73,11 +73,14 @@ const LIST_FORMS: Record<
  *
  * Only the two documented flags are claimed. Anything else — `help`, an unknown
  * option, both flags at once — falls through so the registry can refuse it by
- * name instead of the TUI silently picking a view.
+ * name instead of the TUI silently picking a view. The `/topic` prefix is part
+ * of the test, not the caller's promise: `/anything list` has to reach the
+ * registry's "unknown command" answer, not this panel.
  */
 export function claimedListView(
   parts: readonly string[],
 ): TopicPanelView | null {
+  if (parts[0]?.toLowerCase() !== "/topic") return null;
   if (parts[1]?.toLowerCase() !== "list") return null;
   if (parts.length === 2) return "blocks";
   if (parts.length !== 3) return null;
