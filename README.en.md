@@ -222,7 +222,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
-| `0.4.4` | - | **Compaction rework**: `/compact` first summarises the frozen prefix into an overview and cut points (nothing written), and only trims once you pick; cancel and failure write nothing. Topics become searchable and readable (`/topic list` with three views, `/topic search`, `/topic show`, plus the read-only `TopicQuery` tool for the model). The desktop `conversation_compact` path now compresses by ratio when no block is given |
+| `0.4.4` | - | **Compaction rework**: Enable automatic processing of abstracts and topic tags before compression, making topic-inspired compression truly practical and providing queries for topics and corresponding original texts. |
 | `0.4.3` | + | **Reflection rewritten**: reflection now runs as a hidden session that writes memory directly, so it no longer produces conflicting commits; The TUI display section will undergo beautification in the future. |
 | `0.4.2` | + | **Data export and import**: snapshot-style export and import of all data. Cross-platform is not guaranteed yet; back up your data before you start, in case something goes wrong |
 | `0.4.1` | + | **Hidden sessions**: sessions that run automatically are hidden automatically |
