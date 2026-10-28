@@ -68,7 +68,6 @@ import {
   type Line,
   toLines,
 } from "@/cli/helpers/accumulator";
-import { isLocalAgentId } from "@/cli/helpers/app-urls";
 import { backfillBuffers } from "@/cli/helpers/backfill";
 import { chunkLog } from "@/cli/helpers/chunk-log";
 import { buildCliModContext } from "@/cli/helpers/cli-mod-context";
@@ -122,17 +121,6 @@ import {
   type LocalModAdapter,
   useLocalModAdapter,
 } from "@/cli/mods/use-local-mod-adapter";
-import {
-  getIntendedCronOccurrence,
-  getTask,
-  handleTaskPreflight,
-  hasLiveSchedulerOwner,
-  readCronFile,
-  safeAppendCronRunLogForTask,
-  shouldFireTask,
-  updateTask,
-  wrapCronPrompt,
-} from "@/cron";
 import { experimentManager } from "@/experiments/manager";
 import { runSessionEndHooks, runSessionStartHooks } from "@/hooks";
 import type { ApprovalContext } from "@/permissions/analyzer";
@@ -177,7 +165,6 @@ import {
   isDebugEnabled,
 } from "@/utils/debug";
 import {
-  addToMessageQueue,
   type QueuedMessage,
   setMessageQueueAdder,
 } from "@/utils/message-queue-bridge";
@@ -1278,127 +1265,6 @@ export function App({
     });
     return () => setMessageQueueAdder(null);
   }, []);
-  // ── Shadow cron scheduler ──────────────────────────────────────────
-  // Lightweight tui_cron scheduler when no matching WS listener is running.
-  // Defers to a live all-owner or this agent's scoped backend owner.
-  // The experiment check is inside tick() so toggling takes effect live.
-  useEffect(() => {
-    if (!agentId || agentId === "loading") return;
-
-    const TICK_INTERVAL_MS = 60_000;
-    const firedThisMinute = new Set<string>();
-    let lastMinuteKey = "";
-
-    function tick(): void {
-      // Check experiment gate on each tick so toggling takes effect immediately
-      if (!experimentManager.isEnabled("tui_cron")) return;
-
-      const now = new Date();
-      const currentMinuteKey = (() => {
-        const d = now;
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}T${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-      })();
-
-      // Reset per-minute dedup when minute changes
-      if (currentMinuteKey !== lastMinuteKey) {
-        firedThisMinute.clear();
-        lastMinuteKey = currentMinuteKey;
-      }
-
-      // Defer to a live all-owner or this agent's scoped backend owner.
-      const cronData = readCronFile();
-      if (
-        hasLiveSchedulerOwner(
-          cronData,
-          isLocalAgentId(agentIdRef.current ?? "") ? "local" : "cloud",
-        )
-      ) {
-        return;
-      }
-
-      // No active scheduler — process tasks for this agent
-      const activeTasks = cronData.tasks.filter(
-        (t) => t.status === "active" && t.agent_id === agentIdRef.current,
-      );
-
-      for (const task of activeTasks) {
-        if (firedThisMinute.has(task.id)) continue;
-
-        if (handleTaskPreflight(task, now)) continue;
-
-        if (shouldFireTask(task, now)) {
-          firedThisMinute.add(task.id);
-          const intendedOccurrence = getIntendedCronOccurrence(task, now);
-
-          // Apply jitter delay for recurring tasks (same as WS scheduler)
-          const jitterMs = task.recurring ? task.jitter_offset_ms : 0;
-          const taskId = task.id;
-          const doFire = () => {
-            // Revalidate: task may have been deleted/cancelled during jitter
-            const freshTask = getTask(taskId);
-            if (!freshTask || freshTask.status !== "active") return;
-
-            const schedulerNow = new Date();
-            // Use the same user-visible prompt formatter as the WS scheduler.
-            const text = wrapCronPrompt(freshTask, {
-              intendedOccurrence,
-              schedulerNow,
-            });
-            addToMessageQueue({
-              kind: "user",
-              source: "cron",
-              text,
-              agentId: freshTask.agent_id,
-              conversationId: freshTask.conversation_id,
-            });
-
-            // Update task state
-            const nowIso = schedulerNow.toISOString();
-            if (freshTask.recurring) {
-              updateTask(freshTask.id, (t) => {
-                t.last_fired_at = nowIso;
-                t.fire_count += 1;
-              });
-            } else {
-              updateTask(freshTask.id, (t) => {
-                t.status = "fired";
-                t.fired_at = nowIso;
-                t.last_fired_at = nowIso;
-                t.fire_count = 1;
-              });
-            }
-
-            safeAppendCronRunLogForTask(freshTask, {
-              status: "ok",
-              runAtMs: schedulerNow.getTime(),
-              scheduledFor: freshTask.scheduled_for,
-              firedAt: nowIso,
-            });
-
-            debugLog("cron", `TUI shadow scheduler fired task ${taskId}`);
-          };
-
-          if (jitterMs > 0) {
-            setTimeout(doFire, jitterMs);
-          } else {
-            doFire();
-          }
-        }
-      }
-    }
-
-    // Initial tick
-    tick();
-
-    const interval = setInterval(tick, TICK_INTERVAL_MS);
-    debugLog("cron", "TUI shadow scheduler started");
-
-    return () => {
-      clearInterval(interval);
-      debugLog("cron", "TUI shadow scheduler stopped");
-    };
-  }, [agentId]);
-
   const waitingForQueueCancelRef = useRef(false);
   const queueSnapshotRef = useRef<QueuedMessage[]>([]);
   const [restoreQueueOnCancel, setRestoreQueueOnCancel] = useState(false);

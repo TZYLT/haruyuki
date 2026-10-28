@@ -116,7 +116,7 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   desktop_conversation_bootstrap: "conversation bootstrap",
   diffs: "diffs",
   memory_palace: "memory palace",
-  tui_cron: "TUI cron",
+  tui_cron: "TUI cron (retired)",
   ui_v2: "full-screen TUI",
 };
 

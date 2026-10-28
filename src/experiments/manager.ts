@@ -110,9 +110,9 @@ const EXPERIMENT_DEFINITIONS: readonly ExperimentDefinition[] = [
   },
   {
     id: "tui_cron",
-    label: "TUI cron scheduler",
+    label: "TUI cron scheduler (retired)",
     description:
-      "Fire scheduled tasks from the CLI when the desktop app isn't running.",
+      "Retired: the TUI no longer runs its own scheduler. Reliable scheduling is owned by the shared scheduler core (see /schedule). This entry is kept only so existing settings and the app-server protocol keep validating; toggling it has no effect.",
   },
   {
     id: "ui_v2",
