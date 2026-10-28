@@ -2,38 +2,40 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
-  __testFailNextRefreshSchedulerLease,
-  __testOverrideReadProcessIdentity,
-  __testThrowNextRefreshSchedulerLease,
-  type AddTaskInput,
   addTask,
-  type CronTask,
-  claimSchedulerLease,
-  computeJitter,
   deleteAllTasks,
   deleteTask,
   garbageCollect,
   getActiveTasks,
   getTask,
-  hasLiveSchedulerOwner,
-  isProcessAlive,
   listTasks,
   pauseTask,
-  readCronFile,
   recordTaskQueued,
+  resumeTask,
+  updateTask,
+} from "@/cron/cron-file";
+import { computeJitter } from "@/cron/cron-jitter";
+import {
+  __testFailNextRefreshSchedulerLease,
+  __testThrowNextRefreshSchedulerLease,
+  claimSchedulerLease,
+  hasLiveSchedulerOwner,
   refreshSchedulerLease,
   releaseSchedulerLease,
-  resumeTask,
-  type SchedulerOwner,
-  updateTask,
   verifySchedulerLease,
   withLock,
-} from "@/cron/cron-file";
+} from "@/cron/cron-lease";
+import { readCronFile } from "@/cron/cron-store";
+import type { AddTaskInput, CronTask, SchedulerOwner } from "@/cron/cron-types";
+import {
+  __testOverrideReadProcessIdentity,
+  isProcessAlive,
+} from "@/cron/process-identity";
 
 // ── Test setup ──────────────────────────────────────────────────────
 
 const TEST_DIR = path.join(import.meta.dir, "__cron_test_tmp__");
-const _CRON_PATH = path.join(TEST_DIR, "crons.json");
+const _CRON_PATH = path.join(TEST_DIR, "schedules.json");
 const _LOCK_PATH = path.join(TEST_DIR, "crons.lock");
 
 // Override the internal paths used by cronFile.ts for testing.

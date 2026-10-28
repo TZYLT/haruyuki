@@ -1,4 +1,4 @@
-import type { CronTask } from "./cron-file";
+import type { CronTask } from "./cron-types";
 import { formatScheduledTaskPrompt } from "./scheduled-task-prompt";
 
 export {

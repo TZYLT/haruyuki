@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CronTask } from "./cron-file";
+import type { CronTask } from "./cron-types";
 import {
   formatCronPrompt,
   formatScheduledTaskPrompt,
