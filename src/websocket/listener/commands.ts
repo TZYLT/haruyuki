@@ -520,6 +520,7 @@ async function compactLocalFromListener(
         reflectionSettings,
       })("compaction", {
         timeoutMinutes: reflectionSettings.timeoutMinutes,
+        deleteSessionOnSuccess: reflectionSettings.deleteSessionOnSuccess,
       });
     },
     regenerateDescription: () => {
@@ -639,6 +640,7 @@ async function handleCompactCommand(
           reflectionSettings,
         })("compaction", {
           timeoutMinutes: reflectionSettings.timeoutMinutes,
+          deleteSessionOnSuccess: reflectionSettings.deleteSessionOnSuccess,
         });
       },
       regenerateDescription: () => {
@@ -894,7 +896,10 @@ async function handleReflectCommand(
     memfsEnabled: settingsManager.isMemfsEnabled(agentId),
     triggerSource: "manual",
     instruction: parsed.instruction,
-    reflectionSettings: { timeoutMinutes: reflectionSettings.timeoutMinutes },
+    reflectionSettings: {
+      timeoutMinutes: reflectionSettings.timeoutMinutes,
+      deleteSessionOnSuccess: reflectionSettings.deleteSessionOnSuccess,
+    },
   });
   if (result.launched) {
     return "Started a reflection pass for this conversation.";

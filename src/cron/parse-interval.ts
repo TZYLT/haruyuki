@@ -408,6 +408,36 @@ export function cronMatchesTime(
   }
 }
 
+/**
+ * The parser-ready form of a product cron expression — the same normalization
+ * {@link cronMatchesTime} and {@link isValidCron} use.
+ *
+ * Signal sources need it to build a `cron-parser` iterator over an expression
+ * whose phase can never disagree with the matcher: handing the raw expression to
+ * the parser shifts one-based wildcard steps in day-of-month and month by one,
+ * so a step of two would mean days 1,3,5… where the matcher means 2,4,6….
+ * Returns `null` when the expression is outside the dialect.
+ */
+export function toParserCronExpression(expr: string): string | null {
+  return normalizeCronExpressionForParser(expr);
+}
+
+/**
+ * Project an instant into a task timezone's wall-clock minute, expressed on the
+ * UTC timeline — the same projection {@link cronMatchesTime} compares against.
+ *
+ * A signal source that wants "the slot before/after now" builds its iterator on
+ * this value with `tz: "UTC"`, so the iteration and the matcher agree even
+ * across DST changes. Invalid or absent timezones fall back to process-local
+ * wall time, matching the matcher's fallback.
+ */
+export function toTimezoneWallClockMinute(
+  date: Date,
+  timezone?: string | null,
+): Date {
+  return toWallClockMinute(date, timezone);
+}
+
 function toWallClockMinute(date: Date, timezone?: string | null): Date {
   if (timezone) {
     try {

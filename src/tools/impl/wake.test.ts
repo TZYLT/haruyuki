@@ -81,6 +81,13 @@ describe("Wake", () => {
       timezone: "UTC",
       recurring: false,
       scheduled_for: new Date("2026-09-24T16:00:00Z"),
+      // G-3/M-15: written explicitly, not left to the store's normalizer.
+      type: "prompt",
+      target: { kind: "existing", conversation_id: SCOPE.conversationId },
+      permission: "unrestricted",
+      catch_up: false,
+      timeout_minutes: 30,
+      wait_minutes: 10,
     });
     expect(payload(result)).toMatchObject({
       id: "schedule-local",
@@ -245,6 +252,18 @@ describe("Wake", () => {
         conversation_id: scope.conversationId,
       });
       expect(listTasks({ agent_id: scope.agentId })[0]?.timezone).toBe("UTC");
+      // The persisted record carries the defaults, so a later edit/panel shows
+      // the values the task actually runs with (M-15).
+      const persisted = listTasks({ agent_id: scope.agentId })[0];
+      expect(persisted?.permission).toBe("unrestricted");
+      expect(persisted?.catch_up).toBe(false);
+      expect(persisted?.timeout_minutes).toBe(30);
+      expect(persisted?.wait_minutes).toBe(10);
+      expect(persisted?.type).toBe("prompt");
+      expect(persisted?.target).toEqual({
+        kind: "existing",
+        conversation_id: scope.conversationId,
+      });
 
       const id = String(payload(created).id);
       const listed = await runWithRuntimeContext(scope, () =>

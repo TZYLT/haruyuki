@@ -1,19 +1,15 @@
-import { runAgentsSubcommand } from "./agents";
-import { runChannelsSubcommand } from "./channels";
-import { runConnectSubcommand } from "./connect";
-import { runCronSubcommand } from "./cron";
-import { runLocalBackendSubcommand } from "./local-backend";
-import { runMcpSubcommand } from "./mcp";
-import { runMemorySubcommand } from "./memory";
-import { runMessagesSubcommand } from "./messages";
-import { runModelSubcommand } from "./model";
-import { runModsSubcommand } from "./mods";
-import { runRecallSubcommand } from "./recall";
-import { runSecretSubcommand } from "./secret";
-import { runServerSubcommand } from "./server";
-import { runInstallSubcommand, runSkillsSubcommand } from "./skills";
-import { runStepsSubcommand } from "./steps";
-import { runTrajectoriesSubcommand } from "./trajectories";
+/**
+ * Subcommand dispatch.
+ *
+ * Every subcommand is imported on demand. The CLI entry imports this module
+ * before it knows what the user asked for, so a static import here would drag
+ * the whole subcommand graph (listener, backend, tools, providers) into every
+ * invocation — including `haruyuki schedule tick`, which the OS timer wakes once
+ * a minute and which must stay cheap when nothing is due (C-24, R-5.3.2).
+ *
+ * `subcommandNeedsEarlyBackendMode` stays synchronous and import-free: it runs
+ * before any subcommand module is loaded.
+ */
 
 async function runVersionSubcommand(): Promise<number> {
   const { getVersion } = await import("@/version");
@@ -21,9 +17,9 @@ async function runVersionSubcommand(): Promise<number> {
   return 0;
 }
 
-// The snapshot commands are wrapped rather than imported: they pull in the
-// archive and import pipelines, and `--help` must stay cheap. Both read local
-// data roots, so they also appear in `subcommandNeedsEarlyBackendMode`.
+// The snapshot commands pull in the archive and import pipelines, and `--help`
+// must stay cheap. Both read local data roots, so they also appear in
+// `subcommandNeedsEarlyBackendMode`.
 async function runSnapshotExportSubcommand(argv: string[]): Promise<number> {
   const { runSnapshotExport } = await import("./snapshot/cli");
   return runSnapshotExport(argv);
@@ -75,54 +71,58 @@ export async function runSubcommand(argv: string[]): Promise<number | null> {
       return runVersionSubcommand();
     case "memory":
     case "memfs": // legacy alias
-      return runMemorySubcommand(rest);
+      return (await import("./memory")).runMemorySubcommand(rest);
     case "agents":
-      return runAgentsSubcommand(rest);
+      return (await import("./agents")).runAgentsSubcommand(rest);
     case "model":
     case "models": // alias
-      return runModelSubcommand(rest);
+      return (await import("./model")).runModelSubcommand(rest);
     case "app-server":
       console.error(
         "Warning: `haruyuki app-server` is deprecated. Use `haruyuki server` instead.",
       );
-      return runServerSubcommand(rest);
+      return (await import("./server")).runServerSubcommand(rest);
     case "messages":
-      return runMessagesSubcommand(rest);
+      return (await import("./messages")).runMessagesSubcommand(rest);
     case "steps":
-      return runStepsSubcommand(rest);
+      return (await import("./steps")).runStepsSubcommand(rest);
     case "mcp":
-      return runMcpSubcommand(rest);
+      return (await import("./mcp")).runMcpSubcommand(rest);
     case "mods":
-      return runModsSubcommand(rest);
+      return (await import("./mods")).runModsSubcommand(rest);
     case "recall":
-      return runRecallSubcommand(rest);
+      return (await import("./recall")).runRecallSubcommand(rest);
     case "secret":
-      return runSecretSubcommand(rest);
+      return (await import("./secret")).runSecretSubcommand(rest);
     case "server":
-      return runServerSubcommand(rest);
+      return (await import("./server")).runServerSubcommand(rest);
     case "connect":
-      return runConnectSubcommand(rest);
+      return (await import("./connect")).runConnectSubcommand(rest);
     case "install":
-      return runInstallSubcommand(rest);
+      return (await import("./skills")).runInstallSubcommand(rest);
     case "skills":
-      return runSkillsSubcommand(rest);
+      return (await import("./skills")).runSkillsSubcommand(rest);
     case "cron":
-      return runCronSubcommand(rest);
+      return (await import("./cron")).runCronSubcommand(rest);
+    case "schedule":
+      // Deliberately NOT in `subcommandNeedsEarlyBackendMode`: the whole point
+      // of `schedule tick` is to exit before the backend is configured (C-24).
+      return (await import("./schedule")).runScheduleSubcommand(rest);
     case "channels":
-      return runChannelsSubcommand(rest);
-    case "channel-gateway": {
-      const { runChannelGatewaySubcommand } = await import("./channel-gateway");
-      return runChannelGatewaySubcommand(rest);
-    }
+      return (await import("./channels")).runChannelsSubcommand(rest);
+    case "channel-gateway":
+      return (await import("./channel-gateway")).runChannelGatewaySubcommand(
+        rest,
+      );
     case "local-backend":
-      return runLocalBackendSubcommand(rest);
+      return (await import("./local-backend")).runLocalBackendSubcommand(rest);
     case "export":
       return runSnapshotExportSubcommand(rest);
     case "import":
       return runSnapshotImportSubcommand(rest);
     case "trajectories":
     case "trajectory": // alias
-      return runTrajectoriesSubcommand(rest);
+      return (await import("./trajectories")).runTrajectoriesSubcommand(rest);
     default:
       return null;
   }

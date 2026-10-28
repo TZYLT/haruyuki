@@ -2,7 +2,7 @@
  * Signal-source registry (F-05, R-5.4.1/R-5.4.3).
  *
  * The schedule core asks the registry "what is due now?" and must never grow a
- * special case for a concrete feature: a future dream/reflection signal source
+ * special case for a concrete feature: a future threshold/cursor signal source
  * registers here exactly like the built-in cron one. That is the whole contract
  * — this module knows nothing about tasks beyond their id and occurrence.
  *

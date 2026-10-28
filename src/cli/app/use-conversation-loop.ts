@@ -107,6 +107,7 @@ import { telemetry } from "@/telemetry";
 import { replaceClientPreferences } from "@/tools/client-preferences";
 import { analyzeToolApproval, type ToolExecutionResult } from "@/tools/manager";
 import type { PreparedScopeToolContext } from "@/tools/toolset";
+import { consumeScheduledRunContext } from "@/usage/scheduled-run-context";
 import { debugLog, debugWarn, isDebugEnabled } from "@/utils/debug";
 import type { QueuedMessage } from "@/utils/message-queue-bridge";
 import { maybeAutoTitleConversation } from "./auto-title";
@@ -1758,6 +1759,9 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
               setStreaming(false);
               closeTrajectorySegment();
               syncTrajectoryElapsedBase();
+              // F-05: the user's queued message ends this turn here; settle a
+              // scheduled run as cancelled rather than leaving it to time out.
+              consumeScheduledRunContext({ outcome: "cancelled" });
               return;
             }
 
@@ -2028,6 +2032,8 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
                   setStreaming(false);
                   closeTrajectorySegment();
                   syncTrajectoryElapsedBase();
+                  // F-05: same terminal queue-cancel ending (see the first).
+                  consumeScheduledRunContext({ outcome: "cancelled" });
                   return;
                 }
 
@@ -2096,6 +2102,8 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
                 setStreaming(false);
                 closeTrajectorySegment();
                 syncTrajectoryElapsedBase();
+                // F-05: same terminal queue-cancel ending (see the first).
+                consumeScheduledRunContext({ outcome: "cancelled" });
                 return;
               }
             } finally {
@@ -2520,6 +2528,11 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
             notify("error", "Stream error"); // Notify user of error
             refreshDerived();
             resetTrajectoryBases();
+            // F-05: a turn that ends in error settles a scheduled run's ledger
+            // entry now. Without it the TUI runner would keep waiting for the
+            // task's timeout and report the run as `timeout`. Consuming is
+            // idempotent — a completed or cancelled turn already consumed.
+            consumeScheduledRunContext({ outcome: "failed" });
             return;
           }
 
@@ -2639,6 +2652,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
               sendDesktopNotification();
               refreshDerived();
               resetTrajectoryBases();
+              consumeScheduledRunContext({ outcome: "failed" });
               return;
             }
           } else {
@@ -2674,6 +2688,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
           notify("error", "Execution error"); // Notify user of error
           refreshDerived();
           resetTrajectoryBases();
+          consumeScheduledRunContext({ outcome: "failed" });
           return;
         }
       } catch (e) {
@@ -2720,6 +2735,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
         notify("error", "Processing error"); // Notify user of error
         refreshDerived();
         resetTrajectoryBases();
+        consumeScheduledRunContext({ outcome: "failed" });
       } finally {
         if (!preserveTranscriptStartForApproval) {
           pendingTranscriptStartLineIndexRef.current = null;

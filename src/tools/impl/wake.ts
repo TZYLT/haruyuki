@@ -224,6 +224,19 @@ function createWake(
     recurring: timing.recurring,
     prompt,
     scheduled_for: timing.scheduledFor,
+    // F-05 G-3: write the defaults explicitly instead of relying on the store's
+    // normalizer. Values are Q-45/Q-53's, identical to the old behaviour:
+    // full access (what `wake` tasks always had), no catch-up, 30-minute run
+    // ceiling, 10-minute wait for a busy conversation.
+    type: "prompt",
+    target:
+      scope.conversationId === "new"
+        ? { kind: "new", hidden: false }
+        : { kind: "existing", conversation_id: scope.conversationId },
+    permission: "unrestricted",
+    catch_up: false,
+    timeout_minutes: 30,
+    wait_minutes: 10,
   };
   const created = (deps.addLocal ?? addTask)(input);
   const warnings = [created.warning].filter((warning): warning is string =>

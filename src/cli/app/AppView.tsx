@@ -36,6 +36,11 @@ import { PersonalitySelector } from "@/cli/components/PersonalitySelector";
 import { PinDialog } from "@/cli/components/PinDialog";
 import { ProviderSelector } from "@/cli/components/ProviderSelector";
 import { RecallOverlay } from "@/cli/components/RecallOverlay";
+import {
+  isScheduleOverlay,
+  ScheduleOverlayRoute,
+} from "@/cli/components/ScheduleOverlay";
+import { ScheduleWizard } from "@/cli/components/ScheduleWizard";
 import { SleeptimeSelector } from "@/cli/components/SleeptimeSelector";
 import { SubagentManager } from "@/cli/components/SubagentManager";
 import { SystemPromptSelector } from "@/cli/components/SystemPromptSelector";
@@ -624,6 +629,27 @@ export function AppView(props: AppViewRenderProps) {
                 agentId={agentId}
                 conversationId={conversationId}
                 searchQuery={searchQuery}
+                onClose={closeOverlay}
+              />
+            )}
+
+            {/* F-05: the schedule faces. One host for list/detail/run-log — they
+                share a model and differ only in which view opens — plus the
+                wizard, which owns a different key table. Mounted through
+                `ScheduleOverlayRoute` so a `show`/`logs` command's task id can
+                ride the one-shot bridge (the submit layer cannot pass props). */}
+            {activeOverlay !== null && isScheduleOverlay(activeOverlay) && (
+              <ScheduleOverlayRoute
+                overlay={activeOverlay}
+                agentId={agentId}
+                onClose={closeOverlay}
+              />
+            )}
+
+            {activeOverlay === "schedule-add" && (
+              <ScheduleWizard
+                agentId={agentId}
+                currentConversationId={conversationId}
                 onClose={closeOverlay}
               />
             )}

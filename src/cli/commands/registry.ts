@@ -16,6 +16,7 @@ import {
 import { formatHubHelpFor } from "./hubs";
 import { handleMemoryRepositoryCommand } from "./memory-repository";
 import { handleRecallCommand } from "./recall";
+import { handleScheduleCommand } from "./schedule";
 import { handleSecretCommand } from "./secret";
 import { handleSystemRemindersCommand } from "./system-reminders";
 import { handleTopicCommand } from "./topic";
@@ -560,6 +561,19 @@ export const commands: Record<string, Command> = {
     args: "[on|off|status]",
     order: 36.8,
     handler: (args: string[]) => handleSystemRemindersCommand(args),
+  },
+  "/schedule": {
+    // F-05 §5.12: the hub for the nine scheduled-task subcommands. No
+    // experiment gate — `tui_cron` was retired with the shadow scheduler and is
+    // a different thing; this command is always available. The TUI claims the
+    // face-bearing forms (`list`/`show`/`add`/`logs`/`run`) in the submit
+    // layer, so this handler answers the channels without a terminal and the
+    // bare `/schedule` help.
+    desc: "Scheduled tasks: list, show, add, run, pause, resume, delete, logs, autostart",
+    args: "<list|show|add|run|pause|resume|delete|logs|autostart>",
+    order: 36.2,
+    handler: (args, scope) =>
+      handleScheduleCommand(args, { agentId: scope?.agentId }),
   },
   "/terminal": {
     desc: "Setup terminal shortcuts [--revert]",

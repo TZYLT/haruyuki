@@ -58,6 +58,7 @@ import {
   type CommandFinishedEvent,
   createCommandRunner,
 } from "@/cli/commands/runner";
+import { startupScheduleSummaryLines } from "@/cli/commands/schedule";
 import type { BtwState } from "@/cli/components/BtwPane";
 import type { ModelSelectorSelection } from "@/cli/components/ModelSelector";
 import { setRecallDisplay } from "@/cli/components/transcript-display-state";
@@ -85,6 +86,7 @@ import { getReflectionSettings } from "@/cli/helpers/memory-reminder";
 import type { ExecutionPhase } from "@/cli/helpers/phase-visuals";
 import { maybeLaunchPostTurnReflection } from "@/cli/helpers/post-turn-reflection";
 import { launchReflectionSubagent } from "@/cli/helpers/reflection-launcher";
+import { useTuiScheduleHost } from "@/cli/helpers/schedule-host";
 import { getStartupModelDisplayOverride } from "@/cli/helpers/startup-model-display";
 import type { ApprovalRequest } from "@/cli/helpers/stream";
 import {
@@ -1378,6 +1380,15 @@ export function App({
     [appendTaskNotificationEvents],
   );
 
+  // F-05: the TUI's host leg. While this session is alive the shared scheduler
+  // core is ticked every 60 s with the TUI's own task runner; the host owns the
+  // interval, the scheduler lease ("all") and the run-notification flush, so
+  // this file gains one call and no state (src/cli/AGENTS.md, C-27).
+  useTuiScheduleHost({
+    appendTaskNotificationEvents,
+    isConversationBusy: isAgentBusy,
+  });
+
   // Queue callbacks remove consumed display entries by item ID.
   const consumeQueuedMessages = useCallback((): QueuedMessage[] | null => {
     const len = tuiQueueRef.current?.length ?? 0;
@@ -2381,6 +2392,11 @@ export function App({
       statusLines.push(...startupWarnings);
       statusLines.push(headerMessage);
       statusLines.push(...commandHints);
+      // F-05 R-5.11.2: one block for what ran while this session was closed.
+      // The helper reads the pending watermark once per process and marks it
+      // seen, so the resumed and the fresh-session paths cannot consume it
+      // twice (only one of them runs, but the rule is the helper's).
+      statusLines.push(...startupScheduleSummaryLines());
 
       buffersRef.current.byId.set(statusId, {
         kind: "status",
@@ -4186,6 +4202,11 @@ export function App({
       statusLines.push(...startupWarnings);
       statusLines.push(headerMessage);
       statusLines.push(...commandHints);
+      // F-05 R-5.11.2: one block for what ran while this session was closed.
+      // The helper reads the pending watermark once per process and marks it
+      // seen, so the resumed and the fresh-session paths cannot consume it
+      // twice (only one of them runs, but the rule is the helper's).
+      statusLines.push(...startupScheduleSummaryLines());
 
       buffersRef.current.byId.set(statusId, {
         kind: "status",

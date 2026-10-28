@@ -20,8 +20,10 @@ import {
 import type {
   AddTaskInput,
   AddTaskResult,
+  CronRunOutcome,
   CronTask,
   CronTaskStatus,
+  RunOutcome,
   ScheduleFileData,
 } from "./cron-types";
 import { isValidCron } from "./parse-interval";
@@ -94,6 +96,15 @@ export function addTask(input: AddTaskInput): AddTaskResult {
       timezone,
       recurring: input.recurring,
       prompt: input.prompt,
+      // F-05 v2 fields: `undefined` is left to `normalizeScheduleTask`, which
+      // fills every one of them with the documented default (Q-53).
+      type: input.type,
+      payload: input.payload,
+      target: input.target,
+      permission: input.permission,
+      catch_up: input.catch_up,
+      timeout_minutes: input.timeout_minutes,
+      wait_minutes: input.wait_minutes,
       status: "active",
       created_at: now.toISOString(),
       // Recurring tasks do not auto-expire (expires_at: null)
@@ -401,3 +412,39 @@ export function getActiveTasks(): CronTask[] {
 
 /** Store mtime, for the scheduler's change detection. */
 export { getScheduleFileMtime };
+
+// ── G-4: the persisted outcome vocabulary ───────────────────────────
+
+/**
+ * Map an F-05 terminal outcome onto the persisted `last_run_outcome` enum.
+ *
+ * The old enum predates F-05 and only knows `queued` / `missed` / `failed` /
+ * `skipped`, so three of the five v2 outcomes have no truthful legacy value:
+ *
+ * | v2          | legacy     | why                                        |
+ * |-------------|------------|--------------------------------------------|
+ * | `success`   | `null`     | the old enum had no success value at all   |
+ * | `failed`    | `failed`   | same meaning                               |
+ * | `skipped`   | `skipped`  | same meaning (F3)                          |
+ * | `timeout`   | `failed`   | a timeout is an F2 failure for the streak  |
+ * | `cancelled` | `null`     | neither a failure nor a skip; user did it  |
+ *
+ * `null` means "write nothing": the run log's `runOutcome` is the authority for
+ * these runs, and inventing `failed` for a success would pause healthy tasks
+ * after three runs (R-5.9.3). The enum itself is not extended — the existing
+ * tests and the CLI's JSON shape pin it (C-3).
+ */
+export function legacyRunOutcomeFor(
+  outcome: RunOutcome,
+): CronRunOutcome | null {
+  switch (outcome) {
+    case "success":
+    case "cancelled":
+      return null;
+    case "failed":
+    case "timeout":
+      return "failed";
+    case "skipped":
+      return "skipped";
+  }
+}

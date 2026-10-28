@@ -68,6 +68,13 @@ export type CronPromptQueueItem = QueueItemBase & {
   text: string;
   /** Cron task ID for tracing. */
   cronTaskId: string;
+  /**
+   * Scheduler run id that produced this item (F-05 C-19).
+   *
+   * Carried on the item so the turn's ledger row and the run log can be joined
+   * on one id; absent for items enqueued before F-05.
+   */
+  runId?: string;
 };
 
 export type ModContinueQueueItem = QueueItemBase & {

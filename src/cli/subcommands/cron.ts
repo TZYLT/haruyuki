@@ -11,9 +11,11 @@
  *   haruyuki cron delete <id|name>   (alias: remove)
  *   haruyuki cron delete --all [--agent <id>]
  *
- * Every schedule is device-local: it lives in ~/.haruyuki/crons.json and fires
- * from the WS listener process on this device. Durable Cloud schedules were
- * removed with the rest of the Cloud surface.
+ * Every schedule is device-local: it lives in `schedules.json` under the
+ * harness root (`~/.haruyuki` unless `HARUYUKI_HOME` moves it), next to the
+ * read-only `crons.v1.json` backup the F-05 migration left behind. Runs fire from
+ * the WS listener process on this device. Durable Cloud schedules were removed
+ * with the rest of the Cloud surface.
  */
 
 import { parseArgs } from "node:util";

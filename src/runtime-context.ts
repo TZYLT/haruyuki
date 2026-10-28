@@ -36,6 +36,14 @@ export interface RuntimeContextSnapshot {
   workingDirectoryRecoveredFrom?: string | null;
   toolContextId?: string | null;
   permissionMode?: RuntimePermissionMode;
+  /**
+   * Tier a child subagent process should launch with (F-05 C-17).
+   *
+   * Only a scheduler-triggered reflection sets this, to hand the scheduled
+   * task's permission tier to `--permission-mode`. Absent keeps the historical
+   * `unrestricted` default, so end-of-turn reflection is unchanged.
+   */
+  subagentPermissionMode?: RuntimePermissionMode;
   workspaceSandbox?: RuntimeWorkspaceSandbox;
   executionSettings?: RuntimeExecutionSettings;
 }

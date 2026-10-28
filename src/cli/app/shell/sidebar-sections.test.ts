@@ -7,6 +7,7 @@ import {
   fitSidebarSections,
   SIDEBAR_SECTIONS,
   type SidebarProjection,
+  type SidebarScheduleRow,
   type SidebarSectionSpec,
   sidebarContentColumns,
   sidebarGeometry,
@@ -228,6 +229,7 @@ function projection(
     agents: null,
     today: null,
     memfs: null,
+    schedules: null,
     ...overrides,
   };
 }
@@ -290,7 +292,10 @@ describe("buildSidebarSections", () => {
 
   test("an empty agent list hides its section instead of printing zero", () => {
     const ids = buildSidebarSections(projection()).map((item) => item.id);
-    expect(ids).toEqual(["context", "turn", "usage", "memfs"]);
+    // `schedules` is present even when empty: R-5.12.5 asks for a placeholder
+    // rather than a missing section, so it is the one section an empty source
+    // still draws.
+    expect(ids).toEqual(["context", "turn", "usage", "schedules", "memfs"]);
   });
 
   test("three agents are named and the rest become +N", () => {
@@ -451,6 +456,7 @@ describe("buildSidebarSections", () => {
       "context",
       "turn",
       "usage",
+      "schedules",
       "agents",
       "memfs",
     ]);
@@ -460,5 +466,77 @@ describe("buildSidebarSections", () => {
     expect(
       buildSidebarSections(projection(), onlyTurn).map((item) => item.id),
     ).toEqual(["turn"]);
+  });
+});
+
+describe("the 计划任务 section (M-16)", () => {
+  function schedulesSection(
+    rows: readonly SidebarScheduleRow[] | null,
+    width = 28,
+  ) {
+    const spec = buildSidebarSections(
+      projection({ width, schedules: rows }),
+    ).find((item) => item.id === "schedules");
+    return spec;
+  }
+
+  test("shows at most three runs, name, next due and status", () => {
+    const spec = schedulesSection([
+      { id: "a", name: "晨报", when: "09:00", status: "active" },
+      { id: "b", name: "周报", when: "10-30", status: "paused" },
+      { id: "c", name: "抓取", when: "11:00", status: "paused · auto" },
+      { id: "d", name: "第四条", when: "12:00", status: "active" },
+    ]);
+    expect(spec?.title).toBe("计划任务");
+    expect(spec?.detail).toHaveLength(4);
+    expect(spec?.detail[0]).toBe("• 晨报 09:00");
+    expect(spec?.detail[1]).toContain("暂停");
+    // The reason a task stopped is never abbreviated away.
+    expect(spec?.detail[2]).toContain("自动暂停");
+    // The surplus is a count, not a fourth task.
+    expect(spec?.detail[3]).toBe("+1");
+    expect(spec?.detail.join("\n")).not.toContain("第四条");
+  });
+
+  test("an empty store paints a placeholder, not a missing section", () => {
+    const spec = schedulesSection([]);
+    expect(spec?.detail).toEqual(["暂无计划任务"]);
+    expect(spec?.summary).toBe("计划任务 0");
+  });
+
+  test("an unread store says so instead of pretending there are none", () => {
+    const spec = schedulesSection(null);
+    expect(spec?.detail).toEqual(["读取中…"]);
+  });
+
+  test("the section gives way before the transcript's own numbers", () => {
+    const specs = buildSidebarSections(
+      projection({
+        schedules: [{ id: "a", name: "晨报", when: "09:00", status: "active" }],
+      }),
+    );
+    const fitted = fitSidebarSections(specs, 9);
+    const order = fitted.map((item) => item.spec.id);
+    // It survives a short band that already dropped MemFS; when the band gets
+    // shorter still, the rail degrades whole sections from the bottom.
+    expect(order).not.toContain("memfs");
+    expect(fitSidebarSections(specs, 4).length).toBeLessThan(fitted.length);
+  });
+
+  test("a long task name is trimmed to the rail, never wrapped", () => {
+    const spec = schedulesSection(
+      [
+        {
+          id: "a",
+          name: "一个非常非常长的计划任务名称会撑破侧栏",
+          when: "09:00",
+          status: "active",
+        },
+      ],
+      18,
+    );
+    for (const line of spec?.detail ?? []) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(18);
+    }
   });
 });

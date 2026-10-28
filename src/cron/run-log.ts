@@ -17,22 +17,46 @@ import {
 import path from "node:path";
 import { debugWarn } from "@/utils/debug";
 import { getCronFilePath } from "./cron-store";
-import type { CronRunOutcome, CronRunReason, CronTask } from "./cron-types";
+import type {
+  CronRunOutcome,
+  CronRunReason,
+  CronTask,
+  RunOutcome,
+} from "./cron-types";
 
 export type CronRunLogStatus = "ok" | "error" | "skipped";
+
+/** The record fields a run-log line needs; a `ScheduleTaskV2` can supply them. */
+export type CronRunLogTaskRef = Pick<
+  CronTask,
+  "id" | "agent_id" | "conversation_id"
+>;
 
 export interface CronRunLogEntry {
   ts: number;
   jobId: string;
   action: "finished";
   status?: CronRunLogStatus;
+  /**
+   * Legacy outcome vocabulary (`queued` / `missed` / `failed` / `skipped`).
+   *
+   * It cannot express `success` / `timeout` / `cancelled` (G-4), so F-05 runs
+   * also write `runOutcome` and leave this field unset where the old enum has no
+   * truthful value. Both readers and writers keep the same shape as before.
+   */
   outcome?: CronRunOutcome;
+  /** F-05 terminal outcome — the authoritative one (G-4). */
+  runOutcome?: RunOutcome;
   reason?: CronRunReason;
   error?: string;
   summary?: string;
   agentId?: string;
   conversationId?: string;
   runId?: string;
+  /** Host that executed the run (`TaskRunnerPort.host`). */
+  host?: "long-lived" | "short-lived";
+  /** Wall-clock duration of the run, from dispatch to terminal. */
+  durationMs?: number;
   runAtMs?: number;
   queueItemId?: string;
   scheduledFor?: string | null;
@@ -179,12 +203,15 @@ function parseAllRunLogEntries(raw: string, jobId?: string): CronRunLogEntry[] {
         action: "finished",
         status: obj.status,
         outcome: obj.outcome,
+        runOutcome: obj.runOutcome,
         reason: obj.reason,
         error: obj.error,
         summary: obj.summary,
         agentId: obj.agentId,
         conversationId: obj.conversationId,
         runId: obj.runId,
+        host: obj.host,
+        durationMs: obj.durationMs,
         runAtMs: obj.runAtMs,
         queueItemId: obj.queueItemId,
         scheduledFor: obj.scheduledFor,
@@ -239,7 +266,7 @@ export function readCronRunLogEntriesPage(
 }
 
 export function appendCronRunLogForTask(
-  task: CronTask,
+  task: CronRunLogTaskRef,
   entry: Omit<CronRunLogEntry, "action" | "agentId" | "jobId" | "ts"> & {
     ts?: number;
   },
@@ -255,7 +282,7 @@ export function appendCronRunLogForTask(
 }
 
 export function safeAppendCronRunLogForTask(
-  task: CronTask,
+  task: CronRunLogTaskRef,
   entry: Parameters<typeof appendCronRunLogForTask>[1],
 ): void {
   try {

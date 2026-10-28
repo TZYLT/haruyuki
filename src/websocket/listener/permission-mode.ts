@@ -19,6 +19,15 @@ import type { ListenerRuntime } from "./types";
 
 export type ConversationPermissionModeState = {
   mode: PermissionMode;
+  /**
+   * True for the duration of one scheduled run (F-05 Q-51).
+   *
+   * The F-05 task runner writes the task's tier into `mode` and this flag
+   * together, and restores both when the run ends. While set, the permission
+   * checker denies every `ask` instead of building an approval request: nobody
+   * is at the keyboard, and a pending approval would hang the run.
+   */
+  unattended?: boolean;
 };
 
 export function getPermissionModeScopeKey(

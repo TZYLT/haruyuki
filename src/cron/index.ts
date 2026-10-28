@@ -21,6 +21,7 @@ export {
   garbageCollect,
   getActiveTasks,
   getTask,
+  legacyRunOutcomeFor,
   listTasks,
   pauseTask,
   recordTaskQueued,
@@ -46,7 +47,11 @@ export {
   verifySchedulerLease,
   withLock,
 } from "./cron-lease";
-export { CRON_SIGNAL_SOURCE_ID, createCronSignalSource } from "./cron-signal";
+export {
+  CRON_SIGNAL_SOURCE_ID,
+  createCronSignalSource,
+  ensureCronSignalSourceRegistered,
+} from "./cron-signal";
 // ── Storage, migration and the frozen-view adapters ─────────────────
 export {
   applyScheduleTaskV2,
@@ -57,6 +62,7 @@ export {
   getScheduleFileMtime,
   getScheduleFilePath,
   getScheduleTask,
+  listScheduleTasks,
   type MigrationResult,
   migrateLegacyCronFile,
   normalizeScheduleTask,
@@ -109,6 +115,13 @@ export {
   type SchedulePreflightResult,
 } from "./preflight";
 export { isProcessAlive } from "./process-identity";
+// ── Prompt formatting (owner: prompt.ts) ────────────────────────────
+export {
+  type CronPromptTiming,
+  formatCronPrompt,
+  formatTimezoneQualifiedIso,
+  getIntendedCronOccurrence,
+} from "./prompt";
 // ── Run log ─────────────────────────────────────────────────────────
 export {
   appendCronRunLog,
@@ -131,22 +144,41 @@ export {
   type RunSummaryEntry,
   readPendingRunSummary,
 } from "./run-summary";
-// ── Long-lived host adapter (M1 rewrites the body) ──────────────────
+// ── Process-local schedule events (Lead, M0.5) ──────────────────────
 export {
-  type CronPromptTiming,
-  formatCronPrompt,
-  formatTimezoneQualifiedIso,
-  getIntendedCronOccurrence,
+  clearScheduleEventSubscribers,
+  emitScheduleEvent,
+  type ScheduleEvent,
+  type ScheduleEventKind,
+  type ScheduleEventListener,
+  scheduleEventSubscriberCount,
+  subscribeScheduleEvents,
+} from "./schedule-events";
+// ── Long-lived host adapter (M1) ────────────────────────────────────
+export {
+  CRON_SCHEDULER_SCOPE_ENV,
+  isSchedulerRunning,
+  resolveCronSchedulerScope,
+  runCronTaskNow,
+  setSchedulerTaskRunner,
+  startScheduler,
+  stopScheduler,
+  taskMatchesCronSchedulerScope,
+} from "./scheduler";
+// ── Scheduler core + policy helpers (M1) ────────────────────────────
+export {
+  applyInvalidRecurringTask,
+  classifyRunFailure,
+  handleInvalidRecurringTask,
   handleMissedOneShot,
   handleTaskPreflight,
-  shouldFireTask,
-  wrapCronPrompt,
-} from "./scheduler";
-// ── Scheduler core + short-lived host (M1) ──────────────────────────
-export {
+  minuteKey,
+  runScheduledTaskNow,
   runSchedulerTick,
   type SchedulerTickInput,
   type SchedulerTickResult,
+  shouldFireTask,
+  wrapCronPrompt,
 } from "./scheduler-core";
 // ── Signal sources (M1) ─────────────────────────────────────────────
 export {
@@ -160,7 +192,22 @@ export {
 // ── Task execution (M2) ─────────────────────────────────────────────
 export {
   isAllowedScheduledCommand,
+  isScheduledTaskPreflightError,
+  isTaskPermissionTier,
+  type ParsedScheduledCommand,
+  parseScheduledCommand,
+  permissionModeForTier,
+  type RunScheduledTaskInput,
+  resolveTaskPermissionTier,
+  resolveUnattendedApproval,
   runScheduledTask,
+  runScheduledTaskWithHost,
+  type ScheduledCommandContext,
+  type ScheduledPromptRunResult,
+  type ScheduledTaskHostPort,
+  type ScheduledTaskPolicyInput,
+  ScheduledTaskPreflightError,
   type ScheduledTaskRunResult,
+  TARGET_BUSY_POLL_MS,
   TASK_COMMAND_WHITELIST,
 } from "./task-run";

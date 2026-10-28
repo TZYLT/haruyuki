@@ -10,6 +10,7 @@ import {
 import type { AppViewProps } from "@/cli/app/AppView";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { type MemfsStats, readMemfsStats } from "@/cli/helpers/memfs-stats";
+import { useScheduleTasks } from "@/cli/helpers/schedule-store";
 import { readUsageLedger } from "@/usage/ledger";
 import { summarizeUsage, type UsageSummary } from "@/usage/summary";
 import {
@@ -17,6 +18,7 @@ import {
   fitSidebarSections,
   SIDEBAR_GUTTER_COLUMNS,
   type SidebarProjection,
+  type SidebarScheduleRow,
   sidebarContentColumns,
 } from "./sidebar-sections";
 
@@ -129,6 +131,8 @@ export type SidebarProjectionInputs = {
   /** Today's ledger summary, or `null` while the read is still in flight. */
   today: UsageSummary["today"] | null;
   memfs: MemfsStats | null;
+  /** The current agent's planned runs, newest-due first (F-05, R-5.12.5). */
+  schedules: readonly SidebarScheduleRow[] | null;
 };
 
 /**
@@ -163,6 +167,7 @@ export function sidebarProjectionFrom(
         }
       : null,
     memfs: inputs.memfs,
+    schedules: inputs.schedules,
   };
 }
 
@@ -235,6 +240,27 @@ export function ContextSidebarSlot({
 
   const stats = view.sessionStatsRef.current.getSnapshot();
   const now = Date.now();
+
+  // F-05: the planned runs of *this* agent, from the schedule store. The hook
+  // gives the rail three things for free — the read, the 30 s low-frequency
+  // refresh and the event subscription — and, because the snapshot object is
+  // stable when nothing changed, a tick that reads the same data does not
+  // re-render this subtree (`《38》§6.6`, C-27).
+  const scheduleSnapshot = useScheduleTasks();
+  const schedules = scheduleSnapshot.loaded
+    ? scheduleSnapshot.rows
+        .filter((row) => row.agentId === view.agentId)
+        .slice(0, 3)
+        .map(
+          (row): SidebarScheduleRow => ({
+            id: row.id,
+            name: row.name,
+            when: row.nextShort,
+            status: row.statusLabel,
+          }),
+        )
+    : null;
+
   const projection = sidebarProjectionFrom({
     stats,
     usedContextTokens: view.usedContextTokens ?? null,
@@ -248,6 +274,7 @@ export function ContextSidebarSlot({
     })),
     today,
     memfs,
+    schedules,
   });
 
   return (

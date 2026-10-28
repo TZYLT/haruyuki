@@ -1,6 +1,9 @@
 import type { MessageCreate } from "@letta-ai/letta-client/resources/agents/agents";
 import WebSocket from "ws";
-import { startScheduler as startCronScheduler } from "@/cron/scheduler";
+import {
+  setSchedulerTaskRunner,
+  startScheduler as startCronScheduler,
+} from "@/cron/scheduler";
 import { createSharedReminderState } from "@/reminders/state";
 import { getCurrentWorkingDirectory } from "@/runtime-context";
 import {
@@ -35,6 +38,7 @@ import {
   handleChangeDeviceStateInput,
 } from "./control-inputs";
 import { getOrCreateScopedRuntime } from "./conversation-runtime";
+import { createListenerCronRunner } from "./cron-host";
 import { loadPersistedCwdMap } from "./cwd";
 import {
   createExternalToolNotificationState,
@@ -382,6 +386,14 @@ export async function startConnectedListenerRuntime(
     });
 
     if (shouldStartCronScheduler) {
+      // F-05: the host provides the runner, the adapter provides the tick.
+      setSchedulerTaskRunner(
+        createListenerCronRunner({
+          transport: processTransport,
+          opts: opts as StartListenerOptions,
+          processQueuedTurn,
+        }),
+      );
       startCronScheduler(
         processTransport,
         opts as StartListenerOptions,
@@ -547,14 +559,44 @@ export interface StartLocalChannelListenerOptions {
   onStatusChange?: StartListenerOptions["onStatusChange"];
   onLog?: StartListenerOptions["onLog"];
   onWsEvent?: StartListenerOptions["onWsEvent"];
+  /**
+   * F-05 short-lived host (C-5): `false` keeps this runtime from claiming the
+   * scheduler lease or starting a tick loop. It still builds the conversation
+   * runtimes the cron runner needs.
+   */
+  startCronScheduler?: boolean;
+  /** Skip process services (cron tick does not need subagent/message routing). */
+  startProcessServices?: boolean;
 }
+
+/** What a caller needs to drive one scheduled run on this runtime. */
+export interface LocalChannelListenerHandle {
+  runtime: ListenerRuntime;
+  transport: ListenerTransport;
+  options: StartListenerOptions;
+  processQueuedTurn: ProcessQueuedTurn;
+}
+
 /**
  * Start a listener runtime for local channel adapters without environment
  * registration or a remote WebSocket server.
+ *
+ * Returns nothing; use {@link startLocalChannelListenerWithHandle} when the
+ * caller needs the transport/queue processor (F-05's short-lived host does).
  */
 export async function startLocalChannelListener(
   opts: StartLocalChannelListenerOptions,
 ): Promise<void> {
+  await startLocalChannelListenerWithHandle(opts);
+}
+
+/**
+ * Same start-up, but hands back the pieces a caller needs to drive one run, or
+ * `null` when it failed (`opts.onError` already fired).
+ */
+export async function startLocalChannelListenerWithHandle(
+  opts: StartLocalChannelListenerOptions,
+): Promise<LocalChannelListenerHandle | null> {
   const existingRuntime = getActiveRuntime();
   if (existingRuntime) {
     stopRuntime(existingRuntime, true);
@@ -590,14 +632,25 @@ export async function startLocalChannelListener(
       transport,
       opts,
       processQueuedTurn,
-      { startHeartbeat: false, startCronScheduler: true },
+      {
+        startHeartbeat: false,
+        startCronScheduler: opts.startCronScheduler ?? true,
+        startProcessServices: opts.startProcessServices ?? true,
+      },
     );
+    return {
+      runtime,
+      transport,
+      options: connectionOptions,
+      processQueuedTurn,
+    };
   } catch (error) {
     stopRuntime(runtime, true);
     if (getActiveRuntime() === runtime) {
       setActiveRuntime(null);
     }
     opts.onError(error instanceof Error ? error : new Error(String(error)));
+    return null;
   }
 }
 

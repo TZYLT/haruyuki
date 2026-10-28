@@ -11,6 +11,7 @@
 
 import type { SessionStats, TrajectoryStatsSnapshot } from "@/agent/stats";
 import { appendUsageRecord, buildUsageRecord } from "@/usage/ledger";
+import { consumeScheduledRunContext } from "@/usage/scheduled-run-context";
 
 export interface TurnUsageIdentity {
   agentId: string | null;
@@ -18,13 +19,36 @@ export interface TurnUsageIdentity {
   model: string | null;
 }
 
+/**
+ * How the turn ended, in the vocabulary the scheduled runner waits on.
+ *
+ * `cancelled` is the only one the TUI names today; the other two exist so a
+ * caller that knows better can say so, and so a scheduled run never has to fall
+ * back to the runner's timeout to learn that its turn failed.
+ */
+export type TurnEndOutcome = "completed" | "failed" | "cancelled" | "timeout";
+
+export interface TurnUsageOptions {
+  cancelled?: boolean;
+  /** Overrides the outcome derived from `cancelled`. */
+  outcome?: TurnEndOutcome;
+}
+
 /** Append one ledger record for the turn that just ended. */
 export function appendTurnUsageRecord(
   snapshot: TrajectoryStatsSnapshot,
   identity: TurnUsageIdentity,
-  options: { cancelled?: boolean } = {},
+  options: TurnUsageOptions = {},
 ): Promise<boolean> {
   const usage = snapshot.usage;
+  // F-05: a turn the scheduler started carries its own `runId` from the queue
+  // hand-off; reading and clearing the context here is what tags the row and
+  // keeps the next interactive turn from inheriting the tag. The outcome rides
+  // the same call: consuming is also the scheduled runner's terminal signal, so
+  // a turn that failed must not be reported as `completed`.
+  const scheduled = consumeScheduledRunContext({
+    outcome: options.outcome ?? (options.cancelled ? "cancelled" : "completed"),
+  });
   const record = buildUsageRecord({
     agentId: identity.agentId ?? "unknown",
     model: identity.model ?? "unknown",
@@ -41,8 +65,10 @@ export function appendTurnUsageRecord(
     cost: snapshot.cost,
     // F-03 §5.16.2: a turn the user drove is tagged as such, so the Usage page
     // can keep automated spend apart from it. Old rows have no source and read
-    // as this same value (ledger §5.16.3).
-    source: "interactive",
+    // as this same value (ledger §5.16.3). `command` tasks are scheduled too,
+    // and the ledger's enum has one bucket for both (Lead's ruling).
+    source: scheduled ? "cron" : "interactive",
+    ...(scheduled ? { runId: scheduled.runId } : {}),
     ...(options.cancelled ? { cancelled: true } : {}),
   });
   return appendUsageRecord(record);
@@ -60,7 +86,7 @@ export function appendTurnUsageRecord(
 export function finishTurnTrajectory(
   stats: SessionStats,
   identity: TurnUsageIdentity,
-  options: { cancelled?: boolean } = {},
+  options: TurnUsageOptions = {},
 ): { snapshot: TrajectoryStatsSnapshot | null; wallMs: number } {
   const snapshot = stats.endTrajectory();
   if (snapshot) {

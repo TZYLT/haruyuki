@@ -136,7 +136,10 @@ export function buildMaybeLaunchReflectionSubagent(params: {
   reflectionSettings?: ReflectionSettings;
 }): (
   triggerSource: PostTurnReflectionTrigger,
-  launchSettings: Pick<ReflectionSettings, "timeoutMinutes">,
+  launchSettings: Pick<
+    ReflectionSettings,
+    "timeoutMinutes" | "deleteSessionOnSuccess"
+  >,
 ) => Promise<boolean> {
   return async (triggerSource, launchSettings) => {
     const { agentId, conversationId } = params;

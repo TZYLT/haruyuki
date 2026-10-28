@@ -390,6 +390,7 @@ async function afterCompaction(
         triggerSource: "compaction",
         reflectionSettings: {
           timeoutMinutes: reflectionSettings.timeoutMinutes,
+          deleteSessionOnSuccess: reflectionSettings.deleteSessionOnSuccess,
         },
       });
     },

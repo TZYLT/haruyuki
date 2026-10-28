@@ -40,6 +40,7 @@ import { promisify } from "node:util";
 import type {
   ReflectionRunMetadata,
   ReflectionRunRecordStatus,
+  ReflectionRunTriggerSource,
 } from "@/types/reflection-run-metadata";
 import { APP_SUBDIRS, appHomePath } from "@/utils/app-paths";
 import { debugLog, debugWarn } from "@/utils/debug";
@@ -60,7 +61,7 @@ export interface ReflectionRunState {
   parentConversationId: string;
   /** Set once the fork conversation exists (`attachReflectionFork`). */
   forkConversationId?: string;
-  triggerSource: "compaction" | "user-messages" | "manual";
+  triggerSource: ReflectionRunTriggerSource;
   status: ReflectionRunStatus;
   startedAt: number;
   /** `Number.POSITIVE_INFINITY` when the run has no wall-clock limit. */
@@ -395,6 +396,19 @@ export function attachReflectionFork(
   }
   run.forkConversationId = forkConversationId;
   if (run.status === "starting") run.status = "running";
+}
+
+/**
+ * Forget the fork conversation this run owned (F-05 C-18 / Q-56).
+ *
+ * Called after a successful run deleted its hidden fork, so the in-process run
+ * record cannot keep pointing at a conversation that no longer exists. Late or
+ * unknown calls are ignored, like the attach above.
+ */
+export function detachReflectionFork(runId: string): void {
+  const run = runs.get(runId);
+  if (!run) return;
+  delete run.forkConversationId;
 }
 
 /**

@@ -12,6 +12,7 @@ import type { AddTaskInput, CronTask } from "@/cron/cron-types";
 import {
   CRON_SCHEDULER_SCOPE_ENV,
   isSchedulerRunning,
+  setSchedulerTaskRunner,
   startScheduler,
   stopScheduler,
 } from "@/cron/scheduler";
@@ -358,9 +359,9 @@ test("scoped heartbeat does not restore beside a live all-owner", () => {
   }
 });
 
-test("unleased scoped retry clears jitter timers and does not fire", () => {
+test("a jitter-pending run arms a real delay timer, and losing the lease clears it", async () => {
   let heartbeat: (() => void) | undefined;
-  let jitterFire: (() => void) | undefined;
+  const delays: Array<{ delay: number; handler: () => void }> = [];
   const armed: ReturnType<typeof setInterval>[] = [];
   const realSetInterval = globalThis.setInterval;
   const realSetTimeout = globalThis.setTimeout;
@@ -370,40 +371,43 @@ test("unleased scoped retry clears jitter timers and does not fire", () => {
   globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
     const handle = realSetInterval(...args);
     armed.push(handle);
-    if (Number(args[1] ?? 0) === 1_000) {
-      const handler = args[0];
-      if (typeof handler === "function") {
-        heartbeat = handler as () => void;
-      }
+    if (Number(args[1] ?? 0) === 1_000 && typeof args[0] === "function") {
+      heartbeat = args[0] as () => void;
     }
     return handle;
   }) as typeof setInterval;
   globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
     const handle = realSetTimeout(...args);
-    if (Number(args[1] ?? 0) === 30_000) {
-      const handler = args[0];
-      if (typeof handler === "function") {
-        jitterFire = handler as () => void;
-      }
+    const delay = Number(args[1] ?? 0);
+    if (typeof args[0] === "function" && delay > 0 && delay < 60_000) {
+      delays.push({ delay, handler: args[0] as () => void });
     }
     return handle;
   }) as typeof setTimeout;
   globalThis.clearTimeout = ((
     handle: Parameters<typeof realClearTimeout>[0],
   ) => {
-    if (jitterFire) clearedJitter = true;
+    if (delays.length > 0) clearedJitter = true;
     realClearTimeout(handle);
   }) as typeof clearTimeout;
 
   process.env[CRON_SCHEDULER_SCOPE_ENV] = "local";
   const { task } = addTask(
-    makeInput({
-      agent_id: "agent-local-jitter",
-      cron: "* * * * *",
-    }),
+    makeInput({ agent_id: "agent-local-jitter", cron: "* * * * *" }),
   );
   updateTask(task.id, (t) => {
-    t.jitter_offset_ms = 30_000;
+    // Just under one tick, so the jittered instant is always still ahead.
+    t.jitter_offset_ms = 59_999;
+    t.created_at = new Date(Date.now() - 3_600_000).toISOString();
+  });
+  const runs: string[] = [];
+  setSchedulerTaskRunner({
+    host: "long-lived",
+    async run(input) {
+      runs.push(input.task.id);
+      return { outcome: "success" };
+    },
+    cancel() {},
   });
 
   try {
@@ -422,9 +426,15 @@ test("unleased scoped retry clears jitter timers and does not fire", () => {
     );
 
     expect(isSchedulerRunning()).toBe(true);
-    expect(jitterFire).toBeTypeOf("function");
-    expect(getTask(task.id)?.last_run_outcome).toBeNull();
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline && delays.length === 0) {
+      await Bun.sleep(10);
+    }
+    expect(delays.length).toBeGreaterThan(0);
+    expect(delays[0]?.delay).toBeLessThan(60_000);
 
+    // A live all-scope owner appears: the scoped lease is lost, the pending
+    // jitter timer is cleared, and firing it must not run the task.
     const current = readCronFile();
     writeFileSync(
       path.join(TEST_DIR, "schedules.json"),
@@ -443,8 +453,9 @@ test("unleased scoped retry clears jitter timers and does not fire", () => {
     expect(isSchedulerRunning()).toBe(true);
     expect(clearedJitter).toBe(true);
 
-    jitterFire?.();
-    expect(getTask(task.id)?.last_run_outcome).toBeNull();
+    delays[0]?.handler();
+    await Bun.sleep(20);
+    expect(runs).toEqual([]);
   } finally {
     stopScheduler();
     globalThis.setInterval = realSetInterval;
@@ -456,8 +467,8 @@ test("unleased scoped retry clears jitter timers and does not fire", () => {
   }
 });
 
-test("jitter fire logs lock errors without terminating the listener", () => {
-  let jitterFire: (() => void) | undefined;
+test("a lock error on the jitter wake is logged without terminating the host", async () => {
+  const delays: Array<() => void> = [];
   const armed: ReturnType<typeof setInterval>[] = [];
   const realSetInterval = globalThis.setInterval;
   const realSetTimeout = globalThis.setTimeout;
@@ -468,8 +479,9 @@ test("jitter fire logs lock errors without terminating the listener", () => {
   }) as typeof setInterval;
   globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
     const handle = realSetTimeout(...args);
-    if (Number(args[1] ?? 0) === 30_000 && typeof args[0] === "function") {
-      jitterFire = args[0] as () => void;
+    const delay = Number(args[1] ?? 0);
+    if (typeof args[0] === "function" && delay > 0 && delay < 60_000) {
+      delays.push(args[0] as () => void);
     }
     return handle;
   }) as typeof setTimeout;
@@ -479,7 +491,17 @@ test("jitter fire logs lock errors without terminating the listener", () => {
     makeInput({ agent_id: "agent-local-jitter-lock", cron: "* * * * *" }),
   );
   updateTask(task.id, (t) => {
-    t.jitter_offset_ms = 30_000;
+    t.jitter_offset_ms = 59_999;
+    t.created_at = new Date(Date.now() - 3_600_000).toISOString();
+  });
+  const runs: string[] = [];
+  setSchedulerTaskRunner({
+    host: "long-lived",
+    async run() {
+      runs.push("ran");
+      return { outcome: "success" };
+    },
+    cancel() {},
   });
   const logged: string[] = [];
   try {
@@ -499,17 +521,23 @@ test("jitter fire logs lock errors without terminating the listener", () => {
       },
       async () => {},
     );
-    expect(jitterFire).toBeTypeOf("function");
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline && delays.length === 0) {
+      await Bun.sleep(10);
+    }
+    expect(delays.length).toBeGreaterThan(0);
+
     __testThrowNextRefreshSchedulerLease();
-    jitterFire?.();
+    delays[0]?.();
+    await Bun.sleep(20);
+
     expect(isSchedulerRunning()).toBe(true);
     expect(
       logged.some((line) =>
-        line.includes(
-          "Jitter fire lease check error: Failed to acquire crons.lock",
-        ),
+        line.includes("Lease check error: Failed to acquire crons.lock"),
       ),
     ).toBe(true);
+    expect(runs).toEqual([]);
     expect(getTask(task.id)?.last_run_outcome).toBeNull();
   } finally {
     stopScheduler();

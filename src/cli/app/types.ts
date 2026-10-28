@@ -82,6 +82,10 @@ export type ActiveOverlay =
   | "topic-blocks"
   | "topic-context"
   | "topic-all"
+  | "schedule"
+  | "schedule-detail"
+  | "schedule-logs"
+  | "schedule-add"
   | "diff"
   | null;
 

@@ -20,10 +20,13 @@ export type PostTurnReflectionTrigger = "compaction" | "user-messages";
 export type PostTurnReflectionLauncher = (
   triggerSource: PostTurnReflectionTrigger,
   /**
-   * The resolved run policy, so the launcher gets the per-agent timeout. The
-   * launcher no longer reads settings itself (F-03 §3.4).
+   * The resolved run policy, so the launcher gets the per-agent timeout and the
+   * fork's lifetime. The launcher no longer reads settings itself (F-03 §3.4).
    */
-  reflectionSettings: Pick<ReflectionSettings, "timeoutMinutes">,
+  reflectionSettings: Pick<
+    ReflectionSettings,
+    "timeoutMinutes" | "deleteSessionOnSuccess"
+  >,
 ) => Promise<boolean>;
 
 /**
@@ -84,6 +87,7 @@ export async function maybeLaunchPostTurnReflection(params: {
   const isReflectionActive = params.isReflectionActive ?? isReflectionRunActive;
   const runSettings = {
     timeoutMinutes: params.reflectionSettings.timeoutMinutes,
+    deleteSessionOnSuccess: params.reflectionSettings.deleteSessionOnSuccess,
   };
 
   // Finish a previous launch before deciding anything: "reflected" means the run

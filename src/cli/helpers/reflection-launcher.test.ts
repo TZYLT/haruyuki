@@ -466,3 +466,101 @@ describe("launchReflectionSubagent timeout accounting", () => {
     expect(rows).toHaveLength(0);
   });
 });
+
+describe("launchReflectionSubagent fork lifetime (C-18 / Q-56)", () => {
+  async function launchWith(
+    deleteSessionOnSuccess: boolean | undefined,
+    h: Harness,
+  ) {
+    const result = await launchReflectionSubagent(
+      launchOptions({
+        reflectionSettings:
+          deleteSessionOnSuccess === undefined
+            ? {}
+            : { deleteSessionOnSuccess },
+      }),
+      h.deps,
+    );
+    if (!result.launched) throw new Error("expected a launch");
+    return result;
+  }
+
+  test("a successful run deletes its own fork exactly once", async () => {
+    const h = harness();
+    const result = await launchWith(true, h);
+
+    await h.complete({ success: true });
+
+    expect(h.deleted).toEqual(["conv-fork-1"]);
+    // Never the parent, and the in-process run no longer points at a dead id.
+    expect(h.deleted).not.toContain(conversationId);
+    expect(getReflectionRun(result.runId)?.status).toBe("succeeded");
+    expect(getReflectionRun(result.runId)?.forkConversationId).toBeUndefined();
+  });
+
+  test("the setting default deletes on success", async () => {
+    const h = harness();
+    await launchWith(undefined, h);
+    await h.complete({ success: true });
+    expect(h.deleted).toEqual(["conv-fork-1"]);
+  });
+
+  test("deleteSessionOnSuccess:false keeps the fork", async () => {
+    const h = harness();
+    await launchWith(false, h);
+    await h.complete({ success: true });
+
+    expect(h.deleted).toEqual([]);
+    expect(getReflectionRun("run-unknown")).toBeUndefined();
+  });
+
+  test("a failed run keeps its fork for inspection", async () => {
+    const h = harness();
+    const result = await launchWith(true, h);
+    await h.complete({ success: false, error: "child died" });
+
+    expect(h.deleted).toEqual([]);
+    expect(getReflectionRun(result.runId)?.status).toBe("failed");
+    expect(getReflectionRun(result.runId)?.forkConversationId).toBe(
+      "conv-fork-1",
+    );
+  });
+
+  test("a timed-out run keeps its fork even when the child reports success", async () => {
+    const h = harness();
+    const result = await launchWith(true, h);
+
+    await finishReflectionRun(result.runId, "timeout");
+    await h.complete({ success: true });
+
+    expect(h.deleted).toEqual([]);
+    expect(getReflectionRun(result.runId)?.status).toBe("timeout");
+  });
+
+  test("a cancelled run keeps its fork even when the child reports success", async () => {
+    const h = harness();
+    const result = await launchWith(true, h);
+
+    await finishReflectionRun(result.runId, "cancelled");
+    await h.complete({ success: true });
+
+    expect(h.deleted).toEqual([]);
+    expect(getReflectionRun(result.runId)?.status).toBe("cancelled");
+  });
+
+  test("a failing delete is a warning, not a run failure", async () => {
+    const h = harness({
+      deleteConversation: async () => {
+        throw new Error("backend refused");
+      },
+    });
+    const result = await launchWith(true, h);
+
+    await h.complete({ success: true });
+
+    // The run settled successfully before the delete was attempted, and the
+    // error never reached the child's completion callback.
+    expect(getReflectionRun(result.runId)?.status).toBe("succeeded");
+    expect(h.lockReleases).toBe(1);
+  });
+});

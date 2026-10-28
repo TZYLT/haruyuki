@@ -135,6 +135,26 @@ export interface AddTaskInput {
   recurring: boolean;
   prompt: string;
   scheduled_for?: Date; // for one-shots
+
+  // ── F-05 v2 fields (all optional: omitted values fall back to the defaults
+  // the store's normalizer already applies, so existing callers are unchanged) ──
+  /**
+   * `prompt` (default) or `command` (R-5.5.1). A `command` task passes `payload`
+   * through verbatim to the whitelisted command.
+   */
+  type?: TaskType;
+  /** Command string for `command` tasks; defaults to `prompt`. */
+  payload?: string;
+  /** Explicit target (R-5.5.5). Derived from `conversation_id` when omitted. */
+  target?: TaskTarget;
+  /** Execution permission tier (Q-50). Default `unrestricted` (Q-53). */
+  permission?: PermissionTier;
+  /** Retry the most recent missed occurrence (Q-11). Default false. */
+  catch_up?: boolean;
+  /** Per-run timeout in minutes; `0` means unlimited (Q-26). Default 30. */
+  timeout_minutes?: number;
+  /** How long to wait for a busy target conversation (Q-25). Default 10. */
+  wait_minutes?: number;
 }
 
 export interface AddTaskResult {
@@ -214,6 +234,12 @@ export interface DueOccurrence {
   taskId: string;
   occurrence: string;
   intendedAt: string;
+  /**
+   * Scheduled slots between the last consumed occurrence and this one (1 when
+   * this is the only pending slot). `missed_count` accumulates this, so it means
+   * "missed slots", not "times we skipped a run" (R-5.10.2, Lead ruling).
+   */
+  missedCycles?: number;
 }
 
 /** Per-signal-source cursor, persisted alongside the tasks. */

@@ -36,6 +36,7 @@ function projection(
     agents: null,
     today: null,
     memfs: null,
+    schedules: null,
     ...overrides,
   };
 }
@@ -205,6 +206,7 @@ describe("sidebarProjectionFrom", () => {
       agents: [],
       today: null,
       memfs: null,
+      schedules: null,
       ...overrides,
     };
   }

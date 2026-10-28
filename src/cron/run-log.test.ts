@@ -159,4 +159,27 @@ describe("cron run log", () => {
       readCronRunLogEntriesPage(logPath, { runId: "run-1" }).entries,
     ).toEqual([expect.objectContaining({ runId: "run-1", ts: 1000 })]);
   });
+
+  test("round-trips the F-05 run fields (runOutcome/host/durationMs)", () => {
+    const logPath = getCronRunLogPath("job-1");
+    appendCronRunLog(logPath, {
+      ts: 5000,
+      jobId: "job-1",
+      action: "finished",
+      status: "ok",
+      runOutcome: "success",
+      runId: "run-9",
+      host: "long-lived",
+      durationMs: 1234,
+      conversationId: "conv-9",
+    });
+
+    const [entry] = readCronRunLogEntries(logPath, { jobId: "job-1" });
+    expect(entry?.runOutcome).toBe("success");
+    expect(entry?.host).toBe("long-lived");
+    expect(entry?.durationMs).toBe(1234);
+    expect(entry?.conversationId).toBe("conv-9");
+    // G-4: success has no truthful legacy value, so the old field stays unset.
+    expect(entry?.outcome).toBeUndefined();
+  });
 });

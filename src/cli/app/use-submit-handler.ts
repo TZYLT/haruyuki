@@ -123,6 +123,7 @@ import { handleDiagnosticsCommand } from "./submit-diagnostics-commands";
 import type { SubmitHandlerContext } from "./submit-handler-context";
 import { handleNavigationCommand } from "./submit-navigation-commands";
 import { handleProfileCommand } from "./submit-profile-commands";
+import { handleScheduleSubmit } from "./submit-schedule-commands";
 import { handleTopicOverlayCommand } from "./submit-topic-commands";
 import { bindTuiClientPreferences, buildTuiTurnInput } from "./turn-input";
 
@@ -1743,6 +1744,12 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
         const topicOverlayResult = await handleTopicOverlayCommand(msg, ctx);
         if (topicOverlayResult) return topicOverlayResult;
 
+        // F-05: `/schedule`'s face-bearing forms (list/show/add/logs) and its
+        // manual run. The rest of the hub is the registry's, which prints a
+        // receipt through the command row like every other command.
+        const scheduleCommandResult = await handleScheduleSubmit(msg, ctx);
+        if (scheduleCommandResult) return scheduleCommandResult;
+
         // Special handling for /rename command - rename agent or conversation.
         // Reached as `/agent rename` and `/session rename`; `/rename` itself is
         // retired at the routing boundary.
@@ -2283,6 +2290,11 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
               instruction: reflectArgs.instruction,
               reflectionSettings: {
                 timeoutMinutes: reflectionSettings.timeoutMinutes,
+                // C-18 / Q-56: the run's hidden fork is deleted on success only
+                // when the per-agent setting says so; the launcher owns the
+                // deletion, the caller only hands the policy down.
+                deleteSessionOnSuccess:
+                  reflectionSettings.deleteSessionOnSuccess,
               },
             });
             if (!result.launched) {

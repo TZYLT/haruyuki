@@ -289,6 +289,29 @@ export type SidebarProjection = {
     changedLines7d: number;
     totalBytes: number;
   } | null;
+  /**
+   * The current agent's next planned runs, already ordered by due time
+   * (R-5.12.5). `null` means the store has not been read yet — the section says
+   * so instead of painting a zero, the same rule the other projections follow.
+   * At most three rows are drawn; a longer list reports its surplus as `+N`.
+   */
+  schedules: readonly SidebarScheduleRow[] | null;
+};
+
+/**
+ * One planned run as the rail draws it: name, next due, status.
+ *
+ * Three strings rather than the store's row type, so the rail's copy stays
+ * independent of the schedule store's shape (the slot does the mapping) and a
+ * width/priority test can build a projection without a task.
+ */
+export type SidebarScheduleRow = {
+  id: string;
+  name: string;
+  /** `09:00` today, `10-30` later, `—` when it cannot fire. */
+  when: string;
+  /** Empty for an ordinary active task; `暂停`/`自动暂停`/`已完成` otherwise. */
+  status: string;
 };
 
 function contextPercent(used: number, limit: number): number {
@@ -436,6 +459,55 @@ function memfsSection(projection: SidebarProjection) {
 }
 
 /**
+ * The status words the rail uses, in two columns where it can afford them.
+ *
+ * `自动暂停` is the one that must not be abbreviated away: a task that stopped
+ * because it failed three times in a row is the reason the user opens the panel,
+ * and `暂停` alone would read as their own doing.
+ */
+function scheduleStatusWord(status: string): string {
+  switch (status) {
+    case "active":
+      return "";
+    case "paused":
+      return "暂停";
+    case "paused · auto":
+      return "自动暂停";
+    case "fired":
+      return "已完成";
+    case "missed":
+      return "错过";
+    case "cancelled":
+      return "取消";
+    default:
+      return status;
+  }
+}
+
+/** `计划任务` — the current agent's next three runs (R-5.12.5, M-16). */
+function schedulesSection(projection: SidebarProjection) {
+  const schedules = projection.schedules;
+  if (schedules === null) {
+    return { detail: ["读取中…"], summary: "计划任务 —" };
+  }
+  if (schedules.length === 0) {
+    return { detail: ["暂无计划任务"], summary: "计划任务 0" };
+  }
+  const shown = schedules.slice(0, 3);
+  const detail = shown.map((row) => {
+    const status = scheduleStatusWord(row.status);
+    return `• ${row.name} ${row.when}${status ? ` ${status}` : ""}`;
+  });
+  if (schedules.length > shown.length) {
+    detail.push(`+${schedules.length - shown.length}`);
+  }
+  return {
+    detail,
+    summary: `${schedules.length} 个 · ${shown[0]?.when ?? "—"}`,
+  };
+}
+
+/**
  * The rail's sections, highest priority first.
  *
  * `Context` first because it is the one number that can page the user out.
@@ -449,6 +521,9 @@ export const SIDEBAR_SECTIONS: readonly SidebarSectionDefinition[] = [
   // title also avoids colliding with the conversation tab of the same name.
   { id: "turn", title: "Turn", build: turnSection },
   { id: "usage", title: "Usage", build: usageSection },
+  // F-05: read-only, three rows, event-driven; it never scrolls and it never
+  // ticks (`《38》§6.6`, C-27).
+  { id: "schedules", title: "计划任务", build: schedulesSection },
   { id: "agents", title: "Agents", build: agentsSection },
   { id: "memfs", title: "MemFS", build: memfsSection },
 ];

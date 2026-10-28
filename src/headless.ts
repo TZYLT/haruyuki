@@ -3326,7 +3326,10 @@ async function runBidirectionalMode(
   const isSubagent = process.env.HARUYUKI_CODE_AGENT_ROLE === "subagent";
   const maybeLaunchReflectionSubagent = async (
     triggerSource: PostTurnReflectionTrigger,
-    launchSettings: Pick<ReflectionSettings, "timeoutMinutes">,
+    launchSettings: Pick<
+      ReflectionSettings,
+      "timeoutMinutes" | "deleteSessionOnSuccess"
+    >,
   ): Promise<boolean> => {
     const result = await launchReflectionSubagent({
       agentId: agent.id,

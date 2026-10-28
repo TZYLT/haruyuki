@@ -743,3 +743,32 @@ export function aggregateUsageBySource(
 ): Map<UsageSource, UsageTotals> {
   return aggregateBy(records, usageSourceOf) as Map<UsageSource, UsageTotals>;
 }
+
+/**
+ * Per-run buckets keyed by `runId` (F-05 R-5.14.2).
+ *
+ * Pass the run ids the caller is displaying: every requested id gets a bucket
+ * even when the ledger has no row for it, so "no row" is distinguishable from
+ * "a run that spent nothing" (`turns === 0` → the panel shows `—`, not `0`).
+ * Rows without a `runId` are skipped — they belong to no scheduled run.
+ */
+export function aggregateUsageByRunId(
+  records: readonly UsageRecord[],
+  runIds?: readonly string[],
+): Map<string, UsageTotals> {
+  const buckets = new Map<string, UsageTotals>();
+  for (const runId of runIds ?? []) {
+    if (!buckets.has(runId)) buckets.set(runId, emptyTotals());
+  }
+  for (const record of records) {
+    const runId = record.runId;
+    if (!runId) continue;
+    let totals = buckets.get(runId);
+    if (!totals) {
+      totals = emptyTotals();
+      buckets.set(runId, totals);
+    }
+    addRecordToTotals(totals, record);
+  }
+  return buckets;
+}

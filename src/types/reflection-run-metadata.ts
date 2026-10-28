@@ -30,7 +30,9 @@ export type ReflectionRunRecordStatus =
 export type ReflectionRunTriggerSource =
   | "compaction"
   | "user-messages"
-  | "manual";
+  | "manual"
+  /** Fired by the scheduler's `reflect` command task (F-05 C-3). */
+  | "scheduled";
 
 export interface ReflectionRunMetadata {
   /** Stable id minted before the fork exists; matches the in-process run id. */
@@ -53,6 +55,7 @@ const TRIGGER_SOURCES: readonly string[] = [
   "compaction",
   "user-messages",
   "manual",
+  "scheduled",
 ];
 
 const RECORD_STATUSES: readonly string[] = [

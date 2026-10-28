@@ -26,6 +26,7 @@ import { claimMemoryOperation } from "@/agent/memory-operation";
 import {
   attachReflectionFork,
   attachReflectionTask,
+  detachReflectionFork,
   finishReflectionRun,
   getReflectionRun,
   isReflectionRunActive,
@@ -51,6 +52,9 @@ import {
   isReflectionRetryDeferred,
   recordReflectionFailure,
 } from "@/cli/helpers/reflection-retry";
+import type { PermissionMode } from "@/permissions/mode";
+import { DEFAULT_REFLECTION_DELETE_SESSION_ON_SUCCESS } from "@/reflection-settings";
+import { runWithRuntimeContext } from "@/runtime-context";
 import { telemetry } from "@/telemetry";
 import { maybeSendReflectionThresholdFeedback } from "@/telemetry/reflection-threshold-feedback";
 import type { SpawnBackgroundSubagentTaskArgs } from "@/tools/impl/task";
@@ -86,13 +90,19 @@ const FALLBACK_REFLECTION_CONFIG: SubagentConfig = {
 
 /**
  * Per-run settings the launcher reads. Deliberately narrow: the launcher owns
- * the run, not the trigger policy, so it takes the deadline and nothing else
- * from the settings layer. The settings layer resolves the per-agent override
- * and passes it in (`ReflectionLaunchOptions.reflectionSettings`); a caller
- * that omits it gets the requirement's 3-minute default.
+ * the run, not the trigger policy, so it takes the deadline and the fork's
+ * lifetime from the settings layer. The settings layer resolves the per-agent
+ * override and passes it in (`ReflectionLaunchOptions.reflectionSettings`); a
+ * caller that omits it gets the requirement's 3-minute deadline and the default
+ * "delete the fork on success".
  */
 export interface ReflectionLaunchSettings {
   timeoutMinutes?: number;
+  /**
+   * Delete this run's hidden fork once it succeeds, including a no-op run
+   * (C-18 / Q-56). A failure, timeout or cancellation always keeps it.
+   */
+  deleteSessionOnSuccess?: boolean;
 }
 
 const reservedReflectionAgentIds = new Set<string>();
@@ -146,7 +156,9 @@ export interface ReflectionFeedbackContext {
 
 /**
  * Telemetry still carries the pre-F-03 trigger names; the requirement's trigger
- * sources are mapped here instead of widening a shared telemetry contract.
+ * sources are mapped here instead of widening a shared telemetry contract. A
+ * scheduled run reports as `manual`: it is a one-shot nobody counted, and the
+ * telemetry schema has no fourth value (the F-05 run log is the authority).
  */
 const TELEMETRY_TRIGGER_SOURCE: Record<
   ReflectionLaunchTriggerSource,
@@ -155,6 +167,7 @@ const TELEMETRY_TRIGGER_SOURCE: Record<
   manual: "manual",
   compaction: "compaction-event",
   "user-messages": "step-count",
+  scheduled: "manual",
 };
 
 export function emitReflectionRunStart(params: {
@@ -233,6 +246,14 @@ export interface ReflectionLaunchOptions {
   reflectionSettings?: ReflectionLaunchSettings;
   /** `/reflect --instruction`: user text appended to the task message. */
   instruction?: string;
+  /**
+   * Permission tier the child subprocess launches with (F-05 C-17).
+   *
+   * Optional and absent by default: end-of-turn reflection keeps launching
+   * `unrestricted`, exactly as before. Only a scheduled task passes its own
+   * tier here (`@/cron/task-run`).
+   */
+  permissionMode?: PermissionMode;
 }
 
 /**
@@ -342,6 +363,16 @@ function resolveTimeoutMinutes(
     : DEFAULT_REFLECTION_TIMEOUT_MINUTES;
 }
 
+/** C-18/Q-56: the resolved fork lifetime, defaulting to the requirement's `true`. */
+function resolveDeleteSessionOnSuccess(
+  settings: ReflectionLaunchSettings | undefined,
+): boolean {
+  const requested = settings?.deleteSessionOnSuccess;
+  return typeof requested === "boolean"
+    ? requested
+    : DEFAULT_REFLECTION_DELETE_SESSION_ON_SUCCESS;
+}
+
 async function resolveReflectionConfig(): Promise<SubagentConfig | undefined> {
   const configs = await getAllSubagentConfigs();
   return configs.reflection;
@@ -372,6 +403,53 @@ async function recordRunningMetadata(input: {
     debugWarn(
       "memory",
       `Failed to record reflection run metadata for ${input.metadata.runId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+/**
+ * Build the child's argv under the requested permission tier (F-05 C-17).
+ *
+ * `--permission-mode` is assembled deep inside the (async) spawn chain, so the
+ * tier travels through the async-local runtime context instead of a parameter
+ * added to six positional layers. Absent a tier this is a plain pass-through,
+ * which is what keeps the end-of-turn path byte-identical.
+ */
+function spawnWithPermissionMode(
+  mode: PermissionMode | undefined,
+  spawn: () => ReflectionSpawnedTask,
+): ReflectionSpawnedTask {
+  if (!mode) return spawn();
+  return runWithRuntimeContext({ subagentPermissionMode: mode }, spawn);
+}
+
+/**
+ * Delete the hidden fork of a run that succeeded (F-05 C-18 / Q-56).
+ *
+ * Only ever called with **this run's** `forkConversationId` — the closure value
+ * the fork call returned for this invocation; the parent conversation id is a
+ * different variable in the same closure and is never passed here. A deletion
+ * that fails is a warning, not a run failure: the run already succeeded, and the
+ * child process callback must not see an error it did not cause.
+ */
+async function deleteSucceededFork(input: {
+  runId: string;
+  forkConversationId: string;
+  remove: (conversationId: string) => Promise<void>;
+}): Promise<void> {
+  try {
+    await input.remove(input.forkConversationId);
+    detachReflectionFork(input.runId);
+    debugLog(
+      "memory",
+      `deleted reflection fork ${input.forkConversationId} for run ${input.runId}`,
+    );
+  } catch (error) {
+    debugWarn(
+      "memory",
+      `Failed to delete the reflection fork ${input.forkConversationId}: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
@@ -439,6 +517,8 @@ export async function launchReflectionSubagent(
 
   const reflectionSettings = options.reflectionSettings;
   const timeoutMinutes = resolveTimeoutMinutes(reflectionSettings);
+  const deleteSessionOnSuccess =
+    resolveDeleteSessionOnSuccess(reflectionSettings);
 
   let run: ReflectionRunState;
   try {
@@ -533,104 +613,127 @@ export async function launchReflectionSubagent(
 
     let spawned: ReflectionSpawnedTask;
     try {
-      spawned = spawnTask({
-        subagentType: "reflection",
-        // The existing-conversation branch still adds `--tools` unconditionally
-        // when the config narrows the set, which would leave the child's local
-        // registry short of the tools its frozen `client_tools` advertises
-        // (§5.1.8). "all" is the only value that suppresses the flag.
-        config: {
-          ...(reflectionConfig ?? FALLBACK_REFLECTION_CONFIG),
-          allowedTools: "all",
-        },
-        prompt: taskMessage,
-        description: AUTO_REFLECTION_DESCRIPTION,
-        existingConversationId: forkConversationId,
-        memoryScope,
-        parentScope: { agentId, conversationId },
-        silentCompletion: true,
-        onComplete: async ({
-          success,
-          error,
-          model,
-          stepCount,
-          durationMs,
-        }) => {
-          try {
-            emitReflectionRunEnd({
-              parentAgentId: agentId,
-              triggerSource,
-              success,
-              subagentId: spawned.subagentId,
-              conversationId: forkConversationId,
-              error,
-              stepCount,
-              durationMs,
-              model,
-            });
-            if (success) {
-              clearAutomaticReflectionSuppression(agentId);
-              clearReflectionRetry(agentId);
-            } else {
-              // §5.1.6: a failed child must leave a trace of why, not just a
-              // status transition — the notification alone does not say it.
-              debugWarn(
-                "memory",
-                `reflection run ${run.runId} failed: ${error ?? "unknown error"}`,
-              );
-              recordReflectionConfigurationFailure({
-                agentId,
-                model,
+      spawned = spawnWithPermissionMode(options.permissionMode, () =>
+        spawnTask({
+          subagentType: "reflection",
+          // The existing-conversation branch still adds `--tools` unconditionally
+          // when the config narrows the set, which would leave the child's local
+          // registry short of the tools its frozen `client_tools` advertises
+          // (§5.1.8). "all" is the only value that suppresses the flag.
+          config: {
+            ...(reflectionConfig ?? FALLBACK_REFLECTION_CONFIG),
+            allowedTools: "all",
+          },
+          prompt: taskMessage,
+          description: AUTO_REFLECTION_DESCRIPTION,
+          existingConversationId: forkConversationId,
+          memoryScope,
+          parentScope: { agentId, conversationId },
+          silentCompletion: true,
+          onComplete: async ({
+            success,
+            error,
+            model,
+            stepCount,
+            durationMs,
+          }) => {
+            try {
+              emitReflectionRunEnd({
+                parentAgentId: agentId,
+                triggerSource,
+                success,
+                subagentId: spawned.subagentId,
+                conversationId: forkConversationId,
                 error,
+                stepCount,
+                durationMs,
+                model,
               });
-            }
-            // A timed-out run was already finished by the controller; only a
-            // still-running one is ours to finish (§2.4 state machine).
-            const current = getReflectionRun(run.runId);
-            // The one row the parent owns: a run killed at its deadline never
-            // ends a child turn, so only this side can put its ending in the
-            // ledger (§5.16.4). Zero tokens by construction — see
-            // `recordTimedOutReflectionRun`.
-            if (current?.status === "timeout") {
-              await writeTimeoutUsage({
-                input: {
-                  runId: run.runId,
+              if (success) {
+                clearAutomaticReflectionSuppression(agentId);
+                clearReflectionRetry(agentId);
+              } else {
+                // §5.1.6: a failed child must leave a trace of why, not just a
+                // status transition — the notification alone does not say it.
+                debugWarn(
+                  "memory",
+                  `reflection run ${run.runId} failed: ${error ?? "unknown error"}`,
+                );
+                recordReflectionConfigurationFailure({
                   agentId,
-                  sessionId: forkConversationId,
-                  parentSessionId: conversationId,
-                  model: model?.trim() || "unknown",
-                  wallMs: Math.max(0, Math.round(durationMs ?? 0)),
-                },
-                writer:
-                  dependencies.recordTimeoutUsage ??
-                  recordTimedOutReflectionRun,
-              });
+                  model,
+                  error,
+                });
+              }
+              // A timed-out run was already finished by the controller; only a
+              // still-running one is ours to finish (§2.4 state machine).
+              const current = getReflectionRun(run.runId);
+              // The one row the parent owns: a run killed at its deadline never
+              // ends a child turn, so only this side can put its ending in the
+              // ledger (§5.16.4). Zero tokens by construction — see
+              // `recordTimedOutReflectionRun`.
+              if (current?.status === "timeout") {
+                await writeTimeoutUsage({
+                  input: {
+                    runId: run.runId,
+                    agentId,
+                    sessionId: forkConversationId,
+                    parentSessionId: conversationId,
+                    model: model?.trim() || "unknown",
+                    wallMs: Math.max(0, Math.round(durationMs ?? 0)),
+                  },
+                  writer:
+                    dependencies.recordTimeoutUsage ??
+                    recordTimedOutReflectionRun,
+                });
+              }
+              if (
+                current?.status === "running" ||
+                current?.status === "starting"
+              ) {
+                await finishReflectionRun(
+                  run.runId,
+                  success ? "succeeded" : "failed",
+                );
+              }
+              // C-18 / Q-56: a run that succeeded (including a no-op run) deletes
+              // its own hidden fork, per the per-agent setting. The finish above
+              // runs first so the metadata and the gate see the real status; a
+              // failure, timeout or cancellation keeps the fork for inspection
+              // (§44-3 G9, §5.1.4). Only this closure's `forkConversationId` is
+              // passed — never `conversationId`, the parent.
+              const settled = getReflectionRun(run.runId) ?? current;
+              if (
+                success &&
+                deleteSessionOnSuccess &&
+                settled?.status !== "timeout" &&
+                settled?.status !== "cancelled"
+              ) {
+                await deleteSucceededFork({
+                  runId: run.runId,
+                  forkConversationId,
+                  remove:
+                    dependencies.deleteConversation ??
+                    deleteBackendConversation,
+                });
+              }
+              // §5.5.7: only startup/settlement failures back off. A timeout or an
+              // interruption already surfaced to the user, and backing off from it
+              // would starve a healthy channel.
+              if (
+                !success &&
+                current?.status !== "timeout" &&
+                current?.status !== "cancelled"
+              ) {
+                recordReflectionFailure(agentId);
+              }
+            } finally {
+              await releaseLock();
+              releaseReflectionLaunch(agentId);
             }
-            if (
-              current?.status === "running" ||
-              current?.status === "starting"
-            ) {
-              await finishReflectionRun(
-                run.runId,
-                success ? "succeeded" : "failed",
-              );
-            }
-            // §5.5.7: only startup/settlement failures back off. A timeout or an
-            // interruption already surfaced to the user, and backing off from it
-            // would starve a healthy channel.
-            if (
-              !success &&
-              current?.status !== "timeout" &&
-              current?.status !== "cancelled"
-            ) {
-              recordReflectionFailure(agentId);
-            }
-          } finally {
-            await releaseLock();
-            releaseReflectionLaunch(agentId);
-          }
-        },
-      });
+          },
+        }),
+      );
     } catch (error) {
       // The fork exists but nothing will ever run on it: remove the half-built
       // conversation instead of leaving an empty hidden session behind (§5.1.4).

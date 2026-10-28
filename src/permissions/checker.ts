@@ -204,6 +204,22 @@ export function checkPermission(
     }
   }
 
+  // Unattended scheduled runs deny every human prompt instead of queueing one
+  // (F-05 Q-51). Denying here — after both engines and the dual-eval comparison
+  // — keeps the listener and the TUI on one rule and means no approval object is
+  // ever built. `unattended` is only set by the task runner for the duration of
+  // one scheduled run, so an ordinary session is unaffected.
+  if (
+    modeState?.unattended &&
+    (result.decision === "ask" || result.decision === "alwaysAsk")
+  ) {
+    result = {
+      ...result,
+      decision: "deny",
+      reason: "unattended",
+    };
+  }
+
   return result;
 }
 
