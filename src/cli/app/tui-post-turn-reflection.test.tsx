@@ -41,6 +41,7 @@ import {
   type HeadlessTurnExecutor,
   type HeadlessTurnExecutorInput,
 } from "@/backend/dev/headless-turn-executor";
+import { resetTabsForTests } from "@/cli/app/tabs";
 import { resetReflectionRetries } from "@/cli/helpers/reflection-retry";
 import { getReflectionTranscriptState } from "@/cli/helpers/reflection-transcript";
 import { settingsManager } from "@/settings-manager";
@@ -270,6 +271,10 @@ afterEach(async () => {
   clearAllSubagents();
   backgroundTasks.clear();
   __testSetBackend(null);
+  // The tab store is module-level state shared by every file in the process: a
+  // rendered app opens a real tab, and leaving it behind makes the next file's
+  // "the placeholder opens no tab" fail on this file's conversation.
+  resetTabsForTests();
   await settingsManager.reset();
   for (const directory of memoryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
