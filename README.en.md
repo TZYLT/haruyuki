@@ -64,7 +64,7 @@ to that end.
 | Highlight | Description |
 |---|---|
 | **Prefix freezing** | Changes to prompts, tools, or memory **never silently rewrite context already sent**, so you don't wake up to a terrifying bill; `/context pending` shows what is queued, `/recompile` applies it explicitly |
-| **Topic trimming** | `/topic`, `/topic list`, `/compact` — trim context along topic boundaries you choose, instead of dropping the tail proportionally |
+| **Topic trimming** | `/topic` marks a boundary; `/topic list`, `/topic search`, and `/topic show` look topics up and read one back; `/compact` **computes the overview and cut points first and trims only once you pick** (nothing touches disk before that; cancel and failure write nothing), instead of dropping the tail proportionally |
 | **Memory as a file tree** | MemFS: all context (including memory blocks) is tracked by git — diffable, revertible, and pushable to your own remote |
 | **Passive memory** | **Reflection rewritten**: reflection runs as a hidden session on the current context, adds only one task message, and writes the memory repository directly, so it no longer produces conflicting commits; `/reflect`, `/dream`, and `/memory config` control triggers and the time limit; the TUI's `/usage` detail now shows reflection cost under "Automated tasks" |
 | **Local backend** | A single backend mode (`--backend local`): agent, conversations, memory, and transcripts all live on this machine |
@@ -173,6 +173,7 @@ memory.
 | Item | Notes |
 |---|---|
 | Reflection | Automatic reflection now runs **on compaction** on every platform (the Windows environment-variable gate is gone). A run longer than `reflectionTimeoutMinutes` (default 3) is aborted and **its uncommitted memory changes are discarded** (backed up first as `refs/letta-backup/*` plus a patch, but there is no one-click restore entry). While a run is active, Edit/Write/ApplyPatch against memory are rejected; Bash is not blocked |
+| Compaction | While the summarizer runs (`preparing`) the cut-point picker owns the keyboard, so those tens of seconds take no input (Esc exits and hands it back); the byte-identical prefix has only been verified against the local stub provider (Anthropic / OpenAI-Responses / Fable-shaped probes not run); the topic index takes no cross-process lock, so two processes refreshing different conversations can lose the other's merge — the next refresh or query heals it |
 | Sandboxing | Kernel-level filesystem sandboxing is available only on macOS (seatbelt) and Linux (bwrap); **Windows has no kernel backend** (a code fact — see `src/sandbox/availability.ts`), so the cross-agent memory fence falls back to a static path guard |
 | Legacy flags | `--computer`, `--no-wait`, `--memfs-startup` and similar are still in the help output (upstream compatibility surface); this fork does not promise their cloud semantics work |
 | Multiple platforms untested | This project is developed on Windows and I have no other machines to test on. If you hit a problem, please open an issue |
@@ -198,6 +199,7 @@ something or want to contribute, a pull request is very welcome.
 **To do:**
 - [x] Prefix freezing → raise cache hit rate and cut cost substantially
 - [x] Topic markers → freer context trimming
+- [x] Compaction rework → see the overview and cut points before deciding what to trim (including topic lookup and read-back)
 - [x] Passive memory recall → improve answer accuracy (the effect on cost, short or long term, is not yet clear)
 - [ ] Active conversation tree → a continuous, unified conversation experience
 - [x] Redesign the TUI (still polishing the details)

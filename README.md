@@ -47,7 +47,7 @@ Haruyuki 把 agent 的记忆、身份与行为当作**可以长期演进的资�
 | 特色 | 说明 |
 |---|---|
 | **前缀冻结** | 提示/工具/记忆的改动**不会静默改写已发出的上下文**，不会让你不知不觉得到超级吓人的账单；`/context pending` 看待应用项，`/recompile` 显式应用 |
-| **话题裁切** | `/topic`、`/topic list`、`/compact` —— 按你选的话题边界裁上下文，而不是默认按比例丢尾巴 |
+| **话题裁切** | `/topic` 标边界，`/topic list`／`/topic search`／`/topic show` 查与回看；`/compact` **先算概况与切点、你选完才裁**（不落盘，取消与失败零写入），而不是默认按比例丢尾巴 |
 | **记忆即文件树** | MemFS：全部上下文（含记忆块）由 git 跟踪，可 diff、可回滚、可推到自己的远端仓库 |
 | **被动记忆** | **重写反思机制**：反思作为隐藏会话在当前上下文上运行，只多一条任务消息，直接写记忆仓、不再产生冲突提交；`/reflect`、`/dream`、`/memory config` 控制触发与时限；TUI 同步添加相关成本统计（`/usage` 明细「Automated tasks」） |
 | **本地后端** | 单一后端模式（`--backend local`）：agent、会话、记忆、transcript 全在本机 |
@@ -142,6 +142,7 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 | 项 | 说明 |
 |---|---|
 | 反思 | 自动触发默认在**压缩时**运行（全平台，不再有 Windows 环境变量门）；时长超过 `reflectionTimeoutMinutes`（默认 3 分钟）会中止并**丢弃未提交的记忆改动**（先备份为 `refs/letta-backup/*` 与 patch，但没有一键回滚入口）。反思运行期间，主会话用 Edit／Write／ApplyPatch 写记忆会被拒绝，Bash 不拦 |
+| 压缩 | `preparing`（摘要器在跑）期间由选点面接管键盘，这几十秒里不能继续输入（Esc 退出即可）；逐字节前缀目前只在本地桩 provider 上验过，Anthropic／OpenAI-Responses／Fable 形状未跑；话题索引并发无锁，两个进程同时刷不同会话时后写者可能丢掉另一次的合并结果，靠下次刷新或查询自愈 |
 | 沙箱 | 内核级文件沙箱只在 macOS（seatbelt）与 Linux（bwrap）可用；**Windows 没有内核后端**（代码事实，见 `src/sandbox/availability.ts`），跨 agent 记忆围栏退回到静态路径守卫 |
 | 遗留接口 | `--computer`、`--no-wait`、`--memfs-startup` 等参数仍在帮助里（上游兼容面），本分支不承诺其云端语义可用 |
 | 多平台验证缺失 | 本项目在 Windows 平台上开发，暂时没有其他系统的机器以供测试，如果您发现了问题，欢迎提交 issue |
@@ -162,6 +163,7 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 **To do：**
 - [x] 前缀冻结 -> 提升缓存命中以大幅降低成本
 - [x] 话题标记 -> 更高自由度的上下文裁切
+- [x] 压缩重设计 -> 先看摘要与切点再决定裁什么（含话题查询与回看）
 - [x] 被动记忆召回 -> 提升回复准确度（短期与长期成本变化尚不确定）
 - [x] 反思机制重写 -> 隐藏会话直接写记忆、不再产生冲突提交，反思成本进 `/usage`
 - [ ] 主动会话树机制 -> 提供连续统一的对话体验
