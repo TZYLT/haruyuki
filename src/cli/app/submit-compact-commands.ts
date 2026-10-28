@@ -209,7 +209,9 @@ export async function offerTrimBeforeSend(
       ? formatNoMarkerCompactHint(topicMarkingEnabled)
       : formatSingleBlockCompactHint({
           topicMarkingEnabled,
-          liveMarkerAnchor: list.markers.some((view) => view.anchorInContext),
+          liveMarkerAnchor: list.markers.some(
+            (view) => view.anchorIndex !== null,
+          ),
         });
   await applyPreparedCompaction(
     ctx,
@@ -825,7 +827,9 @@ export async function submitCompactPreparation(
         ? formatNoMarkerCompactHint(topicMarkingEnabled)
         : formatSingleBlockCompactHint({
             topicMarkingEnabled,
-            liveMarkerAnchor: list.markers.some((view) => view.anchorInContext),
+            liveMarkerAnchor: list.markers.some(
+              (view) => view.anchorIndex !== null,
+            ),
           })
       : undefined;
   return applyPreparedCompaction(ctx, runtime, preview, pick, cmd, {

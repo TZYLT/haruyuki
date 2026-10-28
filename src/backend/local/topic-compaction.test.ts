@@ -234,6 +234,10 @@ describe("listTopicBlocks", () => {
       markerId: "t1",
       anchorMessageId: "a6",
       createdBy: "agent",
+      // The row's time is when the topic was tagged, not when its content
+      // starts — a block that begins at a compaction summary has a much newer
+      // first message than its marker.
+      taggedAt: "2026-01-01T00:00:00.000Z",
     });
     // Block 2 starts at turn 4 — topic B's opening — because block 1 is closed
     // by a marker that was written two turns late.
@@ -248,6 +252,7 @@ describe("listTopicBlocks", () => {
       markerId: null,
       createdBy: null,
     });
+    expect(blocks[1]?.taggedAt).toBeUndefined();
   });
 
   test("blocks start on user turns and never split a tool call", () => {

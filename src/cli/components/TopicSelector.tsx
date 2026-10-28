@@ -26,9 +26,9 @@ import { colors } from "@/cli/components/colors";
 import { terminalTextWidth } from "@/cli/helpers/char-width";
 import {
   CURRENT_TOPIC_LABEL,
-  shortTimestamp,
   topicBlockBoundaryNote,
 } from "@/cli/helpers/topic-list";
+import { topicBlockMeta } from "@/cli/helpers/topic-panel";
 import type { TopicTrimRequest } from "@/cli/helpers/topic-trim-request";
 import { truncateText } from "@/cli/helpers/truncate-text";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
@@ -66,7 +66,7 @@ export function buildTopicPickRows(
 ): SingleSelectItem[] {
   return blocks.map((block, position) => {
     const summary = block.summary?.replace(/\s+/g, " ").trim() ?? "";
-    const meta = `${block.messageCount} messages · ~${block.tokens} tokens · from ${shortTimestamp(block.startsAt)} · ${topicBlockBoundaryNote(block, blocks[position - 1])}`;
+    const meta = `${topicBlockMeta(block)} · ${topicBlockBoundaryNote(block, blocks[position - 1])}`;
     return {
       key: String(block.index),
       label: `${block.index}. ${block.title ?? CURRENT_TOPIC_LABEL}`,

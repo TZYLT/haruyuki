@@ -130,12 +130,27 @@ compaction can cut at.
   so a settings change to it lands at the next application point —
   `src/backend/local/system-prompt-compilation.ts:500-504`.
 
-`/topic list` prints the block table, marking trimmable blocks with `*`.
-Two marker views answer different questions: `--all` is every marker this agent
-has recorded, newest first (time order); `--context` is this conversation's
-markers in the order they happened (conversation order, with position numbers).
-The numbers in `--context` are marker positions, not the block numbers
-`/compact` takes.
+`/topic list` opens the topic panel on the block table: one row per block,
+numbered as `/compact <n>` numbers them, with the block's message count, its
+tokens and **when the topic was tagged** (`tagged at <time>`; the still-open
+block has no marker, so it says `open since <time>`). Enter opens the row's
+boundary note, the content start, any absorbed markers, and the topic's summary.
+
+The panel has three views and Tab switches between them — the command that was
+typed only picks the opening view:
+
+- `/topic list` — the blocks of the current context, oldest first.
+- `/topic list --context` — this conversation's markers in **context order**
+  (where each topic sits in the context), labelled with the marker's
+  write-order number (`#n`, which is what `/topic show` takes). The two orders
+  can differ: a summarizer's marker is written when a fold runs, but its topic
+  was folded into the leading summary, so it sorts first while keeping a late
+  number. These numbers are marker numbers, not `/compact` block numbers.
+- `/topic list --all` — every marker this agent has recorded, newest first,
+  with its time, conversation and source. Enter opens the section a compaction
+  wrote for that topic.
+
+Channels with no face (listener, headless) print the same rows as text instead.
 
 ### Reading a marker's conversation back
 

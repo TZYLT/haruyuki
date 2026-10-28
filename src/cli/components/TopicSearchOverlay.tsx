@@ -1,7 +1,10 @@
 import { Box } from "ink";
 import { useMemo, useRef, useState } from "react";
 import { getBackend } from "@/backend";
-import { queryTopicIndex } from "@/backend/local/topic-index";
+import {
+  queryTopicIndex,
+  type TopicIndexEntry,
+} from "@/backend/local/topic-index";
 import { TOPIC_COMMAND_LOCAL_ONLY } from "@/cli/commands/topic";
 import { namedKeyChords } from "@/cli/helpers/input-keys";
 import {
@@ -17,7 +20,6 @@ import { useOverlayList } from "@/cli/overlay/use-overlay-list";
 import { colors } from "./colors";
 import { PasteAwareTextInput } from "./PasteAwareTextInput";
 import { Text } from "./Text";
-import type { TopicIndexRows } from "./TopicListOverlay";
 
 /**
  * `/topic search <kw>` — keyword search over this agent's topic markers
@@ -39,6 +41,11 @@ import type { TopicIndexRows } from "./TopicListOverlay";
  * test's rows, while the app passes nothing and reads the backend's own storage
  * root (`getLocalStorageDir()`, route §2.3).
  */
+
+/** What the face has to show: rows, or the reason there are none to read. */
+export type TopicIndexRows =
+  | { kind: "rows"; entries: readonly TopicIndexEntry[] }
+  | { kind: "unavailable" };
 
 /** Where a search reads from: one keyword, one answer. */
 export type TopicSearchSource = (keyword: string) => TopicIndexRows;

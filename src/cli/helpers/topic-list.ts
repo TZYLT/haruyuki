@@ -20,13 +20,17 @@ export const TOPICS_COMMAND_USAGE = [
   "USAGE",
   "  /topic list           — blocks that still define the current context",
   "  /topic list --all     — every marker this agent has recorded, newest first",
-  "  /topic list --context — this conversation's markers, in conversation order",
+  "  /topic list --context — this conversation's markers, in context order",
   "  /topic search <kw>    — search this agent's topics by title or section",
   "  /topic show <#n|title> — print the conversation a marker covers",
   "  /topic list help      — show this help",
   "",
+  "In the terminal the three lists open one full-screen panel: Tab switches the",
+  "view, arrows/PgUp/PgDn scroll, Enter opens a row, q closes.",
+  "",
   "/compact <n> keeps block n and summarizes everything before it. The numbers in",
-  "--context are marker positions, not block numbers.",
+  "--context are marker numbers in write order (what /topic show takes), not block",
+  "numbers.",
 ].join("\n");
 
 /**
@@ -40,16 +44,17 @@ export const TOPICS_COMMAND_USAGE = [
  */
 export const TOPIC_LIST_ALL_NOTES: readonly string[] = [
   "A trimmed marker stays on disk and keeps its title; it simply no longer defines a block. Removed context is still searchable with /search.",
-  "A marker whose boundary lands on the start of the context defines no block of its own, so it shows up under block 1 in /topics.",
+  "A marker whose boundary lands on the start of the context defines no block of its own, so it shows up under block 1 in /topic list.",
 ];
 
 /**
- * The printed table's third note: it is about the `#n` column above it, which
- * the panel does not draw (its rows are ordered newest first, so a `#1` there
- * would contradict this very sentence).
+ * The `--context` view has two orders in it, and they are not the same order:
+ * the rows follow the context, the numbers follow the transcript. Saying so is
+ * cheaper than renumbering, which would rename every marker `/topic show`
+ * accepts.
  */
-export const MARKER_POSITION_NOTE =
-  "The numbers here are marker positions (marker #1 is the oldest marker), not the block numbers /compact takes.";
+export const CONTEXT_ORDER_NOTE =
+  "Rows are in context order — where each topic sits in the context — while #n is the marker's write order (what /topic show takes), not a /compact block number. So the numbers need not run 1, 2, 3 down the list.";
 
 /** The trailing block's label: a topic nobody has marked finished yet. */
 export const CURRENT_TOPIC_LABEL = "Current topic (not marked finished)";
@@ -92,6 +97,10 @@ export const ABSORBED_MARKERS_NOTE = [
   "block they belong to already has a title, so the later names ride along with it.",
 ].join("\n");
 
+/** Why a block whose first message is a compaction summary is titled by an older marker. */
+export const COMPACTION_START_NOTE =
+  "starts at a compaction summary: the history before it was folded, so the title is an older marker";
+
 /** What the user can do when a list has no markers at all. */
 export function topicMarkerHint(topicMarkingEnabled: boolean): string {
   if (!topicMarkingEnabled) {
@@ -117,7 +126,14 @@ export interface TopicBlockRow {
   isCurrent: boolean;
   messageCount: number;
   tokens: number;
+  /** Creation time of the block's first message (content start). */
   startsAt: string;
+  /**
+   * When this topic was tagged: the ending marker's write time, or — for the
+   * still-open block — when its content starts. The two cases read differently
+   * on purpose, because a block's content can predate its marker by days.
+   */
+  tagLine: string;
   /** How this block's first message was chosen. */
   boundary: string;
 }
@@ -164,6 +180,22 @@ export function topicBlockBoundaryNote(
   return `marker "${previousTitle}"${markedBy} at ${anchor}, ${rewound}`;
 }
 
+/**
+ * The time half of a block row: when the topic was tagged, or when the open
+ * topic's content starts.
+ *
+ * It deliberately is not "when the block's content starts" in the tagged case.
+ * A compaction summary is stamped at fold time while the retained messages keep
+ * their own (older) dates, so a block that starts at a summary would print a
+ * time *newer* than the content after it — the row would look out of order even
+ * though the list is in context order.
+ */
+export function topicBlockTagLine(block: TopicBlock): string {
+  return block.taggedAt === undefined
+    ? `open since ${shortTimestamp(block.startsAt)}`
+    : `tagged at ${shortTimestamp(block.taggedAt)}`;
+}
+
 export function buildTopicBlockRows(list: LocalTopicList): TopicBlockRow[] {
   return list.blocks.map((block, position) => ({
     index: block.index,
@@ -172,6 +204,7 @@ export function buildTopicBlockRows(list: LocalTopicList): TopicBlockRow[] {
     messageCount: block.messageCount,
     tokens: block.tokens,
     startsAt: shortTimestamp(block.startsAt),
+    tagLine: topicBlockTagLine(block),
     boundary: topicBlockBoundaryNote(block, list.blocks[position - 1]),
   }));
 }
@@ -198,14 +231,12 @@ export function formatTopicBlockList(
     lines.push(
       `  ${row.index}${marker} ${pad(row.title.slice(0, titleWidth), titleWidth)}  ` +
         `${String(row.messageCount).padStart(4)} messages  ` +
-        `~${String(row.tokens).padStart(6)} tokens  from ${row.startsAt}`,
+        `~${String(row.tokens).padStart(6)} tokens  ${row.tagLine}`,
     );
     lines.push(`      boundary: ${row.boundary}`);
     const block = list.blocks[row.index - 1];
     if (block?.compaction) {
-      lines.push(
-        "      starts at a compaction summary: the history before it was folded, so the title is an older marker",
-      );
+      lines.push(`      ${COMPACTION_START_NOTE}`);
     }
     if (block && block.absorbedTitles.length > 0) {
       lines.push(`      absorbed markers: ${block.absorbedTitles.join(", ")}`);
@@ -228,27 +259,59 @@ export function formatTopicBlockList(
 }
 
 export interface TopicMarkerRow {
+  /** The marker's number: its write order, 1-based. What `/topic show` takes. */
   index: number;
+  /** The marker id: identity, never the row number (§5.6.1). */
+  key: string;
   title: string;
   createdBy: string;
   createdAt: string;
   status: string;
+  /** The anchor's position in the context, or null once it left it. */
+  anchorIndex: number | null;
 }
 
 function markerStatus(view: LocalTopicMarkerView): string {
-  return view.anchorInContext
+  return view.anchorIndex !== null
     ? "in the current context"
     : "trimmed: its anchor is no longer in the context";
 }
 
+/**
+ * The `--context` order: by the marker's position in the context, then by write
+ * order.
+ *
+ * A marker whose anchor was folded away sorts before every surviving one: a
+ * compaction only ever takes a *prefix* of the context, so a folded anchor is
+ * older than everything that was retained. That is what puts a summarizer's
+ * marker where its topic actually sits, instead of where its row happened to be
+ * appended.
+ *
+ * Ties keep write order, which is also the numbering, so a marker and the one
+ * that absorbed its boundary still read left to right.
+ */
+export function orderTopicMarkerRows(
+  rows: readonly TopicMarkerRow[],
+): TopicMarkerRow[] {
+  return [...rows].sort(
+    (left, right) =>
+      (left.anchorIndex ?? -1) - (right.anchorIndex ?? -1) ||
+      left.index - right.index,
+  );
+}
+
+/** Marker rows in **context order**, numbered in **write order**. */
 export function buildTopicMarkerRows(list: LocalTopicList): TopicMarkerRow[] {
-  return list.markers.map((view, position) => ({
+  const written = list.markers.map((view, position) => ({
     index: position + 1,
+    key: view.marker.id,
     title: view.marker.title,
     createdBy: view.marker.createdBy,
     createdAt: shortTimestamp(view.marker.createdAt),
     status: markerStatus(view),
+    anchorIndex: view.anchorIndex,
   }));
+  return orderTopicMarkerRows(written);
 }
 
 /** `/topics --all`: every marker, including the ones a trim pushed out. */
@@ -266,7 +329,7 @@ export function formatTopicMarkerHistory(
   const titleWidth = columnWidth(rows, (row) => row.title, 5, 40);
   const authorWidth = columnWidth(rows, (row) => row.createdBy, 5, 5);
   const lines = [
-    `Every topic marker in this conversation (${rows.length}, oldest first):`,
+    `Every topic marker in this conversation (${rows.length}, context order):`,
     "",
   ];
   for (const row of rows) {
@@ -277,7 +340,7 @@ export function formatTopicMarkerHistory(
   }
   lines.push("");
   lines.push(...TOPIC_LIST_ALL_NOTES);
-  lines.push(MARKER_POSITION_NOTE);
+  lines.push(CONTEXT_ORDER_NOTE);
   return lines.join("\n");
 }
 

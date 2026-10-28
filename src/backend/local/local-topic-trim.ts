@@ -63,8 +63,17 @@ export interface LocalTopicTrimPorts {
 
 export interface LocalTopicMarkerView {
   marker: LocalTopicMarker;
-  /** False once a compaction moved the anchor out of the context. */
-  anchorInContext: boolean;
+  /**
+   * The anchor's index in the in-context message list, or `null` once a
+   * compaction moved the anchor out of the context.
+   *
+   * This is the one field that gives a marker a *context position*. The written
+   * order of markers is a different order: a summarizer writes its markers when
+   * a fold runs, so its rows are appended after markers whose topics sit later
+   * in the context. `--context` orders by this index; the marker number (and
+   * `/topic show`) stays the transcript's write order.
+   */
+  anchorIndex: number | null;
 }
 
 export interface LocalTopicList {
@@ -154,14 +163,17 @@ export function listLocalTopics(
     ports.compactionSettings(input.conversationId, agentId)
       .slidingWindowPercentage,
   );
-  const inContext = new Set(messages.map((message) => message.id));
+  const indexById = new Map(
+    messages.map((message, index) => [message.id, index] as const),
+  );
   return {
     blocks,
     markers: markers.map((marker) => ({
       marker,
-      anchorInContext:
-        marker.anchorMessageId !== null &&
-        inContext.has(marker.anchorMessageId),
+      anchorIndex:
+        marker.anchorMessageId === null
+          ? null
+          : (indexById.get(marker.anchorMessageId) ?? null),
     })),
     contextMessageCount: messages.length,
     contextTokens,

@@ -67,6 +67,16 @@ export interface TopicBlock {
   /** Where that ending marker was written (display only; boundaries are older). */
   anchorMessageId: string | null;
   /**
+   * When the ending marker was written — `null` for the trailing block, and
+   * absent on a block the summarizer proposed but nothing has written yet.
+   *
+   * The block's content can be much older than this (a compaction summary is
+   * stamped at fold time while the retained messages keep their own dates), so
+   * the receipt and the list label this as *when the topic was tagged*, not when
+   * its content starts.
+   */
+  taggedAt?: string;
+  /**
    * Titles of markers whose boundary was clamped onto this block (they were too
    * close to the previous marker to delimit a block of their own).
    */
@@ -323,6 +333,7 @@ export function listTopicBlocks(
         : { summary: endingMarker.summary }),
       ...(first.metadata?.compaction === undefined ? {} : { compaction: true }),
       anchorMessageId: endingMarker ? endingMarker.anchorMessageId : null,
+      ...(endingMarker === null ? {} : { taggedAt: endingMarker.createdAt }),
       absorbedTitles: leadingTitles.splice(0),
       boundaryMessageId: first.id,
       startIndex: blockStart,

@@ -86,7 +86,7 @@ describe("buildTopicPickRows", () => {
     ]);
 
     expect(rows[0]?.description).toBe(
-      "The refresh landed; the retry storm is unresolved. · 8 messages · ~612 tokens · from 2026-01-01 10:00 · the start of the context",
+      "The refresh landed; the retry storm is unresolved. · 8 messages · ~612 tokens · open since 2026-01-01 10:00 · the start of the context",
     );
   });
 
@@ -94,12 +94,28 @@ describe("buildTopicPickRows", () => {
     const rows = buildTopicPickRows(BLOCKS);
 
     expect(rows[0]?.description).toBe(
-      "8 messages · ~612 tokens · from 2026-01-01 10:00 · the start of the context",
+      "8 messages · ~612 tokens · open since 2026-01-01 10:00 · the start of the context",
     );
     expect(rows[1]?.description).toContain("6 messages · ~480 tokens");
     expect(rows[1]?.description).toContain(
       'marker "Auth token refresh" at message-local-anchor, rewound 2 user turns',
     );
+  });
+
+  test("a written block says when its topic was tagged, not when its content starts", () => {
+    // The picker and `/topic list` share the wording: a block's content can
+    // predate its marker by days, so the row names the marker's time.
+    const rows = buildTopicPickRows([
+      block({
+        index: 1,
+        title: "Alpha",
+        taggedAt: "2026-01-03T09:00:00.000Z",
+        startsAt: "2026-01-01T10:00:00.000Z",
+      }),
+    ]);
+
+    expect(rows[0]?.description).toContain("tagged at 2026-01-03 09:00");
+    expect(rows[0]?.description).not.toContain("from 2026-01-01");
   });
 
   test("names the boundary's author when a marker created it", () => {
@@ -155,7 +171,7 @@ describe("buildTopicPickRows", () => {
     const rows = buildTopicPickRows([
       block({ index: 1, startsAt: "not-a-date" }),
     ]);
-    expect(rows[0]?.description).toContain("from not-a-date");
+    expect(rows[0]?.description).toContain("open since not-a-date");
   });
 });
 

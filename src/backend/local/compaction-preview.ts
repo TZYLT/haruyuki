@@ -383,6 +383,9 @@ export function mergeCompactionBlocks(
       ...(primary?.summary === undefined ? {} : { summary: primary.summary }),
       ...(first.metadata?.compaction === undefined ? {} : { compaction: true }),
       anchorMessageId: primary?.anchorMessageId ?? null,
+      ...(primary?.taggedAt === undefined
+        ? {}
+        : { taggedAt: primary.taggedAt }),
       absorbedTitles,
       boundaryMessageId: first.id,
       startIndex: start,

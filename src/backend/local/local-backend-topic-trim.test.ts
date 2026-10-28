@@ -147,7 +147,8 @@ describe("LocalBackend.listTopics", () => {
     expect(marked.markers).toEqual([
       {
         marker: expect.objectContaining({ title: "Alpha" }),
-        anchorInContext: true,
+        // A user mark anchors on the newest in-context message.
+        anchorIndex: marked.contextMessageCount - 1,
       },
     ]);
   });

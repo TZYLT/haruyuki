@@ -649,7 +649,7 @@ export const commands: Record<string, Command> = {
     },
   },
   "/topic": {
-    desc: "Mark a topic boundary, or list/search/show the topic markers",
+    desc: "Mark a topic boundary, or open/search/show the topic markers",
     args: "<title> [summary] | list [--all|--context] | search <kw> | show <#n|title> [--full] [--out <path>]",
     handler: (args, scope) => {
       // `list` and `search` are subcommands, not titles. Without this branch a

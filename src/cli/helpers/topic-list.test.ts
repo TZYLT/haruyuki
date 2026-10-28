@@ -107,7 +107,7 @@ describe("formatTopicBlockList", () => {
               anchorMessageId: "message-local-anchor",
               createdAt: "2026-01-01T10:00:00.000Z",
             },
-            anchorInContext: true,
+            anchorIndex: 11,
           },
         ],
       }),
@@ -126,6 +126,41 @@ describe("formatTopicBlockList", () => {
     expect(output).toContain("/compact <n> keeps block n");
     // The first block is not trimmable, so only block 2 carries the marker.
     expect(output).toContain("* = a block you can trim from.");
+  });
+
+  test("a tagged block shows when it was tagged, and the open one when it started", () => {
+    // A compaction summary is stamped at fold time while the retained messages
+    // keep their own (older) dates, so "when the content starts" would read as
+    // if the table were out of order. The row says what it actually knows.
+    const output = formatTopicBlockList(
+      list({
+        blocks: [
+          block({
+            index: 1,
+            title: "Folded",
+            taggedAt: "2026-01-03T09:00:00.000Z",
+            startsAt: "2026-01-05T09:00:00.000Z",
+          }),
+          block({ index: 2 }),
+        ],
+        markers: [
+          {
+            marker: {
+              id: "t1",
+              title: "Folded",
+              createdBy: "agent",
+              anchorMessageId: "a1",
+              createdAt: "2026-01-03T09:00:00.000Z",
+            },
+            anchorIndex: 0,
+          },
+        ],
+      }),
+    );
+
+    expect(output).toContain("tagged at 2026-01-03 09:00");
+    expect(output).not.toContain("from 2026-01-05");
+    expect(output).toContain("open since 2026-01-01 10:00");
   });
 
   test("reports absorbed markers instead of hiding them", () => {
@@ -148,7 +183,7 @@ describe("formatTopicBlockList", () => {
               anchorMessageId: null,
               createdAt: "2026-01-01T10:00:00.000Z",
             },
-            anchorInContext: false,
+            anchorIndex: null,
           },
         ],
       }),
@@ -178,7 +213,7 @@ describe("formatTopicBlockList", () => {
               anchorMessageId: null,
               createdAt: "2026-01-01T10:00:00.000Z",
             },
-            anchorInContext: false,
+            anchorIndex: null,
           },
         ],
       }),
@@ -253,7 +288,7 @@ describe("formatTopicMarkerHistory", () => {
               anchorMessageId: "a6",
               createdAt: "2026-01-01T09:00:00.000Z",
             },
-            anchorInContext: true,
+            anchorIndex: 11,
           },
           {
             marker: {
@@ -263,16 +298,58 @@ describe("formatTopicMarkerHistory", () => {
               anchorMessageId: "gone",
               createdAt: "2026-01-01T09:30:00.000Z",
             },
-            anchorInContext: false,
+            anchorIndex: null,
           },
         ],
       }),
     );
 
-    expect(output).toContain("2, oldest first");
+    expect(output).toContain("2, context order");
     expect(output).toContain("in the current context");
     expect(output).toContain("trimmed: its anchor is no longer in the context");
     expect(output).toContain("still searchable with /search");
+    // The two orders are stated, not left implicit: rows follow the context,
+    // numbers follow the transcript (`/topic show`).
+    expect(output).toContain("write order");
+  });
+
+  test("rows follow the context while the numbers keep the write order", () => {
+    // The shape a summarizer produces: its row is written last, but its topic
+    // was folded into the leading summary, so in the context it comes first.
+    const output = formatTopicMarkerHistory(
+      list({
+        markers: [
+          {
+            marker: {
+              id: "t1",
+              title: "Late written, early in the context",
+              createdBy: "user",
+              anchorMessageId: "a3",
+              createdAt: "2026-01-01T09:00:00.000Z",
+            },
+            anchorIndex: 3,
+          },
+          {
+            marker: {
+              id: "t2",
+              title: "Folded away",
+              createdBy: "summarizer",
+              anchorMessageId: null,
+              createdAt: "2026-01-01T10:00:00.000Z",
+            },
+            anchorIndex: null,
+          },
+        ],
+      }),
+    );
+
+    const folded = output.indexOf("Folded away");
+    const late = output.indexOf("Late written");
+    expect(folded).toBeGreaterThan(-1);
+    expect(late).toBeGreaterThan(folded);
+    // ... and the folded marker still carries its write-order number.
+    expect(output).toContain("#2  Folded away");
+    expect(output).toContain("#1  Late written");
   });
 
   test("rows carry author, time, and status", () => {
@@ -287,7 +364,7 @@ describe("formatTopicMarkerHistory", () => {
               anchorMessageId: "a6",
               createdAt: "not-a-date",
             },
-            anchorInContext: true,
+            anchorIndex: 11,
           },
         ],
       }),
@@ -295,10 +372,12 @@ describe("formatTopicMarkerHistory", () => {
     expect(rows).toEqual([
       {
         index: 1,
+        key: "t1",
         title: "Alpha",
         createdBy: "user",
         createdAt: "not-a-date",
         status: "in the current context",
+        anchorIndex: 11,
       },
     ]);
   });

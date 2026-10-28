@@ -1,163 +1,294 @@
 import { Box } from "ink";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { getBackend } from "@/backend";
+import { LocalBackend } from "@/backend/local/local-backend";
+import type { LocalTopicList } from "@/backend/local/local-topic-trim";
 import {
   queryTopicIndex,
   type TopicIndexEntry,
 } from "@/backend/local/topic-index";
 import { TOPIC_COMMAND_LOCAL_ONLY } from "@/cli/commands/topic";
+import { terminalTextWidth } from "@/cli/helpers/char-width";
+import { namedKeyChords } from "@/cli/helpers/input-keys";
 import {
-  buildTopicIndexRows,
-  TOPIC_LIST_ALL_NOTES,
-  type TopicIndexRow,
-} from "@/cli/helpers/topic-list";
+  buildTopicPanelRows,
+  TOPIC_PANEL_VIEWS,
+  type TopicPanelRow,
+  type TopicPanelView,
+  topicPanelCommand,
+  topicPanelCount,
+  topicPanelEmpty,
+  topicPanelNotes,
+  topicPanelTitle,
+} from "@/cli/helpers/topic-panel";
 import { truncateText } from "@/cli/helpers/truncate-text";
 import {
   useTerminalRows,
   useTerminalWidth,
 } from "@/cli/hooks/use-terminal-width";
 import { OverlayFrame } from "@/cli/overlay/frame";
-import type { OverlayListItem } from "@/cli/overlay/list-model";
 import { OverlayListView } from "@/cli/overlay/list-view";
 import { useOverlayList } from "@/cli/overlay/use-overlay-list";
 import { colors } from "./colors";
 import { Text } from "./Text";
 
 /**
- * `/topic list --all` — the full-screen browser over this agent's topic markers
- * (requirement §5.11.10).
+ * The one topic panel: `/topic list`, `/topic list --context` and
+ * `/topic list --all` (requirement §5.11.10–11, amended 2026-10-28).
  *
- * It replaced a printed table, and the reasons are the ones the requirement
- * gives: the transcript form has to fit every marker, its time, its conversation
- * and its source into lines that then stay in the scrollback forever, and it can
- * only be read top to bottom. The panel windows the same rows, sorts them newest
- * first (the printed table is oldest first, which is the order a *table* reads
- * in), and closes with `q`.
+ * Three views over the same data, one component and one key table: the blocks
+ * of the current context (what `/compact <n>` numbers), this conversation's
+ * markers in context order, and this agent's whole index newest first. The
+ * command that was typed picks the opening view; Tab/Shift+Tab cycles, so the
+ * other two are always one key away instead of one command away.
  *
- * Everything is read once, on mount, from the per-agent index. The query is
- * synchronous, so the first frame is the list rather than a "loading" line; the
- * index's own self-heal (§5.11.4) is what makes a stale file safe to read.
+ * Everything is read once, on mount. The queries are synchronous, so the first
+ * frame is the list rather than a "loading" line, and the index's own self-heal
+ * (§5.11.4) is what makes a stale file safe to read.
  *
  * Three things are deliberate:
  *
- * - **One line per row.** A row is title · time · conversation · source, clipped
- *   with `truncateText`, so the window's height cannot depend on the data — a
- *   two-line row would move the footer, and the composer behind it, on scroll.
- * - **No row numbers.** The printed table numbers markers by position so a user
- *   can talk about them; here the list is newest first, so a `#1` would name a
- *   different marker than the table's `#1`. The rows carry no number at all, and
- *   the note about what numbers mean stays with the table (`topic-list.ts`).
- * - **The source is injectable.** The app passes nothing and gets the real index
- *   through the backend's own storage root — `getLocalStorageDir()` is the only
- *   root that is correct for a test or alternate-root backend (§2.3), and a
- *   backend without one is reported as local-only rather than read from the
- *   default root. Tests pass a fixture instead of writing a transcript.
+ * - **One line per row.** Label · description clipped separately, so the
+ *   window's height (and the composer behind it) cannot depend on the data. The
+ *   facts that do not fit open with Enter instead of wrapping the row.
+ * - **The row models are pure functions** (`helpers/topic-panel.ts`): the frame
+ *   tests assert on rows, and the printed forms keep reading the same copy.
+ * - **The source is injectable.** The app passes nothing and gets the real
+ *   transcript and index through the backend's own storage root —
+ *   `getLocalStorageDir()` is the only root that is correct for a test or
+ *   alternate-root backend (route §2.3), and a backend without one is reported
+ *   as local-only rather than read from the default root.
  */
 
-/** What the face has to show: rows, or the reason there are none to read. */
-export type TopicIndexRows =
-  | { kind: "rows"; entries: readonly TopicIndexEntry[] }
+/** What the face has to show: both sources, or the reason there are none. */
+export type TopicPanelData =
+  | {
+      kind: "loaded";
+      list: LocalTopicList;
+      entries: readonly TopicIndexEntry[];
+    }
   | { kind: "unavailable" };
 
-/** Where a topic face reads from. Called once per mount (list) or keyword (search). */
-export type TopicIndexSource = () => TopicIndexRows;
+/** Where a panel reads from. Called once per mount. */
+export type TopicPanelSource = () => TopicPanelData;
 
 /**
- * The app's source: this agent's index file, under the backend's storage root.
+ * The app's source: this conversation's transcript plus this agent's index,
+ * both under the backend's storage root.
  *
- * `getLocalStorageDir()` is optional on `Backend` and absent on a non-local one;
- * falling back to `getLocalBackendStorageDir()` there would read the *real*
- * `~/.haruyuki/lc-local-backend` for a conversation that is not even local
- * (route §2.3, 《31》A1).
+ * A non-local backend has neither: `getLocalStorageDir()` is absent and its
+ * conversations live server-side, so the face says so instead of reading the
+ * user's real `~/.haruyuki/lc-local-backend` (route §2.3, 《31》A1).
  */
-export function backendTopicIndexSource(agentId: string): TopicIndexSource {
+export function backendTopicPanelSource(
+  agentId: string,
+  conversationId: string,
+): TopicPanelSource {
   return () => {
-    const storageDir = getBackend().getLocalStorageDir?.();
-    if (!storageDir) return { kind: "unavailable" };
-    return { kind: "rows", entries: queryTopicIndex({ agentId, storageDir }) };
+    const backend = getBackend();
+    const storageDir = backend.getLocalStorageDir?.();
+    if (!storageDir || !(backend instanceof LocalBackend)) {
+      return { kind: "unavailable" };
+    }
+    return {
+      kind: "loaded",
+      list: backend.listTopics(conversationId, agentId),
+      entries: queryTopicIndex({ agentId, storageDir }),
+    };
   };
 }
 
 /**
  * Chrome the list does not get to use: the frame's header (command, rule, blank,
- * title + its margin), the two indicator rows a windowed list always reserves,
- * and the footer's three lines plus their top margin.
+ * title + its margin = 5), the two indicator rows a windowed list always
+ * reserves, and the footer's three lines plus their top margin. Every view
+ * carries exactly two standing notes for this reason (`topicPanelNotes`): a
+ * footer that grew would resize the window mid-session.
  */
 const CHROME_ROWS = 11;
 
-const EMPTY_MESSAGE = "No topic markers in this agent's conversations yet.";
-const EMPTY_HINT =
-  "Mark one with /topic <title>, or let the agent call TopicMark when a topic ends.";
-
-/** One marker, one line: title · time · conversation · source. */
+/** One marker, block or index record, on one line. */
 function TopicRow({
   row,
   width,
   isCursor,
 }: {
-  row: TopicIndexRow;
+  row: TopicPanelRow;
   width: number;
   isCursor: boolean;
 }) {
   const color = isCursor ? colors.selector.itemHighlighted : undefined;
+  const available = Math.max(1, width - 2);
+  const label = truncateText(row.label, available);
+  const descBudget = available - terminalTextWidth(label) - 3;
+  const description =
+    row.description && descBudget > 3
+      ? truncateText(row.description, descBudget)
+      : null;
   return (
     <Box flexDirection="row">
       <Text color={color}>{isCursor ? "> " : "  "}</Text>
       <Text bold={isCursor} color={color}>
-        {truncateText(row.line, Math.max(1, width - 2))}
+        {label}
       </Text>
+      {description !== null && <Text dimColor>{` · ${description}`}</Text>}
     </Box>
+  );
+}
+
+/** The whole row, plus whatever Enter opened, on the same face. */
+function TopicDetail({
+  row,
+  command,
+  view,
+  width,
+}: {
+  row: TopicPanelRow;
+  command: string;
+  view: TopicPanelView;
+  width: number;
+}) {
+  return (
+    <OverlayFrame
+      command={command}
+      title={topicPanelTitle(view)}
+      footer={
+        <Text dimColor>
+          {truncateText(
+            "Esc back to the list · Tab switch view · q close",
+            width,
+          )}
+        </Text>
+      }
+    >
+      <Box flexDirection="column">
+        <Text bold color={colors.selector.title}>
+          {truncateText(row.label, width)}
+        </Text>
+        {row.description !== undefined && (
+          <Text dimColor>{truncateText(row.description, width)}</Text>
+        )}
+        <Box height={1} />
+        {row.detail.map((line, position) => (
+          <Text key={`${row.key}:${position}`}>
+            {truncateText(line, width)}
+          </Text>
+        ))}
+      </Box>
+    </OverlayFrame>
   );
 }
 
 export function TopicListOverlay({
   agentId,
+  conversationId,
+  view: initialView = "all",
   onClose,
   source,
 }: {
   agentId: string;
+  conversationId: string;
+  /** The view the command names; Tab moves from here. */
+  view?: TopicPanelView;
   onClose: () => void;
-  /** Tests inject their rows; the app reads the index. */
-  source?: TopicIndexSource;
+  /** Tests inject their data; the app reads the transcript and the index. */
+  source?: TopicPanelSource;
 }) {
-  // Read once per mount. A ref would re-query on every render, and the index
-  // query is the one call here that touches the disk.
-  const [loaded] = useState<TopicIndexRows>(() =>
-    (source ?? backendTopicIndexSource(agentId))(),
+  const [loaded] = useState<TopicPanelData>(() =>
+    (source ?? backendTopicPanelSource(agentId, conversationId))(),
   );
+  const [view, setView] = useState<TopicPanelView>(initialView);
+  // The row whose detail is open. Held here, the one owner of "which view", so
+  // Escape can mean detail-then-list-then-face, exactly like the hidden-sessions
+  // browser.
+  const [detail, setDetail] = useState<TopicPanelRow | null>(null);
+
   const rows =
-    loaded.kind === "rows" ? buildTopicIndexRows(loaded.entries) : [];
+    loaded.kind === "loaded" ? buildTopicPanelRows(view, loaded) : [];
 
   const terminalRows = useTerminalRows();
   const terminalWidth = useTerminalWidth();
   const listRows = Math.max(1, terminalRows - CHROME_ROWS);
   const footerWidth = Math.max(1, terminalWidth - 2);
 
-  const items: OverlayListItem[] = rows.map((row) => ({
-    key: row.key,
-    label: row.title,
-  }));
+  const items = rows.map((row) => ({ key: row.key, label: row.label }));
+
+  // Assigned after the hook: the cycle handler is declared before `list` exists
+  // (it is part of `list`'s own bindings), and it must reset the cursor of the
+  // list that is on screen *now*, not the one captured in this render.
+  const resetCursorRef = useRef<() => void>(() => {});
+
+  const cycleView = (step: number): void => {
+    const index = TOPIC_PANEL_VIEWS.indexOf(view);
+    const next =
+      TOPIC_PANEL_VIEWS[
+        (index + step + TOPIC_PANEL_VIEWS.length) % TOPIC_PANEL_VIEWS.length
+      ];
+    if (next === undefined) return;
+    setView(next);
+    setDetail(null);
+    resetCursorRef.current();
+  };
 
   const list = useOverlayList({
-    owner: "topic-list",
+    owner: "topic-panel",
     items,
     rows: listRows,
-    onCancel: onClose,
+    // While a detail is open the list does not own the arrows or Enter; the
+    // detail's own Enter/Escape take them (the `extra` table below).
+    navigationEnabled: detail === null,
+    onCancel: () => {
+      if (detail !== null) {
+        setDetail(null);
+        return;
+      }
+      onClose();
+    },
+    onConfirm: (_key, index) => {
+      const row = rows[index];
+      if (row) setDetail(row);
+    },
     extra: [
       {
-        id: "topic-list.quit",
+        id: "topic-panel.tab",
+        chords: [{ key: "tab" }],
+        run: () => {
+          cycleView(1);
+          return "consumed";
+        },
+      },
+      {
+        id: "topic-panel.shift-tab",
+        chords: [{ key: "tab", shift: true }],
+        run: () => {
+          cycleView(-1);
+          return "consumed";
+        },
+      },
+      {
+        id: "topic-panel.quit",
         chords: [{ key: "q" }],
         run: () => {
           onClose();
           return "consumed";
         },
       },
+      {
+        id: "topic-panel.detail-back",
+        chords: namedKeyChords("return"),
+        run: () => {
+          if (detail === null) return "declined";
+          setDetail(null);
+          return "consumed";
+        },
+      },
     ],
   });
+  resetCursorRef.current = () => list.setCursor(0);
 
   if (loaded.kind === "unavailable") {
     return (
-      <OverlayFrame command="/topic list --all" title="Topic markers">
+      <OverlayFrame command="/topic list" title="Topic markers">
         <Box flexDirection="column">
           <Text dimColor>
             {truncateText(TOPIC_COMMAND_LOCAL_ONLY, footerWidth)}
@@ -169,20 +300,32 @@ export function TopicListOverlay({
     );
   }
 
+  if (detail !== null) {
+    return (
+      <TopicDetail
+        row={detail}
+        command={topicPanelCommand(view)}
+        view={view}
+        width={footerWidth}
+      />
+    );
+  }
+
   const count = rows.length;
+  const empty = topicPanelEmpty(view);
   const hint =
     count === 0
-      ? "esc close"
-      : `${count} marker${count === 1 ? "" : "s"} · ↑↓ scroll · PgUp/PgDn page · q close`;
+      ? "Tab switches view · Esc close"
+      : `${topicPanelCount(view, count)} · Tab switch · ↑↓ scroll · PgUp/PgDn page · Enter detail · q close`;
 
   return (
     <OverlayFrame
-      command="/topic list --all"
-      title="Topic markers (newest first)"
+      command={topicPanelCommand(view)}
+      title={topicPanelTitle(view)}
       footer={
         <Box flexDirection="column">
           <Text dimColor>{truncateText(hint, footerWidth)}</Text>
-          {TOPIC_LIST_ALL_NOTES.map((note) => (
+          {topicPanelNotes(view).map((note) => (
             <Text key={note} dimColor>
               {truncateText(note, footerWidth)}
             </Text>
@@ -192,8 +335,8 @@ export function TopicListOverlay({
     >
       {count === 0 ? (
         <Box flexDirection="column">
-          <Text dimColor>{EMPTY_MESSAGE}</Text>
-          <Text dimColor>{truncateText(EMPTY_HINT, footerWidth)}</Text>
+          <Text dimColor>{empty.message}</Text>
+          <Text dimColor>{truncateText(empty.hint, footerWidth)}</Text>
         </Box>
       ) : (
         <OverlayListView

@@ -448,7 +448,7 @@ describe("LocalBackend.applyCompaction", () => {
       "section: one",
       "section: two",
     ]);
-    expect(list.markers.map((view) => view.anchorInContext)).toEqual([
+    expect(list.markers.map((view) => view.anchorIndex !== null)).toEqual([
       false,
       true,
     ]);

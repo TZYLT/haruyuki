@@ -1,14 +1,18 @@
 /**
- * `/topic list --all` and `/topic search <kw>` at the submit boundary.
+ * The topic faces at the submit boundary: `/topic list` and its two flags, and
+ * `/topic search <kw>`.
  *
- * Two claims, and both are about what the command must *not* do:
+ * Three claims, and the last two are about what the command must *not* do:
  *
- * - it opens the face rather than printing the list (§5.11.10 — a registry
- *   handler cannot open an overlay, route C-23);
+ * - all three list forms open the one panel, on the view the command names
+ *   (§5.11.10–11 as amended 2026-10-28 — a registry handler cannot open an
+ *   overlay, route C-23);
  * - `search` never writes a marker. The registry used to read the first word of
  *   `/topic …` as a title, so a search recorded a topic called "search"
  *   (route C-22). The assertion below is on the transcript's marker count, not
- *   on the command's return value, because the bug's damage was a row on disk.
+ *   on the command's return value, because the bug's damage was a row on disk;
+ * - the forms the registry owns (`help`, an unknown option, both flags at once)
+ *   are not claimed here, so their refusals still reach the user.
  *
  * The backend is a real `LocalBackend` on a temporary root: `listTopics` is what
  * proves nothing was written, and the index behind `search` only exists under a
@@ -88,7 +92,7 @@ afterEach(async () => {
 });
 
 describe("handleTopicOverlayCommand", () => {
-  test("/topic list --all opens the panel and prints no list", async () => {
+  test("/topic list --all opens the panel on the index view", async () => {
     const local = await localConversation(4);
     local.markTopic("Alpha");
     const { ctx, opened, finished } = context();
@@ -98,15 +102,33 @@ describe("handleTopicOverlayCommand", () => {
     expect(result).toEqual({ submitted: true });
     expect(opened).toEqual([
       {
-        overlay: "topic-list",
+        overlay: "topic-all",
         input: "/topic list --all",
-        openingOutput: "Opening the topic list...",
+        openingOutput: "Opening every topic marker...",
         dismissOutput: "Topic list dismissed",
       },
     ]);
     // Nothing is printed here: the row belongs to the overlay (`openOverlay`
     // starts it), and the list itself is drawn by the face.
     expect(finished).toEqual([]);
+  });
+
+  test("the bare list and --context open the same panel on their own views", async () => {
+    await localConversation(4);
+    const { ctx, opened } = context();
+
+    await handleTopicOverlayCommand("/topic list", ctx);
+    await handleTopicOverlayCommand("/topic list --context", ctx);
+
+    expect(opened.map((entry) => entry.overlay)).toEqual([
+      "topic-blocks",
+      "topic-context",
+    ]);
+    // The command as typed rides the overlay, so the frame's header can echo it.
+    expect(opened.map((entry) => entry.input)).toEqual([
+      "/topic list",
+      "/topic list --context",
+    ]);
   });
 
   test("/topic search <kw> opens the search face with the keyword", async () => {
@@ -146,17 +168,18 @@ describe("handleTopicOverlayCommand", () => {
     expect(markers.map((view) => view.marker.title)).toEqual(["Alpha"]);
   });
 
-  test("the other /topic forms are not claimed", async () => {
+  test("the forms the registry owns are not claimed", async () => {
     await localConversation(4);
     const { ctx, opened } = context();
 
-    // A title, the plain list, its help, an unknown option and the retired alias
-    // all belong to the registry — claiming them here would swallow its answers.
+    // A title, the list's help, an unknown option, both flags at once and the
+    // retired alias all belong to the registry — claiming them here would swallow
+    // its answers (and, for a title, write the marker in the wrong layer).
     for (const input of [
       "/topic Auth token refresh",
-      "/topic list",
       "/topic list help",
       "/topic list --all extra",
+      "/topic list --all --context",
       "/topics",
       "/topic searchx",
     ]) {

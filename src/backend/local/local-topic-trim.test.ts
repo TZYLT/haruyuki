@@ -140,10 +140,7 @@ describe("listLocalTopics", () => {
     ]);
     expect(list.blocks[0]?.absorbedTitles).toEqual(["Gone"]);
     expect(list.blocks[1]?.title).toBeNull();
-    expect(list.markers.map((view) => view.anchorInContext)).toEqual([
-      true,
-      false,
-    ]);
+    expect(list.markers.map((view) => view.anchorIndex)).toEqual([11, null]);
     expect(list.contextMessageCount).toBe(12);
     expect(list.contextTokens).toBe(1_200);
     expect(list.contextWindow).toBe(1_000);

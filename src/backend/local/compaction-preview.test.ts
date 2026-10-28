@@ -315,6 +315,11 @@ describe("mergeCompactionBlocks", () => {
     ]);
     expect(merged.map((block) => block.index)).toEqual([1, 2, 3]);
     expect(merged.map((block) => block.endIndex)).toEqual([2, 4, 6]);
+    // The marker's tag time survives the merge, so the picker can say when the
+    // topic was tagged instead of when the merged block's content happens to
+    // start (the merge recomputes that from the messages).
+    expect(merged[0]?.taggedAt).toBe("2026-01-01T00:00:00.000Z");
+    expect(merged[1]?.taggedAt).toBeUndefined();
   });
 
   test("splits a summarizer topic that spans a marker into two blocks", () => {

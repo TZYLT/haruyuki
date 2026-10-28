@@ -461,8 +461,10 @@ These open a selector instead of running in the transcript:
   `src/cli/app/submit-compact-commands.ts`.
 - `/compact config` opens the mode panel, where the **Compression rate** row is
   editable — `src/cli/app/use-submit-handler.ts:718-729`.
-- `/topic <title> [summary]` marks a boundary; `/topic list [--all]` lists the
-  blocks and, with `--all`, every marker —
+- `/topic <title> [summary]` marks a boundary; `/topic list` opens the topic
+  panel — blocks of the current context, `--context` for this conversation's
+  markers in context order, `--all` for every marker this agent has recorded;
+  Tab switches views, Enter opens a row. Registered in
   `src/cli/commands/registry.ts:645-657`.
 - `/clear` empties the in-context transcript; `/messages clear` resets all of
   the agent's messages — `src/cli/commands/registry.ts:262-279`.

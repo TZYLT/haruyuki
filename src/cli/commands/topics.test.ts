@@ -156,7 +156,7 @@ describe("handleTopicsCommand", () => {
     expect(output).toContain("/compact <n> keeps block n");
   });
 
-  test("--context lists this conversation's markers in conversation order", async () => {
+  test("--context lists this conversation's markers in context order", async () => {
     const { backend, agentId, scope } = await backendWithTurns(4);
     backend.markTopic({
       conversationId: "default",
@@ -169,7 +169,10 @@ describe("handleTopicsCommand", () => {
       backend,
     });
     expect(output).toContain("Every topic marker in this conversation (1,");
-    expect(output).toContain("oldest first");
+    expect(output).toContain("context order");
+    // The two orders are stated: the rows follow the context, the numbers the
+    // transcript, so `/topic show` keeps meaning what it meant.
+    expect(output).toContain("write order");
     expect(output).toContain("Auth token refresh");
     expect(output).toContain("agent");
     expect(output).toContain("in the current context");
@@ -212,7 +215,7 @@ describe("handleTopicsCommand", () => {
       backend,
     });
     expect(all).toContain("newest first");
-    expect(context).toContain("oldest first");
+    expect(context).toContain("context order");
   });
 
   test("an unmarked context explains both marking channels", async () => {
