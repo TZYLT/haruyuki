@@ -226,7 +226,7 @@ describe("mouse input", () => {
       const entry = leaderEntries().find(
         (candidate) => candidate.id === "leader.toggleMouse",
       );
-      expect(entry?.label).toBe("鼠标上报 开/关");
+      expect(entry?.label).toBe("Mouse reporting on/off");
     } finally {
       shell.unmount();
     }
@@ -242,8 +242,8 @@ describe("mouse input", () => {
 
       expect(isMouseTrackingEnabled()).toBe(false);
       // Reported where the user can see it: the hint slot above the input.
-      expect(getNotice()).toContain("鼠标上报已关闭");
-      expect(frame).toContain("鼠标上报已关闭");
+      expect(getNotice()).toContain("Mouse reporting off");
+      expect(frame).toContain("Mouse reporting off");
       expect(stream.writes.at(-1)).toBe(MOUSE_TRACKING_DISABLE);
     } finally {
       shell.unmount();

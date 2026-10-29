@@ -100,7 +100,7 @@ export function MessageHistoryOverlay({ onClose }: { onClose: () => void }) {
     extra: [
       {
         id: "message-history.clear",
-        label: "清空",
+        label: "Clear",
         chords: [{ key: "c" }],
         run: () => {
           if (entries.length === 0) return "declined";

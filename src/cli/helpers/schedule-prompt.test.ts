@@ -394,7 +394,7 @@ describe("task target routing (P1-2/F2)", () => {
       const routing = resolveTuiTaskTarget(task({ target }), ACTIVE);
       expect(routing.kind).toBe("skip");
       if (routing.kind !== "skip") continue;
-      expect(routing.reason).toContain("新会话");
+      expect(routing.reason).toContain("new conversation");
       expect(routing.conversationId).toBe(target.hidden ? "new-hidden" : "new");
     }
   });
@@ -403,7 +403,7 @@ describe("task target routing (P1-2/F2)", () => {
     const routing = resolveTuiTaskTarget(task(), null);
     expect(routing.kind).toBe("skip");
     if (routing.kind !== "skip") return;
-    expect(routing.reason).toContain("目标未知");
+    expect(routing.reason).toContain("target unknown");
   });
 
   test("canRun is exactly the live-session routing, and false without one", () => {

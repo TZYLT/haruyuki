@@ -104,7 +104,7 @@ export function createTabStripActions(
     if (!open.some((tab) => tab.id === tabId)) return;
     const remaining = open.filter((tab) => tab.id !== tabId);
     if (remaining.length === 0) {
-      showNotice("至少保留一个会话标签");
+      showNotice("At least one conversation tab must stay open");
       return;
     }
     if (tabId !== deps.conversationIdRef.current) {
@@ -112,7 +112,7 @@ export function createTabStripActions(
       return;
     }
     if (deps.isAgentBusy()) {
-      showNotice("正在运行 · 先 Esc 中断再关闭会话");
+      showNotice("Running · press Esc to interrupt before closing");
       return;
     }
     const next = remaining.at(-1);

@@ -166,7 +166,7 @@ export function useOverlayCommands(input: {
    */
   const openTabsOverlay = useCallback(() => {
     if (activeOverlay === "tabs") return;
-    openOverlay("tabs", "/tabs", "标签列表", "标签列表已关闭");
+    openOverlay("tabs", "/tabs", "Tab list", "Tab list closed");
   }, [activeOverlay, openOverlay]);
 
   // The row's phase follows the face: a command started before its overlay was

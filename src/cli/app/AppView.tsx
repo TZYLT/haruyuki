@@ -651,6 +651,11 @@ export function AppView(props: AppViewRenderProps) {
                 agentId={agentId}
                 currentConversationId={conversationId}
                 onClose={closeOverlay}
+                onCompleted={() =>
+                  completeOverlay("schedule-add")?.finish(
+                    "Scheduled task created",
+                  )
+                }
               />
             )}
 

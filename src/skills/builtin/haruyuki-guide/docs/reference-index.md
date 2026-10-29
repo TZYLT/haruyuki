@@ -883,37 +883,37 @@ Commands marked hidden still work but are kept out of autocomplete.
 
 | Slash command | Arguments | What it does | Source |
 | --- | --- | --- | --- |
-| `/agent` | `<list\|pin\|unpin\|pinned\|rename\|describe\|system\|personality\|toolset\|subagents\|ade\|profile>` | Agent: browse, pin, rename, describe, system, personality, tools | `src/cli/commands/registry.ts:93` |
-| `/session` | `<rename\|logout>` | Session: rename this conversation, log out | `src/cli/commands/registry.ts:99` |
-| `/messages` | `<history\|clear>` | Messages: history, clear | `src/cli/commands/registry.ts:105` |
-| `/skill` | `<list\|skill-creator>` | Skill: list the available skills, or create a new one | `src/cli/commands/registry.ts:111` |
-| `/config` | `<connect\|mcp\|hooks\|secret\|experiments\|mods\|statusline\|title\|terminal\|font-width\|console-font\|stream\|reasoning-tab\|system-reminders>` | Config: providers, MCP, hooks, secrets, terminal, appearance | `src/cli/commands/registry.ts:117` |
-| `/maintenance` | `<feedback\|bg\|workflows\|install-github-app\|sessions>` | Maintenance: feedback, background shells, workflows, GitHub app, hidden sessions | `src/cli/commands/registry.ts:123` |
-| `/model` | — | Switch model | `src/cli/commands/registry.ts:140` |
-| `/doctor` | `[symptom]` | Investigate an agent issue in this conversation | `src/cli/commands/registry.ts:157` |
-| `/dream` | `[--instruction TEXT]` | Reflect on this conversation's memory (alias for /reflect) | `src/cli/commands/registry.ts:166` |
-| `/reflect` | `[--instruction TEXT]` | Launch reflection on this conversation (/reflect [--instruction TEXT]) | `src/cli/commands/registry.ts:172` |
-| `/memory` | `<recall\|init\|memfs\|remote\|palace\|config>` | Memory: view, init, filesystem backend, remote, palace, recall | `src/cli/commands/registry.ts:195` |
-| `/search` | — | Search messages across all agents (/search [query]) | `src/cli/commands/registry.ts:246` |
-| `/clear` | — | Clear in-context messages | `src/cli/commands/registry.ts:263` |
-| `/cd` | `<path>` | Change working directory for this TUI session (/cd <path>) | `src/cli/commands/registry.ts:281` |
-| `/new` | — | Start a new conversation (keep agent memory) | `src/cli/commands/registry.ts:292` |
-| `/fork` | — | Fork the current conversation | `src/cli/commands/registry.ts:301` |
-| `/btw` | — | Fork conversation and ask a side question (/btw <question>) | `src/cli/commands/registry.ts:310` |
-| `/reload` | — | Reload settings and local mods | `src/cli/commands/registry.ts:367` |
-| `/usage` | — | Open the Usage page (overview + breakdown) | `src/cli/commands/registry.ts:446` |
-| `/tabs` | — | List open tabs (switch with Enter, close with D) | `src/cli/commands/registry.ts:452` |
-| `/close` | — | Close the current tab | `src/cli/commands/registry.ts:470` |
-| `/settings` | — | Open the Settings page | `src/cli/commands/registry.ts:476` |
-| `/context` | `<limit\|pending>` | Context: usage, limit, pending prefix changes | `src/cli/commands/registry.ts:482` |
-| `/recompile` | — | Recompile current agent + conversation (warning: this will evict the cache and increase costs) | `src/cli/commands/registry.ts:488` |
-| `/help` | — | Show available commands | `src/cli/commands/registry.ts:514` |
-| `/schedule` | `<list\|show\|add\|run\|pause\|resume\|delete\|logs\|autostart>` | Scheduled tasks: list, show, add, run, pause, resume, delete, logs, autostart | `src/cli/commands/registry.ts:565` |
-| `/exit` | — | Exit this session | `src/cli/commands/registry.ts:628` |
-| `/compact` | `[n\|help]` | Trim older context at a topic boundary you pick | `src/cli/commands/registry.ts:657` |
-| `/topic` | `<title> [summary] \| list [--all\|--context] \| search <kw> \| show <#n\|title> [--full] [--out <path>]` | Mark a topic boundary, or open/search/show the topic markers | `src/cli/commands/registry.ts:665` |
-| `/recall` | `[setting] [value]` | Configure passive recall of earlier conversations and memory | `src/cli/commands/registry.ts:697` |
-| `/resume` | `[conversation_id]` | Resume a previous conversation | `src/cli/commands/registry.ts:703` |
+| `/agent` | `<list\|pin\|unpin\|pinned\|rename\|describe\|system\|personality\|toolset\|subagents\|ade\|profile>` | Agent: browse, pin, rename, describe, system, personality, tools | `src/cli/commands/registry.ts:94` |
+| `/session` | `<id\|rename\|logout>` | Session: show the conversation id, rename this conversation, log out | `src/cli/commands/registry.ts:100` |
+| `/messages` | `<history\|clear>` | Messages: history, clear | `src/cli/commands/registry.ts:106` |
+| `/skill` | `<list\|skill-creator>` | Skill: list the available skills, or create a new one | `src/cli/commands/registry.ts:112` |
+| `/config` | `<connect\|mcp\|hooks\|secret\|experiments\|mods\|statusline\|title\|terminal\|font-width\|console-font\|stream\|reasoning-tab\|system-reminders>` | Config: providers, MCP, hooks, secrets, terminal, appearance | `src/cli/commands/registry.ts:118` |
+| `/maintenance` | `<feedback\|bg\|workflows\|install-github-app\|sessions>` | Maintenance: feedback, background shells, workflows, GitHub app, hidden sessions | `src/cli/commands/registry.ts:124` |
+| `/model` | — | Switch model | `src/cli/commands/registry.ts:141` |
+| `/doctor` | `[symptom]` | Investigate an agent issue in this conversation | `src/cli/commands/registry.ts:158` |
+| `/dream` | `[--instruction TEXT]` | Reflect on this conversation's memory (alias for /reflect) | `src/cli/commands/registry.ts:167` |
+| `/reflect` | `[--instruction TEXT]` | Launch reflection on this conversation (/reflect [--instruction TEXT]) | `src/cli/commands/registry.ts:173` |
+| `/memory` | `<recall\|init\|memfs\|remote\|palace\|config>` | Memory: view, init, filesystem backend, remote, palace, recall | `src/cli/commands/registry.ts:196` |
+| `/search` | — | Search messages across all agents (/search [query]) | `src/cli/commands/registry.ts:247` |
+| `/clear` | — | Clear in-context messages | `src/cli/commands/registry.ts:264` |
+| `/cd` | `<path>` | Change working directory for this TUI session (/cd <path>) | `src/cli/commands/registry.ts:282` |
+| `/new` | — | Start a new conversation (keep agent memory) | `src/cli/commands/registry.ts:293` |
+| `/fork` | — | Fork the current conversation | `src/cli/commands/registry.ts:302` |
+| `/btw` | — | Fork conversation and ask a side question (/btw <question>) | `src/cli/commands/registry.ts:311` |
+| `/reload` | — | Reload settings and local mods | `src/cli/commands/registry.ts:368` |
+| `/usage` | — | Open the Usage page (overview + breakdown) | `src/cli/commands/registry.ts:447` |
+| `/tabs` | — | List open tabs (switch with Enter, close with D) | `src/cli/commands/registry.ts:453` |
+| `/close` | — | Close the current tab | `src/cli/commands/registry.ts:471` |
+| `/settings` | — | Open the Settings page | `src/cli/commands/registry.ts:477` |
+| `/context` | `<limit\|pending>` | Context: usage, limit, pending prefix changes | `src/cli/commands/registry.ts:483` |
+| `/recompile` | — | Recompile current agent + conversation (warning: this will evict the cache and increase costs) | `src/cli/commands/registry.ts:489` |
+| `/help` | — | Show available commands | `src/cli/commands/registry.ts:515` |
+| `/schedule` | `<list\|show\|add\|run\|pause\|resume\|delete\|logs\|autostart>` | Scheduled tasks: list, show, add, run, pause, resume, delete, logs, autostart | `src/cli/commands/registry.ts:566` |
+| `/exit` | — | Exit this session | `src/cli/commands/registry.ts:629` |
+| `/compact` | `[n\|help]` | Trim older context at a topic boundary you pick | `src/cli/commands/registry.ts:674` |
+| `/topic` | `<title> [summary] \| list [--all\|--context] \| search <kw> \| show <#n\|title> [--full] [--out <path>]` | Mark a topic boundary, or open/search/show the topic markers | `src/cli/commands/registry.ts:682` |
+| `/recall` | `[setting] [value]` | Configure passive recall of earlier conversations and memory | `src/cli/commands/registry.ts:714` |
+| `/resume` | `[conversation_id]` | Resume a previous conversation | `src/cli/commands/registry.ts:720` |
 
 ## Hub subcommands
 
@@ -936,6 +936,7 @@ it, so these are the only spellings that run.
 | `/agent subagents` | — | Manage custom subagents |
 | `/agent ade` | — | Open this agent in ADE (browser) |
 | `/agent profile` | `<save\|load\|delete\|usage> [name]` | Save, load or delete a local agent profile |
+| `/session id` | — | Show this conversation's id |
 | `/session rename` | `<name>` | Rename this conversation |
 | `/session logout` | — | Clear saved credentials and exit |
 | `/memory` | — | View your agent's memory |

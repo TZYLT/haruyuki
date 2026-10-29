@@ -20,12 +20,14 @@
  */
 
 import {
+  conversationRef,
   formatNextDueOrPending,
   liveScheduleSource,
   outcomeLabel,
   permissionLabel,
   refreshScheduleTasks,
   shortId,
+  statusLabel,
   takeStartupScheduleSummaryLines,
 } from "@/cli/helpers/schedule-store";
 import {
@@ -67,34 +69,34 @@ export type ScheduleSubcommand = (typeof SCHEDULE_SUBCOMMANDS)[number];
  */
 export function formatScheduleHelp(): string {
   return [
-    "/schedule — 计划任务（本机，随宿主运行）",
+    "/schedule — scheduled tasks (local; run by a host)",
     "",
-    "  /schedule list [--all]            列出计划任务（默认只看当前 agent）",
-    "  /schedule show <id|名称>          一个任务的详情",
-    "  /schedule add [选项]              新建；参数齐全时一步建好，缺参数进向导",
-    "  /schedule run <id|名称>           立即运行一次（不消耗下一次计划触发）",
-    "  /schedule pause <id|名称>         暂停",
-    "  /schedule resume <id|名称>        恢复（清零连续失败）",
-    "  /schedule delete <id|名称>        删除",
-    "  /schedule logs <id|名称>          运行记录（按 runId 分组）",
-    "  /schedule autostart on|off|status 开机自启（每分钟唤起短命宿主）",
+    "  /schedule list [--all]            List tasks (current agent only by default)",
+    "  /schedule show <id|name>          Show one task",
+    "  /schedule add [options]           Create; complete flags create in one step, otherwise the wizard asks",
+    "  /schedule run <id|name>           Run once now (does not consume the next scheduled trigger)",
+    "  /schedule pause <id|name>         Pause",
+    "  /schedule resume <id|name>        Resume (resets the failure streak)",
+    "  /schedule delete <id|name>        Delete",
+    "  /schedule logs <id|name>          Run history (grouped by runId)",
+    "  /schedule autostart on|off|status OS autostart (wakes a short-lived host every minute)",
     "",
-    "add 选项：",
-    "  --cron <5 字段> | --every <5m|2h|1d> | --at <时间>   时间（--at 为一次性）",
-    "  --prompt <文本> | --command <命令>                  内容；命令仅 compact/reflect",
-    "  --type prompt|command                               默认 prompt",
-    "  --target new|default|existing:<会话 id>             目标（必填）",
-    "  --visible | --hidden                                新会话是否隐藏（--target new 必填）",
-    "  --permission standard|acceptEdits|unrestricted      权限（必填）",
-    "  --catch-up | --no-catch-up                          错过是否补跑（必填）",
-    "  --timeout <分钟> --wait <分钟> --tz <IANA> --name <名称>",
-    "                                      0 合法：超时 0=不限时，等待 0=忙时立即跳过",
+    "add options:",
+    "  --cron <5 fields> | --every <5m|2h|1d> | --at <time>   When (--at is one-off)",
+    "  --prompt <text> | --command <command>                  Payload; commands limited to compact/reflect",
+    "  --type prompt|command                                 Default: prompt",
+    "  --target new|default|existing:<conversation id>       Target (required)",
+    "  --visible | --hidden                                  New-conversation visibility (required with --target new)",
+    "  --permission standard|acceptEdits|unrestricted        Permission (required)",
+    "  --catch-up | --no-catch-up                            Run a missed slot on startup (required)",
+    "  --timeout <minutes> --wait <minutes> --tz <IANA> --name <name>",
+    "                                      0 is valid: timeout 0 = no limit, wait 0 = skip at once when busy",
     "",
-    "权限三档（无人值守，任何审批请求一律拒绝）：",
-    "  只读 standard：读文件/搜索；写文件、shell、子代理都不行",
-    "  可编辑 acceptEdits：能读写文件；shell 仍被拒",
-    "  全权 unrestricted：全部工具。本版不承诺禁删/禁网（沙箱是进程级的）",
-    "reflection 命令任务沿用任务权限，只读 + reflect 会因写不了记忆而失败。",
+    "Permission tiers (unattended: every approval request is denied):",
+    "  read-only (standard): read files and search; no writes, shell, or subagents",
+    "  read-write (acceptEdits): read and write files; shell is still denied",
+    "  unrestricted: every tool. This build does not promise delete/network blocks (the sandbox is process-level)",
+    "reflection command tasks keep the task's permission; read-only + reflect fails because it cannot write memory.",
   ].join("\n");
 }
 
@@ -208,7 +210,7 @@ function parseAdd(args: readonly string[]): ScheduleInvocation {
   const nextValue = (flag: string): string => {
     const value = tokens[index + 1];
     if (value === undefined || value.startsWith("--")) {
-      error = `${flag} 需要一个值`;
+      error = `${flag} needs a value`;
       return "";
     }
     index += 1;
@@ -216,12 +218,12 @@ function parseAdd(args: readonly string[]): ScheduleInvocation {
   };
 
   // Text flags may be followed by a multi-word value: consume until the next
-  // flag so `/schedule add --prompt 帮我总结今天的提交 --cron …` works, which is
-  // how the unquoted registry path arrives.
+  // flag so `/schedule add --prompt summarise today's commits --cron …` works,
+  // which is how the unquoted registry path arrives.
   const consumeText = (flag: string): string => {
     const value = tokens[index + 1];
     if (value === undefined || value.startsWith("--")) {
-      error = `${flag} 需要一个值`;
+      error = `${flag} needs a value`;
       return "";
     }
     const words = [value];
@@ -238,7 +240,7 @@ function parseAdd(args: readonly string[]): ScheduleInvocation {
   const consumeCron = (): string => {
     const first = tokens[index + 1];
     if (first === undefined || first.startsWith("--")) {
-      error = "--cron 需要一个表达式";
+      error = "--cron needs an expression";
       return "";
     }
     index += 1;
@@ -261,7 +263,7 @@ function parseAdd(args: readonly string[]): ScheduleInvocation {
       case "--type": {
         const value = nextValue(flag);
         if (value === "prompt" || value === "command") draft.type = value;
-        else error = "--type 只接受 prompt 或 command";
+        else error = "--type accepts only prompt or command";
         break;
       }
       case "--prompt":
@@ -279,7 +281,8 @@ function parseAdd(args: readonly string[]): ScheduleInvocation {
       case "--every": {
         const value = nextValue(flag);
         const parsed = parseEvery(value);
-        if (!parsed) error = `无法识别间隔 "${value}"（试试 5m、2h、1d）`;
+        if (!parsed)
+          error = `Unrecognized interval "${value}" (try 5m, 2h, 1d)`;
         else draft.cron = parsed.cron;
         draft.recurring = true;
         break;
@@ -288,7 +291,7 @@ function parseAdd(args: readonly string[]): ScheduleInvocation {
         const value = consumeText(flag);
         const parsed = parseAt(value);
         if (!parsed) {
-          error = `无法识别时间 "${value}"（试试 "in 45m"、"3:00pm"）`;
+          error = `Unrecognized time "${value}" (try "in 45m", "3:00pm")`;
         } else {
           draft.cron = parsed.cron;
           draft.recurring = false;
@@ -335,7 +338,8 @@ function parseAdd(args: readonly string[]): ScheduleInvocation {
         const value = nextValue(flag);
         const permission = parsePermission(value);
         if (!permission) {
-          error = "权限只接受 standard / acceptEdits / unrestricted";
+          error =
+            "Permission accepts only standard / acceptEdits / unrestricted";
         } else {
           draft.permission = permission;
         }
@@ -350,14 +354,16 @@ function parseAdd(args: readonly string[]): ScheduleInvocation {
       case "--timeout": {
         const value = nextValue(flag);
         const minutes = parseInteger(value);
-        if (minutes === null) error = "--timeout 需要 0 或正整数分钟";
+        if (minutes === null)
+          error = "--timeout needs 0 or a positive number of minutes";
         else draft.timeoutMinutes = minutes;
         break;
       }
       case "--wait": {
         const value = nextValue(flag);
         const minutes = parseInteger(value);
-        if (minutes === null) error = "--wait 需要 0 或正整数分钟";
+        if (minutes === null)
+          error = "--wait needs 0 or a positive number of minutes";
         else draft.waitMinutes = minutes;
         break;
       }
@@ -372,7 +378,7 @@ function parseAdd(args: readonly string[]): ScheduleInvocation {
         draft.description = consumeText(flag);
         break;
       default:
-        error = `未知选项 ${flag}`;
+        error = `Unknown option ${flag}`;
         break;
     }
     if (error) break;
@@ -422,13 +428,13 @@ export function parseScheduleInvocation(
       }
       return {
         kind: "error",
-        message: "用法：/schedule autostart on|off|status",
+        message: "Usage: /schedule autostart on|off|status",
       };
     }
     default:
       return {
         kind: "error",
-        message: `未知子命令 ${sub}。可用：${SCHEDULE_SUBCOMMANDS.join(" / ")}`,
+        message: `Unknown subcommand ${sub}. Available: ${SCHEDULE_SUBCOMMANDS.join(" / ")}`,
       };
   }
 }
@@ -436,7 +442,7 @@ export function parseScheduleInvocation(
 function missingRef(sub: string): ScheduleInvocation {
   return {
     kind: "error",
-    message: `/schedule ${sub} 需要任务的 id 或名称`,
+    message: `/schedule ${sub} needs a task id or name`,
   };
 }
 
@@ -461,7 +467,7 @@ export function resolveScheduleTask(
   if (byShortId.length === 1) return { task: byShortId[0] as ScheduleTaskV2 };
   if (byShortId.length > 1) {
     return {
-      error: `「${taskRef}」匹配到 ${byShortId.length} 个任务，请用完整 id：${byShortId
+      error: `"${taskRef}" matches ${byShortId.length} tasks; use the full id: ${byShortId
         .map((task) => task.id)
         .join(", ")}`,
     };
@@ -470,12 +476,12 @@ export function resolveScheduleTask(
   if (byName.length === 1) return { task: byName[0] as ScheduleTaskV2 };
   if (byName.length > 1) {
     return {
-      error: `「${taskRef}」匹配到 ${byName.length} 个任务，请用 id：${byName
+      error: `"${taskRef}" matches ${byName.length} tasks; use an id: ${byName
         .map((task) => shortId(task.id))
         .join(", ")}`,
     };
   }
-  return { error: `找不到任务 ${taskRef}` };
+  return { error: `Task ${taskRef} not found` };
 }
 
 /** One task's detail, as lines the command row or the panel can print. */
@@ -484,26 +490,41 @@ export function formatScheduleDetailLines(
   now: Date,
   nextDueAt: Date | null,
 ): string[] {
-  const pauseWord = task.pausedReason === "auto_failures" ? "连续失败" : "手动";
+  const line = (label: string, value: string): string =>
+    `${label.padEnd(10)} ${value}`;
+  const target =
+    task.target.kind === "new"
+      ? `new conversation${task.target.hidden ? " (hidden)" : ""}`
+      : `conversation ${conversationRef(task.target.conversation_id)}`;
   return [
     `${task.name} (${task.id})`,
-    `类型      ${task.type} · ${task.payload}`,
-    `目标      ${
-      task.target.kind === "new"
-        ? `新会话${task.target.hidden ? "（隐藏）" : ""}`
-        : `会话 ${task.target.conversation_id}`
-    }`,
-    `时间      ${task.cron} · ${task.timezone} · ${task.recurring ? "重复" : "一次性"}`,
-    `状态      ${task.status}${task.pausedReason ? `（${pauseWord}）` : ""}`,
-    `权限      ${permissionLabel(task.permission)}`,
-    `补跑      ${task.catchUp ? "是" : "否"} · 超时 ${
-      task.timeoutMinutes === 0 ? "不限" : `${task.timeoutMinutes} 分钟`
-    } · 等待 ${task.waitMinutes} 分钟`,
-    `上次      ${outcomeLabel(task.lastOutcome)}${
-      task.lastRunAt ? ` · ${task.lastRunAt}` : ""
-    }${task.lastError ? ` · ${task.lastError}` : ""}`,
-    `连续失败  ${task.consecutiveFailures} 次 · 错过 ${task.missedCount} 次 · 失败 ${task.failedCount} 次`,
-    `下次      ${formatNextDueOrPending(nextDueAt, now)}`,
+    line("Type", `${task.type} · ${task.payload}`),
+    line("Target", target),
+    line(
+      "Schedule",
+      `${task.cron} · ${task.timezone} · ${task.recurring ? "recurring" : "one-off"}`,
+    ),
+    line("Status", statusLabel(task)),
+    line("Permission", permissionLabel(task.permission)),
+    line(
+      "Catch-up",
+      `${task.catchUp ? "yes" : "no"} · timeout ${
+        task.timeoutMinutes === 0
+          ? "no limit"
+          : `${task.timeoutMinutes} minutes`
+      } · wait ${task.waitMinutes} minutes`,
+    ),
+    line(
+      "Last",
+      `${outcomeLabel(task.lastOutcome)}${
+        task.lastRunAt ? ` · ${task.lastRunAt}` : ""
+      }${task.lastError ? ` · ${task.lastError}` : ""}`,
+    ),
+    line(
+      "Failures",
+      `${task.consecutiveFailures} in a row · ${task.missedCount} missed · ${task.failedCount} failed`,
+    ),
+    line("Next", formatNextDueOrPending(nextDueAt, now)),
   ];
 }
 
@@ -511,7 +532,7 @@ export function formatScheduleDetailLines(
 export function formatMissingAddFlags(
   missing: readonly MissingAddFlag[],
 ): string {
-  return `缺少必填参数：${missing.join("、")}`;
+  return `Missing required flags: ${missing.join(", ")}`;
 }
 
 /**
@@ -527,7 +548,7 @@ export function isAutoPauseDetailLine(
   line: string,
 ): boolean {
   if (task.pausedReason !== "auto_failures") return false;
-  return line.startsWith("状态") || line.startsWith("连续失败");
+  return line.startsWith("Status") || line.startsWith("Failures");
 }
 
 // ── Creation (one place for the one-step form and the wizard) ───────
@@ -578,7 +599,7 @@ export function createScheduleTask(
   const type = draft.type ?? "prompt";
   const name =
     draft.name?.trim() ||
-    `${type === "command" ? "命令" : "提示"}: ${draft.payload.slice(0, 32)}`;
+    `${type === "command" ? "Command" : "Prompt"}: ${draft.payload.slice(0, 32)}`;
   const description = draft.description?.trim() || draft.payload.slice(0, 80);
   const target: AddTaskInput["target"] =
     draft.target ?? ({ kind: "new", hidden: draft.hidden ?? false } as const);
@@ -629,20 +650,25 @@ export function formatScheduleCreatedLines(
     detail?: string;
   },
 ): string[] {
-  if (result.kind === "error") return [`创建失败：${result.message}`];
+  if (result.kind === "error")
+    return [`Failed to create task: ${result.message}`];
   const lines = [
-    `已创建计划任务 ${result.name} (${shortId(result.taskId)})`,
-    `  ${result.cron} · ${result.timezone} · 权限 ${permissionLabel(result.permission)}`,
+    `Created scheduled task ${result.name} (${shortId(result.taskId)})`,
+    `  ${result.cron} · ${result.timezone} · permission ${permissionLabel(result.permission)}`,
     result.warning ? `  ${result.warning}` : "",
   ].filter(Boolean);
   if (options?.autostart === "failed") {
     lines.push(
-      `  任务已创建，自启未注册：${options.detail ?? "注册失败"}。任务只在 Haruyuki 运行时执行。`,
+      `  Task created, but autostart is not registered: ${options.detail ?? "registration failed"}. It runs only while Haruyuki is running.`,
     );
   } else if (options?.autostart === "declined") {
-    lines.push("  自启未注册（你选了「否」）：任务只在 Haruyuki 运行时执行。");
+    lines.push(
+      "  Autostart not registered (you chose No): the task runs only while Haruyuki is running.",
+    );
   } else if (options?.autostart === "registered") {
-    lines.push("  自启已注册：每分钟由短命宿主检查一次。");
+    lines.push(
+      "  Autostart registered: a short-lived host checks every minute.",
+    );
   }
   return lines;
 }
@@ -654,12 +680,12 @@ function mutationReceipt(
   result: { success: boolean; name: string; error?: string },
 ): string {
   const verbs = {
-    pause: "已暂停",
-    resume: "已恢复",
-    delete: "已删除",
+    pause: "Paused",
+    resume: "Resumed",
+    delete: "Deleted",
   } as const;
   if (!result.success) {
-    return `${result.name}：${result.error ?? "操作失败"}`;
+    return `${result.name}: ${result.error ?? "operation failed"}`;
   }
   return `${verbs[action]} ${result.name}`;
 }
@@ -697,19 +723,19 @@ export async function handleScheduleCommand(
     case "help":
       return formatScheduleHelp();
     case "error":
-      return `${invocation.message}\n\n运行 /schedule 查看用法。`;
+      return `${invocation.message}\n\nRun /schedule for usage.`;
     case "list": {
       const tasks = scheduleTasksFor(scope?.agentId, invocation.allAgents);
       if (tasks.length === 0) {
         return invocation.allAgents
-          ? "还没有任何计划任务。用 /schedule add 新建。"
-          : "当前 agent 还没有计划任务。用 /schedule add 新建（--all 看全部）。";
+          ? "No scheduled tasks yet. Create one with /schedule add."
+          : "This agent has no scheduled tasks yet. Create one with /schedule add (or use --all to see every task).";
       }
       const source = liveScheduleSource();
       return tasks
         .map((task) => {
           const next = formatNextDueOrPending(source.nextDueAt(task, now), now);
-          return `${shortId(task.id)}  ${task.name} · ${task.type} · ${task.status} · ${outcomeLabel(task.lastOutcome)} · 下次 ${next}`;
+          return `${shortId(task.id)}  ${task.name} · ${task.type} · ${task.status} · ${outcomeLabel(task.lastOutcome)} · next ${next}`;
         })
         .join("\n");
     }
@@ -734,10 +760,10 @@ export async function handleScheduleCommand(
       }
       // The run log is rendered by the panel; in text the pointer is the honest
       // answer (`/schedule logs` has the grouping and the paging there).
-      return `/schedule logs ${shortId(resolved.task.id)} 的运行记录在面板里查看（TUI）。`;
+      return `/schedule logs ${shortId(resolved.task.id)}: open the run history in the TUI panel.`;
     }
     case "run":
-      return "/schedule run 需要在 TUI 里运行：它走 TUI 宿主自己的执行腿。";
+      return "/schedule run must run in the TUI: it uses the TUI host's own runner.";
     case "pause":
     case "resume":
     case "delete": {
@@ -756,7 +782,7 @@ export async function handleScheduleCommand(
         return mutationReceipt("delete", {
           success: ok,
           name: task.name,
-          error: ok ? undefined : "任务已不存在",
+          error: ok ? undefined : "the task no longer exists",
         });
       }
       const result =
@@ -775,10 +801,10 @@ export async function handleScheduleCommand(
         return [
           formatMissingAddFlags(invocation.missing),
           "",
-          "在 TUI 里运行 `/schedule add` 会进入向导，逐项填写。",
+          "Run `/schedule add` in the TUI to open the wizard and fill each one in.",
         ].join("\n");
       }
-      if (!scope?.agentId) return "缺少当前 agent，无法创建任务。";
+      if (!scope?.agentId) return "No current agent; cannot create a task.";
       const created = createScheduleTask({
         agentId: scope.agentId,
         draft: invocation.draft,
@@ -794,7 +820,7 @@ export async function handleScheduleCommand(
  *
  * `unregisterAutostart` may *return* `registered: false` with an `error` when it
  * could not read or write the crontab — that is not the same fact as "the entry
- * is gone", and M3 #7 exists because the old receipt called it "自启已关闭".
+ * is gone", and M3 #7 exists because the old receipt called it "autostart off".
  */
 export function formatAutostartResult(
   action: "on" | "off" | "status",
@@ -807,22 +833,24 @@ export function formatAutostartResult(
 ): string {
   if (action === "on") {
     return status.registered
-      ? `自启已注册（${status.method ?? "未知方式"}${
-          status.launcherPath ? `，${status.launcherPath}` : ""
-        }）。`
-      : `自启注册失败：${status.error ?? "未知原因"}`;
+      ? `Autostart registered (${status.method ?? "unknown method"}${
+          status.launcherPath ? `, ${status.launcherPath}` : ""
+        }).`
+      : `Autostart registration failed: ${status.error ?? "unknown reason"}`;
   }
   if (action === "off") {
-    if (status.registered) return `自启仍在：${status.error ?? "卸载未生效"}`;
-    if (status.error) {
-      return `无法确认自启已关闭：${status.error}。条目可能仍在，请手动检查。`;
+    if (status.registered) {
+      return `Autostart is still present: ${status.error ?? "uninstall did not take effect"}`;
     }
-    return "自启已关闭。任务只在 Haruyuki 运行时执行。";
+    if (status.error) {
+      return `Could not confirm autostart is off: ${status.error}. The entry may still exist; check manually.`;
+    }
+    return "Autostart off. Tasks run only while Haruyuki is running.";
   }
   if (status.registered) {
-    return `自启：已注册（${status.method ?? "未知方式"}）。`;
+    return `Autostart: registered (${status.method ?? "unknown method"}).`;
   }
-  return `自启：未注册${status.error ? `（${status.error}）` : ""}。`;
+  return `Autostart: not registered${status.error ? ` (${status.error})` : ""}.`;
 }
 
 /**
@@ -845,8 +873,13 @@ export async function formatAutostartReceipt(
     return formatAutostartResult(action, await getAutostartStatus());
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const verb = action === "on" ? "注册" : action === "off" ? "卸载" : "状态";
-    return `自启${verb}失败：${message}`;
+    const verb =
+      action === "on"
+        ? "registration"
+        : action === "off"
+          ? "unregistration"
+          : "status read";
+    return `Autostart ${verb} failed: ${message}`;
   }
 }
 

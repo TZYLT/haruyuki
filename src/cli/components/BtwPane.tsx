@@ -61,7 +61,7 @@ export const BtwPane = memo(
             id: "btw.jumpToFork",
             leader: true,
             chords: [{ key: "j" }],
-            label: "切到分叉会话",
+            label: "Switch to fork",
             run: () => {
               if (!complete || !state.forkedConversationId) return "declined";
               onJumpToConversation?.(state.forkedConversationId);
@@ -133,8 +133,8 @@ export const BtwPane = memo(
             </Text>
             {onJumpToConversation && (
               <Text dimColor>
-                {"  "}[esc] 关闭 ·
-                面板期间应用级快捷键暂停（打字与基础编辑仍可用）
+                {"  "}[esc] close · app shortcuts are paused while this pane is
+                open (typing and basic editing still work)
               </Text>
             )}
           </Box>

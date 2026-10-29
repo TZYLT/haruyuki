@@ -210,8 +210,8 @@ describe("the TUI host leg", () => {
       // React updates of the transcript.
       expect(notifications).toHaveLength(2);
       expect(notifications[0]).toContain("晨报");
-      expect(notifications[0]).toContain("成功");
-      expect(notifications[1]).toContain("已暂停");
+      expect(notifications[0]).toContain("succeeded");
+      expect(notifications[1]).toContain("paused");
     } finally {
       host.dispose();
     }

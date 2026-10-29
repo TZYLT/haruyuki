@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { setConversationId, setCurrentAgentId } from "@/agent/context";
 import {
   formatHubHelpFor,
   HUBS,
@@ -149,6 +150,7 @@ describe("hub resolution", () => {
     ["/agent ade", "/ade"],
     ["/agent profile save mine", "/profile save mine"],
     ["/session rename Ship it", "/rename convo Ship it"],
+    ["/session id", "/session-id"],
     ["/session logout", "/logout"],
     ["/memory", "/memory"],
     ["/memory recall", "/recall"],
@@ -190,6 +192,7 @@ describe("hub resolution", () => {
     if (result.kind !== "error") return;
     expect(result.message).toContain("/session rename <name>");
     expect(result.message).toContain("/session logout");
+    expect(result.message).toContain("/session id");
   });
 
   test("an unknown subcommand is refused, with the list attached", () => {
@@ -312,5 +315,33 @@ describe("/topic list", () => {
     const { executeCommand } = await import("@/cli/commands/registry");
     const result = await executeCommand("/topic Auth token refresh bug");
     expect(result.output).toContain("Topic markers require an active agent");
+  });
+});
+
+describe("/session id", () => {
+  test("prints both ids a support request needs", async () => {
+    const { executeCommand } = await import("@/cli/commands/registry");
+    setCurrentAgentId("agent-local-session-id");
+    setConversationId("conv-local-session-id");
+    try {
+      await expect(executeCommand("/session-id")).resolves.toMatchObject({
+        success: true,
+        output:
+          "Conversation: conv-local-session-id\nAgent: agent-local-session-id",
+      });
+    } finally {
+      setConversationId(null);
+      setCurrentAgentId(null);
+    }
+  });
+
+  test("reports (none) when neither id is set", async () => {
+    const { executeCommand } = await import("@/cli/commands/registry");
+    setCurrentAgentId(null);
+    setConversationId(null);
+    await expect(executeCommand("/session-id")).resolves.toMatchObject({
+      success: true,
+      output: "Conversation: (none)\nAgent: (none)",
+    });
   });
 });

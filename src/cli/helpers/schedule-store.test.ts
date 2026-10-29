@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   autostartViewFor,
   buildRunSummaryLines,
+  conversationRef,
   formatNextDue,
   formatNextDueOrPending,
   formatNextDueShort,
@@ -147,12 +148,22 @@ describe("the row model", () => {
     expect(sooner?.listLine).toContain("晨报");
     expect(sooner?.listLine).toContain("prompt");
     // M3 #14: the list row names the target, not just the detail view.
-    expect(sooner?.listLine).toContain("新会话");
-    expect(rows[1]?.listLine).toContain("会话 conv-lat");
-    expect(sooner?.listLine).toContain("上次—");
-    expect(sooner?.listLine).toContain("可编辑");
+    expect(sooner?.listLine).toContain("new");
+    expect(rows[1]?.listLine).toContain("conversation …v-later-1234");
+    expect(sooner?.listLine).toContain("last —");
+    expect(sooner?.listLine).toContain("read-write");
     expect(rows[2]?.statusLabel).toBe("paused");
     expect(rows[2]?.nextLabel).toBe("—");
+  });
+
+  test("a conversation id is shortened from the tail, not the shared prefix", () => {
+    // Every id this fork creates starts with `local-conv-`, so `shortId` shows
+    // the same prefix for all of them; `conversationRef` must keep the tail.
+    const first = "local-conv-01234567-89ab-cdef-0123-456789abcdef";
+    const second = "local-conv-fedcba98-7654-3210-fedc-ba9876543210";
+    expect(conversationRef(first)).not.toBe(conversationRef(second));
+    expect(conversationRef(first)).toBe("…456789abcdef");
+    expect(conversationRef("default")).toBe("default");
   });
 
   test("an auto-paused task shows the reason and the streak, not just 'paused'", () => {
@@ -168,20 +179,23 @@ describe("the row model", () => {
       NOW,
       () => null,
     );
-    expect(row?.statusLabel).toBe("paused · auto");
-    expect(row?.failureNote).toBe("连续失败 3 次后暂停");
-    expect(row?.listLine).toContain("连续失败 3 次后暂停");
-    expect(row?.listLine).toContain("上次失败");
+    expect(row?.statusLabel).toBe("auto-paused");
+    expect(row?.failureNote).toBe("paused after 3 consecutive failure(s)");
+    expect(row?.listLine).toContain("paused after 3 consecutive failure(s)");
+    expect(row?.listLine).toContain("last failed");
   });
 
   test("today keeps the clock, a later day keeps the date", () => {
     const laterToday = new Date(NOW);
     laterToday.setHours(NOW.getHours() + 1, 30, 0, 0);
-    expect(formatNextDue(laterToday, NOW)).toBe("今天 11:30");
+    expect(formatNextDue(laterToday, NOW)).toBe("Today 11:30");
     expect(formatNextDueShort(laterToday, NOW)).toBe("11:30");
     const tomorrow = new Date(NOW);
     tomorrow.setDate(tomorrow.getDate() + 1);
-    expect(formatNextDue(tomorrow, NOW)).toContain("明天");
+    expect(formatNextDue(tomorrow, NOW)).toContain("Tomorrow");
+    const yesterday = new Date(NOW);
+    yesterday.setDate(yesterday.getDate() - 1);
+    expect(formatNextDue(yesterday, NOW)).toContain("Yesterday");
     const later = new Date("2026-12-24T09:00:00.000Z");
     expect(formatNextDueShort(later, NOW)).toMatch(/^12-2[45]$/);
     expect(formatNextDue(null, NOW)).toBe("—");
@@ -191,12 +205,12 @@ describe("the row model", () => {
     // T1's contract: `nextDueAt` is the next instant the core must act on, so a
     // past value is a pending occurrence (a late slot or a catch-up).
     const overdue = new Date(NOW.getTime() - 30 * 60 * 1000);
-    expect(formatNextDueOrPending(overdue, NOW)).toContain("已到期");
-    expect(formatNextDueShort(overdue, NOW)).toBe("已到期");
+    expect(formatNextDueOrPending(overdue, NOW)).toContain("overdue");
+    expect(formatNextDueShort(overdue, NOW)).toBe("overdue");
     expect(formatNextDueOrPending(null, NOW)).toBe("—");
     expect(
       formatNextDueOrPending(new Date(NOW.getTime() + 60_000), NOW),
-    ).not.toContain("已到期");
+    ).not.toContain("overdue");
   });
 });
 
@@ -237,9 +251,9 @@ describe("the run history", () => {
   test("the line carries the time, result, duration and conversation", () => {
     const [group] = groupRunsByRunId([entry()]);
     const line = formatRunGroupLine(group as never, NOW);
-    expect(line).toContain("成功");
+    expect(line).toContain("succeeded");
     expect(line).toContain("12s");
-    expect(line).toContain("会话 conv-1");
+    expect(line).toContain("conversation conv-1");
   });
 
   test("a v2 outcome spelled in the summary is not reported as failure", () => {
@@ -293,11 +307,15 @@ describe("the startup summary", () => {
 
   test("the block is one count line plus one line per run", () => {
     const lines = buildRunSummaryLines(entries, NOW);
-    expect(lines[0]).toBe("离开期间后台执行 3 条（成功 1／失败 1／跳过 1）");
-    expect(lines).toHaveLength(4);
-    expect(lines[1]).toContain("晨报");
-    expect(lines[2]).toContain("失败");
-    expect(lines[3]).toContain("跳过");
+    // The blank line separates the block from `/init`-style startup output.
+    expect(lines[0]).toBe("");
+    expect(lines[1]).toBe(
+      "While you were away: 3 scheduled runs (1 succeeded / 1 failed / 1 skipped)",
+    );
+    expect(lines).toHaveLength(5);
+    expect(lines[2]).toContain("晨报");
+    expect(lines[3]).toContain("failed");
+    expect(lines[4]).toContain("skipped");
   });
 
   test("every pending run gets its own line — no cap, nothing summarized away", () => {
@@ -308,11 +326,12 @@ describe("the startup summary", () => {
       taskName: `任务${index}`,
     }));
     const lines = buildRunSummaryLines(many, NOW);
-    expect(lines).toHaveLength(10);
+    expect(lines).toHaveLength(11);
     for (let index = 0; index < 9; index += 1) {
-      expect(lines[index + 1]).toContain(`任务${index}`);
+      expect(lines[index + 2]).toContain(`任务${index}`);
     }
-    expect(lines.join("\\n")).not.toContain("其余");
+    expect(lines.slice(2)).toHaveLength(9);
+    expect(lines.join("\n")).not.toContain("more");
   });
 
   test("nothing pending means no block at all", () => {
@@ -337,7 +356,8 @@ describe("the startup summary", () => {
     expect(readPendingRunSummary()).toHaveLength(1);
 
     const lines = takeStartupScheduleSummaryLines(NOW);
-    expect(lines[0]).toContain("后台执行 1 条");
+    expect(lines[0]).toBe("");
+    expect(lines[1]).toContain("While you were away: 1 scheduled run");
     expect(existsSync(getRunSummarySeenPath())).toBe(true);
 
     // The second caller in the same process gets the cached block; a new
@@ -356,8 +376,8 @@ describe("per-run cost (M3 #9)", () => {
     expect(formatRunCostLabel({ turns: 1, cost: 0.0042 })).toContain(
       "$ 0.00420",
     );
-    expect(formatRunCostLabel({ turns: 1, cost: null })).toBe("费用 —");
-    expect(formatRunCostLabel(undefined)).toBe("费用 —");
+    expect(formatRunCostLabel({ turns: 1, cost: null })).toBe("cost —");
+    expect(formatRunCostLabel(undefined)).toBe("cost —");
   });
 
   test("reads the ledger by runId, and separates priced from unpriced", async () => {
@@ -427,9 +447,9 @@ describe("run notifications", () => {
       NOW,
     );
     expect(line).toContain("晨报");
-    expect(line).toContain("成功");
+    expect(line).toContain("succeeded");
     expect(line).toContain("12s");
-    expect(line).toContain("会话 conv-1");
+    expect(line).toContain("conversation conv-1");
   });
 
   test("a failure carries a truncated error and a skip still notifies", () => {
@@ -445,7 +465,7 @@ describe("run notifications", () => {
       },
       NOW,
     );
-    expect(failed).toContain("失败");
+    expect(failed).toContain("failed");
     expect(failed?.length).toBeLessThan(160);
     const skipped = formatScheduleNotification(
       {
@@ -458,7 +478,7 @@ describe("run notifications", () => {
       },
       NOW,
     );
-    expect(skipped).toContain("跳过");
+    expect(skipped).toContain("skipped");
   });
 
   test("a paused task is its own notification; run-started is not one", () => {
@@ -471,7 +491,7 @@ describe("run notifications", () => {
         agentId: "agent-1",
         pausedReason: "auto_failures",
       }),
-    ).toContain("连续失败");
+    ).toContain("auto-paused");
     expect(
       formatScheduleNotification({
         kind: "run-started",
@@ -495,15 +515,15 @@ describe("the autostart panel line (M4 #11)", () => {
     });
     expect(stale.registered).toBe(true);
     expect(stale.stale).toBe(true);
-    expect(stale.label).toContain("需重新注册");
+    expect(stale.label).toContain("needs re-registration");
 
     const fresh = autostartViewFor({
       registered: true,
       platform: "win32",
       method: "schtasks",
     });
-    expect(fresh.label).toContain("已注册");
-    expect(fresh.label).not.toContain("需重新注册");
+    expect(fresh.label).toContain("registered");
+    expect(fresh.label).not.toContain("needs re-registration");
 
     const missing = autostartViewFor({
       registered: false,
@@ -511,7 +531,7 @@ describe("the autostart panel line (M4 #11)", () => {
       method: null,
       error: "crontab 不可读",
     });
-    expect(missing.label).toContain("未注册");
+    expect(missing.label).toContain("not registered");
     expect(missing.label).toContain("crontab 不可读");
   });
 });

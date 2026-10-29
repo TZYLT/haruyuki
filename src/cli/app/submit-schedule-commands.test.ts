@@ -181,10 +181,10 @@ describe("claimed forms", () => {
       expect(opened).toHaveLength(0);
       expect(finished).toHaveLength(1);
       expect(finished[0]?.success).toBe(true);
-      expect(finished[0]?.output).toContain("已创建计划任务");
+      expect(finished[0]?.output).toContain("Created scheduled task");
       expect(finished[0]?.output).toContain("0 9 * * *");
       // R-5.2.5: the one-step path did not ask about autostart, and says so.
-      expect(finished[0]?.output).toContain("自启未注册");
+      expect(finished[0]?.output).toContain("Autostart not registered");
     } finally {
       if (previousHome === undefined) delete process.env.HARUYUKI_HOME;
       else process.env.HARUYUKI_HOME = previousHome;
@@ -197,7 +197,7 @@ describe("claimed forms", () => {
     const { ctx, finished, failed } = context();
     await handleScheduleSubmit("/schedule run a1b2c3d4", ctx);
     // No host in this process: the command row says why instead of pretending.
-    expect(failed.join("\n")).toContain("TUI 调度宿主没有运行");
+    expect(failed.join("\n")).toContain("TUI schedule host is not running");
     expect(finished).toHaveLength(0);
   });
 });

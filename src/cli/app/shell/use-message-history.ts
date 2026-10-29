@@ -21,7 +21,7 @@ export function useMessageHistory(open: () => void): void {
           id: "leader.messageHistory",
           leader: true,
           chords: LEADER_KEY_CHORDS.messageHistory,
-          label: "消息历史",
+          label: "Message history",
           run: () => {
             open();
             return "consumed";

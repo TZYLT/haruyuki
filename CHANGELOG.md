@@ -43,13 +43,18 @@
 - **账本按 runId 聚合**：触发时生成 `runId`，写进队列条目与本轮上下文；cron 回合终态写
   `source: "cron" | "command"` 与 `outcome`；`/usage` 的「Automated tasks」可按 runId 聚合，
   缺账显示 `—`。
+- **`/session id`**：打印当前会话 id 与 agent id（调度目标需要会话 id 时用它；面板里的会话引用
+  改为可区分的尾部 id，不再把 `local-conv-*` 全截成同一个前缀）。
 - **开机自启**：`/schedule autostart on|off|status` 与新建向导最后一步注册 OS 条目
   （Windows `schtasks`、macOS launchd、Linux systemd-user／crontab）；OS 条目只指向稳定的
-  launcher 脚本。`status`/`off` 从机器上已安装的条目（unit 文件、enable 符号链接、crontab 行、
-  plist／注册表）判定方式，不再只看 `XDG_RUNTIME_DIR`，因此 SSH 下仍能识别并关闭桌面会话注册
-  的 timer；macOS 注册改用 `bootout` ＋ `bootstrap`，重写 plist 后立即生效。`HARUYUKI_HOME`／
-  安装路径变化后 `status` 会把旧条目标为 stale 并给出旧 launcher 路径，`on` 一次即刷新。
-  删除最后一个任务**不**卸载自启，避免反复重建时反复写系统配置。
+  launcher 脚本。Windows 的 launcher 是 `.vbs`，由 `wscript.exe` 运行（GUI 子系统、窗口隐藏），
+  每分钟的心跳不再弹出 cmd 窗口；升级后旧 `.cmd` 条目会被 `status` 标为 stale，运行一次
+  `/schedule autostart on` 即替换（`off` 会一并清理旧 launcher）。`status`/`off` 从机器上已安装的
+  条目（unit 文件、enable 符号链接、crontab 行、plist／注册表）判定方式，不再只看
+  `XDG_RUNTIME_DIR`，因此 SSH 下仍能识别并关闭桌面会话注册的 timer；macOS 注册改用
+  `bootout` ＋ `bootstrap`，重写 plist 后立即生效。`HARUYUKI_HOME`／安装路径变化后 `status`
+  会把旧条目标为 stale 并给出旧 launcher 路径，`on` 一次即刷新。删除最后一个任务**不**卸载自启，
+  避免反复重建时反复写系统配置。
 - **侧栏「计划任务」**：只读显示当前 agent 最近将跑的 3 条（名称、下次时间、状态）；空列表显示
   占位；只在列表变化时重绘（30s 低频 ＋ 事件刷新，遵守 TUI 闪烁纪律）。
 - **启动汇总与运行通知**：启动时逐条汇总一次（已读标记，不重复），`/schedule logs` 可回看；
@@ -82,6 +87,10 @@
 - **快照清单变化**：新包带 `schedules.json`、不带 `crons.v1.json`；旧包（只有 `crons.json`）
   导入后首次读取时才迁移。
 - **自启条目**：只有显式开关或卸载会删除 OS 条目；删任务不会连带卸载。
+- **界面文案统一为英文**：TUI 提示与状态行、`/schedule` 面板与向导、侧栏、启动汇总与运行通知、
+  复制/切换等运行时可见文案全部改为英文（模型提示词与文档内容不在本次范围）。
+- **启动汇总与向导回执**：启动汇总前留一个空行，并与逐条运行记录一起改为英文；`/schedule add`
+  向导成功创建后退出不再误报“已取消”。
 - **文档**：`docs/commands.zh-CN.md` 与随包 `haruyuki-guide` 的调度、快照章节同步改写；
   `scheduling-tasks` 技能按新面重写。
 

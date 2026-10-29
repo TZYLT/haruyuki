@@ -373,7 +373,7 @@ export function startTuiScheduleHost(
       // lease: the core takes the task-level lease for this one run.
       const result = await runScheduledTaskNow({ taskId, runner, now: now() });
       if (!result.started) {
-        throw new Error(result.error ?? "任务没有跑起来");
+        throw new Error(result.error ?? "the task did not start");
       }
       return {
         outcome: result.outcome ?? "failed",
@@ -426,7 +426,7 @@ export type TuiRunNowResult =
  *
  * A prompt task's run lasts as long as the turn it starts (T2's runner resolves
  * when the TUI consumes the queued turn), so a command row that awaited it would
- * sit "running" for minutes. The row answers "已开始运行" after this, and the run
+ * sit "running" for minutes. The row answers "started" after this, and the run
  * reports itself through the notification and the run log — the same two places
  * a tick-started run reports.
  */
@@ -439,7 +439,8 @@ export async function runScheduledTaskViaTuiHost(
   if (!host) {
     return {
       kind: "unavailable",
-      message: "TUI 调度宿主没有运行：计划任务只在 Haruyuki 运行时执行。",
+      message:
+        "TUI schedule host is not running: scheduled tasks run only while Haruyuki is running.",
     };
   }
   const tasks = listAllScheduleTasks();
@@ -451,8 +452,8 @@ export async function runScheduledTaskViaTuiHost(
       kind: "unavailable",
       message:
         byName.length > 1
-          ? `「${taskRef}」匹配到 ${byName.length} 个任务，请用 id。`
-          : `找不到任务 ${taskRef}`,
+          ? `"${taskRef}" matches ${byName.length} tasks; use an id.`
+          : `Task ${taskRef} not found`,
     };
   }
   const run = host.runTaskNow(task.id);
@@ -472,7 +473,8 @@ export async function runScheduledTaskViaTuiHost(
   if (!raced) {
     return {
       kind: "unavailable",
-      message: "TUI 调度宿主不可用：任务执行器还没就绪。",
+      message:
+        "TUI schedule host unavailable: the task runner is not ready yet.",
     };
   }
   return { kind: "ran", outcome: raced.outcome, error: raced.error };

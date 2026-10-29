@@ -32,10 +32,11 @@ import type { AppCommandRunner } from "./types";
 export type SwitchPolicy = "queue" | "refuse";
 
 /** The refusal, verbatim from 《38》§7.5. */
-export const SWITCH_REFUSED_NOTICE = "正在运行 · 先 Esc 中断再切换会话";
+export const SWITCH_REFUSED_NOTICE =
+  "Running · press Esc to interrupt before switching";
 
 /** What the compatibility shell says when it defers instead. */
-export const SWITCH_QUEUED_NOTICE = "切换已排队 · 当前回合结束后执行";
+export const SWITCH_QUEUED_NOTICE = "Switch queued · runs after this turn";
 
 let policy: SwitchPolicy = "queue";
 const listeners = new Set<() => void>();

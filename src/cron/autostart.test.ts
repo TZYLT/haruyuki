@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type {
   AutostartCommand,
   AutostartCommandResult,
@@ -18,7 +18,6 @@ import {
   AUTOSTART_LAUNCHD_LABEL,
   AUTOSTART_SYSTEMD_UNIT,
   AUTOSTART_TASK_NAME,
-  buildAutostartLauncherScript,
   getAutostartStatus,
   readAutostartLauncher,
   registerAutostart,
@@ -26,6 +25,7 @@ import {
   resolveAutostartLauncherPath,
   unregisterAutostart,
 } from "@/cron/autostart";
+import { buildAutostartLauncherScript } from "@/cron/autostart-launcher";
 
 const homes: string[] = [];
 
@@ -65,21 +65,38 @@ const invocation = {
 };
 
 describe("launcher script", () => {
-  test("windows launcher pins the invocation and the harness root", () => {
+  test("windows launcher is a hidden VBScript that pins the invocation", () => {
     const script = buildAutostartLauncherScript({
       platform: "win32",
       invocation,
       env: { HARUYUKI_HOME: "D:\\hryk home" },
     });
 
-    expect(script).toContain("@echo off");
-    expect(script).toContain('set "HARUYUKI_HOME=D:\\hryk home"');
+    // `wscript.exe` runs in the GUI subsystem and window style 0 is hidden:
+    // that pair is what stops the every-minute tick flashing a console window.
+    expect(script).toContain('Set shell = CreateObject("WScript.Shell")');
+    expect(script).toContain("shell.Run cmd, 0, False");
+    expect(script).not.toContain("@echo off");
     expect(script).toContain(
-      '"C:\\bun\\bun.exe" "C:\\repo\\src\\index.ts" schedule tick',
+      'shell.Environment("Process")("HARUYUKI_HOME") = "D:\\hryk home"',
     );
-    // A .cmd file needs CRLF; a bare LF confuses cmd.exe on long lines.
+    expect(script).toContain(
+      'cmd = Chr(34) & "C:\\bun\\bun.exe" & Chr(34) & " " & Chr(34) & "C:\\repo\\src\\index.ts" & Chr(34) & " schedule tick"',
+    );
+    // WScript wants CRLF; a bare LF can truncate a long line.
     expect(script).toContain("\r\n");
     expect(script).not.toContain("\nexec ");
+  });
+
+  test("the windows launcher has no HARUYUKI_HOME line without an override", () => {
+    const script = buildAutostartLauncherScript({
+      platform: "win32",
+      invocation,
+      env: {},
+    });
+    expect(script).not.toContain("HARUYUKI_HOME");
+    expect(script).not.toContain("shell.Environment");
+    expect(script).toContain("shell.Run cmd, 0, False");
   });
 
   test("unix launcher is a sh script with a quoted override", () => {
@@ -185,11 +202,108 @@ describe("windows registration", () => {
       "/TN",
       AUTOSTART_TASK_NAME,
       "/TR",
-      `"${status.launcherPath}"`,
+      `wscript.exe "${status.launcherPath}"`,
     ]);
+    expect(status.launcherPath?.endsWith("schedule-tick.vbs")).toBe(true);
     expect(
       readAutostartLauncher({ platform: "win32", homeDir: home, env: {} }),
-    ).toContain("schedule tick");
+    ).toContain("shell.Run cmd, 0, False");
+  });
+
+  test("a launcher path with spaces stays quoted for schtasks", async () => {
+    const home = join(tempHome(), "home with spaces");
+    const fake = recorder(() => undefined);
+
+    const status = await registerAutostart({
+      platform: "win32",
+      homeDir: home,
+      env: {},
+      runner: fake.runner,
+      invocation,
+    });
+
+    expect(status.launcherPath).toContain("home with spaces");
+    expect(fake.calls[0]?.args.at(-1)).toBe(
+      `wscript.exe "${status.launcherPath}"`,
+    );
+  });
+
+  test("status reads the launcher path out of the wscript arguments", async () => {
+    const home = tempHome();
+    const launcherPath = resolveAutostartLauncherPath({
+      platform: "win32",
+      homeDir: home,
+      env: {},
+    });
+    await registerAutostart({
+      platform: "win32",
+      homeDir: home,
+      env: {},
+      runner: recorder(() => undefined).runner,
+      invocation,
+    });
+    const fake = recorder((command) =>
+      command.args.includes("/XML")
+        ? {
+            code: 0,
+            stdout:
+              "<Task><Actions><Exec><Command>wscript.exe</Command>" +
+              `<Arguments>&quot;${launcherPath}&quot;</Arguments>` +
+              "</Exec></Actions></Task>",
+            stderr: "",
+          }
+        : { code: 0, stdout: "", stderr: "" },
+    );
+
+    const status = await getAutostartStatus({
+      platform: "win32",
+      homeDir: home,
+      env: {},
+      runner: fake.runner,
+      invocation,
+    });
+
+    expect(status.registered).toBe(true);
+    expect(status.registeredLauncherPath).toBe(launcherPath);
+    expect(status.stale).toBe(false);
+  });
+
+  test("a task still pointing at the pre-VBS .cmd launcher is stale", async () => {
+    const home = tempHome();
+    const launcherPath = resolveAutostartLauncherPath({
+      platform: "win32",
+      homeDir: home,
+      env: {},
+    });
+    await registerAutostart({
+      platform: "win32",
+      homeDir: home,
+      env: {},
+      runner: recorder(() => undefined).runner,
+      invocation,
+    });
+    const legacy = join(dirname(launcherPath), "schedule-tick.cmd");
+    const fake = recorder((command) =>
+      command.args.includes("/XML")
+        ? {
+            code: 0,
+            stdout: `<Task><Actions><Exec><Command>${legacy}</Command></Exec></Actions></Task>`,
+            stderr: "",
+          }
+        : { code: 0, stdout: "", stderr: "" },
+    );
+
+    const status = await getAutostartStatus({
+      platform: "win32",
+      homeDir: home,
+      env: {},
+      runner: fake.runner,
+      invocation,
+    });
+
+    expect(status.registered).toBe(true);
+    expect(status.stale).toBe(true);
+    expect(status.registeredLauncherPath).toBe(legacy);
   });
 
   test("a refused schtasks call becomes structured error, not a throw", async () => {
@@ -276,6 +390,33 @@ describe("windows registration", () => {
       "/F",
     ]);
     expect(status.registered).toBe(false);
+  });
+
+  test("unregister removes the .cmd launcher a pre-VBS build left behind", async () => {
+    const home = tempHome();
+    const launcherPath = resolveAutostartLauncherPath({
+      platform: "win32",
+      homeDir: home,
+      env: {},
+    });
+    await registerAutostart({
+      platform: "win32",
+      homeDir: home,
+      env: {},
+      runner: recorder(() => undefined).runner,
+      invocation,
+    });
+    const legacy = join(dirname(launcherPath), "schedule-tick.cmd");
+    writeFileSync(legacy, "@echo off\r\n");
+
+    await unregisterAutostart({
+      platform: "win32",
+      homeDir: home,
+      env: {},
+      runner: recorder(() => ({ code: 1, stdout: "", stderr: "" })).runner,
+    });
+
+    expect(existsSync(legacy)).toBe(false);
   });
 });
 

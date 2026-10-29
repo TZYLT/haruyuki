@@ -101,7 +101,7 @@ export async function handleFontWidthCommand(args: string[]): Promise<string> {
       "",
       "  auto    — ask the terminal (the default)",
       "  narrow  — one column, e.g. Consolas",
-      "  wide    — two columns, e.g. 等宽楷体",
+      "  wide    — two columns, e.g. MS Gothic",
     ].join("\n");
   }
   const { startAmbiguousWidthProbe } = await import(
@@ -173,7 +173,7 @@ export async function handleConsoleFontCommand(
       "/config console-font auto | off | <face>",
       "",
       "Classic Windows `conhost.exe` changes a live window's font by itself —",
-      "`Consolas` → `宋体` around startup (the console's saved default being",
+      "`Consolas` → `SimSun` around startup (the console's saved default being",
       "re-applied), `Consolas` → `Terminal` 8×12 mid-turn (the smallest raster face,",
       "which has none of the block or ambiguous glyphs this UI is drawn with) — and",
       "keeps it until the window's properties are changed by hand. No escape",
@@ -189,7 +189,7 @@ export async function handleConsoleFontCommand(
       "  (unset)  — the preset, `Consolas`",
       "  auto     — whatever face this session started with",
       "  off      — stop watching",
-      "  <face>   — draw with that face, e.g. 霞鹜文楷等宽",
+      "  <face>   — draw with that face, e.g. LXGW WenKai Mono",
     ].join("\n");
   }
 

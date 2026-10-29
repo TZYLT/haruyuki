@@ -205,7 +205,7 @@ describe("clicking a tab's close", () => {
 
     app.actions.onClose("conv-1");
 
-    expect(getNotice()).toBe("至少保留一个会话标签");
+    expect(getNotice()).toBe("At least one conversation tab must stay open");
     expect(getOpenConversations().map((tab) => tab.id)).toEqual(["conv-1"]);
     expect(app.switched).toEqual([]);
   });
@@ -264,7 +264,7 @@ describe("clicking a tab's close", () => {
 
     app.actions.onClose("conv-2");
 
-    expect(getNotice()).toBe("正在运行 · 先 Esc 中断再关闭会话");
+    expect(getNotice()).toBe("Running · press Esc to interrupt before closing");
     expect(app.switched).toEqual([]);
     expect(getOpenConversations()).toHaveLength(2);
   });

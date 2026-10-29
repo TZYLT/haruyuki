@@ -54,25 +54,25 @@ export type WizardStep =
  * The steps the wizard asks, in the order it asks them (M3 #15).
  *
  * One list, because the numbering used to be literals in `ScheduleWizard.tsx`
- * and drifted: "9/10 超时" and "9/10 等待" shared a number, the timezone step
+ * and drifted: "9/10 Timeout" and "9/10 Wait" shared a number, the timezone step
  * claimed 6/10, and autostart was outside the count. A title now comes from the
  * row's index here, so adding or reordering a step renumbers every frame without
  * another edit. The two sub-steps (`conversation-pick`, `schedule-mode`) share
  * their parent's slot; `create-failed`/`done` are not numbered at all.
  */
 export const WIZARD_STEPS = [
-  { id: "type", label: "类型" },
-  { id: "target", label: "目标" },
-  { id: "conversation", label: "会话" },
-  { id: "payload", label: "内容" },
-  { id: "schedule", label: "时间" },
-  { id: "timezone", label: "时区" },
-  { id: "permission", label: "权限" },
-  { id: "catch-up", label: "补跑" },
-  { id: "timeout", label: "超时" },
-  { id: "wait", label: "等待" },
-  { id: "name", label: "名称" },
-  { id: "autostart", label: "开机自启" },
+  { id: "type", label: "Type" },
+  { id: "target", label: "Target" },
+  { id: "conversation", label: "Conversation" },
+  { id: "payload", label: "Payload" },
+  { id: "schedule", label: "Schedule" },
+  { id: "timezone", label: "Timezone" },
+  { id: "permission", label: "Permission" },
+  { id: "catch-up", label: "Catch-up" },
+  { id: "timeout", label: "Timeout" },
+  { id: "wait", label: "Wait" },
+  { id: "name", label: "Name" },
+  { id: "autostart", label: "Autostart" },
 ] as const;
 
 export type WizardStepId = (typeof WIZARD_STEPS)[number]["id"];
@@ -86,7 +86,8 @@ function wizardStepSlot(step: WizardStep): WizardStepId | null {
 }
 
 /**
- * `7/12 权限` — the step's title, with its number derived from `WIZARD_STEPS`.
+ * `7/12 Permission` — the step's title, with its number derived from
+ * `WIZARD_STEPS`.
  *
  * `label` overrides just the words (the payload step names the command form);
  * the count always comes from the table.
@@ -123,18 +124,19 @@ export interface ScheduleChoice {
 export const PERMISSION_ROWS: readonly SingleSelectItem[] = [
   {
     key: "standard",
-    label: "只读（standard）",
-    description: "读文件、搜索；写文件、shell、子代理都不行",
+    label: "read-only (standard)",
+    description: "Read files and search; no writes, shell, or subagents",
   },
   {
     key: "acceptEdits",
-    label: "可编辑（acceptEdits）",
-    description: "能读写文件；shell 仍被拒",
+    label: "read-write (acceptEdits)",
+    description: "Read and write files; shell is still denied",
   },
   {
     key: "unrestricted",
-    label: "全权（unrestricted）",
-    description: "全部工具，无审批；本版不承诺禁删/禁网",
+    label: "unrestricted",
+    description:
+      "Every tool, no approvals; this build does not block deletes or network",
   },
 ];
 

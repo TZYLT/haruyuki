@@ -298,8 +298,8 @@ export type SidebarProjection = {
   schedules: readonly SidebarScheduleRow[] | null;
   /**
    * The store read failed (version gate, permissions). The section says
-   * "读取失败" instead of painting a zero-task list, which would claim there are
-   * no tasks when the truth is that nothing could be read (M3 #17).
+   * "read failed" instead of painting a zero-task list, which would claim there
+   * are no tasks when the truth is that nothing could be read (M3 #17).
    */
   schedulesError?: string | null;
 };
@@ -316,7 +316,7 @@ export type SidebarScheduleRow = {
   name: string;
   /** `09:00` today, `10-30` later, `—` when it cannot fire. */
   when: string;
-  /** Empty for an ordinary active task; `暂停`/`自动暂停`/`已完成` otherwise. */
+  /** Empty for an ordinary active task; `paused`/`auto-paused`/`finished` otherwise. */
   status: string;
 };
 
@@ -467,45 +467,47 @@ function memfsSection(projection: SidebarProjection) {
 /**
  * The status words the rail uses, in two columns where it can afford them.
  *
- * `自动暂停` is the one that must not be abbreviated away: a task that stopped
- * because it failed three times in a row is the reason the user opens the panel,
- * and `暂停` alone would read as their own doing.
+ * `auto-paused` is the one that must not be abbreviated away: a task that
+ * stopped because it failed three times in a row is the reason the user opens
+ * the panel, and `paused` alone would read as their own doing.
  */
 function scheduleStatusWord(status: string): string {
   switch (status) {
     case "active":
       return "";
     case "paused":
-      return "暂停";
+      return "paused";
     case "paused · auto":
-      return "自动暂停";
+    case "auto-paused":
+      return "auto-paused";
     case "fired":
-      return "已完成";
+    case "finished":
+      return "finished";
     case "missed":
-      return "错过";
+      return "missed";
     case "cancelled":
-      return "取消";
+      return "cancelled";
     default:
       return status;
   }
 }
 
-/** `计划任务` — the current agent's next three runs (R-5.12.5, M-16). */
+/** `Scheduled tasks` — the current agent's next three runs (R-5.12.5, M-16). */
 function schedulesSection(projection: SidebarProjection) {
-  // A failed read is not an empty store (M3 #17): "暂无计划任务" would make the
-  // rail claim a fact it does not have.
+  // A failed read is not an empty store (M3 #17): "no scheduled tasks" would
+  // make the rail claim a fact it does not have.
   if (projection.schedulesError) {
     return {
-      detail: [`读取失败：${projection.schedulesError}`],
-      summary: "计划任务 —",
+      detail: [`Read failed: ${projection.schedulesError}`],
+      summary: "Scheduled tasks —",
     };
   }
   const schedules = projection.schedules;
   if (schedules === null) {
-    return { detail: ["读取中…"], summary: "计划任务 —" };
+    return { detail: ["Loading…"], summary: "Scheduled tasks —" };
   }
   if (schedules.length === 0) {
-    return { detail: ["暂无计划任务"], summary: "计划任务 0" };
+    return { detail: ["No scheduled tasks"], summary: "Scheduled tasks 0" };
   }
   const shown = schedules.slice(0, 3);
   const detail = shown.map((row) => {
@@ -517,7 +519,7 @@ function schedulesSection(projection: SidebarProjection) {
   }
   return {
     detail,
-    summary: `${schedules.length} 个 · ${shown[0]?.when ?? "—"}`,
+    summary: `${schedules.length} tasks · ${shown[0]?.when ?? "—"}`,
   };
 }
 
@@ -537,7 +539,7 @@ export const SIDEBAR_SECTIONS: readonly SidebarSectionDefinition[] = [
   { id: "usage", title: "Usage", build: usageSection },
   // F-05: read-only, three rows, event-driven; it never scrolls and it never
   // ticks (`《38》§6.6`, C-27).
-  { id: "schedules", title: "计划任务", build: schedulesSection },
+  { id: "schedules", title: "Scheduled tasks", build: schedulesSection },
   { id: "agents", title: "Agents", build: agentsSection },
   { id: "memfs", title: "MemFS", build: memfsSection },
 ];

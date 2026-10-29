@@ -2,7 +2,8 @@
  * The TUI's view of the schedule store (F-05, M3).
  *
  * Three surfaces read the same data and must not each read the disk: the
- * `/schedule` overlay, the rail's "计划任务" section, and the startup summary.
+ * `/schedule` overlay, the rail's "Scheduled tasks" section, and the startup
+ * summary.
  * So there is one module-level store here, with the shape the rail's refresh
  * discipline asks for (`src/cli/AGENTS.md`, 45-5 C-27):
  *
@@ -153,9 +154,9 @@ export interface ScheduleTaskRow {
   type: ScheduleTaskV2["type"];
   /** The task itself, for a detail view that needs a field the row does not. */
   task: ScheduleTaskV2;
-  /** `new (hidden)` or `conversation 6f3a2b1c`. */
+  /** `new (hidden)` or `conversation …6f3a2b1c` (see `conversationRef`). */
   targetLabel: string;
-  /** `active`, `paused`, `paused (auto)`, `fired`, … */
+  /** `active`, `auto-paused`, `finished`, `missed`, … */
   statusLabel: string;
   /** `paused(auto_failures)` spelled out; empty when nothing is wrong. */
   failureNote: string;
@@ -163,7 +164,7 @@ export interface ScheduleTaskRow {
   cron: string;
   timezone: string;
   nextDueAt: Date | null;
-  /** `今天 09:00` / `明天 09:00` / `10-30 09:00` / `—`. */
+  /** `Today 09:00` / `Tomorrow 09:00` / `10-30 09:00` / `—`. */
   nextLabel: string;
   /** The rail's terser form: `09:00` / `10-30` / `—`. */
   nextShort: string;
@@ -175,11 +176,11 @@ export interface ScheduleTaskRow {
 }
 
 const OUTCOME_LABELS: Record<RunOutcome, string> = {
-  success: "成功",
-  failed: "失败",
-  skipped: "跳过",
-  timeout: "超时",
-  cancelled: "已取消",
+  success: "succeeded",
+  failed: "failed",
+  skipped: "skipped",
+  timeout: "timed out",
+  cancelled: "cancelled",
 };
 
 /** The label a terminal outcome is shown with, in the panel and the rails. */
@@ -188,9 +189,9 @@ export function outcomeLabel(outcome: RunOutcome | null): string {
 }
 
 const PERMISSION_LABELS: Record<ScheduleTaskV2["permission"], string> = {
-  standard: "只读",
-  acceptEdits: "可编辑",
-  unrestricted: "全权",
+  standard: "read-only",
+  acceptEdits: "read-write",
+  unrestricted: "unrestricted",
 };
 
 export function permissionLabel(
@@ -199,16 +200,30 @@ export function permissionLabel(
   return PERMISSION_LABELS[permission];
 }
 
-/** `新会话(隐藏)` / `会话 6f3a…`, the target as one short phrase. */
+/** `new (hidden)` / `conversation …6f3a2b1c`, the target as one short phrase. */
 export function targetLabel(target: ScheduleTaskV2["target"]): string {
-  if (target.kind === "new") return target.hidden ? "新会话(隐藏)" : "新会话";
-  if (target.conversation_id === "default") return "默认会话";
-  return `会话 ${shortId(target.conversation_id)}`;
+  if (target.kind === "new") return target.hidden ? "new (hidden)" : "new";
+  if (target.conversation_id === "default") return "default conversation";
+  return `conversation ${conversationRef(target.conversation_id)}`;
 }
 
 /** The first eight characters of an id, the form every row shows. */
 export function shortId(id: string): string {
   return id.length > 8 ? id.slice(0, 8) : id;
+}
+
+/** Trailing characters `conversationRef` keeps, enough to tell ids apart. */
+const CONVERSATION_REF_TAIL = 12;
+
+/**
+ * A conversation id shortened for display. `shortId` cannot be used here:
+ * every id this fork creates starts with `local-conv-`, so the shared prefix
+ * would make two conversations read the same; the tail is what differs.
+ */
+export function conversationRef(id: string): string {
+  return id.length <= CONVERSATION_REF_TAIL
+    ? id
+    : `…${id.slice(-CONVERSATION_REF_TAIL)}`;
 }
 
 function pad2(value: number): string {
@@ -225,13 +240,13 @@ function dayLabel(at: Date, now: Date): string {
   const days = Math.round(
     (startOfDay(at) - startOfDay(now)) / (24 * 60 * 60 * 1000),
   );
-  if (days === 0) return "今天";
-  if (days === 1) return "明天";
-  if (days === 2) return "后天";
+  if (days === 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  if (days === -1) return "Yesterday";
   return `${pad2(at.getMonth() + 1)}-${pad2(at.getDate())}`;
 }
 
-/** `今天 09:00`, or `—` when the task has no next run. */
+/** `Today 09:00`, or `—` when the task has no next run. */
 export function formatNextDue(at: Date | null, now: Date): string {
   if (!at) return "—";
   return `${dayLabel(at, now)} ${clockLabel(at)}`;
@@ -248,16 +263,16 @@ export function formatNextDue(at: Date | null, now: Date): string {
 export function formatNextDueOrPending(at: Date | null, now: Date): string {
   if (!at) return "—";
   return at.getTime() <= now.getTime()
-    ? `已到期（${formatNextDue(at, now)}）`
+    ? `overdue (${formatNextDue(at, now)})`
     : formatNextDue(at, now);
 }
 
 /** The rail's budget: today keeps the clock, later days keep the date. */
 export function formatNextDueShort(at: Date | null, now: Date): string {
   if (!at) return "—";
-  if (at.getTime() <= now.getTime()) return "已到期";
+  if (at.getTime() <= now.getTime()) return "overdue";
   const day = dayLabel(at, now);
-  return day === "今天" ? clockLabel(at) : day;
+  return day === "Today" ? clockLabel(at) : day;
 }
 
 /** An absolute instant (a run's start), which is never "due". */
@@ -265,20 +280,23 @@ export function formatRunStamp(at: Date, now: Date): string {
   return `${dayLabel(at, now)} ${clockLabel(at)}`;
 }
 
-/** `active`, `paused`, or the reason a pause matters (`paused · auto`). */
+/** `active`, `paused`, `auto-paused`, `finished`, `missed`, or `cancelled`. */
 export function statusLabel(task: ScheduleTaskV2): string {
+  if (task.status === "fired") return "finished";
   if (task.status !== "paused") return task.status;
-  return task.pausedReason === "auto_failures" ? "paused · auto" : "paused";
+  return task.pausedReason === "auto_failures" ? "auto-paused" : "paused";
 }
 
 /** The pause reason spelled out, which is the thing a row must not bury. */
 export function failureNote(task: ScheduleTaskV2): string {
   const streak = task.consecutiveFailures;
   if (task.pausedReason === "auto_failures") {
-    return streak > 0 ? `连续失败 ${streak} 次后暂停` : "连续失败后暂停";
+    return streak > 0
+      ? `paused after ${streak} consecutive failure(s)`
+      : "paused after repeated failures";
   }
   if (task.status !== "active") return "";
-  return streak > 0 ? `连续失败 ${streak} 次` : "";
+  return streak > 0 ? `${streak} consecutive failure(s)` : "";
 }
 
 /** One row per task, ordered by next due, tasks with no next run last. */
@@ -320,14 +338,14 @@ export function scheduleTaskRows(
   });
 }
 
-/** `晨报 · prompt · 新会话 · 今天 09:00 · 上次成功 · active · 全权`. */
+/** `Morning report · prompt · new · Today 09:00 · last succeeded · active · read-write`. */
 function buildListLine(row: ScheduleTaskRow): string {
   const parts = [
     row.name,
     row.type,
     row.targetLabel,
     row.nextLabel,
-    `上次${row.lastLabel}`,
+    `last ${row.lastLabel}`,
     row.statusLabel,
     permissionLabel(row.permission),
   ];
@@ -484,9 +502,9 @@ export function formatRunCost(cost: number | null | undefined): string {
   return formatCost(cost === null ? undefined : cost, DETAIL_COST_DECIMALS);
 }
 
-/** The cost segment one run-log row shows; `费用 —` when there is no row. */
+/** The cost segment one run-log row shows; `cost —` when there is no row. */
 export function formatRunCostLabel(usage: RunUsageRow | undefined): string {
-  return `费用 ${formatRunCost(usage?.cost ?? null)}`;
+  return `cost ${formatRunCost(usage?.cost ?? null)}`;
 }
 
 /** One line per run group: when, result, how long, cost, conversation. */
@@ -501,7 +519,9 @@ export function formatRunGroupLine(
     formatRunDuration(group),
   ];
   if (costLabel !== undefined) parts.push(costLabel);
-  if (group.conversationId) parts.push(`会话 ${shortId(group.conversationId)}`);
+  if (group.conversationId) {
+    parts.push(`conversation ${conversationRef(group.conversationId)}`);
+  }
   const error = group.error?.trim().replace(/\s+/g, " ");
   if (error) parts.push(error.length > 48 ? `${error.slice(0, 47)}…` : error);
   return parts.join(" · ");
@@ -539,7 +559,7 @@ export function summarizeRunEntries(
 }
 
 /**
- * The startup block: one count line, then one line per run (R-5.11.2 逐条).
+ * The startup block: one count line, then one line per run (R-5.11.2 itemized).
  *
  * The block is committed through `<Static>`, which never re-renders, so
  * "expandable" cannot be a toggle here. The detail is materialized in the same
@@ -548,6 +568,9 @@ export function summarizeRunEntries(
  * An earlier cap of six made the block a preview and lost the rest of the
  * report; the pending summary is itself bounded by the runner, so printing it
  * whole cannot be unbounded output.
+ *
+ * A leading empty string separates the block from whatever the startup output
+ * printed before it, so the two call sites can push the lines as they are.
  */
 export function buildRunSummaryLines(
   entries: readonly RunSummaryEntry[],
@@ -555,18 +578,20 @@ export function buildRunSummaryLines(
 ): string[] {
   if (entries.length === 0) return [];
   const counts = summarizeRunEntries(entries);
+  const runWord = counts.total === 1 ? "run" : "runs";
   const lines = [
-    `离开期间后台执行 ${counts.total} 条（成功 ${counts.success}／失败 ${counts.failed}／跳过 ${counts.skipped}）`,
+    `While you were away: ${counts.total} scheduled ${runWord} (${counts.success} succeeded / ${counts.failed} failed / ${counts.skipped} skipped)`,
   ];
   for (const entry of entries) {
     const at = Date.parse(entry.startedAt);
     const when = Number.isFinite(at) ? formatRunStamp(new Date(at), now) : "—";
     const parts = [when, entry.taskName, outcomeLabel(entry.outcome)];
-    if (entry.conversationId)
-      parts.push(`会话 ${shortId(entry.conversationId)}`);
+    if (entry.conversationId) {
+      parts.push(`conversation ${conversationRef(entry.conversationId)}`);
+    }
     lines.push(`  · ${parts.join(" · ")}`);
   }
-  return lines;
+  return ["", ...lines];
 }
 
 let startupSummaryCache: string[] | null = null;
@@ -640,14 +665,14 @@ export function formatScheduleNotification(
       ? null
       : formatElapsedLabel(Math.max(0, event.durationMs));
   const conversation = event.conversationId
-    ? `会话 ${shortId(event.conversationId)}`
+    ? `conversation ${conversationRef(event.conversationId)}`
     : null;
   const parts = [when];
 
   switch (event.kind) {
     case "run-finished": {
       parts.push(
-        `计划任务「${event.taskName}」`,
+        `Scheduled task "${event.taskName}"`,
         outcomeLabel(event.outcome ?? null),
       );
       if (duration) parts.push(duration);
@@ -660,16 +685,18 @@ export function formatScheduleNotification(
     }
     case "task-paused":
       parts.push(
-        `计划任务「${event.taskName}」已暂停`,
-        event.pausedReason === "auto_failures" ? "连续失败" : "手动",
+        `Scheduled task "${event.taskName}" paused`,
+        event.pausedReason === "auto_failures"
+          ? "auto-paused"
+          : "paused manually",
       );
       return parts.join(" · ");
     case "task-missed":
       parts.push(
-        `计划任务「${event.taskName}」错过一次`,
+        `Scheduled task "${event.taskName}" missed a run`,
         event.missedCount === undefined
-          ? "未补跑"
-          : `累计 ${event.missedCount} 次`,
+          ? "not caught up"
+          : `${event.missedCount} missed so far`,
       );
       return parts.join(" · ");
     default:
@@ -786,7 +813,7 @@ export function refreshScheduleTasks(now = scheduleNow()): ScheduleSnapshot {
  * Read once, if the process has not read yet.
  *
  * Called by the submit layer right before it opens a face: the first frame a
- * user sees is then the data, not "正在读取…". The read is synchronous on
+ * user sees is then the data, not "Loading…". The read is synchronous on
  * purpose (one small JSON parse plus one journal per task), and it is a no-op
  * once anything has loaded — the rail normally got there first.
  */
@@ -902,24 +929,24 @@ export interface AutostartView {
  *
  * Pure, and exported so the stale wording (M4 #11) is tested without shelling
  * out: a registered-but-stale entry is the one state the label must separate —
- * the timer exists and is wrong, which is not "未注册".
+ * the timer exists and is wrong, which is not "not registered".
  */
 export function autostartViewFor(status: AutostartStatus): AutostartView {
   if (status.registered && status.stale) {
     return {
       registered: true,
       stale: true,
-      label: `自启 已注册（需重新注册${
-        status.method ? `，${status.method}` : ""
-      }）`,
+      label: `Autostart: registered (needs re-registration${
+        status.method ? `, ${status.method}` : ""
+      })`,
     };
   }
   return {
     registered: status.registered,
     stale: status.stale,
     label: status.registered
-      ? `自启 已注册（${status.method ?? "未知方式"}）`
-      : `自启 未注册${status.error ? `（${status.error}）` : ""}`,
+      ? `Autostart: registered (${status.method ?? "unknown method"})`
+      : `Autostart: not registered${status.error ? ` (${status.error})` : ""}`,
   };
 }
 
@@ -928,10 +955,10 @@ export function autostartViewFor(status: AutostartStatus): AutostartView {
  *
  * On demand and never in the rail: this shells out to `schtasks`/`launchctl`/
  * `systemctl`, which is a subprocess, so a 30 s refresh must not carry it. A
- * throw and a `{registered:false, error}` result both become "未注册": the panel
- * only has to say whether the timer exists. The re-read moments are the face's
- * (mount, view change, store revision), because the entry can be removed behind
- * the panel's back (M3 #16).
+ * throw and a `{registered:false, error}` result both become "not registered":
+ * the panel only has to say whether the timer exists. The re-read moments are
+ * the face's (mount, view change, store revision), because the entry can be
+ * removed behind the panel's back (M3 #16).
  */
 export async function readAutostartView(): Promise<AutostartView> {
   try {
@@ -939,9 +966,9 @@ export async function readAutostartView(): Promise<AutostartView> {
   } catch (error) {
     return {
       registered: null,
-      label: `自启 未知（${
+      label: `Autostart: unknown (${
         error instanceof Error ? error.message : String(error)
-      }）`,
+      })`,
     };
   }
 }

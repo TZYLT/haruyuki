@@ -35,6 +35,11 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { APP_SUBDIRS, appHomePath, resolveHomeDir } from "@/utils/app-paths";
+import {
+  type AutostartLauncherInvocation,
+  buildAutostartLauncherScript,
+  quoteForShell,
+} from "./autostart-launcher";
 import type { AutostartStatus } from "./cron-types";
 
 // ── Public constants ───────────────────────────────────────────────
@@ -124,10 +129,7 @@ function exitCodeOf(err: Error): number {
 // ── Options ────────────────────────────────────────────────────────
 
 /** The command the launcher runs: this executable plus the current entrypoint. */
-export interface AutostartInvocation {
-  command: string;
-  args: string[];
-}
+export type AutostartInvocation = AutostartLauncherInvocation;
 
 export interface AutostartOptions {
   /** Overrides `process.platform`; tests use it to assert all three branches. */
@@ -196,59 +198,11 @@ export function resolveAutostartLauncherPath(
 ): string {
   if (options.launcherPath) return options.launcherPath;
   const name =
-    platformOf(options) === "win32" ? "schedule-tick.cmd" : "schedule-tick.sh";
+    platformOf(options) === "win32" ? "schedule-tick.vbs" : "schedule-tick.sh";
   return appHomePath([APP_SUBDIRS.bin, name], {
     homeDir: options.homeDir,
     env: options.env,
   });
-}
-
-function quoteForCmd(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
-}
-
-function quoteForShell(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-/**
- * The launcher body. It is written once per registration and is the only thing
- * the OS entry references, so the entry survives updates that move the binary.
- */
-export function buildAutostartLauncherScript(input: {
-  platform: NodeJS.Platform;
-  invocation: AutostartInvocation;
-  env: NodeJS.ProcessEnv;
-}): string {
-  const home = input.env.HARUYUKI_HOME?.trim();
-  const commandLine = [input.invocation.command, ...input.invocation.args]
-    .map((part) =>
-      input.platform === "win32" ? quoteForCmd(part) : quoteForShell(part),
-    )
-    .join(" ");
-
-  if (input.platform === "win32") {
-    return [
-      "@echo off",
-      "setlocal",
-      "rem Written by Haruyuki F-05 autostart. Removed by `haruyuki schedule autostart off`.",
-      home ? `set "HARUYUKI_HOME=${home}"` : undefined,
-      `${commandLine} schedule tick`,
-      "",
-    ]
-      .filter((line): line is string => line !== undefined)
-      .join("\r\n");
-  }
-
-  return [
-    "#!/bin/sh",
-    "# Written by Haruyuki F-05 autostart. Removed by `haruyuki schedule autostart off`.",
-    home ? `export HARUYUKI_HOME=${quoteForShell(home)}` : undefined,
-    `exec ${commandLine} schedule tick`,
-    "",
-  ]
-    .filter((line): line is string => line !== undefined)
-    .join("\n");
 }
 
 function writeLauncher(
@@ -394,7 +348,16 @@ async function readRegisteredLauncherPath(
           /<Command>([\s\S]*?)<\/Command>/,
           result.stdout,
         );
-        return command === undefined ? undefined : decodeXmlEntities(command);
+        // `wscript.exe "<launcher>"` is stored as Command + Arguments; a task
+        // registered by a pre-VBS build carries the whole path in Command.
+        const args = matchGroup(
+          /<Arguments>([\s\S]*?)<\/Arguments>/,
+          result.stdout,
+        );
+        const raw = decodeXmlEntities(
+          args?.trim() ? args : (command ?? ""),
+        ).trim();
+        return raw ? unquotePath(raw) : undefined;
       }
       case "launchd": {
         const plistPath = launchAgentsPlistPath(context.homeDir);
@@ -687,7 +650,10 @@ async function registerWindows(
       "/TN",
       AUTOSTART_TASK_NAME,
       "/TR",
-      `"${context.launcherPath}"`,
+      // `wscript.exe` runs the VBScript in the GUI subsystem, so the every-minute
+      // tick opens no console window. The launcher path stays quoted: it sits
+      // under the user's home, which may contain spaces.
+      `wscript.exe "${context.launcherPath}"`,
     ],
   });
   if (result.code !== 0)
@@ -933,6 +899,11 @@ export async function unregisterAutostart(
       await context.runner({
         file: "schtasks",
         args: ["/Delete", "/TN", AUTOSTART_TASK_NAME, "/F"],
+      });
+      // A pre-VBS build registered `schedule-tick.cmd`; `off` removes it too so
+      // an upgrade does not leave an orphan launcher beside the new one.
+      rmSync(join(dirname(context.launcherPath), "schedule-tick.cmd"), {
+        force: true,
       });
     } else if (context.platform === "darwin") {
       const plistPath = launchAgentsPlistPath(context.homeDir);

@@ -470,7 +470,7 @@ section covers what each command does and whether it takes over the screen.
 | Hub | Subcommands | What it owns |
 | --- | --- | --- |
 | `/agent` | `list`, `pin [name]`, `unpin`, `pinned`, `rename <name>`, `describe <text>`, `system`, `personality`, `toolset`, `subagents`, `ade`, `profile <save\|load\|delete\|usage> [name]` | agent identity, prompts, tools, and the agent browser |
-| `/session` | `rename <name>`, `logout` | the conversation's own name and saved credentials |
+| `/session` | `id`, `rename <name>`, `logout` | the conversation's own id and name, and saved credentials |
 | `/memory` | `recall`, `init`, `memfs`, `remote`, `palace`, `config` | memory view, initialisation, filesystem backend, git remote, palace, and reflection settings |
 | `/messages` | `history`, `clear` | the message history and the destructive full reset |
 | `/skill` | — or `list` | the available skills (the skills dialog) |

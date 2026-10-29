@@ -254,8 +254,8 @@ describe("terminal selection", () => {
 
       expect(copied).toEqual(["alpha bravo\ncha"]);
       // Reported where the user can see it.
-      expect(getNotice()).toContain("已复制选区");
-      expect(frame).toContain("已复制选区");
+      expect(getNotice()).toContain("Copied selection");
+      expect(frame).toContain("Copied selection");
     } finally {
       shell.unmount();
     }
@@ -270,7 +270,7 @@ describe("terminal selection", () => {
       await shell.press("y");
 
       expect(copied).toEqual(["the last answer"]);
-      expect(getNotice()).toContain("最后一条回答");
+      expect(getNotice()).toContain("last answer");
     } finally {
       shell.unmount();
     }

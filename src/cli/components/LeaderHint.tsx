@@ -71,13 +71,13 @@ import {
  * tests: the tail is found in the painted text by this word, so a test can point
  * at the cells the component will claim without hard-coding their column.
  */
-export const UNREAD_MARKER = "未读";
+export const UNREAD_MARKER = "unread";
 
 /**
  * The tail the idle row appends while messages are unread, `""` otherwise.
  *
  * The chord is printed *beside* the count for the reason the count exists at
- * all: a count with no visible way to clear it is a permanent `未读 1`. It is
+ * all: a count with no visible way to clear it is a permanent `unread 1`. It is
  * derived from the leader table, not typed here, so the row cannot name a key
  * that does not open the face (`use-message-history.ts` binds the same chord).
  */
@@ -93,7 +93,7 @@ export function unreadSuffix(unread?: number): string {
  *
  * **It only names commands that exist**, and as of P2 all three the design prints
  * do: `/tabs` (the tab list), `/settings` (the Settings page) and `/close` (close
- * this tab). The copy follows 《38》§3.2's frames; the one addition is `Esc 回会话`
+ * this tab). The copy follows 《38》§3.2's frames; the one addition is `Esc back`
  * on a page, because a keyboard user who opens one has to be told how to leave it.
  *
  * With the mouse **off** the line leads with the toggle that turns it back on: a
@@ -104,14 +104,15 @@ export function contextHint(input: {
   pageActive: boolean;
   mouseEnabled: boolean;
   /**
-   * Notifications the message history has not shown yet (`docs/38` §15.2: "在底栏
-   * 提示行末尾显示 `未读 N`"). Zero says nothing at all — the row is one line at
-   * every width, and a `未读 0` would spend columns on the word "nothing".
+   * Notifications the message history has not shown yet (`docs/38` §15.2: show
+   * `unread N` at the end of the bottom hint row). Zero says nothing at all —
+   * the row is one line at every width, and an `unread 0` would spend columns on
+   * the word "nothing".
    */
   unread?: number;
 }): string {
   const prefix = LEADER_KEY_CHORDS.activate.map(describeChord).join("/");
-  const leader = `${prefix} ? 键位`;
+  const leader = `${prefix} ? keys`;
   // The count and the key that clears it ride together at the very end, so a row
   // that has to truncate loses them last: "there is something to read" is the one
   // fact the user cannot discover by pressing anything, and the chord printed
@@ -121,17 +122,18 @@ export function contextHint(input: {
   const unread = unreadSuffix(input.unread);
   // Short on purpose: the row is one line at every width, and it is truncated
   // rather than wrapped — so a label that grows past ~60 columns eats the leader
-  // hint itself, which is the only way to discover the other keys. `开鼠标` is the
-  // compromise between "打开鼠标上报" (accurate, too long) and `鼠标` (ambiguous).
-  const enableMouse = `${prefix} ${LEADER_KEY_CHORDS.toggleMouse[0].key} 开鼠标`;
+  // hint itself, which is the only way to discover the other keys. `mouse on` is
+  // the compromise between "mouse reporting on" (accurate, too long) and
+  // `mouse` (ambiguous).
+  const enableMouse = `${prefix} ${LEADER_KEY_CHORDS.toggleMouse[0].key} mouse on`;
   if (input.pageActive) {
     return input.mouseEnabled
-      ? `点标签切换 · /tabs 标签 · Esc 回会话 · ${leader}${unread}`
-      : `${enableMouse} · /tabs 标签 · Esc 回会话 · ${leader}${unread}`;
+      ? `click a tab to switch · /tabs · Esc back to chat · ${leader}${unread}`
+      : `${enableMouse} · /tabs · Esc back to chat · ${leader}${unread}`;
   }
   return input.mouseEnabled
-    ? `Enter 发送 · Shift+Enter 换行 · /tabs 标签 · ${leader}${unread}`
-    : `${enableMouse} · Enter 发送 · /tabs 标签 · /close 关 · ${leader}${unread}`;
+    ? `Enter send · Shift+Enter newline · /tabs · ${leader}${unread}`
+    : `${enableMouse} · Enter send · /tabs · /close · ${leader}${unread}`;
 }
 
 /**
@@ -139,8 +141,9 @@ export function contextHint(input: {
  *
  * Columns are 0-based offsets from the row's first cell, the same space the mouse
  * report is converted into. They come from `terminalTextWidth`, never from
- * `.length`: `未读` is four cells but two code units, so a string index would aim
- * two columns left of the tail on every row that carries CJK.
+ * `.length`: a wide character anywhere before the tail (the row is a generic
+ * string builder, so a full-width glyph can land in it) would make a string
+ * index aim short of the tail.
  *
  * `paintedWidth` is how much of the row the terminal actually drew (Ink truncates
  * the line to the row's width). Two consequences, both deliberate:
@@ -204,7 +207,7 @@ function onUnreadTail(
  *
  * The tail is the one part of this row with an action behind it, and it is also
  * the part a user has no reason to try: a count that never goes away with nothing
- * to press is a bug report (`未读 N 出现后从不消失`). Clicking the tail is defined
+ * to press is a bug report (`unread N` never going away). Clicking the tail is
  * as the chord beside it — it calls the same opener — so the pointer and the
  * keyboard cannot drift apart.
  *
@@ -406,7 +409,7 @@ export function LeaderHint() {
           <Text color={colors.text.dim}>{entry.label ?? entry.id}</Text>
         </Text>
       ))}
-      <Text dimColor>esc 退出</Text>
+      <Text dimColor>esc exit</Text>
     </Box>
   );
 }

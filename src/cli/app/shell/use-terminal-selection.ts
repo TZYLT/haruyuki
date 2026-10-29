@@ -183,10 +183,10 @@ function clampedToBand(
 }
 
 function methodLabel(method: ClipboardResult["method"]): string {
-  if (method === "osc52+local") return "OSC 52 ＋ 本地";
+  if (method === "osc52+local") return "OSC 52 + local";
   if (method === "osc52") return "OSC 52";
-  if (method === "local") return "本地剪贴板";
-  return "未送达";
+  if (method === "local") return "local clipboard";
+  return "not delivered";
 }
 
 /** What the notice says after a copy attempt. */
@@ -196,11 +196,11 @@ export function copyNotice(
   text: string,
 ): string {
   if (source === "none" || result.method === "none") {
-    return "没有复制成功：终端不支持 OSC 52，本地剪贴板命令也不可用";
+    return "Copy failed: the terminal does not support OSC 52 and no local clipboard command is available";
   }
-  const what = source === "selection" ? "选区" : "最后一条回答";
+  const what = source === "selection" ? "selection" : "last answer";
   const lines = text.split("\n").length;
-  return `已复制${what}（${lines} 行，${methodLabel(result.method)}）`;
+  return `Copied ${what} (${lines} ${lines === 1 ? "line" : "lines"}, ${methodLabel(result.method)})`;
 }
 
 export interface TerminalSelectionOptions {
@@ -350,14 +350,14 @@ export function useTerminalSelection(
           id: "leader.copySelection",
           leader: true,
           chords: LEADER_KEY_CHORDS.copySelection,
-          label: "复制选区 / 最后一条回答",
+          label: "Copy selection / last answer",
           run: () => {
             const { source, text } = copySourceFor(
               getSelectedText(),
               items ? lastAnswerText(items()) : "",
             );
             if (source === "none") {
-              showNotice("没有可复制的内容");
+              showNotice("Nothing to copy");
               return "consumed";
             }
             showNotice(

@@ -196,7 +196,7 @@ describe("BtwPane", () => {
     await withPane(COMPLETE, async ({ frame }) => {
       const rendered = frame();
       expect(rendered).toContain("esc");
-      expect(rendered).toContain("应用级快捷键暂停");
+      expect(rendered).toContain("app shortcuts are paused");
       // The footer must not advertise what the `modal` claim makes unreachable: the
       // leader prefix is app-scoped, so it cannot be armed while the pane shows.
       expect(rendered).not.toContain("ctrl+x j");

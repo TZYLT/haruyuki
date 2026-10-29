@@ -420,6 +420,7 @@ haruyuki import --from ./work.hryk                   # 正式恢复（手敲 ove
 
 | 子命令 | 参数 | 说明 |
 |---|---|---|
+| `/session id` | — | 打印当前会话 id 与 agent id（调度目标、排查会话归属时用） |
 | `/session rename` | `<名字>` | 重命名当前会话 |
 | `/session logout` | — | 清除已保存凭据并退出 |
 

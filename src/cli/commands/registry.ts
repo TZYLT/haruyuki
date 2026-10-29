@@ -1,6 +1,7 @@
 // src/cli/commands/registry.ts
 // Registry of available CLI commands
 
+import { getConversationId, getCurrentAgentId } from "@/agent/context";
 import {
   type DreamCommandScope,
   requestCloudReflectionRun,
@@ -97,8 +98,8 @@ export const commands: Record<string, Command> = {
     handler: () => formatHubHelpFor("/agent"),
   },
   "/session": {
-    desc: "Session: rename this conversation, log out",
-    args: "<rename|logout>",
+    desc: "Session: show the conversation id, rename this conversation, log out",
+    args: "<id|rename|logout>",
     order: 20.5,
     handler: () => formatHubHelpFor("/session"),
   },
@@ -643,6 +644,22 @@ export const commands: Record<string, Command> = {
       return "Clearing credentials...";
     },
   },
+  "/session-id": {
+    desc: "Show this conversation's id",
+    noArgs: true,
+    handler: () => {
+      // A support request needs both sides: which conversation this is and
+      // which agent owns it. Either may be unset before the first turn.
+      const conversation = getConversationId() ?? "(none)";
+      let agent = "(none)";
+      try {
+        agent = getCurrentAgentId();
+      } catch {
+        // No agent context yet: report the absence instead of failing.
+      }
+      return `Conversation: ${conversation}\nAgent: ${agent}`;
+    },
+  },
 
   // === Hidden commands (not shown in autocomplete) ===
   "/stream": {
@@ -751,6 +768,7 @@ export const HUB_TARGET_COMMANDS: readonly string[] = [
   "/ade",
   "/profile",
   // /session
+  "/session-id",
   "/logout",
   // /memory
   "/memfs",

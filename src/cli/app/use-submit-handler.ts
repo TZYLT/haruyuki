@@ -1149,7 +1149,7 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
         if (
           runShellCommand(trimmed, {
             openTabs: () =>
-              openOverlay("tabs", "/tabs", "标签列表", "标签列表已关闭"),
+              openOverlay("tabs", "/tabs", "Tab list", "Tab list closed"),
             openOverlay,
             tabStrip,
           })

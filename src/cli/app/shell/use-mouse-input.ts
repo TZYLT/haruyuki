@@ -102,13 +102,13 @@ export function useMouseInput(
           id: "leader.toggleMouse",
           leader: true,
           chords: LEADER_KEY_CHORDS.toggleMouse,
-          label: "鼠标上报 开/关",
+          label: "Mouse reporting on/off",
           run: () => {
             const enabled = toggleMouseTracking(stream);
             showNotice(
               enabled
-                ? "鼠标上报已开启（拖拽选择 → ctrl+x y 复制；终端原生选择用 shift 拖拽）"
-                : "鼠标上报已关闭（终端原生选择与右键菜单恢复；ctrl+x m 可再开）",
+                ? "Mouse reporting on (drag to select, then ctrl+x y to copy; use shift+drag for the terminal's own selection)"
+                : "Mouse reporting off (terminal selection and right-click menus are back; ctrl+x m turns it on again)",
             );
             return "consumed";
           },

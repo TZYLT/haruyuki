@@ -54,7 +54,7 @@ export function TabsOverlay({ actions, onDismiss }: TabsOverlayProps) {
       return {
         key: tab.id,
         label: tab.title,
-        description: page ? "页" : undefined,
+        description: page ? "page" : undefined,
         isCurrent: tab.id === state.activeId,
         closeable: !page,
       };
@@ -95,7 +95,7 @@ export function TabsOverlay({ actions, onDismiss }: TabsOverlayProps) {
     extra: [
       {
         id: "tabs-overlay.close",
-        label: "关闭标签",
+        label: "Close tab",
         chords: [{ key: "d" }],
         run: () => {
           close(cursorRef.current);
@@ -122,8 +122,8 @@ export function TabsOverlay({ actions, onDismiss }: TabsOverlayProps) {
   return (
     <OverlayFrame
       command="/tabs"
-      title="标签"
-      footer="↑↓ 选择 · Enter 切换 · D 关闭 · Esc 取消"
+      title="Tabs"
+      footer="↑↓ select · Enter switch · D close · Esc cancel"
     >
       <Box ref={listRef} flexDirection="column">
         <OverlayListView

@@ -34,7 +34,7 @@ export function useDiffFace(deps: {
           id: "leader.diff",
           leader: true,
           chords: LEADER_KEY_CHORDS.diff,
-          label: "差异面",
+          label: "Diff view",
           run: () => {
             const files = diffFaceFilesFromDiffs([
               ...precomputedDiffsRef.current.entries(),

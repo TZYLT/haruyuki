@@ -168,8 +168,8 @@ describe("composer leader prefix", () => {
     try {
       const frame = await composer.press(CTRL_X);
       expect(frame).toContain("ctrl+x");
-      expect(frame).toContain("列出可用键");
-      expect(frame).not.toContain("esc 退出");
+      expect(frame).toContain("List available keys");
+      expect(frame).not.toContain("esc exit");
     } finally {
       composer.unmount();
     }
@@ -180,8 +180,8 @@ describe("composer leader prefix", () => {
     try {
       await composer.press(CTRL_X);
       const frame = await composer.press("?");
-      expect(frame).toContain("ctrl+x ? — 列出可用键");
-      expect(frame).toContain("esc 退出");
+      expect(frame).toContain("ctrl+x ? — List available keys");
+      expect(frame).toContain("esc exit");
       // Not typed into the draft: the prompt row is still empty.
       expect(frame).toMatch(/^>\s*$/m);
       // The list is a surface to read: it must survive on its own, with the
@@ -199,8 +199,8 @@ describe("composer leader prefix", () => {
     try {
       await composer.press(CTRL_X);
       const frame = await composer.press(KITTY_QUESTION);
-      expect(frame).toContain("esc 退出");
-      expect(frame).toContain("列出可用键");
+      expect(frame).toContain("esc exit");
+      expect(frame).toContain("List available keys");
     } finally {
       composer.unmount();
     }
@@ -214,7 +214,7 @@ describe("composer leader prefix", () => {
       // The prefix was left, and the letter reached the draft. The bottom row
       // still names the prefix (M6's hint row does), so the armed *list* is what
       // has to be gone.
-      expect(frame).not.toContain("列出可用键");
+      expect(frame).not.toContain("List available keys");
       expect(frame).toMatch(/^>\s*a\s*$/m);
     } finally {
       composer.unmount();
@@ -227,8 +227,8 @@ describe("composer leader prefix", () => {
       await composer.press(CTRL_X);
       await composer.press("?");
       const frame = await composer.press(ESCAPE);
-      expect(frame).not.toContain("列出可用键");
-      expect(frame).not.toContain("esc 退出");
+      expect(frame).not.toContain("List available keys");
+      expect(frame).not.toContain("esc exit");
     } finally {
       composer.unmount();
     }

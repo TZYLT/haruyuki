@@ -111,7 +111,7 @@ function visibleRows(
 }
 
 /**
- * `> 任务名 · …` — one line per task: name, type, next run, last result, status,
+ * `> Task name · …` — one line per task: name, type, next run, last result, status,
  * permission, and the failure streak when there is one (R-5.12.4).
  */
 function ScheduleRow({
@@ -198,13 +198,13 @@ function ScheduleListView({
   const count = rows.length;
   const hint =
     count === 0
-      ? "Esc 关闭 · /schedule add 新建"
-      : `共 ${count} 个 · ↑↓ 选择 · Enter 详情 · l 运行记录 · Esc 关闭`;
+      ? "Esc close · /schedule add to create"
+      : `${count} total · ↑↓ select · Enter details · l run history · Esc close`;
 
   return (
     <OverlayFrame
       command="/schedule list"
-      title="计划任务"
+      title="Scheduled tasks"
       footer={
         <Box flexDirection="column">
           <Text dimColor>{truncateText(hint, width)}</Text>
@@ -213,7 +213,7 @@ function ScheduleListView({
           )}
           {error && (
             <Text color={colors.status.error}>
-              {truncateText(`读取失败：${error}`, width)}
+              {truncateText(`Read failed: ${error}`, width)}
             </Text>
           )}
         </Box>
@@ -222,11 +222,14 @@ function ScheduleListView({
       {count === 0 ? (
         <Box flexDirection="column">
           <Text dimColor>
-            {truncateText(loaded ? emptyMessage : "正在读取计划任务…", width)}
+            {truncateText(
+              loaded ? emptyMessage : "Loading scheduled tasks…",
+              width,
+            )}
           </Text>
           <Text dimColor>
             {truncateText(
-              "计划任务随宿主运行：TUI 开着时每 60s 检查一次。",
+              "Scheduled tasks run with the host: the TUI checks every 60s while it is open.",
               width,
             )}
           </Text>
@@ -301,7 +304,7 @@ function ScheduleDetailView({
       footer={
         <Box flexDirection="column">
           <Text dimColor>
-            {truncateText("l 运行记录 · Esc 返回列表 · q 关闭", width)}
+            {truncateText("l run history · Esc back to list · q close", width)}
           </Text>
           {autostart && (
             <Text dimColor>{truncateText(autostart.label, width)}</Text>
@@ -397,13 +400,13 @@ function ScheduleRunLogView({
   return (
     <OverlayFrame
       command={`/schedule logs ${shortId(task.id)}`}
-      title={`${task.name} · 运行记录`}
+      title={`${task.name} · Run history`}
       footer={
         <Text dimColor>
           {truncateText(
             empty
-              ? "还没有运行记录 · Esc 返回"
-              : `共 ${groups.length} 次 · ↑↓ 查看 · r 刷新 · Esc 返回 · q 关闭`,
+              ? "No runs yet · Esc back"
+              : `${groups.length} runs · ↑↓ view · r refresh · Esc back · q close`,
             width,
           )}
         </Text>
@@ -411,10 +414,12 @@ function ScheduleRunLogView({
     >
       {empty ? (
         <Box flexDirection="column">
-          <Text dimColor>{truncateText("这个任务还没有跑过。", width)}</Text>
+          <Text dimColor>
+            {truncateText("This task has not run yet.", width)}
+          </Text>
           <Text dimColor>
             {truncateText(
-              "每次运行一行，按 runId 分组；错过也会记一行。",
+              "One row per run, grouped by runId; a missed slot is recorded too.",
               width,
             )}
           </Text>
@@ -491,18 +496,20 @@ function ScheduleNotFoundView({
   return (
     <OverlayFrame
       command={command}
-      title="找不到任务"
+      title="Task not found"
       footer={
-        <Text dimColor>{truncateText("Esc 返回列表 · q 关闭", width)}</Text>
+        <Text dimColor>
+          {truncateText("Esc back to list · q close", width)}
+        </Text>
       }
     >
       <Box flexDirection="column">
         <Text color={colors.status.error}>
-          {truncateText(`找不到任务 ${taskRef}`, width)}
+          {truncateText(`Task ${taskRef} not found`, width)}
         </Text>
         <Text dimColor>
           {truncateText(
-            "用 /schedule list 查看任务，或检查名称 / 短 id 是否拼对。",
+            "Use /schedule list to see tasks, or check the name / short id for typos.",
             width,
           )}
         </Text>
@@ -681,7 +688,9 @@ export function ScheduleOverlay({
       error={snapshot.error}
       loaded={snapshot.loaded}
       emptyMessage={
-        allAgents ? "还没有任何计划任务。" : "当前 agent 还没有计划任务。"
+        allAgents
+          ? "No scheduled tasks yet."
+          : "This agent has no scheduled tasks yet."
       }
       onOpenDetail={(row) => {
         setActiveRef(row.id);

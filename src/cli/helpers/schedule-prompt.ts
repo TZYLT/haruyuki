@@ -217,13 +217,14 @@ export function resolveTuiTaskTarget(
   if (active === null) {
     return {
       kind: "skip",
-      reason: "TUI 会话目标未知：没有已挂载的 agent/会话，不在别处顶替运行。",
+      reason:
+        "TUI conversation target unknown: no agent/conversation is mounted, so it will not run elsewhere.",
     };
   }
   if (task.agentId !== active.agentId) {
     return {
       kind: "skip",
-      reason: `任务属于 agent ${task.agentId}，TUI 当前会话是 agent ${active.agentId}；请由该 agent 的 listener/自启宿主执行。`,
+      reason: `The task belongs to agent ${task.agentId} but the TUI's current session is agent ${active.agentId}; run it from that agent's listener or autostart host.`,
     };
   }
   if (task.target.kind === "new") {
@@ -231,14 +232,14 @@ export function resolveTuiTaskTarget(
       kind: "skip",
       conversationId: task.target.hidden ? "new-hidden" : "new",
       reason:
-        "任务目标是一个新会话；TUI 只能在当前会话里执行，请由 listener/自启宿主创建该会话，或把目标改成当前会话。",
+        "The task targets a new conversation; the TUI can only run the current one. Run it from a listener/autostart host, or retarget it to the current conversation.",
     };
   }
   if (task.target.conversation_id !== active.conversationId) {
     return {
       kind: "skip",
       conversationId: task.target.conversation_id,
-      reason: `任务目标会话 ${task.target.conversation_id} 不是当前会话 ${active.conversationId}；TUI 不在别的会话里顶替运行。`,
+      reason: `The task targets conversation ${task.target.conversation_id} but the current conversation is ${active.conversationId}; the TUI does not substitute another conversation.`,
     };
   }
   return { kind: "run", target: active };

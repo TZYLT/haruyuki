@@ -102,9 +102,14 @@ export const HUBS: Record<string, HubDefinition> = {
   },
   "/session": {
     name: "/session",
-    desc: "Session: rename this conversation, log out",
+    desc: "Session: show the conversation id, rename this conversation, log out",
     order: 20.5,
     subcommands: [
+      {
+        name: "id",
+        desc: "Show this conversation's id",
+        command: "/session-id",
+      },
       {
         name: "rename",
         args: "<name>",

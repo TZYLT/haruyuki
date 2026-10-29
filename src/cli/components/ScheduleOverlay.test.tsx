@@ -91,7 +91,7 @@ function source(tasks: readonly ScheduleTaskV2[]): ScheduleSource {
 
 const AUTOSTART_LINE = {
   registered: false,
-  label: "自启 未注册（M4 未接入）",
+  label: "Autostart: not registered (M4 not wired)",
 };
 
 /**
@@ -152,19 +152,19 @@ describe("the list face", () => {
     try {
       const painted = await settle(tty);
       expect(painted).toContain("/schedule list");
-      expect(painted).toContain("计划任务");
+      expect(painted).toContain("Scheduled tasks");
       expect(painted).toContain("晨报");
-      expect(painted).toContain("今天 11:30");
-      expect(painted).toContain("上次成功");
-      expect(painted).toContain("可编辑");
+      expect(painted).toContain("Today 11:30");
+      expect(painted).toContain("last succeeded");
+      expect(painted).toContain("read-write");
       // M3 #14: the row names the target as well.
-      expect(painted).toContain("新会话");
+      expect(painted).toContain("new");
       // The auto-paused row says why, in the same row as the task.
       expect(painted).toContain("周报");
-      expect(painted).toContain("paused · auto");
-      expect(painted).toContain("连续失败 3 次后暂停");
-      expect(painted).toContain("共 2 个");
-      expect(painted).toContain("自启 未注册");
+      expect(painted).toContain("auto-paused");
+      expect(painted).toContain("paused after 3 consecutive failure(s)");
+      expect(painted).toContain("2 total");
+      expect(painted).toContain("Autostart: not registered");
     } finally {
       tty.stop();
     }
@@ -183,9 +183,9 @@ describe("the list face", () => {
     );
     try {
       const painted = await settle(tty);
-      expect(painted).toContain("当前 agent 还没有计划任务");
+      expect(painted).toContain("This agent has no scheduled tasks yet.");
       expect(painted).toContain("/schedule add");
-      expect(painted).toContain("自启 未注册");
+      expect(painted).toContain("Autostart: not registered");
     } finally {
       tty.stop();
     }
@@ -225,7 +225,7 @@ describe("the list face", () => {
       await tty.press("\r");
       const painted = await settle(tty);
       expect(painted).toContain("/schedule show a1b2c3d4");
-      expect(painted).toContain("权限      可编辑");
+      expect(painted).toContain("read-write");
     } finally {
       tty.stop();
     }
@@ -255,12 +255,12 @@ describe("the detail face", () => {
     try {
       const painted = await settle(tty);
       expect(painted).toContain("晨报");
-      expect(painted).toContain("类型      prompt");
-      expect(painted).toContain("目标      新会话");
-      expect(painted).toContain("状态      paused（连续失败）");
-      expect(painted).toContain("补跑      是");
-      expect(painted).toContain("连续失败  3 次");
-      expect(painted).toContain("l 运行记录");
+      expect(painted).toMatch(/Type\s+prompt/);
+      expect(painted).toMatch(/Target\s+new conversation/);
+      expect(painted).toMatch(/Status\s+auto-paused/);
+      expect(painted).toMatch(/Catch-up\s+yes/);
+      expect(painted).toMatch(/Failures\s+3 in a row/);
+      expect(painted).toContain("l run history");
     } finally {
       tty.stop();
     }
@@ -289,11 +289,11 @@ describe("the run history", () => {
     try {
       const painted = await settle(tty);
       expect(painted).toContain("/schedule logs a1b2c3d4");
-      expect(painted).toContain("运行记录");
-      expect(painted).toContain("共 2 次");
-      expect(painted).toContain("成功");
+      expect(painted).toContain("Run history");
+      expect(painted).toContain("2 runs");
+      expect(painted).toContain("succeeded");
       expect(painted).toContain("12s");
-      expect(painted).toContain("会话 conv-1");
+      expect(painted).toContain("conversation conv-1");
     } finally {
       tty.stop();
     }
@@ -314,8 +314,8 @@ describe("the run history", () => {
     );
     try {
       const painted = await settle(tty);
-      expect(painted).toContain("这个任务还没有跑过");
-      expect(painted).toContain("Esc 返回");
+      expect(painted).toContain("This task has not run yet.");
+      expect(painted).toContain("Esc back");
     } finally {
       tty.stop();
     }
@@ -350,7 +350,7 @@ describe("the run history", () => {
     try {
       const painted = await settle(tty);
       expect(painted).toContain("$ 0.00420");
-      expect(painted).toContain("费用 —");
+      expect(painted).toContain("cost —");
     } finally {
       tty.stop();
     }
@@ -374,7 +374,7 @@ describe("the route (M3 #2)", () => {
     try {
       const painted = await settle(tty);
       expect(painted).toContain("/schedule show a1b2c3d4");
-      expect(painted).toContain("权限      可编辑");
+      expect(painted).toContain("read-write");
     } finally {
       tty.stop();
     }
@@ -396,7 +396,7 @@ describe("the route (M3 #2)", () => {
     try {
       const painted = await settle(tty);
       expect(painted).toContain("/schedule logs a1b2c3d4");
-      expect(painted).toContain("运行记录");
+      expect(painted).toContain("Run history");
     } finally {
       tty.stop();
     }
@@ -417,8 +417,8 @@ describe("the route (M3 #2)", () => {
     );
     try {
       const painted = await settle(tty);
-      expect(painted).toContain("找不到任务");
-      expect(painted).not.toContain("Enter 详情");
+      expect(painted).toContain("not found");
+      expect(painted).not.toContain("Enter details");
     } finally {
       tty.stop();
     }
@@ -438,7 +438,7 @@ describe("the route (M3 #2)", () => {
       { columns: 120, rows: 30 },
     );
     try {
-      expect(await settle(tty)).toContain("找不到任务");
+      expect(await settle(tty)).toContain("not found");
     } finally {
       tty.stop();
     }
@@ -465,7 +465,7 @@ describe("autostart state in the panel", () => {
       { columns: 100, rows: 24 },
     );
     try {
-      expect(await settle(tty)).toContain("需重新注册");
+      expect(await settle(tty)).toContain("needs re-registration");
     } finally {
       tty.stop();
     }
@@ -476,7 +476,7 @@ describe("autostart state in the panel", () => {
     let reads = 0;
     const readAutostart = async () => {
       reads += 1;
-      return { registered: true, label: "自启 已注册（schtasks）" };
+      return { registered: true, label: "Autostart: registered (schtasks)" };
     };
     const tty = mountInkTty(
       <ScheduleOverlay

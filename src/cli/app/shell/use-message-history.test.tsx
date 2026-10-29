@@ -119,7 +119,7 @@ describe("the message history chord", () => {
     const shell = mountHistory();
     try {
       const armed = await shell.press(CTRL_X);
-      expect(armed).toContain("h 消息历史");
+      expect(armed).toContain("h Message history");
 
       await shell.press("h");
       expect(shell.opened).toEqual(["opened"]);

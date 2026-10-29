@@ -5,8 +5,8 @@
  * catch-up → timeout → wait → name → autostart. Every step keeps its value in
  * component state, which is what makes the last step's failure path work: when
  * the OS refuses the autostart entry the task is **already created**, the wizard
- * shows the receipt with "自启未注册", and `r` retries the registration alone —
- * no second task, no lost field.
+ * shows the receipt with "autostart not registered", and `r` retries the
+ * registration alone — no second task, no lost field.
  *
  * Two things are injectable on purpose:
  *
@@ -52,7 +52,7 @@ import {
   wizardStepTitle,
 } from "@/cli/components/ScheduleWizardSteps";
 import { Text } from "@/cli/components/Text";
-import { shortId } from "@/cli/helpers/schedule-store";
+import { conversationRef } from "@/cli/helpers/schedule-store";
 import { truncateText } from "@/cli/helpers/truncate-text";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
@@ -81,6 +81,12 @@ export interface ScheduleWizardProps {
   /** The conversation the wizard was opened from, offered as a row. */
   currentConversationId?: string;
   onClose: () => void;
+  /**
+   * Called instead of `onClose` when the user leaves the receipt of a task that
+   * was created. The overlay uses it to close without printing its dismiss
+   * text: the task exists, so "cancelled" would be a lie.
+   */
+  onCompleted?: () => void;
   /** `/schedule add …` partial flags, pre-filled (missing ones are still asked). */
   args?: readonly string[];
   /** Injected by tests; defaults to the real creation path. */
@@ -116,12 +122,12 @@ const TYPE_ITEMS: readonly SingleSelectItem[] = [
   {
     key: "prompt",
     label: "prompt",
-    description: "注入一段用户消息并跑一轮",
+    description: "Injects a user message and runs one turn",
   },
   {
     key: "command",
     label: "command",
-    description: `只允许 ${[...TASK_COMMAND_WHITELIST].join(" / ")}`,
+    description: `Only ${[...TASK_COMMAND_WHITELIST].join(" / ")} allowed`,
   },
 ];
 
@@ -129,35 +135,41 @@ const TYPE_ITEMS: readonly SingleSelectItem[] = [
 const TARGET_ITEMS: readonly SingleSelectItem[] = [
   {
     key: "new-visible",
-    label: "每次新建可见会话",
-    description: "任务名作为会话摘要",
+    label: "New visible conversation each run",
+    description: "The task name becomes the conversation summary",
   },
   {
     key: "new-hidden",
-    label: "每次新建隐藏会话",
-    description: "不进会话列表，可在 /hidden-sessions 里看",
+    label: "New hidden conversation each run",
+    description: "Kept out of the conversation list; see /hidden-sessions",
   },
   {
     key: "existing",
-    label: "写进已有会话",
-    description: "该会话必须存在且非隐藏",
+    label: "Write into an existing conversation",
+    description: "The conversation must exist and not be hidden",
   },
 ];
 
-/** The catch-up question's two rows; row 0 is "补跑". */
+/** The catch-up question's two rows; row 0 is "catch up". */
 const CATCH_UP_ITEMS: readonly SingleSelectItem[] = [
   {
     key: "yes",
-    label: "补跑",
-    description: "只补最近一次；标原定与实际时间",
+    label: "Catch up",
+    description:
+      "Only the most recent missed slot; the original and actual times are kept",
   },
-  { key: "no", label: "不补跑", description: "记错过，不执行" },
+  {
+    key: "no",
+    label: "No catch-up",
+    description: "Record the miss; do not run",
+  },
 ];
 
 export function ScheduleWizard({
   agentId,
   currentConversationId,
   onClose,
+  onCompleted,
   args,
   createTask,
   registerAutostartEntry,
@@ -250,6 +262,20 @@ export function ScheduleWizard({
     onClose();
   }, [back, canGoBack, onClose]);
 
+  /**
+   * Leaving the receipt: a created task is a success, not a dismissal.
+   *
+   * `onCompleted` lets the overlay close without its "cancelled" line; a mount
+   * site that passes none keeps the old close behaviour.
+   */
+  const leaveDone = useCallback(() => {
+    if (created?.kind === "created" && onCompleted) {
+      onCompleted();
+      return;
+    }
+    onClose();
+  }, [created, onClose, onCompleted]);
+
   const draft: ScheduleAddDraft = useMemo(() => {
     const target: ScheduleAddDraft["target"] =
       targetMode === "existing"
@@ -289,7 +315,8 @@ export function ScheduleWizard({
    * Register the OS entry for a task that already exists.
    *
    * Runs on the failure path too: a retry must not create a second task, and the
-   * receipt keeps saying "任务已创建，自启未注册" until a retry succeeds.
+   * receipt keeps saying "task created, autostart not registered" until a retry
+   * succeeds.
    */
   const registerFor = useCallback(
     async (result: CreateScheduleResult) => {
@@ -297,7 +324,7 @@ export function ScheduleWizard({
       try {
         const status = await (registerAutostartEntry ?? registerAutostart)();
         if (!status.registered) {
-          setRegisterError(status.error ?? "注册未生效");
+          setRegisterError(status.error ?? "registration did not take effect");
           setReceipt(
             formatScheduleCreatedLines(result, {
               autostart: "failed",
@@ -381,7 +408,7 @@ export function ScheduleWizard({
                 id: "schedule-wizard.done.close",
                 chords: [{ key: "escape" }, { key: "return" }],
                 run: () => {
-                  onClose();
+                  leaveDone();
                   return "consumed" as const;
                 },
               },
@@ -389,7 +416,7 @@ export function ScheduleWizard({
                 id: "schedule-wizard.done.interrupt",
                 chords: [{ key: "c", ctrl: true }],
                 run: () => {
-                  onClose();
+                  leaveDone();
                   return "consumed" as const;
                 },
               },
@@ -420,7 +447,7 @@ export function ScheduleWizard({
           key="type"
           command="/schedule add"
           title={wizardStepTitle("type")}
-          hint="prompt 往会话里发一段话；command 跑一个能无人值守跑完的命令。"
+          hint="prompt sends a message into the conversation; command runs a command that can finish unattended."
           items={TYPE_ITEMS}
           initialCursorIndex={cursorIndexFor(TYPE_ITEMS, type)}
           onSelect={(key) => {
@@ -428,7 +455,7 @@ export function ScheduleWizard({
             goTo("target");
           }}
           onCancel={leave}
-          footer="Enter 选择 · ↑↓ 移动 · Esc 取消"
+          footer="Enter select · ↑↓ move · Esc cancel"
           width={width}
         />
       );
@@ -448,7 +475,7 @@ export function ScheduleWizard({
           key="target"
           command="/schedule add"
           title={wizardStepTitle("target")}
-          hint="prompt 任务落在哪个会话：每次新建，还是写进一个已有会话。"
+          hint="Where a prompt task lands: a new conversation each run, or an existing one."
           items={TARGET_ITEMS}
           initialCursorIndex={cursorIndexFor(TARGET_ITEMS, targetKey)}
           onSelect={(key) => {
@@ -463,7 +490,7 @@ export function ScheduleWizard({
             goTo("conversation");
           }}
           onCancel={leave}
-          footer="Enter 选择 · ↑↓ 移动 · Esc 取消"
+          footer="Enter select · ↑↓ move · Esc cancel"
           width={width}
         />
       );
@@ -477,8 +504,8 @@ export function ScheduleWizard({
           title={wizardStepTitle("conversation")}
           hint={
             currentConversationId
-              ? `粘贴会话 id，或输入关键词搜索最近 10 个。当前会话 ${shortId(currentConversationId)}。`
-              : "粘贴会话 id，或输入关键词搜索最近 10 个会话。"
+              ? `Paste a conversation id, or type keywords to search the 10 most recent. Current conversation ${conversationRef(currentConversationId)}.`
+              : "Paste a conversation id, or type keywords to search the 10 most recent conversations."
           }
           value={conversationId}
           onChange={(value) => {
@@ -488,7 +515,7 @@ export function ScheduleWizard({
           onSubmit={(value) => {
             const trimmed = value.trim();
             if (!trimmed) {
-              setError("需要一个会话 id（或 default）。");
+              setError("A conversation id is required (or `default`).");
               return;
             }
             if (trimmed === "default" || looksLikeConversationId(trimmed)) {
@@ -514,9 +541,9 @@ export function ScheduleWizard({
                 );
               });
           }}
-          placeholder="会话 id / default / 关键词"
+          placeholder="conversation id / default / keywords"
           error={error}
-          footer="Enter 确认 · Esc 返回"
+          footer="Enter confirm · Esc back"
           width={width}
         />
       );
@@ -527,30 +554,30 @@ export function ScheduleWizard({
           ? choices.map((choice) => ({
               key: choice.id,
               label: choice.label,
-              description: shortId(choice.id),
+              description: conversationRef(choice.id),
             }))
           : [
               currentConversationId
                 ? {
                     key: currentConversationId,
-                    label: "当前会话",
-                    description: shortId(currentConversationId),
+                    label: "Current conversation",
+                    description: conversationRef(currentConversationId),
                   }
                 : {
                     key: "default",
                     label: "default",
-                    description: "agent 的默认会话",
+                    description: "the agent's default conversation",
                   },
             ];
       return (
         <PickerStep
           key="conversation-pick"
           command="/schedule add"
-          title={wizardStepTitle("conversation-pick", "选择会话")}
+          title={wizardStepTitle("conversation-pick", "Select conversation")}
           hint={
             choices.length > 0
-              ? `最近 ${choices.length} 个匹配的会话。`
-              : "没有搜到可选的会话：Esc 回去直接粘 id，或选默认会话。"
+              ? `${choices.length} matching conversations.`
+              : "No conversations found: press Esc to paste an id, or choose the default conversation."
           }
           items={items}
           initialCursorIndex={cursorIndexFor(items, conversationId)}
@@ -559,7 +586,7 @@ export function ScheduleWizard({
             goTo(payload.trim() ? afterContent() : "payload");
           }}
           onCancel={leave}
-          footer="Enter 选择 · Esc 返回输入"
+          footer="Enter select · Esc back to input"
           width={width}
         />
       );
@@ -572,12 +599,14 @@ export function ScheduleWizard({
           command="/schedule add"
           title={wizardStepTitle(
             "payload",
-            type === "command" ? "命令（参数原样透传）" : "内容",
+            type === "command"
+              ? "Command (arguments passed through)"
+              : "Payload",
           )}
           hint={
             type === "command"
-              ? `只允许 ${[...TASK_COMMAND_WHITELIST].join(" / ")}；如 /compact 3。`
-              : "这一轮会作为一条用户消息发给会话。"
+              ? `Only ${[...TASK_COMMAND_WHITELIST].join(" / ")}; e.g. /compact 3.`
+              : "This is sent to the conversation as one user message."
           }
           value={payload}
           onChange={(value) => {
@@ -587,14 +616,14 @@ export function ScheduleWizard({
           onSubmit={(value) => {
             const trimmed = value.trim();
             if (!trimmed) {
-              setError("内容不能为空。");
+              setError("Payload cannot be empty.");
               return;
             }
             if (type === "command") {
               const command = trimmed.replace(/^\//, "").split(/\s+/)[0] ?? "";
               if (!commandAllowed(command)) {
                 setError(
-                  `命令 ${command || "(空)"} 不在白名单（${[...TASK_COMMAND_WHITELIST].join(" / ")}）。`,
+                  `Command ${command || "(empty)"} is not in the allowlist (${[...TASK_COMMAND_WHITELIST].join(" / ")}).`,
                 );
                 return;
               }
@@ -603,9 +632,13 @@ export function ScheduleWizard({
             setError(null);
             goTo(afterContent());
           }}
-          placeholder={type === "command" ? "/compact 3" : "要发给会话的内容"}
+          placeholder={
+            type === "command"
+              ? "/compact 3"
+              : "Message to send to the conversation"
+          }
           error={error}
-          footer="Enter 下一步 · Esc 返回"
+          footer="Enter next · Esc back"
           width={width}
         />
       );
@@ -616,17 +649,17 @@ export function ScheduleWizard({
           key="schedule-mode"
           command="/schedule add"
           title={wizardStepTitle("schedule-mode")}
-          hint="什么时候跑。cron 表达式最精确，间隔与一次性是它的常用写法。"
+          hint="When it runs. A cron expression is the most precise; interval and one-off are its common shorthand."
           items={[
             {
               key: "cron",
-              label: "cron 表达式",
-              description: "5 字段，如 0 9 * * *",
+              label: "cron expression",
+              description: "5 fields, e.g. 0 9 * * *",
             },
-            { key: "every", label: "间隔", description: "5m / 2h / 1d" },
+            { key: "every", label: "Interval", description: "5m / 2h / 1d" },
             {
               key: "at",
-              label: "一次性时间",
+              label: "One-off time",
               description: '"in 45m" / "3:00pm"',
             },
           ]}
@@ -639,7 +672,7 @@ export function ScheduleWizard({
             goTo("schedule");
           }}
           onCancel={leave}
-          footer="Enter 选择 · Esc 返回"
+          footer="Enter select · Esc back"
           width={width}
         />
       );
@@ -652,10 +685,10 @@ export function ScheduleWizard({
           title={wizardStepTitle("schedule")}
           hint={
             scheduleMode === "cron"
-              ? "5 字段 cron：分 时 日 月 周。"
+              ? "5-field cron: minute hour day month weekday."
               : scheduleMode === "every"
-                ? "间隔：5m、2h、1d（最小 1 分钟）。"
-                : '一次性时间："in 45m"、"3:00pm" 或带时区的 RFC 3339。'
+                ? "Interval: 5m, 2h, 1d (minimum 1 minute)."
+                : 'One-off time: "in 45m", "3:00pm", or an RFC 3339 timestamp with a zone.'
           }
           value={scheduleInput}
           onChange={(value) => {
@@ -667,10 +700,10 @@ export function ScheduleWizard({
             if (!parsed) {
               setError(
                 scheduleMode === "cron"
-                  ? "不是合法的 5 字段 cron 表达式。"
+                  ? "Not a valid 5-field cron expression."
                   : scheduleMode === "every"
-                    ? "无法识别间隔（试试 5m、2h、1d）。"
-                    : '无法识别时间（试试 "in 45m"、"3:00pm"）。',
+                    ? "Unrecognized interval (try 5m, 2h, 1d)."
+                    : 'Unrecognized time (try "in 45m", "3:00pm").',
               );
               return;
             }
@@ -687,7 +720,7 @@ export function ScheduleWizard({
                 : "in 45m"
           }
           error={error}
-          footer="Enter 下一步 · Esc 返回"
+          footer="Enter next · Esc back"
           width={width}
         />
       );
@@ -698,7 +731,7 @@ export function ScheduleWizard({
           key="timezone"
           command="/schedule add"
           title={wizardStepTitle("timezone")}
-          hint="IANA 时区；cron 的时间按这个时区解释。"
+          hint="IANA timezone; cron times are interpreted in it."
           value={timezone}
           onChange={(value) => {
             setTimezone(value);
@@ -707,7 +740,7 @@ export function ScheduleWizard({
           onSubmit={(value) => {
             const trimmed = value.trim();
             if (trimmed && !isTimeZone(trimmed)) {
-              setError("不是合法的 IANA 时区。");
+              setError("Not a valid IANA timezone.");
               return;
             }
             setTimezone(trimmed);
@@ -716,7 +749,7 @@ export function ScheduleWizard({
           }}
           placeholder={Intl.DateTimeFormat().resolvedOptions().timeZone}
           error={error}
-          footer="Enter 下一步 · Esc 返回"
+          footer="Enter next · Esc back"
           width={width}
         />
       );
@@ -727,7 +760,7 @@ export function ScheduleWizard({
           key="permission"
           command="/schedule add"
           title={wizardStepTitle("permission")}
-          hint="无人值守时任何审批请求都会被拒绝，所以档位就是能做什么的全部。"
+          hint="Unattended runs deny every approval request, so the tier is all the task can do."
           items={PERMISSION_ROWS}
           // A prefilled `--permission` opens on its own row (M3 #3).
           initialCursorIndex={cursorIndexFor(PERMISSION_ROWS, permission)}
@@ -742,7 +775,7 @@ export function ScheduleWizard({
             goTo(catchUp === null ? "catch-up" : "timeout");
           }}
           onCancel={leave}
-          footer="Enter 选择 · Esc 返回"
+          footer="Enter select · Esc back"
           width={width}
         />
       );
@@ -753,9 +786,9 @@ export function ScheduleWizard({
           key="catch-up"
           command="/schedule add"
           title={wizardStepTitle("catch-up")}
-          hint="机器关机/休眠错过触发点时，要不要补最近一次。"
+          hint="When the machine was off or asleep and a trigger was missed, run the most recent one."
           items={CATCH_UP_ITEMS}
-          // `--no-catch-up` must not be flipped back to 补跑 by Enter (M3 #3).
+          // `--no-catch-up` must not be flipped back to "catch up" by Enter (M3 #3).
           initialCursorIndex={cursorIndexFor(
             CATCH_UP_ITEMS,
             catchUp === false ? "no" : "yes",
@@ -765,7 +798,7 @@ export function ScheduleWizard({
             goTo("timeout");
           }}
           onCancel={leave}
-          footer="Enter 选择 · Esc 返回"
+          footer="Enter select · Esc back"
           width={width}
         />
       );
@@ -776,7 +809,7 @@ export function ScheduleWizard({
           key="timeout"
           command="/schedule add"
           title={wizardStepTitle("timeout")}
-          hint="单次运行上限（分钟）。0 表示不限时。"
+          hint="Run limit in minutes. 0 means no limit."
           value={timeoutMinutes}
           onChange={(value) => {
             setTimeoutMinutes(value);
@@ -784,7 +817,7 @@ export function ScheduleWizard({
           }}
           onSubmit={(value) => {
             if (parseMinutes(value) === undefined) {
-              setError("需要 0 或正整数分钟。");
+              setError("Needs 0 or a positive number of minutes.");
               return;
             }
             setError(null);
@@ -792,7 +825,7 @@ export function ScheduleWizard({
           }}
           placeholder="30"
           error={error}
-          footer="Enter 下一步 · Esc 返回"
+          footer="Enter next · Esc back"
           width={width}
         />
       );
@@ -803,7 +836,7 @@ export function ScheduleWizard({
           key="wait"
           command="/schedule add"
           title={wizardStepTitle("wait")}
-          hint="目标会话被占用时最多等多久（分钟）；超时记跳过，不计失败。"
+          hint="How long to wait when the target conversation is busy (minutes); a timeout records a skip, not a failure."
           value={waitMinutes}
           onChange={(value) => {
             setWaitMinutes(value);
@@ -811,7 +844,7 @@ export function ScheduleWizard({
           }}
           onSubmit={(value) => {
             if (parseMinutes(value) === undefined) {
-              setError("需要 0 或正整数分钟。");
+              setError("Needs 0 or a positive number of minutes.");
               return;
             }
             setError(null);
@@ -819,7 +852,7 @@ export function ScheduleWizard({
           }}
           placeholder="10"
           error={error}
-          footer="Enter 下一步 · Esc 返回"
+          footer="Enter next · Esc back"
           width={width}
         />
       );
@@ -830,7 +863,7 @@ export function ScheduleWizard({
           key="name"
           command="/schedule add"
           title={wizardStepTitle("name")}
-          hint="展示用；留空则用内容前 32 个字符。"
+          hint="Display name; leave empty to use the first 32 characters of the payload."
           value={name}
           onChange={(value) => {
             setName(value);
@@ -841,9 +874,9 @@ export function ScheduleWizard({
             setError(null);
             goTo("autostart");
           }}
-          placeholder="晨报"
+          placeholder="Morning report"
           error={error}
-          footer="Enter 下一步 · Esc 返回"
+          footer="Enter next · Esc back"
           width={width}
         />
       );
@@ -854,18 +887,22 @@ export function ScheduleWizard({
           key="autostart"
           command="/schedule add"
           title={wizardStepTitle("autostart")}
-          hint="注册后由 OS 每分钟唤起短命宿主；不注册则只在 Haruyuki 运行时执行。"
+          hint="Registers an OS entry that wakes a short-lived host every minute; without it the task runs only while Haruyuki is running."
           items={[
             {
               key: "yes",
-              label: "是（默认）",
-              description: "注册用户级自启项",
+              label: "Yes (default)",
+              description: "Register a user-level autostart entry",
             },
-            { key: "no", label: "否", description: "面板会标未注册" },
+            {
+              key: "no",
+              label: "No",
+              description: "The panel marks it as not registered",
+            },
           ]}
           onSelect={(key) => create(key === "yes")}
           onCancel={leave}
-          footer="Enter 选择 · Esc 取消"
+          footer="Enter select · Esc cancel"
           width={width}
         />
       );
@@ -874,16 +911,21 @@ export function ScheduleWizard({
       return (
         <OverlayFrame
           command="/schedule add"
-          title="创建失败"
-          footer={<StepHint text="Esc 返回修改 · Ctrl+C 关闭" width={width} />}
+          title="Creation failed"
+          footer={
+            <StepHint text="Esc back to edit · Ctrl+C close" width={width} />
+          }
         >
           <Box flexDirection="column">
             <Text color={colors.status.error}>
-              {truncateText(error ?? "未知原因", width)}
+              {truncateText(error ?? "Unknown reason", width)}
             </Text>
             <Box height={1} />
             <Text dimColor>
-              {truncateText("已填内容都还在，Esc 回去改。", width)}
+              {truncateText(
+                "Everything you filled in is still here; press Esc to go back.",
+                width,
+              )}
             </Text>
           </Box>
         </OverlayFrame>
@@ -894,11 +936,13 @@ export function ScheduleWizard({
       return (
         <OverlayFrame
           command="/schedule add"
-          title={failed ? "任务已创建 · 自启未注册" : "已创建"}
+          title={failed ? "Task created · autostart not registered" : "Created"}
           footer={
             <StepHint
               text={
-                failed ? "r 重试注册 · Enter/Esc 关闭" : "Enter 或 Esc 关闭"
+                failed
+                  ? "r retry registration · Enter/Esc close"
+                  : "Enter or Esc close"
               }
               width={width}
             />
@@ -909,7 +953,7 @@ export function ScheduleWizard({
               <Text
                 key={line}
                 color={
-                  failed && line.includes("自启")
+                  failed && line.toLowerCase().includes("autostart")
                     ? colors.status.error
                     : undefined
                 }
@@ -922,7 +966,7 @@ export function ScheduleWizard({
               <Box marginTop={1}>
                 <Text dimColor>
                   {truncateText(
-                    "任务本身没问题，只是 OS 条目没建起来。",
+                    "The task itself is fine; only the OS entry could not be created.",
                     width,
                   )}
                 </Text>

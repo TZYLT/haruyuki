@@ -62,15 +62,17 @@ describe("the hub", () => {
       expect(help).toContain(`/schedule ${subcommand}`);
     }
     // The permission tiers' limits are stated where a user picks one.
-    expect(help).toContain("shell 仍被拒");
-    expect(help).toContain("不承诺禁删/禁网");
+    expect(help).toContain("shell is still denied");
+    expect(help).toContain("does not promise delete/network blocks");
   });
 
   test("no subcommand, help and an unknown word all answer with the help", async () => {
     expect(parseScheduleInvocation([])).toEqual({ kind: "help" });
     expect(parseScheduleInvocation(["help"])).toEqual({ kind: "help" });
     expect(await handleScheduleCommand([])).toContain("/schedule list");
-    expect(await handleScheduleCommand(["nope"])).toContain("未知子命令 nope");
+    expect(await handleScheduleCommand(["nope"])).toContain(
+      "Unknown subcommand nope",
+    );
   });
 
   test("a subcommand without its task is refused by name", () => {
@@ -220,7 +222,7 @@ describe("the parser", () => {
     expect(invalidCron.kind).toBe("add");
     expect(parseScheduleInvocation(["add", "--permission", "strict"])).toEqual({
       kind: "error",
-      message: "权限只接受 standard / acceptEdits / unrestricted",
+      message: "Permission accepts only standard / acceptEdits / unrestricted",
     });
     expect(parseScheduleInvocation(["add", "--every", "0m"]).kind).toBe(
       "error",
@@ -259,7 +261,7 @@ describe("task references", () => {
     });
     const ambiguous = resolveScheduleTask("晨报", tasks);
     expect("error" in ambiguous).toBe(true);
-    if ("error" in ambiguous) expect(ambiguous.error).toContain("请用 id");
+    if ("error" in ambiguous) expect(ambiguous.error).toContain("use an id");
   });
 
   test("the short id a row prints resolves (M3 #2)", () => {
@@ -277,7 +279,7 @@ describe("task references", () => {
     ] as never[];
     const ambiguous = resolveScheduleTask("a1b2c3d4", colliding);
     expect("error" in ambiguous).toBe(true);
-    if ("error" in ambiguous) expect(ambiguous.error).toContain("完整 id");
+    if ("error" in ambiguous) expect(ambiguous.error).toContain("the full id");
   });
 });
 
@@ -316,10 +318,10 @@ describe("the agent-scope rule (M3 #19)", () => {
     // Another agent's task is not part of this agent's view.
     expect(
       await handleScheduleCommand(["show", other], { agentId: "agent-1" }),
-    ).toContain("找不到任务");
+    ).toContain("not found");
     expect(
       await handleScheduleCommand(["logs", "别人的"], { agentId: "agent-1" }),
-    ).toContain("找不到任务");
+    ).toContain("not found");
     // `list` follows the same scope.
     expect(
       await handleScheduleCommand(["list"], { agentId: "agent-1" }),
@@ -332,17 +334,17 @@ describe("the agent-scope rule (M3 #19)", () => {
 
     expect(
       await handleScheduleCommand(["pause", other], { agentId: "agent-1" }),
-    ).toContain("已暂停 别人的");
+    ).toContain("Paused 别人的");
     expect(
       await handleScheduleCommand(["resume", other], { agentId: "agent-1" }),
-    ).toContain("已恢复 别人的");
+    ).toContain("Resumed 别人的");
 
     // Two agents' tasks share a name: the mutation refuses to guess.
     create("agent-2", "同名", "0 11 * * *");
     const ambiguous = await handleScheduleCommand(["pause", "同名"], {
       agentId: "agent-1",
     });
-    expect(ambiguous).toContain("匹配到 2 个任务");
+    expect(ambiguous).toContain("matches 2 tasks");
   });
 });
 
@@ -356,12 +358,14 @@ describe("the one-step creation", () => {
     });
     expect(result.kind).toBe("created");
     if (result.kind !== "created") return;
-    expect(result.name).toBe("提示: 总结今天的提交");
+    expect(result.name).toBe("Prompt: 总结今天的提交");
     expect(result.cron).toBe("0 9 * * *");
     expect(listScheduleTasks()).toHaveLength(1);
     // The receipt names what matters: the task, its schedule, its permission.
-    expect(formatScheduleCreatedLines(result)[0]).toContain("已创建计划任务");
-    expect(formatScheduleCreatedLines(result)[1]).toContain("可编辑");
+    expect(formatScheduleCreatedLines(result)[0]).toContain(
+      "Created scheduled task",
+    );
+    expect(formatScheduleCreatedLines(result)[1]).toContain("read-write");
   });
 
   test("a store refusal becomes one message, not a throw", () => {
@@ -394,17 +398,17 @@ describe("the one-step creation", () => {
     };
     expect(
       formatScheduleCreatedLines(created, { autostart: "declined" }).join("\n"),
-    ).toContain("你选了「否」");
+    ).toContain("you chose No");
     expect(
       formatScheduleCreatedLines(created, { autostart: "registered" }).join(
         "\n",
       ),
-    ).toContain("自启已注册");
+    ).toContain("Autostart registered");
     const failed = formatScheduleCreatedLines(created, {
       autostart: "failed",
       detail: "schtasks 被拒绝",
     }).join("\n");
-    expect(failed).toContain("任务已创建，自启未注册");
+    expect(failed).toContain("autostart is not registered");
     expect(failed).toContain("schtasks 被拒绝");
   });
 });
@@ -423,19 +427,19 @@ describe("the registry handler", () => {
       await handleScheduleCommand(["pause", created.taskId], {
         agentId: "agent-1",
       }),
-    ).toContain("已暂停");
+    ).toContain("Paused");
     expect(listScheduleTasks()[0]?.status).toBe("paused");
     expect(
       await handleScheduleCommand(["resume", created.taskId], {
         agentId: "agent-1",
       }),
-    ).toContain("已恢复");
+    ).toContain("Resumed");
     expect(listScheduleTasks()[0]?.status).toBe("active");
     expect(
       await handleScheduleCommand(["delete", created.taskId], {
         agentId: "agent-1",
       }),
-    ).toContain("已删除");
+    ).toContain("Deleted");
     expect(listScheduleTasks()).toHaveLength(0);
   });
 
@@ -450,19 +454,19 @@ describe("the registry handler", () => {
     const detail = await handleScheduleCommand(["show", created.taskId], {
       agentId: "agent-1",
     });
-    expect(detail).toContain("类型      prompt");
-    expect(detail).toContain("权限      可编辑");
+    expect(detail).toMatch(/^Type\s+prompt/m);
+    expect(detail).toMatch(/^Permission\s+read-write$/m);
     expect(
       await handleScheduleCommand(["show", "nope"], { agentId: "agent-1" }),
-    ).toContain("找不到任务 nope");
+    ).toContain("Task nope not found");
   });
 
   test("add without enough flags points at the wizard instead of creating", async () => {
     const output = await handleScheduleCommand(["add", "--prompt", "hi"], {
       agentId: "agent-1",
     });
-    expect(output).toContain("缺少必填参数");
-    expect(output).toContain("向导");
+    expect(output).toContain("Missing required flags");
+    expect(output).toContain("wizard");
     expect(listScheduleTasks()).toHaveLength(0);
   });
 
@@ -482,27 +486,27 @@ describe("receipts and detail judgements", () => {
       method: null,
       error: "crontab 读取失败",
     });
-    expect(unconfirmed).toContain("无法确认自启已关闭");
+    expect(unconfirmed).toContain("Could not confirm autostart is off");
     expect(unconfirmed).toContain("crontab 读取失败");
-    expect(unconfirmed).not.toContain("自启已关闭。");
+    expect(unconfirmed).not.toContain("Autostart off.");
 
     expect(
       formatAutostartResult("off", { registered: false, method: null }),
-    ).toContain("自启已关闭");
+    ).toContain("Autostart off");
     expect(
       formatAutostartResult("off", {
         registered: true,
         method: "crontab",
         error: "卸载未生效",
       }),
-    ).toContain("自启仍在");
+    ).toContain("Autostart is still present");
     expect(
       formatAutostartResult("on", {
         registered: true,
         method: "schtasks",
         launcherPath: "C:/h/haruyuki-launch.cmd",
       }),
-    ).toContain("自启已注册");
+    ).toContain("Autostart registered");
   });
 
   test("the auto-pause warning follows the status line, not an index (M3 #18)", () => {
@@ -510,17 +514,18 @@ describe("receipts and detail judgements", () => {
       pausedReason: "auto_failures",
       consecutiveFailures: 3,
     } as never;
-    expect(isAutoPauseDetailLine(paused, "状态      paused（连续失败）")).toBe(
-      true,
-    );
+    expect(isAutoPauseDetailLine(paused, "Status     auto-paused")).toBe(true);
     expect(
-      isAutoPauseDetailLine(paused, "连续失败  3 次 · 错过 0 次 · 失败 3 次"),
+      isAutoPauseDetailLine(
+        paused,
+        "Failures   3 in a row · 0 missed · 3 failed",
+      ),
     ).toBe(true);
-    expect(isAutoPauseDetailLine(paused, "权限      全权")).toBe(false);
-    // A manual pause has no failure warning to paint.
-    const manual = { pausedReason: "manual", consecutiveFailures: 0 } as never;
-    expect(isAutoPauseDetailLine(manual, "状态      paused（手动）")).toBe(
+    expect(isAutoPauseDetailLine(paused, "Permission unrestricted")).toBe(
       false,
     );
+    // A manual pause has no failure warning to paint.
+    const manual = { pausedReason: "manual", consecutiveFailures: 0 } as never;
+    expect(isAutoPauseDetailLine(manual, "Status     paused")).toBe(false);
   });
 });

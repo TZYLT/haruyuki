@@ -111,21 +111,21 @@ describe("the creation wizard", () => {
       await Bun.sleep(40);
 
       const failedFrame = await tty.text();
-      expect(failedFrame).toContain("任务已创建 · 自启未注册");
+      expect(failedFrame).toContain("Task created · autostart not registered");
       expect(failedFrame).toContain("schtasks 被组策略拒绝");
       // The receipt still names the task and its schedule: the input survived
       // the failure instead of being rebuilt from an empty draft.
-      expect(failedFrame).toContain("已创建计划任务 晨报");
+      expect(failedFrame).toContain("Created scheduled task 晨报");
       expect(failedFrame).toContain("0 9 * * *");
-      expect(failedFrame).toContain("r 重试注册");
+      expect(failedFrame).toContain("r retry registration");
       expect(drafts).toHaveLength(1);
 
       await tty.press("r");
       await Bun.sleep(40);
       const retriedFrame = await tty.text();
-      expect(retriedFrame).toContain("已创建");
-      expect(retriedFrame).toContain("自启已注册");
-      expect(retriedFrame).not.toContain("自启未注册");
+      expect(retriedFrame).toContain("Created");
+      expect(retriedFrame).toContain("Autostart registered");
+      expect(retriedFrame).not.toContain("autostart not registered");
       // The one thing a retry must never do.
       expect(drafts).toHaveLength(1);
       expect(registrations.count).toBe(2);
@@ -134,7 +134,7 @@ describe("the creation wizard", () => {
     }
   });
 
-  test("answering '否' creates the task and never calls the registrar", async () => {
+  test("answering 'No' creates the task and never calls the registrar", async () => {
     const registrations = { count: 0 };
     const tty = mountInkTty(
       <ScheduleWizard
@@ -148,12 +148,12 @@ describe("the creation wizard", () => {
     );
     try {
       await walkToAutostart(tty);
-      // The "否" row is the second one.
+      // The "No" row is the second one.
       await tty.press(DOWN, ENTER);
       await Bun.sleep(40);
       const frame = await tty.text();
-      expect(frame).toContain("已创建");
-      expect(frame).toContain("你选了「否」");
+      expect(frame).toContain("Created");
+      expect(frame).toContain("you chose No");
       expect(registrations.count).toBe(0);
     } finally {
       tty.stop();
@@ -168,7 +168,7 @@ describe("the creation wizard", () => {
         onClose={() => {}}
         createTask={() => ({
           kind: "error",
-          message: "缺少必填参数：--target",
+          message: "Missing required flags: --target",
         })}
         registerAutostartEntry={async () => ({
           registered: false,
@@ -183,15 +183,15 @@ describe("the creation wizard", () => {
       await tty.press(ENTER);
       await Bun.sleep(40);
       const frame = await tty.text();
-      expect(frame).toContain("创建失败");
-      expect(frame).toContain("缺少必填参数：--target");
-      expect(frame).toContain("已填内容都还在");
+      expect(frame).toContain("Creation failed");
+      expect(frame).toContain("Missing required flags: --target");
+      expect(frame).toContain("Everything you filled in is still here");
 
       // Escape goes back to the question, and the draft is still the same one:
       // the wizard rebuilds no field from scratch.
       await tty.press("\u001b");
       await Bun.sleep(40);
-      expect(await tty.text()).toContain("12/12 开机自启");
+      expect(await tty.text()).toContain("12/12 Autostart");
     } finally {
       tty.stop();
     }
@@ -233,14 +233,14 @@ describe("the creation wizard", () => {
     );
     try {
       // It opens on the timezone step: permission and catch-up are answered.
-      expect(await tty.text()).toContain("6/12 时区");
+      expect(await tty.text()).toContain("6/12 Timezone");
       await walkToAutostart(tty);
-      expect(await tty.text()).toContain("12/12 开机自启");
+      expect(await tty.text()).toContain("12/12 Autostart");
       await tty.press(ENTER);
       await Bun.sleep(40);
       expect(drafts).toHaveLength(1);
       // The old bug: Enter on the default permission row rewrote unrestricted to
-      // standard, and "--no-catch-up" came back as 补跑.
+      // standard, and "--no-catch-up" came back as catch up.
       expect(drafts[0]?.permission).toBe("unrestricted");
       expect(drafts[0]?.catchUp).toBe(false);
     } finally {
@@ -281,11 +281,11 @@ describe("the creation wizard", () => {
     );
     try {
       // It does not skip the target step: the visibility is still unanswered.
-      expect(await tty.text()).toContain("2/12 目标");
+      expect(await tty.text()).toContain("2/12 Target");
       await tty.press(DOWN, ENTER);
       await Bun.sleep(40);
       // The payload is pre-filled, so the flow continues at the time step.
-      expect(await tty.text()).toContain("6/12 时区");
+      expect(await tty.text()).toContain("6/12 Timezone");
       await walkToAutostart(tty);
       await tty.press(ENTER);
       await Bun.sleep(40);
@@ -335,13 +335,49 @@ describe("the creation wizard", () => {
     }
   });
 
+  test("leaving a created task's receipt calls onCompleted, not onClose", async () => {
+    const calls = { completed: 0, closed: 0 };
+    const tty = mountInkTty(
+      <ScheduleWizard
+        agentId="agent-1"
+        args={FULL_ARGS}
+        onClose={() => {
+          calls.closed += 1;
+        }}
+        onCompleted={() => {
+          calls.completed += 1;
+        }}
+        createTask={(draft) => created(draft)}
+        registerAutostartEntry={async () => ({
+          registered: true,
+          platform: "win32",
+          method: "schtasks",
+        })}
+      />,
+      { columns: 110, rows: 30 },
+    );
+    try {
+      await walkToAutostart(tty);
+      await tty.press(ENTER);
+      await Bun.sleep(40);
+      expect(await tty.text()).toContain("Created");
+      // The task exists, so the overlay must close without its dismiss line.
+      await tty.press(ENTER);
+      await Bun.sleep(40);
+      expect(calls.completed).toBe(1);
+      expect(calls.closed).toBe(0);
+    } finally {
+      tty.stop();
+    }
+  });
+
   test("every step title is unique and numbered from one list (M3 #15)", () => {
     const titles = WIZARD_STEPS.map((entry) => wizardStepTitle(entry.id));
     expect(new Set(titles).size).toBe(titles.length);
-    expect(wizardStepTitle("timeout")).toBe(`9/${WIZARD_STEPS.length} 超时`);
-    expect(wizardStepTitle("wait")).toBe(`10/${WIZARD_STEPS.length} 等待`);
+    expect(wizardStepTitle("timeout")).toBe(`9/${WIZARD_STEPS.length} Timeout`);
+    expect(wizardStepTitle("wait")).toBe(`10/${WIZARD_STEPS.length} Wait`);
     expect(wizardStepTitle("autostart")).toBe(
-      `12/${WIZARD_STEPS.length} 开机自启`,
+      `12/${WIZARD_STEPS.length} Autostart`,
     );
     // The sub-steps share their parent's slot instead of taking a new number.
     expect(wizardStepTitle("schedule-mode")).toBe(wizardStepTitle("schedule"));

@@ -53,8 +53,9 @@ import {
  * rendering, and the resume path still uses it for the initial window.
  */
 
-export const HISTORY_START_NOTICE = "已到这次会话的开头";
-export const HISTORY_CURSOR_NOTICE = "更早的历史加载失败：游标已失效";
+export const HISTORY_START_NOTICE = "Beginning of this session";
+export const HISTORY_CURSOR_NOTICE =
+  "Could not load older history: the cursor is stale";
 
 /** How far "reach for older history" got. */
 export type OlderHistoryOutcome =
@@ -168,7 +169,7 @@ async function fetchPageFromBackend(
   const readLogPage = logReaderForPages();
   // A backend that cannot read the log cannot page, and it cannot be *asked* to say
   // so: the in-context list is the only thing it would return, and walking that is
-  // how "已到这次会话的开头" became a lie past a compaction. No backend in this fork
+  // how "the start of this session" became a lie past a compaction. No backend in this fork
   // is in that position (the local one owns the transcript), so refusing is the
   // honest answer for one that is, rather than a silent fallback that stops early.
   if (!readLogPage) {

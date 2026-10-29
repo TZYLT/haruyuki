@@ -30,6 +30,7 @@ import {
 import { runScheduledTaskViaTuiHost } from "@/cli/helpers/schedule-host";
 import {
   ensureScheduleTasksLoaded,
+  outcomeLabel,
   setScheduleOverlayTarget,
 } from "@/cli/helpers/schedule-store";
 import type { ActiveOverlay, AppCommandRunner } from "./types";
@@ -73,7 +74,7 @@ export async function handleScheduleSubmit(
   if (invocation.kind === "help" || invocation.kind === "error") return null;
 
   // Read the store before the face mounts, so its first frame is the data
-  // rather than a "正在读取…" row (the rail usually got there first; this is
+  // rather than a "Loading…" row (the rail usually got there first; this is
   // the append shell and the very first `/schedule list` of a session).
   ensureScheduleTasksLoaded();
 
@@ -86,8 +87,8 @@ export async function handleScheduleSubmit(
       ctx.openOverlay(
         "schedule",
         "/schedule list",
-        "打开计划任务…",
-        "计划任务面板已关闭",
+        "Opening scheduled tasks…",
+        "Scheduled tasks panel closed",
       );
       return { submitted: true };
 
@@ -96,8 +97,8 @@ export async function handleScheduleSubmit(
       ctx.openOverlay(
         "schedule-detail",
         `/schedule show ${invocation.taskRef}`,
-        "打开计划任务详情…",
-        "计划任务详情已关闭",
+        "Opening scheduled task details…",
+        "Scheduled task details closed",
       );
       return { submitted: true };
 
@@ -106,8 +107,8 @@ export async function handleScheduleSubmit(
       ctx.openOverlay(
         "schedule-logs",
         `/schedule logs ${invocation.taskRef}`,
-        "打开运行记录…",
-        "运行记录已关闭",
+        "Opening run history…",
+        "Run history closed",
       );
       return { submitted: true };
 
@@ -116,7 +117,10 @@ export async function handleScheduleSubmit(
       // receipt — the same contract the registry path has. Only an incomplete
       // one opens the wizard, where the missing answers are collected.
       if (invocation.missing.length === 0) {
-        const cmd = ctx.commandRunner.start("/schedule add", "创建计划任务…");
+        const cmd = ctx.commandRunner.start(
+          "/schedule add",
+          "Creating scheduled task…",
+        );
         const created = createScheduleTask({
           agentId: ctx.agentId,
           draft: invocation.draft,
@@ -130,7 +134,7 @@ export async function handleScheduleSubmit(
             ...formatScheduleCreatedLines(created),
             // R-5.2.5: the one-step path did not ask about autostart, so say
             // plainly that no timer was registered.
-            "  自启未注册（一步创建不询问）：任务只在 Haruyuki 运行时执行；需要常驻可运行 `/schedule autostart on`。",
+            "  Autostart not registered (the one-step form does not ask): the task runs only while Haruyuki is running; run `/schedule autostart on` for a persistent host.",
           ].join("\n"),
           true,
         );
@@ -143,15 +147,15 @@ export async function handleScheduleSubmit(
       ctx.openOverlay(
         "schedule-add",
         "/schedule add",
-        "打开新建计划任务向导…",
-        "新建计划任务已取消",
+        "Opening the new task wizard…",
+        "New scheduled task cancelled",
       );
       return { submitted: true };
 
     case "run": {
       const cmd = ctx.commandRunner.start(
         `/schedule run ${invocation.taskRef}`,
-        `立即运行 ${invocation.taskRef}…`,
+        `Running ${invocation.taskRef} now…`,
       );
       try {
         const result = await runScheduledTaskViaTuiHost(invocation.taskRef);
@@ -164,21 +168,21 @@ export async function handleScheduleSubmit(
           // the hand-off instead of holding the command open; the run reports
           // itself through the notification and the run log.
           cmd.finish(
-            `已开始运行「${result.taskName}」；结束后会发一条通知，记录在运行记录里。`,
+            `Started "${result.taskName}"; a notification follows when it finishes and the run is recorded in the run history.`,
             true,
           );
           return { submitted: true };
         }
         const succeeded = result.outcome === "success";
         cmd.finish(
-          `已运行 ${invocation.taskRef}：${result.outcome}${
+          `Ran ${invocation.taskRef}: ${outcomeLabel(result.outcome)}${
             result.error ? ` · ${result.error}` : ""
           }`,
           succeeded,
         );
       } catch (error) {
         cmd.fail(
-          `运行 ${invocation.taskRef} 失败：${
+          `Failed to run ${invocation.taskRef}: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );

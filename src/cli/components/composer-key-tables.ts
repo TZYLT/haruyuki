@@ -118,7 +118,7 @@ export function composerKeyTables(
         id: "leader.help",
         leader: true,
         chords: LEADER_KEY_CHORDS.help,
-        label: "列出可用键",
+        label: "List available keys",
         run: consumeKey(handlers.leaderHelp),
       },
     ],

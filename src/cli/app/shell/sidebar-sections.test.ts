@@ -469,7 +469,7 @@ describe("buildSidebarSections", () => {
   });
 });
 
-describe("the 计划任务 section (M-16)", () => {
+describe("the scheduled tasks section (M-16)", () => {
   function schedulesSection(
     rows: readonly SidebarScheduleRow[] | null,
     options: { schedulesError?: string | null; width?: number } = {},
@@ -488,15 +488,15 @@ describe("the 计划任务 section (M-16)", () => {
     const spec = schedulesSection([
       { id: "a", name: "晨报", when: "09:00", status: "active" },
       { id: "b", name: "周报", when: "10-30", status: "paused" },
-      { id: "c", name: "抓取", when: "11:00", status: "paused · auto" },
+      { id: "c", name: "抓取", when: "11:00", status: "auto-paused" },
       { id: "d", name: "第四条", when: "12:00", status: "active" },
     ]);
-    expect(spec?.title).toBe("计划任务");
+    expect(spec?.title).toBe("Scheduled tasks");
     expect(spec?.detail).toHaveLength(4);
     expect(spec?.detail[0]).toBe("• 晨报 09:00");
-    expect(spec?.detail[1]).toContain("暂停");
+    expect(spec?.detail[1]).toContain("paused");
     // The reason a task stopped is never abbreviated away.
-    expect(spec?.detail[2]).toContain("自动暂停");
+    expect(spec?.detail[2]).toContain("auto-paused");
     // The surplus is a count, not a fourth task.
     expect(spec?.detail[3]).toBe("+1");
     expect(spec?.detail.join("\n")).not.toContain("第四条");
@@ -504,21 +504,21 @@ describe("the 计划任务 section (M-16)", () => {
 
   test("an empty store paints a placeholder, not a missing section", () => {
     const spec = schedulesSection([]);
-    expect(spec?.detail).toEqual(["暂无计划任务"]);
-    expect(spec?.summary).toBe("计划任务 0");
+    expect(spec?.detail).toEqual(["No scheduled tasks"]);
+    expect(spec?.summary).toBe("Scheduled tasks 0");
   });
 
   test("an unread store says so instead of pretending there are none", () => {
     const spec = schedulesSection(null);
-    expect(spec?.detail).toEqual(["读取中…"]);
+    expect(spec?.detail).toEqual(["Loading…"]);
   });
 
   test("a failed read says so instead of painting an empty store (M3 #17)", () => {
     const spec = schedulesSection([], { schedulesError: "版本 99" });
-    expect(spec?.detail.join("\n")).toContain("读取失败");
+    expect(spec?.detail.join("\n")).toContain("Read failed");
     expect(spec?.detail.join("\n")).toContain("版本 99");
-    expect(spec?.detail.join("\n")).not.toContain("暂无计划任务");
-    expect(spec?.summary).toBe("计划任务 —");
+    expect(spec?.detail.join("\n")).not.toContain("No scheduled tasks");
+    expect(spec?.summary).toBe("Scheduled tasks —");
   });
 
   test("the section gives way before the transcript's own numbers", () => {
