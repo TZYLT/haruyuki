@@ -47,7 +47,7 @@ Offer a Schedule button when the evidence shows recurring work: the user asked f
 
 Do not offer one for one-off work, for work that reports when it finishes (such as CI or a deploy), for anything more often than hourly, for work that needs the user during the run, or for anything on the Dismissed list. Offer at most two at a time.
 
-The label names the work and when it runs, with a time zone. The instruction asks you to set it up and says what to do, when, where to send results, and when to stay quiet. Set it up with `haruyuki cron` on the computer the agent runs on, record it in memory, and tell the user where it runs: it only fires while a Haruyuki session is running on that machine.
+The label names the work and when it runs, with a time zone. The instruction asks you to set it up and says what to do, when, where to send results, and when to stay quiet. Set it up with `haruyuki cron` on the computer the agent runs on, record it in memory, and tell the user where it runs: it fires while a Haruyuki host (a TUI session or the local listener) is running on that machine, or from the OS autostart timer when one is registered (`haruyuki schedule autostart on`). With neither host the run is recorded as missed and is not backfilled.
 
 ### Button format
 

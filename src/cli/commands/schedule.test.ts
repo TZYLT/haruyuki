@@ -3,9 +3,11 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import {
   createScheduleTask,
+  formatAutostartResult,
   formatScheduleCreatedLines,
   formatScheduleHelp,
   handleScheduleCommand,
+  isAutoPauseDetailLine,
   parseScheduleInvocation,
   resolveScheduleTask,
   SCHEDULE_SUBCOMMANDS,
@@ -225,6 +227,20 @@ describe("the parser", () => {
     );
     expect(parseScheduleInvocation(["autostart", "maybe"]).kind).toBe("error");
   });
+
+  test("--wait 0 and --timeout 0 mean 'immediately' and 'no limit' (M5 #7)", () => {
+    const parsed = parseScheduleInvocation([
+      ...ONE_STEP,
+      "--wait",
+      "0",
+      "--timeout",
+      "0",
+    ]);
+    if (parsed.kind !== "add") throw new Error("expected add");
+    expect(parsed.missing).toEqual([]);
+    expect(parsed.draft.waitMinutes).toBe(0);
+    expect(parsed.draft.timeoutMinutes).toBe(0);
+  });
 });
 
 describe("task references", () => {
@@ -244,6 +260,89 @@ describe("task references", () => {
     const ambiguous = resolveScheduleTask("晨报", tasks);
     expect("error" in ambiguous).toBe(true);
     if ("error" in ambiguous) expect(ambiguous.error).toContain("请用 id");
+  });
+
+  test("the short id a row prints resolves (M3 #2)", () => {
+    const longIds = [
+      { id: "a1b2c3d4e5f6", name: "晨报" },
+      { id: "f6e5d4c3b2a1", name: "周报" },
+    ] as never[];
+    expect(resolveScheduleTask("a1b2c3d4", longIds)).toMatchObject({
+      task: { id: "a1b2c3d4e5f6" },
+    });
+    // A short prefix that could be two tasks is refused, not guessed.
+    const colliding = [
+      { id: "a1b2c3d4e5f6", name: "一" },
+      { id: "a1b2c3d4ffff", name: "二" },
+    ] as never[];
+    const ambiguous = resolveScheduleTask("a1b2c3d4", colliding);
+    expect("error" in ambiguous).toBe(true);
+    if ("error" in ambiguous) expect(ambiguous.error).toContain("完整 id");
+  });
+});
+
+describe("the agent-scope rule (M3 #19)", () => {
+  function create(agentId: string, name: string, at: string): string {
+    const created = createScheduleTask({
+      agentId,
+      draft: {
+        type: "prompt",
+        payload: `p-${name}`,
+        cron: at,
+        recurring: true,
+        target: { kind: "new", hidden: false },
+        permission: "acceptEdits",
+        catchUp: false,
+        name,
+      },
+    });
+    if (created.kind !== "created") throw new Error(created.message);
+    return created.taskId;
+  }
+
+  test("show/logs answer for the current agent only", async () => {
+    const mine = create("agent-1", "晨报", "0 9 * * *");
+    const other = create("agent-2", "别人的", "0 10 * * *");
+
+    // Own task, by id and by short id.
+    expect(
+      await handleScheduleCommand(["show", mine], { agentId: "agent-1" }),
+    ).toContain("晨报");
+    expect(
+      await handleScheduleCommand(["show", mine.slice(0, 8)], {
+        agentId: "agent-1",
+      }),
+    ).toContain("晨报");
+    // Another agent's task is not part of this agent's view.
+    expect(
+      await handleScheduleCommand(["show", other], { agentId: "agent-1" }),
+    ).toContain("找不到任务");
+    expect(
+      await handleScheduleCommand(["logs", "别人的"], { agentId: "agent-1" }),
+    ).toContain("找不到任务");
+    // `list` follows the same scope.
+    expect(
+      await handleScheduleCommand(["list"], { agentId: "agent-1" }),
+    ).not.toContain("别人的");
+  });
+
+  test("pause/resume/delete may cross agents, but only a unique match", async () => {
+    create("agent-1", "同名", "0 9 * * *");
+    const other = create("agent-2", "别人的", "0 10 * * *");
+
+    expect(
+      await handleScheduleCommand(["pause", other], { agentId: "agent-1" }),
+    ).toContain("已暂停 别人的");
+    expect(
+      await handleScheduleCommand(["resume", other], { agentId: "agent-1" }),
+    ).toContain("已恢复 别人的");
+
+    // Two agents' tasks share a name: the mutation refuses to guess.
+    create("agent-2", "同名", "0 11 * * *");
+    const ambiguous = await handleScheduleCommand(["pause", "同名"], {
+      agentId: "agent-1",
+    });
+    expect(ambiguous).toContain("匹配到 2 个任务");
   });
 });
 
@@ -371,5 +470,57 @@ describe("the registry handler", () => {
     expect(
       await handleScheduleCommand(["run", "a1b2c3d4"], { agentId: "agent-1" }),
     ).toContain("TUI");
+  });
+});
+
+describe("receipts and detail judgements", () => {
+  test("autostart off distinguishes 'could not confirm' from 'closed' (M3 #7)", () => {
+    // The unregister returned `registered:false` *with* an error: the entry may
+    // still be there, so the receipt must not claim it was removed.
+    const unconfirmed = formatAutostartResult("off", {
+      registered: false,
+      method: null,
+      error: "crontab 读取失败",
+    });
+    expect(unconfirmed).toContain("无法确认自启已关闭");
+    expect(unconfirmed).toContain("crontab 读取失败");
+    expect(unconfirmed).not.toContain("自启已关闭。");
+
+    expect(
+      formatAutostartResult("off", { registered: false, method: null }),
+    ).toContain("自启已关闭");
+    expect(
+      formatAutostartResult("off", {
+        registered: true,
+        method: "crontab",
+        error: "卸载未生效",
+      }),
+    ).toContain("自启仍在");
+    expect(
+      formatAutostartResult("on", {
+        registered: true,
+        method: "schtasks",
+        launcherPath: "C:/h/haruyuki-launch.cmd",
+      }),
+    ).toContain("自启已注册");
+  });
+
+  test("the auto-pause warning follows the status line, not an index (M3 #18)", () => {
+    const paused = {
+      pausedReason: "auto_failures",
+      consecutiveFailures: 3,
+    } as never;
+    expect(isAutoPauseDetailLine(paused, "状态      paused（连续失败）")).toBe(
+      true,
+    );
+    expect(
+      isAutoPauseDetailLine(paused, "连续失败  3 次 · 错过 0 次 · 失败 3 次"),
+    ).toBe(true);
+    expect(isAutoPauseDetailLine(paused, "权限      全权")).toBe(false);
+    // A manual pause has no failure warning to paint.
+    const manual = { pausedReason: "manual", consecutiveFailures: 0 } as never;
+    expect(isAutoPauseDetailLine(manual, "状态      paused（手动）")).toBe(
+      false,
+    );
   });
 });

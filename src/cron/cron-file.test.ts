@@ -193,15 +193,17 @@ describe("addTask", () => {
     expect(readCronFile().tasks).toHaveLength(0);
   });
 
-  test("counts paused schedules toward the per-agent limit", () => {
+  test("counts paused schedules toward the per-agent soft limit and warns", () => {
     for (let index = 0; index < 50; index += 1) {
       const { task } = addTask(makeInput({ prompt: `task ${index}` }));
       pauseTask(task.id);
     }
 
-    expect(() => addTask(makeInput({ prompt: "one too many" }))).toThrow(
-      /50 active or paused tasks \(max 50\)/,
-    );
+    // R-5.5.6 cancelled the hard cap: the 51st schedule is created with a
+    // warning instead of being refused (M0 F-13).
+    const result = addTask(makeInput({ prompt: "one more" }));
+    expect(result.task.id).toBeTruthy();
+    expect(result.warning).toContain("soft limit 50");
   });
 });
 

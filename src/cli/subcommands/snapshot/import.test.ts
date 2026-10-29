@@ -73,6 +73,7 @@ function deps(): SnapshotCliDeps {
     appVersion: "0.0.0-test",
     hostname: () => "test-host",
     now: () => new Date(CLOCK.getTime()),
+    autostartStatus: async () => ({ registered: true }),
   };
 }
 

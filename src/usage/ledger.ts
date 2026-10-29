@@ -772,3 +772,108 @@ export function aggregateUsageByRunId(
   }
   return buckets;
 }
+
+/**
+ * One scheduled run's ledger aggregate, shaped for the schedule surfaces
+ * (`/schedule logs`, the TUI run-log panel) — F-05 M2 F6 / M3 #9.
+ *
+ * `aggregateUsageByRunId` had no production consumer, so no surface could show
+ * per-run cost and none could say "—" for a run whose spend was never recorded.
+ * This shape keeps that distinction explicit:
+ *
+ * - `turns === 0` → the ledger has **no row** for the run: display `—`, not `0`;
+ * - `cost` is absent when no row carried provider pricing: display `—` for cost;
+ * - `outcomes` carries what the rows say the run's outcome was (usually one).
+ */
+export interface ScheduledRunUsage {
+  /** Ledger rows for this run. `0` means "no ledger row". */
+  turns: number;
+  prompt: number;
+  cachedInput: number;
+  cacheWrite: number;
+  completion: number;
+  reasoning: number;
+  steps: number;
+  wallMs: number;
+  apiMs: number;
+  /** Summed provider cost; absent when no row reported a cost. */
+  cost?: UsageCost;
+  /** Distinct outcomes recorded for the run; empty when it has no row. */
+  outcomes: UsageOutcome[];
+}
+
+function emptyScheduledRunUsage(): ScheduledRunUsage {
+  return {
+    turns: 0,
+    prompt: 0,
+    cachedInput: 0,
+    cacheWrite: 0,
+    completion: 0,
+    reasoning: 0,
+    steps: 0,
+    wallMs: 0,
+    apiMs: 0,
+    outcomes: [],
+  };
+}
+
+/**
+ * Fold records into per-run summaries. Pure, and every requested run id gets an
+ * entry even when the ledger has no row for it, so callers can render `—`
+ * instead of a misleading `0`.
+ */
+export function summarizeUsageByRunId(
+  records: readonly UsageRecord[],
+  runIds: readonly string[],
+): Map<string, ScheduledRunUsage> {
+  const requested = new Set(runIds);
+  const buckets = new Map<string, ScheduledRunUsage>();
+  for (const runId of requested) {
+    buckets.set(runId, emptyScheduledRunUsage());
+  }
+  for (const record of records) {
+    const runId = record.runId;
+    if (!runId || !requested.has(runId)) continue;
+    const summary = buckets.get(runId);
+    if (!summary) continue;
+    summary.turns += 1;
+    summary.prompt += record.prompt;
+    summary.cachedInput += record.cachedInput;
+    summary.cacheWrite += record.cacheWrite;
+    summary.completion += record.completion;
+    summary.reasoning += record.reasoning;
+    summary.steps += record.steps;
+    summary.wallMs += record.wallMs;
+    summary.apiMs += record.apiMs;
+    if (record.cost) {
+      summary.cost ??= emptyUsageCost();
+      addUsageCost(summary.cost, record.cost);
+    }
+    if (record.outcome && !summary.outcomes.includes(record.outcome)) {
+      summary.outcomes.push(record.outcome);
+    }
+  }
+  return buckets;
+}
+
+export interface ReadScheduledRunUsageOptions
+  extends Omit<ReadUsageLedgerOptions, "lockTimeoutMs"> {
+  /** Runs the caller is displaying; every id gets an entry. */
+  runIds: readonly string[];
+  /** How long the lazy prune's rewrite waits for the shared ledger lock. */
+  lockTimeoutMs?: number;
+}
+
+/**
+ * Production consumer for {@link summarizeUsageByRunId}: read the ledger once
+ * and answer per-run usage for the runs a surface is displaying.
+ *
+ * Never throws — a missing or unreadable ledger yields zero rows for every
+ * requested run, which the caller must render as `—` (`turns === 0`).
+ */
+export async function readScheduledRunUsage(
+  options: ReadScheduledRunUsageOptions,
+): Promise<Map<string, ScheduledRunUsage>> {
+  const records = await readUsageLedger(options);
+  return summarizeUsageByRunId(records, options.runIds);
+}

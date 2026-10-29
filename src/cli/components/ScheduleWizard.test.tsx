@@ -4,6 +4,10 @@ import type {
   ScheduleAddDraft,
 } from "@/cli/commands/schedule";
 import { ScheduleWizard } from "@/cli/components/ScheduleWizard";
+import {
+  WIZARD_STEPS,
+  wizardStepTitle,
+} from "@/cli/components/ScheduleWizardSteps";
 import { resetScheduleStore } from "@/cli/helpers/schedule-store";
 import type { AutostartStatus } from "@/cron";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
@@ -71,8 +75,9 @@ function flakyRegistrar(calls: {
 async function walkToAutostart(tty: {
   press(...keys: string[]): Promise<void>;
 }): Promise<void> {
-  // timezone → permission → catch-up → timeout → wait → name → autostart.
-  for (let step = 0; step < 6; step += 1) {
+  // `--permission`/`--catch-up` are pre-filled in FULL_ARGS, so the walk from
+  // the timezone step skips both: timezone → timeout → wait → name → autostart.
+  for (let step = 0; step < 4; step += 1) {
     await tty.press(ENTER);
   }
 }
@@ -186,9 +191,162 @@ describe("the creation wizard", () => {
       // the wizard rebuilds no field from scratch.
       await tty.press("\u001b");
       await Bun.sleep(40);
-      expect(await tty.text()).toContain("最后一步 · 开机自启");
+      expect(await tty.text()).toContain("12/12 开机自启");
     } finally {
       tty.stop();
     }
+  });
+
+  test("pre-filled --permission/--no-catch-up are not re-asked and survive Enter", async () => {
+    const drafts: ScheduleAddDraft[] = [];
+    const tty = mountInkTty(
+      <ScheduleWizard
+        agentId="agent-1"
+        args={[
+          "--type",
+          "prompt",
+          "--prompt",
+          "总结今天的提交",
+          "--cron",
+          "0 9 * * *",
+          "--target",
+          "new",
+          "--visible",
+          "--permission",
+          "unrestricted",
+          "--no-catch-up",
+          "--name",
+          "晨报",
+        ]}
+        onClose={() => {}}
+        createTask={(draft) => {
+          drafts.push(draft);
+          return created(draft);
+        }}
+        registerAutostartEntry={async () => ({
+          registered: true,
+          platform: "win32",
+          method: "schtasks",
+        })}
+      />,
+      { columns: 110, rows: 30 },
+    );
+    try {
+      // It opens on the timezone step: permission and catch-up are answered.
+      expect(await tty.text()).toContain("6/12 时区");
+      await walkToAutostart(tty);
+      expect(await tty.text()).toContain("12/12 开机自启");
+      await tty.press(ENTER);
+      await Bun.sleep(40);
+      expect(drafts).toHaveLength(1);
+      // The old bug: Enter on the default permission row rewrote unrestricted to
+      // standard, and "--no-catch-up" came back as 补跑.
+      expect(drafts[0]?.permission).toBe("unrestricted");
+      expect(drafts[0]?.catchUp).toBe(false);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("--target new without --visible/--hidden asks the visibility (M3 #4)", async () => {
+    const drafts: ScheduleAddDraft[] = [];
+    const tty = mountInkTty(
+      <ScheduleWizard
+        agentId="agent-1"
+        args={[
+          "--type",
+          "prompt",
+          "--prompt",
+          "总结今天的提交",
+          "--cron",
+          "0 9 * * *",
+          "--target",
+          "new",
+          "--permission",
+          "acceptEdits",
+          "--catch-up",
+        ]}
+        onClose={() => {}}
+        createTask={(draft) => {
+          drafts.push(draft);
+          return created(draft);
+        }}
+        registerAutostartEntry={async () => ({
+          registered: true,
+          platform: "win32",
+          method: "schtasks",
+        })}
+      />,
+      { columns: 110, rows: 30 },
+    );
+    try {
+      // It does not skip the target step: the visibility is still unanswered.
+      expect(await tty.text()).toContain("2/12 目标");
+      await tty.press(DOWN, ENTER);
+      await Bun.sleep(40);
+      // The payload is pre-filled, so the flow continues at the time step.
+      expect(await tty.text()).toContain("6/12 时区");
+      await walkToAutostart(tty);
+      await tty.press(ENTER);
+      await Bun.sleep(40);
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]?.target).toEqual({ kind: "new", hidden: true });
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("double Enter on the autostart question creates one task (M3 #6)", async () => {
+    const drafts: ScheduleAddDraft[] = [];
+    let registrations = 0;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tty = mountInkTty(
+      <ScheduleWizard
+        agentId="agent-1"
+        args={FULL_ARGS}
+        onClose={() => {}}
+        createTask={(draft) => {
+          drafts.push(draft);
+          return created(draft);
+        }}
+        registerAutostartEntry={async () => {
+          registrations += 1;
+          await gate;
+          return { registered: true, platform: "win32", method: "schtasks" };
+        }}
+      />,
+      { columns: 110, rows: 30 },
+    );
+    try {
+      await walkToAutostart(tty);
+      // Two Enter presses while the registration is still in flight.
+      await tty.press(ENTER, ENTER);
+      expect(drafts).toHaveLength(1);
+      release();
+      await Bun.sleep(80);
+      expect(drafts).toHaveLength(1);
+      expect(registrations).toBe(1);
+    } finally {
+      release();
+      tty.stop();
+    }
+  });
+
+  test("every step title is unique and numbered from one list (M3 #15)", () => {
+    const titles = WIZARD_STEPS.map((entry) => wizardStepTitle(entry.id));
+    expect(new Set(titles).size).toBe(titles.length);
+    expect(wizardStepTitle("timeout")).toBe(`9/${WIZARD_STEPS.length} 超时`);
+    expect(wizardStepTitle("wait")).toBe(`10/${WIZARD_STEPS.length} 等待`);
+    expect(wizardStepTitle("autostart")).toBe(
+      `12/${WIZARD_STEPS.length} 开机自启`,
+    );
+    // The sub-steps share their parent's slot instead of taking a new number.
+    expect(wizardStepTitle("schedule-mode")).toBe(wizardStepTitle("schedule"));
+    expect(wizardStepTitle("conversation-pick")).toBe(
+      wizardStepTitle("conversation"),
+    );
   });
 });

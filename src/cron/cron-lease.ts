@@ -10,164 +10,37 @@
  *   Recorded on the task, so a short-lived host and a long-lived host cannot
  *   execute the same occurrence twice.
  *
- * The advisory `crons.lock` directory and its steal rules also live here; they
- * are what makes both leases atomic. `cron-store` deliberately does no locking,
- * so the import graph stays acyclic: `cron-lease` → `cron-store`.
+ * The advisory `crons.lock` directory lock and its steal rules live in the
+ * leaf module `cron-lock`, which both this module and `cron-store` import: the
+ * store migrates v1 files under that lock, and the lock makes both leases
+ * atomic. The graph stays acyclic — `cron-store` → `cron-lock` ← `cron-lease`
+ * → `cron-store`.
  */
 
 import { randomBytes } from "node:crypto";
+import { withLock } from "./cron-lock";
 import {
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { join } from "node:path";
-import { appHomeRoot } from "@/utils/app-paths";
-import { readScheduleFile, writeScheduleFile } from "./cron-store";
+  applyScheduleTaskV2,
+  readScheduleFile,
+  toScheduleTaskV2,
+  writeScheduleFile,
+} from "./cron-store";
 import {
   type CronSchedulerScope,
   type ScheduleFileData,
   type SchedulerOwner,
+  type ScheduleTaskV2,
   TASK_LEASE_TTL_MS,
   type TaskLease,
 } from "./cron-types";
 import { captureProcessIdentity, isProcessAlive } from "./process-identity";
 
-// ── Locking ─────────────────────────────────────────────────────────
-
-const LOCK_DIR_NAME = "crons.lock";
-const LOCK_TOKEN_FILE = "owner.json";
-const LOCK_TIMEOUT_MS = 5_000;
-const LOCK_RETRY_MS = 50;
-const LOCK_STALE_AGE_MS = 30_000;
-
-function getLockDirPath(): string {
-  return join(appHomeRoot(), LOCK_DIR_NAME);
-}
-
-interface LockOwner {
-  pid: number;
-  token: string;
-  acquired_at: number;
-  process_start_ticks?: string | null;
-  boot_id?: string | null;
-}
-
-function readLockOwner(lockDir: string): LockOwner | null {
-  try {
-    const raw = readFileSync(join(lockDir, LOCK_TOKEN_FILE), "utf-8");
-    return JSON.parse(raw) as LockOwner;
-  } catch {
-    return null;
-  }
-}
-
-function writeLockOwner(lockDir: string, owner: LockOwner): void {
-  writeFileSync(join(lockDir, LOCK_TOKEN_FILE), JSON.stringify(owner));
-}
-
-function isLockStale(lockDir: string): boolean {
-  const owner = readLockOwner(lockDir);
-  if (!owner) {
-    // No owner file → consider stale if dir exists and is old
-    try {
-      const stat = statSync(lockDir);
-      return Date.now() - stat.mtimeMs > LOCK_STALE_AGE_MS;
-    } catch {
-      return true;
-    }
-  }
-
-  // Steal only if PID is dead AND lock is older than threshold
-  const pidDead = !isProcessAlive(owner.pid, owner);
-  const isOld = Date.now() - owner.acquired_at > LOCK_STALE_AGE_MS;
-  return pidDead && isOld;
-}
-
-function stealLock(lockDir: string): void {
-  try {
-    rmSync(lockDir, { recursive: true, force: true });
-  } catch {
-    // Best effort
-  }
-}
-
-export interface LockHandle {
-  release(): void;
-}
-
-/**
- * Acquire the crons.lock advisory lock.
- * Throws if unable to acquire within LOCK_TIMEOUT_MS.
- */
-export function acquireLock(): LockHandle {
-  const lockDir = getLockDirPath();
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  const token = randomBytes(4).toString("hex");
-
-  while (Date.now() < deadline) {
-    try {
-      mkdirSync(lockDir, { recursive: false });
-      // Success — we own the lock
-      const owner: LockOwner = {
-        pid: process.pid,
-        token,
-        acquired_at: Date.now(),
-        ...captureProcessIdentity(process.pid),
-      };
-      writeLockOwner(lockDir, owner);
-      return {
-        release() {
-          try {
-            // Verify we still own it before releasing
-            const current = readLockOwner(lockDir);
-            if (current && current.token === token) {
-              rmSync(lockDir, { recursive: true, force: true });
-            }
-          } catch {
-            // Best effort
-          }
-        },
-      };
-    } catch (err: unknown) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "EEXIST") {
-        // Lock held — check if stale
-        if (isLockStale(lockDir)) {
-          stealLock(lockDir);
-          continue; // Retry immediately
-        }
-        // Wait and retry
-        const sleepMs = Math.min(
-          LOCK_RETRY_MS + Math.random() * LOCK_RETRY_MS,
-          deadline - Date.now(),
-        );
-        if (sleepMs > 0) {
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, sleepMs);
-        }
-        continue;
-      }
-      throw err; // Unexpected error
-    }
-  }
-
-  throw new Error("Failed to acquire crons.lock — timed out after 5s");
-}
-
-/**
- * Execute a callback while holding the lock.
- * Lock is released in a finally block.
- */
-export function withLock<T>(fn: () => T): T {
-  const lock = acquireLock();
-  try {
-    return fn();
-  } finally {
-    lock.release();
-  }
-}
+// ── Locking
+//
+// The advisory lock lives in `cron-lock` — a leaf module that both this module
+// and `cron-store` import, which keeps the graph acyclic — and is re-exported
+// here for the historical call sites.
+export { acquireLock, type LockHandle, withLock } from "./cron-lock";
 
 // ── Scheduler lease ─────────────────────────────────────────────────
 
@@ -399,11 +272,17 @@ export interface TaskLeaseClaimInput {
   runId: string;
   host: TaskLease["host"];
   now?: Date;
+  /** Scheduled occurrence this run owns; null/omitted for manual runs. */
+  occurrence?: string | null;
 }
 
 export type TaskLeaseClaimResult =
   | { claimed: true; lease: TaskLease }
-  | { claimed: false; reason: "missing" | "held"; holder?: TaskLease };
+  | {
+      claimed: false;
+      reason: "missing" | "held" | "consumed";
+      holder?: TaskLease;
+    };
 
 function newLeaseToken(): string {
   return randomBytes(4).toString("hex");
@@ -417,7 +296,7 @@ export function isTaskLeaseLive(
   if (!lease) return false;
   const expiresAt = Date.parse(lease.expiresAt);
   if (!Number.isFinite(expiresAt) || expiresAt <= now.getTime()) return false;
-  return isProcessAlive(lease.pid);
+  return isProcessAlive(lease.pid, lease);
 }
 
 /**
@@ -425,8 +304,9 @@ export function isTaskLeaseLive(
  *
  * Refuses while another *live* lease is on the task (R-5.6.2): that run either
  * finishes or expires; neither this call nor a retry may start a second one.
- * An expired lease is taken over — the core decides what to record for the
- * occurrence it was holding (Q-58: recorded as F2/`lease_expired`, not rerun).
+ * Also refuses an occurrence that is already consumed: the check runs under the
+ * same lock as the claim, so two hosts cannot both win (R-5.1.3). An expired
+ * lease is taken over — recovery records F2 for the occurrence it held (Q-58).
  */
 export function claimTaskLease(
   input: TaskLeaseClaimInput,
@@ -442,14 +322,26 @@ export function claimTaskLease(
       return { claimed: false, reason: "held", holder: current };
     }
 
+    const occurrence = input.occurrence ?? null;
+    if (
+      occurrence !== null &&
+      task.last_consumed_occurrence !== null &&
+      task.last_consumed_occurrence !== undefined &&
+      occurrence <= task.last_consumed_occurrence
+    ) {
+      return { claimed: false, reason: "consumed" };
+    }
+
     const lease: TaskLease = {
       runId: input.runId,
       host: input.host,
       pid: process.pid,
       token: newLeaseToken(),
+      occurrence,
       startedAt: now.toISOString(),
       heartbeatAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + TASK_LEASE_TTL_MS).toISOString(),
+      ...captureProcessIdentity(process.pid),
     };
     task.lease = lease;
     writeScheduleFile(data);
@@ -458,8 +350,9 @@ export function claimTaskLease(
 }
 
 /**
- * Refresh the heartbeat of a lease we own. Returns false when the lease is gone
- * or belongs to somebody else — the caller must treat its run as lost.
+ * Refresh the heartbeat of a lease we own. Returns false when the lease is gone,
+ * belongs to somebody else, or has already expired — an expired lease cannot be
+ * revived (F-10): the caller must treat its run as lost.
  */
 export function heartbeatTaskLease(
   taskId: string,
@@ -469,11 +362,12 @@ export function heartbeatTaskLease(
   return withLock(() => {
     const data = readScheduleFile();
     const task = data.tasks.find((candidate) => candidate.id === taskId);
-    if (!task?.lease || task.lease.token !== token) return false;
-    task.lease.heartbeatAt = now.toISOString();
-    task.lease.expiresAt = new Date(
-      now.getTime() + TASK_LEASE_TTL_MS,
-    ).toISOString();
+    const lease = task?.lease;
+    if (!lease || lease.token !== token) return false;
+    const expiresAt = Date.parse(lease.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= now.getTime()) return false;
+    lease.heartbeatAt = now.toISOString();
+    lease.expiresAt = new Date(now.getTime() + TASK_LEASE_TTL_MS).toISOString();
     writeScheduleFile(data);
     return true;
   });
@@ -488,5 +382,44 @@ export function releaseTaskLease(taskId: string, token: string): boolean {
     task.lease = null;
     writeScheduleFile(data);
     return true;
+  });
+}
+
+/**
+ * Clear a dead task lease and hand the frozen view to the caller for
+ * accounting, all inside one lock (P0-4).
+ *
+ * The leased occurrence is consumed here, before the caller's write, so a
+ * crashed run is never replayed — not even when the task has `catch_up`
+ * enabled. Two hosts racing recovery see the lease only once, so the F2 line
+ * is recorded once (M1 #9 goes through the same failure accounting helper).
+ *
+ * `apply` may read the run log to decide whether the run already recorded a
+ * terminal line; returning early from it still consumes and clears.
+ */
+export function recoverExpiredTaskLease(
+  taskId: string,
+  now: Date,
+  apply: (view: ScheduleTaskV2, lease: TaskLease) => void,
+): TaskLease | null {
+  return withLock(() => {
+    const data = readScheduleFile();
+    const index = data.tasks.findIndex((task) => task.id === taskId);
+    const task = index === -1 ? null : data.tasks[index];
+    const lease = task?.lease ?? null;
+    if (!task || !lease || isTaskLeaseLive(lease, now)) return null;
+
+    const view = toScheduleTaskV2(task);
+    if (lease.occurrence !== null) {
+      const consumed = view.lastConsumedOccurrence;
+      if (consumed === null || lease.occurrence > consumed) {
+        view.lastConsumedOccurrence = lease.occurrence;
+      }
+    }
+    apply(view, lease);
+    view.lease = null;
+    data.tasks[index] = applyScheduleTaskV2(task, view);
+    writeScheduleFile(data);
+    return lease;
   });
 }

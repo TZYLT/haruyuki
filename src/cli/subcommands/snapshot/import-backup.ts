@@ -23,6 +23,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
 } from "node:fs";
 import { hostname as systemHostname } from "node:os";
@@ -35,6 +36,7 @@ import {
   PACKAGE_SECRETS_PATH,
   packageScopeOf,
 } from "./import-place";
+import { LEGACY_CRON_FILE_NAME } from "./legacy-store";
 import { buildManifest, serializeManifest } from "./manifest";
 import { collectEntries, type ScopeEntry, type ScopeRoots } from "./scope";
 import {
@@ -50,6 +52,14 @@ export const PRE_IMPORT_BACKUP_NAME = "pre-import.hryk";
 
 /** Package path of the settings file whose packaged copy is sanitised. */
 const PACKAGED_SETTINGS_PATH = "home/settings.json";
+
+/**
+ * Package path of the pre-migration schedule store. It is not part of the v2
+ * include table, but the placement pass writes it and a legacy-only machine
+ * keeps its tasks there, so a backup that omitted it could not be rolled back
+ * (M5 #4).
+ */
+const PACKAGED_LEGACY_CRON_PATH = `home/${LEGACY_CRON_FILE_NAME}`;
 
 export interface PreImportBackupRequest {
   /** Roots of the data that is about to be replaced. */
@@ -92,15 +102,32 @@ async function collectManagedEntries(
   roots: ScopeRoots,
   project: string | undefined,
   warnings: string[],
-): Promise<ScopeEntry[]> {
-  const entries: ScopeEntry[] = [];
+  entries: ScopeEntry[],
+): Promise<void> {
   for await (const entry of collectEntries(roots, {
     project,
     onWarning: (message) => warnings.push(message),
   })) {
     entries.push(entry);
   }
-  return entries;
+}
+
+/** The live pre-migration store, when this machine has one (M5 #4). */
+function collectLegacyCronEntry(appHome: string): ScopeEntry | undefined {
+  const absolutePath = join(appHome, LEGACY_CRON_FILE_NAME);
+  try {
+    const info = statSync(absolutePath);
+    if (!info.isFile()) return undefined;
+    return {
+      path: PACKAGED_LEGACY_CRON_PATH,
+      absolutePath,
+      scope: "home",
+      kind: "file",
+      bytes: info.size,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /** Agent ids are needed to read per-agent secrets; the secrets store cannot list them. */
@@ -199,9 +226,11 @@ export async function writePreImportBackup(
   const warnings: string[] = [];
   const backupPath = join(roots.appHome, "backups", PRE_IMPORT_BACKUP_NAME);
 
-  let entries: ScopeEntry[];
+  const entries: ScopeEntry[] = [];
   try {
-    entries = await collectManagedEntries(roots, project, warnings);
+    await collectManagedEntries(roots, project, warnings, entries);
+    const legacyCron = collectLegacyCronEntry(roots.appHome);
+    if (legacyCron !== undefined) entries.push(legacyCron);
   } catch (error) {
     throw backupFailure(backupPath, error);
   }

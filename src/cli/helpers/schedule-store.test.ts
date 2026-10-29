@@ -2,19 +2,22 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import {
+  autostartViewFor,
   buildRunSummaryLines,
   formatNextDue,
   formatNextDueOrPending,
   formatNextDueShort,
+  formatRunCost,
+  formatRunCostLabel,
   formatRunGroupLine,
   formatScheduleNotification,
   getScheduleSnapshot,
   groupRunsByRunId,
+  readRunUsageCosts,
   refreshScheduleTasks,
   resetScheduleStore,
   resetStartupScheduleSummary,
   type ScheduleSource,
-  STARTUP_SUMMARY_DETAIL_LIMIT,
   scheduleTaskRows,
   setScheduleClockForTests,
   setScheduleSourceForTests,
@@ -29,6 +32,7 @@ import {
 } from "@/cron";
 import type { CronRunLogEntry } from "@/cron/run-log";
 import { getRunSummarySeenPath } from "@/cron/run-summary";
+import { appendUsageRecord, buildUsageRecord } from "@/usage/ledger";
 
 /**
  * The schedule view store: the pure copy, the run-log grouping, the startup
@@ -117,7 +121,11 @@ describe("the row model", () => {
   test("orders by next due and names every fact the requirement lists", () => {
     const rows = scheduleTaskRows(
       [
-        task({ id: "later", name: "周报" }),
+        task({
+          id: "later",
+          name: "周报",
+          target: { kind: "existing", conversation_id: "conv-later-1234" },
+        }),
         task({ id: "sooner", name: "晨报" }),
         task({
           id: "paused",
@@ -138,6 +146,9 @@ describe("the row model", () => {
     const sooner = rows[0];
     expect(sooner?.listLine).toContain("晨报");
     expect(sooner?.listLine).toContain("prompt");
+    // M3 #14: the list row names the target, not just the detail view.
+    expect(sooner?.listLine).toContain("新会话");
+    expect(rows[1]?.listLine).toContain("会话 conv-lat");
     expect(sooner?.listLine).toContain("上次—");
     expect(sooner?.listLine).toContain("可编辑");
     expect(rows[2]?.statusLabel).toBe("paused");
@@ -289,17 +300,19 @@ describe("the startup summary", () => {
     expect(lines[3]).toContain("跳过");
   });
 
-  test("a long run list is capped and points at /schedule logs", () => {
+  test("every pending run gets its own line — no cap, nothing summarized away", () => {
     const template = entries[0] as (typeof entries)[number];
-    const many = Array.from(
-      { length: STARTUP_SUMMARY_DETAIL_LIMIT + 2 },
-      (_, index) => ({
-        ...template,
-        runId: `r-${index}`,
-      }),
-    );
+    const many = Array.from({ length: 9 }, (_, index) => ({
+      ...template,
+      runId: `r-${index}`,
+      taskName: `任务${index}`,
+    }));
     const lines = buildRunSummaryLines(many, NOW);
-    expect(lines.at(-1)).toContain("其余 2 条见 /schedule logs");
+    expect(lines).toHaveLength(10);
+    for (let index = 0; index < 9; index += 1) {
+      expect(lines[index + 1]).toContain(`任务${index}`);
+    }
+    expect(lines.join("\\n")).not.toContain("其余");
   });
 
   test("nothing pending means no block at all", () => {
@@ -332,6 +345,68 @@ describe("the startup summary", () => {
     expect(takeStartupScheduleSummaryLines(NOW)).toEqual(lines);
     resetStartupScheduleSummary();
     expect(takeStartupScheduleSummaryLines(NOW)).toEqual([]);
+  });
+});
+
+describe("per-run cost (M3 #9)", () => {
+  test("a priced run prints its cost, an unpriced or unrun one prints —", () => {
+    expect(formatRunCost(0.0042)).toBe("$ 0.00420");
+    expect(formatRunCost(null)).toBe("—");
+    expect(formatRunCost(undefined)).toBe("—");
+    expect(formatRunCostLabel({ turns: 1, cost: 0.0042 })).toContain(
+      "$ 0.00420",
+    );
+    expect(formatRunCostLabel({ turns: 1, cost: null })).toBe("费用 —");
+    expect(formatRunCostLabel(undefined)).toBe("费用 —");
+  });
+
+  test("reads the ledger by runId, and separates priced from unpriced", async () => {
+    const record = async (
+      runId: string,
+      total: number | undefined,
+      at: Date,
+    ): Promise<void> => {
+      await appendUsageRecord(
+        buildUsageRecord({
+          at,
+          agentId: "agent-1",
+          model: "test-model",
+          prompt: 10,
+          cachedInput: 0,
+          cacheWrite: 0,
+          completion: 5,
+          steps: 1,
+          wallMs: 10,
+          apiMs: 5,
+          source: "cron",
+          outcome: "completed",
+          runId,
+          ...(total === undefined
+            ? {}
+            : {
+                cost: {
+                  input: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  output: 0,
+                  total,
+                },
+              }),
+        }),
+      );
+    };
+    await record("run-1", 0.0021, new Date("2026-11-01T01:00:00.000Z"));
+    await record("run-1", 0.0021, new Date("2026-11-01T01:00:05.000Z"));
+    // A run the provider did not price: turns exist, the price is unknown.
+    await record("run-2", undefined, new Date("2026-11-01T02:00:00.000Z"));
+    // Give the two appends a beat to land before the read.
+    await Bun.sleep(20);
+
+    const usage = await readRunUsageCosts(["run-1", "run-2", "run-none"]);
+    expect(usage.get("run-1")?.turns).toBe(2);
+    expect(usage.get("run-1")?.cost).toBeCloseTo(0.0042, 6);
+    expect(usage.get("run-2")).toEqual({ turns: 1, cost: null });
+    expect(usage.get("run-none")).toEqual({ turns: 0, cost: null });
   });
 });
 
@@ -406,6 +481,38 @@ describe("run notifications", () => {
         agentId: "agent-1",
       }),
     ).toBeNull();
+  });
+});
+
+describe("the autostart panel line (M4 #11)", () => {
+  test("a registered-but-stale entry says it needs re-registering", () => {
+    const stale = autostartViewFor({
+      registered: true,
+      platform: "win32",
+      method: "schtasks",
+      stale: true,
+      registeredLauncherPath: "C:/old/haruyuki-launch.cmd",
+    });
+    expect(stale.registered).toBe(true);
+    expect(stale.stale).toBe(true);
+    expect(stale.label).toContain("需重新注册");
+
+    const fresh = autostartViewFor({
+      registered: true,
+      platform: "win32",
+      method: "schtasks",
+    });
+    expect(fresh.label).toContain("已注册");
+    expect(fresh.label).not.toContain("需重新注册");
+
+    const missing = autostartViewFor({
+      registered: false,
+      platform: "win32",
+      method: null,
+      error: "crontab 不可读",
+    });
+    expect(missing.label).toContain("未注册");
+    expect(missing.label).toContain("crontab 不可读");
   });
 });
 

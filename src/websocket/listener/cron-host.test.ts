@@ -23,12 +23,22 @@ import type { ScheduleTaskV2 } from "@/cron/cron-types";
 import { getCronRunLogPath, readCronRunLogEntries } from "@/cron/run-log";
 import type { DequeuedBatch } from "@/queue/queue-runtime";
 import { readUsageLedger } from "@/usage/ledger";
+import {
+  ensureConversationQueueRuntime,
+  getOrCreateScopedRuntime,
+} from "@/websocket/listener/conversation-runtime";
 import { createListenerCronRunner } from "@/websocket/listener/cron-host";
 import { createRuntime } from "@/websocket/listener/lifecycle";
-import { setActiveRuntime } from "@/websocket/listener/runtime";
+import { getOrCreateConversationPermissionModeStateRef } from "@/websocket/listener/permission-mode";
+import { scheduleQueuePump } from "@/websocket/listener/queue";
+import {
+  getOrCreateConversationRuntime,
+  setActiveRuntime,
+} from "@/websocket/listener/runtime";
 import { notifyStreamObservers } from "@/websocket/listener/stream-observers";
 import { LocalListenerTransport } from "@/websocket/listener/transport";
 import type {
+  ConversationRuntime,
   IncomingMessage,
   ListenerRuntime,
   StartListenerOptions,
@@ -161,6 +171,8 @@ function makeRunner(
       created.push(body);
       return { id: "conv-new" };
     },
+    // F10: the target lookup is a backend read; tests answer it explicitly.
+    resolveExistingTarget: async () => "ok" as const,
     now: () => Date.parse("2026-10-28T03:00:00.000Z"),
     pollIntervalMs: 5,
     ...overrides,
@@ -481,5 +493,316 @@ describe("listener cron runner: host + pre-start failures", () => {
       name: "ScheduledTaskPreflightError",
     });
     await expect(attempt).rejects.toThrow("no model configured");
+  });
+
+  test("a missing target is F1, not a failed turn (F10)", async () => {
+    const { runner } = makeRunner({
+      resolveExistingTarget: async () => "missing",
+    });
+    await expect(
+      runner.run({
+        task: task(),
+        runId: "run-missing-target",
+        occurrence: "2026-10-28T03:00:00.000Z",
+        signal: signal(),
+      }),
+    ).rejects.toThrow("does not exist");
+    expect(listener.conversationRuntimes.size).toBe(0);
+  });
+
+  test("a hidden target is F1, not a failed turn (F10)", async () => {
+    const { runner } = makeRunner({
+      resolveExistingTarget: async () => "hidden",
+    });
+    await expect(
+      runner.run({
+        task: task(),
+        runId: "run-hidden-target",
+        occurrence: "2026-10-28T03:00:00.000Z",
+        signal: signal(),
+      }),
+    ).rejects.toThrow("hidden");
+  });
+
+  test("a cancellation while creating the target never enqueues (F4)", async () => {
+    const controller = new AbortController();
+    const { runner } = makeRunner({
+      createConversation: async () => {
+        controller.abort();
+        return { id: "conv-new" };
+      },
+    });
+    const result = await runner.run({
+      task: task({ target: { kind: "new", hidden: false } }),
+      runId: "run-cancel-create",
+      occurrence: "2026-10-28T03:00:00.000Z",
+      signal: controller.signal,
+    });
+    expect(result.outcome).toBe("cancelled");
+    // No queue item was left behind and no observer is waiting on a turn.
+    for (const runtime of listener.conversationRuntimes.values()) {
+      expect(runtime.queueRuntime?.length ?? 0).toBe(0);
+    }
+    expect(listener.streamObservers?.size ?? 0).toBe(0);
+  });
+});
+
+// ── F4/F5/F9: cancellation, turn correlation, permission restore ────
+
+/** The scoped runtime the runner will use for one target. */
+function scopedRuntime(
+  agentId = "agent-1",
+  conversationId = "conv-1",
+): ConversationRuntime {
+  return ensureConversationQueueRuntime(
+    listener,
+    getOrCreateConversationRuntime(listener, agentId, conversationId),
+  );
+}
+
+/**
+ * A queued-turn processor whose turn hangs until its lease is aborted, i.e. the
+ * turn the run started is still active when the run's timeout/cancel fires.
+ */
+function hangingTurn() {
+  return async (queuedTurn: IncomingMessage, _batch: DequeuedBatch) => {
+    const scoped = getOrCreateScopedRuntime(
+      listener,
+      queuedTurn.agentId,
+      queuedTurn.conversationId,
+    );
+    const lease = scoped.turnLifecycle.begin({
+      origin: "message",
+      workingDirectory: "/tmp",
+    });
+    await new Promise<void>((resolve) => {
+      lease.signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+  };
+}
+
+/** Wait until `predicate` holds (microtask/timer flush). */
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 1000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("waitFor timed out");
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
+describe("listener cron runner: cancelling and timing out a live turn (F4)", () => {
+  test("a mid-turn timeout aborts the turn it started", async () => {
+    const { runner } = makeRunner({
+      processQueuedTurn: hangingTurn(),
+    });
+    const result = await runner.run({
+      task: task({ timeoutMinutes: 0.001 }), // 60ms
+      runId: "run-mid-timeout",
+      occurrence: "2026-10-28T03:00:00.000Z",
+      signal: signal(),
+    });
+    expect(result.outcome).toBe("timeout");
+    const conversation = scopedRuntime();
+    expect(conversation.turnLifecycle.kind).toBe("cancelling");
+    conversation.turnLifecycle.reset();
+  });
+
+  test("a mid-turn cancellation aborts the turn it started", async () => {
+    const controller = new AbortController();
+    const { runner } = makeRunner({ processQueuedTurn: hangingTurn() });
+    const pending = runner.run({
+      task: task({ timeoutMinutes: 0 }),
+      runId: "run-mid-cancel",
+      occurrence: "2026-10-28T03:00:00.000Z",
+      signal: controller.signal,
+    });
+    const conversation = scopedRuntime();
+    await waitFor(() => conversation.turnLifecycle.kind === "active");
+    controller.abort();
+    expect((await pending).outcome).toBe("cancelled");
+    expect(conversation.turnLifecycle.kind).toBe("cancelling");
+    conversation.turnLifecycle.reset();
+  });
+
+  test("cancelling before the turn starts removes the queue item", async () => {
+    const controller = new AbortController();
+    const terminal = terminalTurn(listener);
+    let releaseValidation: () => void = () => {};
+    const validationGate = new Promise<void>((resolve) => {
+      releaseValidation = () => resolve();
+    });
+    const { runner } = makeRunner({
+      resolveExistingTarget: async () => {
+        await validationGate;
+        return "ok" as const;
+      },
+      processQueuedTurn: terminal,
+    });
+    const pending = runner.run({
+      task: task({ timeoutMinutes: 0 }),
+      runId: "run-cancel-queued",
+      occurrence: "2026-10-28T03:00:00.000Z",
+      signal: controller.signal,
+    });
+    // Take the conversation with a foreign turn so the pump cannot consume the
+    // scheduled item; the run's item then waits in the queue.
+    const conversation = scopedRuntime();
+    const foreignLease = conversation.turnLifecycle.begin({
+      origin: "message",
+      workingDirectory: "/tmp",
+    });
+    releaseValidation();
+    await waitFor(() => conversation.queueRuntime.length === 1);
+    controller.abort();
+    expect((await pending).outcome).toBe("cancelled");
+    // The item was dropped and the foreign turn was left alone.
+    expect(conversation.queueRuntime.length).toBe(0);
+    expect(conversation.turnLifecycle.isCurrent(foreignLease)).toBe(true);
+    conversation.turnLifecycle.reset();
+  });
+
+  test("an authoritative queue clear settles the run as cancelled (F4)", async () => {
+    const terminal = terminalTurn(listener);
+    let releaseValidation: () => void = () => {};
+    const validationGate = new Promise<void>((resolve) => {
+      releaseValidation = () => resolve();
+    });
+    const { runner } = makeRunner({
+      resolveExistingTarget: async () => {
+        await validationGate;
+        return "ok" as const;
+      },
+      processQueuedTurn: terminal,
+    });
+    const pending = runner.run({
+      task: task({ timeoutMinutes: 0 }),
+      runId: "run-queue-cleared",
+      occurrence: "2026-10-28T03:00:00.000Z",
+      signal: signal(),
+    });
+    const conversation = scopedRuntime();
+    const foreignLease = conversation.turnLifecycle.begin({
+      origin: "message",
+      workingDirectory: "/tmp",
+    });
+    releaseValidation();
+    await waitFor(() => conversation.queueRuntime.length === 1);
+
+    // A reset/clear elsewhere drops the item; the run must learn it will never
+    // run instead of waiting for its timeout. The queue transition names a cron
+    // item by its own id (`cm-<id>`), which is what the observer matches on.
+    const item = conversation.queueRuntime.peekReady()[0];
+    expect(item).toBeDefined();
+    conversation.queueRuntime.clear("cancelled");
+    notifyStreamObservers(
+      listener,
+      {
+        type: "update_queue",
+        queue: [],
+        removed: [
+          {
+            client_message_id: `cm-${item?.id}`,
+            disposition: "cancelled",
+          },
+        ],
+      },
+      { agent_id: "agent-1", conversation_id: "conv-1" },
+    );
+    const result = await pending;
+    expect(result.outcome).toBe("cancelled");
+    // The foreign turn is untouched: a cleared item is not a turn to interrupt.
+    expect(conversation.turnLifecycle.isCurrent(foreignLease)).toBe(true);
+    conversation.turnLifecycle.reset();
+  });
+});
+
+describe("listener cron runner: terminal correlation (F5)", () => {
+  test("a foreign turn's terminal does not settle a run whose item is queued", async () => {
+    const controller = new AbortController();
+    const terminal = terminalTurn(listener);
+    let releaseValidation: () => void = () => {};
+    const validationGate = new Promise<void>((resolve) => {
+      releaseValidation = () => resolve();
+    });
+    const { runner } = makeRunner({
+      resolveExistingTarget: async () => {
+        await validationGate;
+        return "ok" as const;
+      },
+      processQueuedTurn: terminal,
+    });
+    const pending = runner.run({
+      task: task({ timeoutMinutes: 0 }),
+      runId: "run-foreign",
+      occurrence: "2026-10-28T03:00:00.000Z",
+      signal: controller.signal,
+    });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    const conversation = scopedRuntime();
+    const foreignLease = conversation.turnLifecycle.begin({
+      origin: "message",
+      workingDirectory: "/tmp",
+    });
+    releaseValidation();
+    await waitFor(() => conversation.queueRuntime.length === 1);
+
+    // A user turn on this conversation finished; the run's own item is still
+    // queued, so it must not settle the run (and must not bill it as failed).
+    notifyStreamObservers(
+      listener,
+      {
+        type: "turn_finished",
+        turn_id: "turn-user",
+        stop_reason: "llm_api_error",
+      },
+      { agent_id: "agent-1", conversation_id: "conv-1" },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    expect(conversation.queueRuntime.length).toBe(1);
+
+    // Let the pump run this run's item; its own terminal settles it.
+    conversation.turnLifecycle.finish(foreignLease, "end_turn");
+    scheduleQueuePump(conversation, transport, opts, terminal);
+    const result = await pending;
+    expect(result.outcome).toBe("success");
+  });
+});
+
+describe("listener cron runner: permission state (F9)", () => {
+  test("a user mode change during the run survives the restore", async () => {
+    const { runner } = makeRunner({
+      processQueuedTurn: async (queuedTurn, batch) => {
+        // Simulate the user switching mode while the scheduled turn runs.
+        const state = getOrCreateConversationPermissionModeStateRef(
+          listener,
+          "agent-1",
+          queuedTurn.conversationId ?? "conv-1",
+        );
+        state.mode = "standard";
+        await terminalTurn(listener)(queuedTurn, batch);
+      },
+    });
+    await runner.run({
+      task: task({ permission: "unrestricted" }),
+      runId: "run-user-mode",
+      occurrence: "2026-10-28T03:00:00.000Z",
+      signal: signal(),
+    });
+    const state = getOrCreateConversationPermissionModeStateRef(
+      listener,
+      "agent-1",
+      "conv-1",
+    );
+    // The user's newer choice wins; the run's tier is not restored over it.
+    expect(state.mode).toBe("standard");
+    // The run's unattended flag is still cleared.
+    expect(state.unattended).toBeUndefined();
   });
 });

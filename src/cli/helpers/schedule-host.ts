@@ -24,8 +24,13 @@
  *   task already uses; no second notification format is invented here.
  */
 
-import { useEffect } from "react";
-import { createTuiCronRunner } from "@/cli/helpers/schedule-prompt";
+import { type SpawnOptions, spawn } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { useEffect, useRef } from "react";
+import {
+  createTuiCronRunner,
+  type TuiScheduleActiveTarget,
+} from "@/cli/helpers/schedule-prompt";
 import {
   formatScheduleNotification,
   listAllScheduleTasks,
@@ -52,6 +57,75 @@ export const TUI_SCHEDULE_TICK_MS = 60_000;
 /** The first tick waits for startup I/O instead of competing with it. */
 export const TUI_SCHEDULE_FIRST_TICK_MS = 10_000;
 
+/**
+ * Spawns the short-lived child that runs one due task, or `null`/throws when it
+ * cannot be started.
+ *
+ * `onExit` is called exactly once (spawn `error` or process `exit`) so the
+ * caller's in-flight map stops blocking a later retry.
+ */
+export type SpawnDelegatedTick = (
+  taskId: string,
+  onExit: () => void,
+) => { pid?: number } | null;
+
+/**
+ * The command that re-enters this build's own short-lived host for one task.
+ *
+ * Bundled/Node artifact: `node <haruyuki.js> schedule tick --task <id>`.
+ * Dev under Bun: `bun src/standalone-entry.ts schedule tick --task <id>` — the
+ * lightweight entry, because `src/index.ts` would load the whole app (OAuth,
+ * providers, pi-ai) just to run one task.
+ */
+export function delegatedTickCommand(taskId: string): {
+  command: string;
+  args: string[];
+} {
+  const tail = ["schedule", "tick", "--task", taskId];
+  if (process.versions.bun) {
+    // Resolve the dev entry next to the invoked entry, so a TUI started from a
+    // directory other than the repository root still finds it.
+    const invoked = process.argv[1];
+    const entry = invoked
+      ? resolve(dirname(invoked), "standalone-entry.ts")
+      : "src/standalone-entry.ts";
+    return { command: process.execPath, args: [entry, ...tail] };
+  }
+  return {
+    command: process.execPath,
+    args: [process.argv[1] ?? "haruyuki.js", ...tail],
+  };
+}
+
+/** Spawn one delegated tick, detached, so the TUI exit cannot kill it. */
+function spawnDelegatedScheduleTick(
+  taskId: string,
+  onExit: () => void,
+): { pid?: number } | null {
+  const { command, args } = delegatedTickCommand(taskId);
+  const child = spawn(command, args, {
+    detached: true,
+    stdio: "ignore",
+    env: process.env,
+  } satisfies SpawnOptions);
+  let settled = false;
+  const settle = (): void => {
+    if (settled) return;
+    settled = true;
+    onExit();
+  };
+  child.once("error", (error) => {
+    debugWarn(
+      "schedule",
+      `delegated schedule tick for ${taskId} could not start: ${error.message}`,
+    );
+    settle();
+  });
+  child.once("exit", settle);
+  child.unref();
+  return { pid: child.pid };
+}
+
 export interface TuiScheduleHostOptions {
   /** The coordinator's `appendTaskNotificationEvents` (display path). */
   appendTaskNotificationEvents: (summaries: string[]) => boolean;
@@ -62,10 +136,18 @@ export interface TuiScheduleHostOptions {
    * is serial anyway, and this is the honest answer where one exists.
    */
   isConversationBusy?: () => boolean;
+  /**
+   * The session this host can run a turn in. Only tasks targeting this session
+   * are run in-process; every other due task is delegated to a short-lived child
+   * (P1-2, user ruling B).
+   */
+  getActiveTarget?: () => TuiScheduleActiveTarget | null;
   /** Clock seam; tests only. */
   now?: () => Date;
   /** Runner seam; the app leaves it unset and gets T2's TUI runner. */
   runner?: TaskRunnerPort;
+  /** Spawn seam for the delegated short-lived host; tests only. */
+  spawnDelegatedTick?: SpawnDelegatedTick;
   tickIntervalMs?: number;
   firstTickMs?: number;
 }
@@ -101,11 +183,14 @@ export function currentTuiScheduleHost(): TuiScheduleHost | null {
 function createRunner(options: TuiScheduleHostOptions): TaskRunnerPort | null {
   if (options.runner) return options.runner;
   try {
-    return createTuiCronRunner(
-      options.isConversationBusy
+    return createTuiCronRunner({
+      ...(options.isConversationBusy
         ? { isConversationBusy: options.isConversationBusy }
-        : {},
-    );
+        : {}),
+      ...(options.getActiveTarget
+        ? { getActiveTarget: options.getActiveTarget }
+        : {}),
+    });
   } catch (error) {
     debugWarn(
       "schedule",
@@ -188,6 +273,45 @@ export function startTuiScheduleHost(
     }
   };
 
+  // Task ids whose delegated short-lived child is still alive. One child per
+  // task: a tick that sees the same occurrence still unconsumed (the child is
+  // slow, or failed before consuming) must not start a second runner for it.
+  const delegatedInFlight = new Set<string>();
+
+  /**
+   * Hand one due task the in-process runner cannot run to a short-lived child.
+   *
+   * The child creates/uses its own target conversation and records its own run
+   * (the TUI never writes its result); the TUI stops delegating once the
+   * occurrence is consumed and the next tick no longer lists the task. Spawn
+   * failures are one log line — a tick must not fail because a child could not
+   * start.
+   *
+   * Two bounded retries are intended, not dedupe failures (M1 #5 semantics):
+   * a one-shot F3-skipped occurrence is deliberately not consumed inside its
+   * 90 s grace, so it may be delegated once more before it turns `missed`; and
+   * a child that exits 1 because its runtime would not start leaves the
+   * occurrence unconsumed, so the next tick retries it. The in-flight set only
+   * prevents a *second child for the same task while the first is alive*.
+   */
+  const delegateTask = (taskId: string): void => {
+    if (delegatedInFlight.has(taskId)) return;
+    delegatedInFlight.add(taskId);
+    const spawnTick = options.spawnDelegatedTick ?? spawnDelegatedScheduleTick;
+    try {
+      const child = spawnTick(taskId, () => delegatedInFlight.delete(taskId));
+      if (child === null) delegatedInFlight.delete(taskId);
+    } catch (error) {
+      delegatedInFlight.delete(taskId);
+      debugWarn(
+        "schedule",
+        `could not delegate schedule ${taskId} to a short-lived host: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  };
+
   const tick = async (): Promise<void> => {
     if (disposed || ticking || !runner) return;
     if (!tryClaim()) return;
@@ -204,6 +328,13 @@ export function startTuiScheduleHost(
     try {
       const result = await runSchedulerTick({ now: now(), runner });
       if (result.started || result.missed > 0) refreshScheduleTasks(now());
+      // The core leaves due tasks this host's runner said `canRun === false`
+      // alone (neither claimed nor consumed) and reports their ids (P1-2): the
+      // TUI's own session is the only thing it can run, so everything else is
+      // handed to a short-lived child.
+      for (const taskId of result.deferredTaskIds ?? []) {
+        delegateTask(taskId);
+      }
     } catch (error) {
       debugWarn(
         "schedule",
@@ -351,17 +482,29 @@ export async function runScheduledTaskViaTuiHost(
  * One line in the coordinator: start the host for this session, stop it on
  * unmount. The host owns everything else — the interval, the lease, the event
  * subscription — so the pinned file gains no state.
+ *
+ * The effect deliberately runs **once** (P1-3): the callbacks are read through a
+ * ref, so a new `isConversationBusy` closure on every `isExecutingTool` flip no
+ * longer disposes and recreates the host — which used to clear the tick timer
+ * and release/re-take the "all" scheduler lease on every tool call.
  */
 export function useTuiScheduleHost(input: {
   appendTaskNotificationEvents: (summaries: string[]) => boolean;
   isConversationBusy?: () => boolean;
+  getActiveTarget?: () => TuiScheduleActiveTarget | null;
 }): void {
-  const { appendTaskNotificationEvents, isConversationBusy } = input;
+  const inputRef = useRef(input);
+  inputRef.current = input;
   useEffect(() => {
+    // The ref is the live view of the caller's callbacks: the host's interval
+    // and runner outlive any single render, and must never hold a stale one.
     const host = startTuiScheduleHost({
-      appendTaskNotificationEvents,
-      ...(isConversationBusy ? { isConversationBusy } : {}),
+      appendTaskNotificationEvents: (summaries) =>
+        inputRef.current.appendTaskNotificationEvents(summaries),
+      isConversationBusy: () =>
+        inputRef.current.isConversationBusy?.() ?? false,
+      getActiveTarget: () => inputRef.current.getActiveTarget?.() ?? null,
     });
     return () => host.dispose();
-  }, [appendTaskNotificationEvents, isConversationBusy]);
+  }, []);
 }

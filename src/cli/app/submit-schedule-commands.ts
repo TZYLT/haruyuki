@@ -22,6 +22,8 @@
 
 import type { CommandHandle } from "@/cli/commands/runner";
 import {
+  createScheduleTask,
+  formatScheduleCreatedLines,
   parseScheduleInvocation,
   tokenizeScheduleInput,
 } from "@/cli/commands/schedule";
@@ -110,6 +112,30 @@ export async function handleScheduleSubmit(
       return { submitted: true };
 
     case "add":
+      // R-5.12.1: a fully specified `add` creates in one step and prints the
+      // receipt — the same contract the registry path has. Only an incomplete
+      // one opens the wizard, where the missing answers are collected.
+      if (invocation.missing.length === 0) {
+        const cmd = ctx.commandRunner.start("/schedule add", "创建计划任务…");
+        const created = createScheduleTask({
+          agentId: ctx.agentId,
+          draft: invocation.draft,
+        });
+        if (created.kind === "error") {
+          cmd.fail(created.message);
+          return { submitted: true };
+        }
+        cmd.finish(
+          [
+            ...formatScheduleCreatedLines(created),
+            // R-5.2.5: the one-step path did not ask about autostart, so say
+            // plainly that no timer was registered.
+            "  自启未注册（一步创建不询问）：任务只在 Haruyuki 运行时执行；需要常驻可运行 `/schedule autostart on`。",
+          ].join("\n"),
+          true,
+        );
+        return { submitted: true };
+      }
       // The prefill travels through the same one-shot bridge the faces use; the
       // wizard consumes it on mount, so a partial `--cron …` is not asked twice.
       // The subcommand word itself is dropped: the wizard re-parses the flags.

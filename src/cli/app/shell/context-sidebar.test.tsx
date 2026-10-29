@@ -243,4 +243,13 @@ describe("sidebarProjectionFrom", () => {
     const view = sidebarProjectionFrom(inputs());
     expect(view.today).toBeNull();
   });
+
+  test("a schedule read failure reaches the rail's projection (M3 #17)", () => {
+    const view = sidebarProjectionFrom(
+      inputs({ schedules: [], schedulesError: "版本 99" }),
+    );
+    expect(view.schedulesError).toBe("版本 99");
+    // No error means the rail sees the empty list, not a stale message.
+    expect(sidebarProjectionFrom(inputs()).schedulesError).toBeNull();
+  });
 });

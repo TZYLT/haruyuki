@@ -472,10 +472,14 @@ describe("buildSidebarSections", () => {
 describe("the 计划任务 section (M-16)", () => {
   function schedulesSection(
     rows: readonly SidebarScheduleRow[] | null,
-    width = 28,
+    options: { schedulesError?: string | null; width?: number } = {},
   ) {
     const spec = buildSidebarSections(
-      projection({ width, schedules: rows }),
+      projection({
+        width: options.width ?? 28,
+        schedules: rows,
+        schedulesError: options.schedulesError ?? null,
+      }),
     ).find((item) => item.id === "schedules");
     return spec;
   }
@@ -509,6 +513,14 @@ describe("the 计划任务 section (M-16)", () => {
     expect(spec?.detail).toEqual(["读取中…"]);
   });
 
+  test("a failed read says so instead of painting an empty store (M3 #17)", () => {
+    const spec = schedulesSection([], { schedulesError: "版本 99" });
+    expect(spec?.detail.join("\n")).toContain("读取失败");
+    expect(spec?.detail.join("\n")).toContain("版本 99");
+    expect(spec?.detail.join("\n")).not.toContain("暂无计划任务");
+    expect(spec?.summary).toBe("计划任务 —");
+  });
+
   test("the section gives way before the transcript's own numbers", () => {
     const specs = buildSidebarSections(
       projection({
@@ -533,7 +545,7 @@ describe("the 计划任务 section (M-16)", () => {
           status: "active",
         },
       ],
-      18,
+      { width: 18 },
     );
     for (const line of spec?.detail ?? []) {
       expect(visibleWidth(line)).toBeLessThanOrEqual(18);

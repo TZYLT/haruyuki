@@ -45,8 +45,10 @@ import {
   type ScheduleEvent,
   subscribeScheduleEvents,
 } from "@/cron/schedule-events";
+import { readScheduledRunUsage } from "@/usage/ledger";
 import { debugWarn } from "@/utils/debug";
 import { formatElapsedLabel } from "./format";
+import { DETAIL_COST_DECIMALS, formatCost } from "./usage-format";
 
 // ── Source (the one place that touches the disk) ────────────────────
 
@@ -318,11 +320,12 @@ export function scheduleTaskRows(
   });
 }
 
-/** `晨报 · prompt · 今天 09:00 · 上次成功 · active · 全权`. */
+/** `晨报 · prompt · 新会话 · 今天 09:00 · 上次成功 · active · 全权`. */
 function buildListLine(row: ScheduleTaskRow): string {
   const parts = [
     row.name,
     row.type,
+    row.targetLabel,
     row.nextLabel,
     `上次${row.lastLabel}`,
     row.statusLabel,
@@ -416,13 +419,88 @@ export function formatRunDuration(group: ScheduleRunGroup): string {
   return group.durationMs === null ? "—" : formatElapsedLabel(group.durationMs);
 }
 
-/** One line per run group: when, result, how long, which conversation. */
-export function formatRunGroupLine(group: ScheduleRunGroup, now: Date): string {
+/**
+ * A run's spend, read from the usage ledger by `runId` (R-5.14.2).
+ *
+ * `cost === null` is "the ledger has no priced row for this run", which the
+ * panel paints `—`; it is deliberately not `0`, because a free local model and
+ * an unpriced one both spend nothing and only the ledger can tell them apart
+ * (`helpers/usage-format.ts`, rule 1). `turns === 0` means the ledger has no row
+ * at all for the run.
+ */
+export interface RunUsageRow {
+  turns: number;
+  cost: number | null;
+}
+
+/** Reads the per-run usage the log view is about to paint. */
+export type RunUsageReader = (
+  runIds: readonly string[],
+) => Promise<ReadonlyMap<string, RunUsageRow>>;
+
+/**
+ * The production reader for one page of the run history.
+ *
+ * It goes through the ledger's own per-run API (`readScheduledRunUsage`), not a
+ * second tally here, so the run history and the Usage page cannot disagree about
+ * one run. The ledger keeps the two "no number" cases apart and so does this
+ * row: `turns === 0` means no ledger row at all, and `cost === null` means the
+ * rows were never priced — both paint `—`, never `0` (`helpers/usage-format.ts`,
+ * rule 1).
+ */
+export async function readRunUsageCosts(
+  runIds: readonly string[],
+): Promise<ReadonlyMap<string, RunUsageRow>> {
+  const wanted = [...new Set(runIds.filter((runId) => runId.length > 0))];
+  const usage = new Map<string, RunUsageRow>();
+  if (wanted.length === 0) return usage;
+  try {
+    const summaries = await readScheduledRunUsage({ runIds: wanted });
+    for (const runId of wanted) {
+      const summary = summaries.get(runId);
+      usage.set(runId, {
+        turns: summary?.turns ?? 0,
+        cost:
+          summary && summary.turns > 0 && summary.cost
+            ? summary.cost.total
+            : null,
+      });
+    }
+  } catch (error) {
+    // The ledger API is documented as never throwing; this is the belt that
+    // keeps a run history painting even if that changes.
+    debugWarn(
+      "schedule",
+      `could not read run usage: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  return usage;
+}
+
+/** `$ 0.00042`, or `—` when the ledger has no priced row for the run. */
+export function formatRunCost(cost: number | null | undefined): string {
+  return formatCost(cost === null ? undefined : cost, DETAIL_COST_DECIMALS);
+}
+
+/** The cost segment one run-log row shows; `费用 —` when there is no row. */
+export function formatRunCostLabel(usage: RunUsageRow | undefined): string {
+  return `费用 ${formatRunCost(usage?.cost ?? null)}`;
+}
+
+/** One line per run group: when, result, how long, cost, conversation. */
+export function formatRunGroupLine(
+  group: ScheduleRunGroup,
+  now: Date,
+  costLabel?: string,
+): string {
   const parts = [
     formatRunStamp(new Date(group.at), now),
     outcomeLabel(group.outcome),
     formatRunDuration(group),
   ];
+  if (costLabel !== undefined) parts.push(costLabel);
   if (group.conversationId) parts.push(`会话 ${shortId(group.conversationId)}`);
   const error = group.error?.trim().replace(/\s+/g, " ");
   if (error) parts.push(error.length > 48 ? `${error.slice(0, 47)}…` : error);
@@ -460,16 +538,16 @@ export function summarizeRunEntries(
   return counts;
 }
 
-/** How many per-run lines the startup block spells out before summarizing. */
-export const STARTUP_SUMMARY_DETAIL_LIMIT = 6;
-
 /**
- * The startup block: one count line, then one line per run.
+ * The startup block: one count line, then one line per run (R-5.11.2 逐条).
  *
  * The block is committed through `<Static>`, which never re-renders, so
  * "expandable" cannot be a toggle here. The detail is materialized in the same
- * block instead (逐条), capped, and the last line points at `/schedule logs` for
- * the rest — the replay path R-5.11.3 already names.
+ * block instead: **every** pending run gets its own line, so the block is the
+ * complete record and `/schedule logs` is the replay path, not the remainder.
+ * An earlier cap of six made the block a preview and lost the rest of the
+ * report; the pending summary is itself bounded by the runner, so printing it
+ * whole cannot be unbounded output.
  */
 export function buildRunSummaryLines(
   entries: readonly RunSummaryEntry[],
@@ -480,19 +558,13 @@ export function buildRunSummaryLines(
   const lines = [
     `离开期间后台执行 ${counts.total} 条（成功 ${counts.success}／失败 ${counts.failed}／跳过 ${counts.skipped}）`,
   ];
-  const shown = entries.slice(0, STARTUP_SUMMARY_DETAIL_LIMIT);
-  for (const entry of shown) {
+  for (const entry of entries) {
     const at = Date.parse(entry.startedAt);
     const when = Number.isFinite(at) ? formatRunStamp(new Date(at), now) : "—";
     const parts = [when, entry.taskName, outcomeLabel(entry.outcome)];
     if (entry.conversationId)
       parts.push(`会话 ${shortId(entry.conversationId)}`);
     lines.push(`  · ${parts.join(" · ")}`);
-  }
-  if (entries.length > shown.length) {
-    lines.push(
-      `  … 其余 ${entries.length - shown.length} 条见 /schedule logs <id>`,
-    );
   }
   return lines;
 }
@@ -815,28 +887,55 @@ export function useScheduleTasks(options?: {
 export interface AutostartView {
   /** `null` when M4 has not been wired in this build or the read threw. */
   registered: boolean | null;
+  /**
+   * The OS entry exists but points at a launcher this build no longer uses
+   * (install path or harness root changed), so it needs re-registration
+   * (M4 #11). `true` only when registration itself succeeded.
+   */
+  stale?: boolean;
   /** One line for the panel's footer or a receipt. */
   label: string;
+}
+
+/**
+ * Turn one M4 status into the panel's line.
+ *
+ * Pure, and exported so the stale wording (M4 #11) is tested without shelling
+ * out: a registered-but-stale entry is the one state the label must separate —
+ * the timer exists and is wrong, which is not "未注册".
+ */
+export function autostartViewFor(status: AutostartStatus): AutostartView {
+  if (status.registered && status.stale) {
+    return {
+      registered: true,
+      stale: true,
+      label: `自启 已注册（需重新注册${
+        status.method ? `，${status.method}` : ""
+      }）`,
+    };
+  }
+  return {
+    registered: status.registered,
+    stale: status.stale,
+    label: status.registered
+      ? `自启 已注册（${status.method ?? "未知方式"}）`
+      : `自启 未注册${status.error ? `（${status.error}）` : ""}`,
+  };
 }
 
 /**
  * Read the OS registration for the panel.
  *
  * On demand and never in the rail: this shells out to `schtasks`/`launchctl`/
- * `systemctl`, which is a subprocess, so a 30 s refresh must not carry it. The
- * M4 failure modes — a throw and a `{registered:false, error}` result — both
- * become the same "未注册" line here, because the panel only has to say whether
- * the timer exists.
+ * `systemctl`, which is a subprocess, so a 30 s refresh must not carry it. A
+ * throw and a `{registered:false, error}` result both become "未注册": the panel
+ * only has to say whether the timer exists. The re-read moments are the face's
+ * (mount, view change, store revision), because the entry can be removed behind
+ * the panel's back (M3 #16).
  */
 export async function readAutostartView(): Promise<AutostartView> {
   try {
-    const status: AutostartStatus = await getAutostartStatus();
-    return {
-      registered: status.registered,
-      label: status.registered
-        ? `自启 已注册（${status.method ?? "未知方式"}）`
-        : `自启 未注册${status.error ? `（${status.error}）` : ""}`,
-    };
+    return autostartViewFor(await getAutostartStatus());
   } catch (error) {
     return {
       registered: null,

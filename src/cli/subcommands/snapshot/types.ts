@@ -230,6 +230,11 @@ export interface SnapshotCliDeps {
   now?: () => Date;
   hostname?: () => string;
   appVersion?: string;
+  /**
+   * Autostart probe for the import-side R-5.13.5 reminder. Tests inject a stub
+   * so the pipeline never touches this machine's OS timer registry.
+   */
+  autostartStatus?: () => Promise<{ registered: boolean; stale?: boolean }>;
 }
 
 /** A progress line handed to the CLI layer; no percentage, no timers. */

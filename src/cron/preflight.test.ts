@@ -142,8 +142,11 @@ describe("C-24: the light path never loads the heavy runtime", () => {
       "@/backend",
       "@/providers",
       "@/tools",
-      "@/agent/",
+      "@/agent/conversation",
+      "@/agent/prompts",
       "@/websocket/listener",
+      // `@/agent/agent-id` is deliberately allowed: it is a pure leaf used for
+      // the backend-lane filter (M1 #18) and loads no domain code.
     ]) {
       expect(staticImports).not.toContain(`from "${specifier}`);
     }

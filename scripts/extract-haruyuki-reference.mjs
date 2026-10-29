@@ -32,6 +32,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 import { runSubcommand } from "@/cli/subcommands/router";
 
@@ -39,8 +40,7 @@ const REPOSITORY_ROOT = process.cwd();
 const ROUTER_PATH = "src/cli/subcommands/router.ts";
 const REGISTRY_PATH = "src/cli/commands/registry.ts";
 const GENERATOR_PATH = "scripts/extract-haruyuki-reference.mjs";
-const OUTPUT_PATH =
-  "src/skills/builtin/haruyuki-guide/docs/reference-index.md";
+const OUTPUT_PATH = "src/skills/builtin/haruyuki-guide/docs/reference-index.md";
 
 /** Commands with no usage block: `version` prints a number, and the internal
  * channel-gateway process does not accept `--help` at all. */
@@ -138,6 +138,12 @@ function lineNumberAt(source, index) {
  *
  * Consecutive `case "a": case "b":` labels that share one `return` are one
  * command with aliases, which is exactly how the router expresses them.
+ *
+ * A case block is joined before its `return` is matched, because the delegation
+ * is often wrapped over several lines — `return (await import("./x"))
+ * .runXSubcommand(rest);` — and a line-at-a-time scan silently dropped those
+ * cases (M5 #12). A block with statements but no `return`, or a return this
+ * parser does not understand, throws instead of dropping the command.
  */
 /** `./x` and `@/x` as they resolve from the router module. */
 function resolveRouterModule(specifier) {
@@ -147,51 +153,84 @@ function resolveRouterModule(specifier) {
   return `${base}.ts`;
 }
 
+/** Drop a trailing `//` comment so a comment cannot masquerade as a return. */
+function stripLineComment(line) {
+  const index = line.indexOf("//");
+  return index >= 0 ? line.slice(0, index) : line;
+}
+
 function parseSubcommandCases(source) {
-  const lines = source.split(/\r?\n/);
+  // Only the dispatch function: the module also carries the synchronous
+  // `subcommandNeedsEarlyBackendMode` switch, whose `return true`/`false`
+  // cases are not commands (scoping to the function keeps both switches from
+  // being conflated).
+  const runStart = source.indexOf("export async function runSubcommand");
+  const prefix = runStart >= 0 ? source.slice(0, runStart) : "";
+  const body = runStart >= 0 ? source.slice(runStart) : source;
+  const offset = prefix.length === 0 ? 0 : prefix.split(/\r?\n/).length - 1;
+  const lines = body.split(/\r?\n/);
   const cases = [];
   let pending = [];
+  let block = [];
+  let blockStart = 0;
+
+  const flush = () => {
+    const text = block.join(" ").trim();
+    if (text.length > 0) {
+      const runner =
+        /return\s+(?:\(\s*await\s+import\("((?:\.\/|@\/)[^"]+)"\)\s*\)\s*\.)?(run[A-Za-z]+Subcommand)\s*\(/.exec(
+          text,
+        );
+      if (runner) {
+        cases.push({
+          command: pending[0].name,
+          aliases: pending.slice(1).map((entry) => entry.name),
+          notes: pending
+            .map((entry) => entry.note)
+            .filter((note) => note.length > 0),
+          runner: runner[2],
+          module: runner[1] ? resolveRouterModule(runner[1]) : null,
+          routerLine: blockStart,
+        });
+      } else if (!/return null;/.test(text)) {
+        throw new ExtractionError(
+          `Unrecognized case body for ${pending[0].name} at ${ROUTER_PATH}:${blockStart}: ${text}. Update parseSubcommandCases instead of dropping the command.`,
+        );
+      }
+    } else if (pending.length > 0) {
+      throw new ExtractionError(
+        `Case ${pending[0].name} at ${ROUTER_PATH}:${blockStart} has no return; a command must delegate to a subcommand module.`,
+      );
+    }
+    pending = [];
+    block = [];
+  };
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
 
     const label = /^\s*case "([^"]+)":\s*(?:\/\/\s*(.*?))?\s*$/.exec(line);
     if (label) {
+      if (block.length > 0) flush();
+      if (pending.length === 0) blockStart = offset + index + 1;
       pending.push({ name: label[1], note: label[2] ?? "" });
       continue;
     }
 
     if (/^\s*default:/.test(line)) {
+      if (block.length > 0) flush();
       pending = [];
+      block = [];
       continue;
     }
 
-    // Two shapes exist: a bare call to a helper defined in this file, and an
-    // on-demand import — `return (await import("./x")).runXSubcommand(rest);` —
-    // which is what every subcommand now uses so the router stays import-free
-    // (C-24: `schedule tick` must not drag the backend graph in).
-    const runner =
-      /return\s+(?:\(\s*await\s+import\("((?:\.\/|@\/)[^"]+)"\)\s*\)\s*\.)?(run[A-Za-z]+Subcommand)\s*\(/.exec(
-        line,
-      );
-    if (runner && pending.length > 0) {
-      cases.push({
-        command: pending[0].name,
-        aliases: pending.slice(1).map((entry) => entry.name),
-        notes: pending
-          .map((entry) => entry.note)
-          .filter((note) => note.length > 0),
-        runner: runner[2],
-        module: runner[1] ? resolveRouterModule(runner[1]) : null,
-        routerLine: index + 1,
-      });
-      pending = [];
-      continue;
-    }
-
-    if (/return null;/.test(line)) pending = [];
+    if (pending.length === 0) continue;
+    const statement = stripLineComment(line).trim();
+    if (statement.length === 0) continue;
+    block.push(statement);
   }
 
+  flush();
   if (cases.length === 0) {
     throw new ExtractionError(
       `No subcommand cases found in ${ROUTER_PATH}. Has the router been rewritten?`,
@@ -208,8 +247,7 @@ function parseSubcommandCases(source) {
  */
 function parseImports(source, importingPath) {
   const imports = new Map();
-  const pattern =
-    /import\s*\{([^}]*)\}\s*from\s*"((?:\.\/|@\/)[^"]+)";/g;
+  const pattern = /import\s*\{([^}]*)\}\s*from\s*"((?:\.\/|@\/)[^"]+)";/g;
   for (const match of source.matchAll(pattern)) {
     const specifier = match[2];
     const base = specifier.startsWith("@/")
@@ -232,7 +270,8 @@ function parseImports(source, importingPath) {
  * what a reader should be pointed at when there is no `console.log` to cite.
  */
 function enclosingDefinition(source, index) {
-  const pattern = /^(?:export\s+)?(?:async\s+)?(?:function\s+(\w+)|const\s+(\w+))/gm;
+  const pattern =
+    /^(?:export\s+)?(?:async\s+)?(?:function\s+(\w+)|const\s+(\w+))/gm;
   let last = null;
   for (const match of source.slice(0, index).matchAll(pattern)) {
     last = { name: match[1] ?? match[2], index: match.index };
@@ -305,7 +344,10 @@ function locateUsage(source) {
       .slice(windowStart, match.index)
       .lastIndexOf("console.log(");
     if (logIndex >= 0) {
-      return { line: lineNumberAt(source, windowStart + logIndex), symbol: "printUsage" };
+      return {
+        line: lineNumberAt(source, windowStart + logIndex),
+        symbol: "printUsage",
+      };
     }
 
     const owner = enclosingDefinition(source, match.index);
@@ -317,6 +359,24 @@ function locateUsage(source) {
     };
   }
 
+  return locateUsageConstant(source);
+}
+
+/**
+ * A `const USAGE = [...]` block that a printer logs, plus the definition line
+ * to cite. `schedule` keeps its help in such a constant; the literal scan above
+ * only sees one `Usage:` string, and a one-line synopsis is rejected there as an
+ * error hint, so without this the row has no anchor at all (M5 #13).
+ */
+function locateUsageConstant(source) {
+  for (const match of source.matchAll(/console\.(?:log|error)\((\w+)\)/g)) {
+    const symbol = match[1];
+    const start = definitionIndex(source, symbol);
+    if (start === null) continue;
+    const body = source.slice(start, start + 4000);
+    if (!/(["'`])\s*Usage:/.test(body)) continue;
+    return { line: lineNumberAt(source, start), symbol };
+  }
   return null;
 }
 
@@ -365,6 +425,73 @@ async function resolveHelpAnchor(modulePath, cache) {
   return { file: modulePath, line: null, symbol: null };
 }
 
+/**
+ * The usage anchor for one exported function: the literal (or `const USAGE`)
+ * inside it, else inside a same-module printer it calls. `export` and `import`
+ * both live in `snapshot/cli.ts`, so a module-wide scan would cite the first
+ * block for both (M5 #13).
+ */
+async function resolveSymbolUsage(modulePath, symbol, cache) {
+  let source = cache.get(modulePath);
+  if (source === undefined) {
+    source = await tryReadRepositoryFile(modulePath);
+    cache.set(modulePath, source);
+  }
+  if (source === null) return null;
+  const anchorAt = (index, usage, name) => ({
+    file: modulePath,
+    line: source.slice(0, index).split(/\r?\n/).length - 1 + usage.line,
+    symbol: name,
+  });
+  const functionBody = (index) => {
+    const rest = source.slice(index);
+    const next = /^(?:export\s+)?(?:async\s+)?(?:function|const)\s/m.exec(
+      rest.slice(1),
+    );
+    return next ? rest.slice(0, next.index + 1) : rest;
+  };
+
+  const start = definitionIndex(source, symbol);
+  if (start === null) return null;
+  const body = functionBody(start);
+  const usage = locateUsage(body);
+  if (usage) return anchorAt(start, usage, symbol);
+
+  for (const call of body.matchAll(/\b(\w+)\s*\(/g)) {
+    const name = call[1];
+    if (name === symbol) continue;
+    const nested = definitionIndex(source, name);
+    if (nested === null) continue;
+    const nestedUsage = locateUsage(functionBody(nested));
+    if (nestedUsage) return anchorAt(nested, nestedUsage, name);
+  }
+  return null;
+}
+
+/**
+ * Follow a local router helper (export/import) that only re-exports another
+ * module's subcommand: the real usage block lives in that target module.
+ * Returns `null` when the helper does not delegate this way.
+ */
+async function resolveDelegatedHelpAnchor(routerSource, runner, cache) {
+  const start = definitionIndex(routerSource, runner);
+  if (start === null) return null;
+  const body = routerSource.slice(start, start + 2000);
+  const delegated =
+    /const\s*\{[^}]*\}\s*=\s*await\s+import\("((?:\.\/|@\/)[^"]+)"\)/.exec(
+      body,
+    ) ?? /\(await\s+import\("((?:\.\/|@\/)[^"]+)"\)\)/.exec(body);
+  if (!delegated) return null;
+  const targetModule = resolveRouterModule(delegated[1]);
+  const called = /return\s+(\w+)\s*\(/.exec(body)?.[1];
+  if (called !== undefined) {
+    const symbolAnchor = await resolveSymbolUsage(targetModule, called, cache);
+    if (symbolAnchor !== null) return symbolAnchor;
+  }
+  const anchor = await resolveHelpAnchor(targetModule, cache);
+  return anchor.line === null ? null : anchor;
+}
+
 function formatValue(value) {
   if (typeof value === "string") return value;
   if (value instanceof Error) return value.message;
@@ -385,18 +512,14 @@ function formatValue(value) {
 async function captureHelp(command) {
   const captured = [];
   const sink = (...args) => captured.push(args.map(formatValue).join(" "));
-  const captureWrite =
-    (stream) =>
-    (chunk, encoding, callback) => {
-      const text =
-        typeof chunk === "string"
-          ? chunk
-          : new TextDecoder().decode(chunk);
-      captured.push(text.replace(/\r?\n$/, ""));
-      const done = typeof encoding === "function" ? encoding : callback;
-      if (typeof done === "function") done();
-      return true;
-    };
+  const captureWrite = () => (chunk, encoding, callback) => {
+    const text =
+      typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+    captured.push(text.replace(/\r?\n$/, ""));
+    const done = typeof encoding === "function" ? encoding : callback;
+    if (typeof done === "function") done();
+    return true;
+  };
 
   const original = {
     log: console.log,
@@ -409,8 +532,8 @@ async function captureHelp(command) {
 
   console.log = sink;
   console.error = sink;
-  process.stdout.write = captureWrite(process.stdout);
-  process.stderr.write = captureWrite(process.stderr);
+  process.stdout.write = captureWrite();
+  process.stderr.write = captureWrite();
   try {
     exitCode = await runSubcommand([command, "--help"]);
   } catch (error) {
@@ -541,10 +664,7 @@ function renderSubcommand(entry) {
   if (entry.help.length > 0) {
     lines.push("```text", entry.help, "```", "");
   } else if (entry.failure) {
-    lines.push(
-      `Collecting \`--help\` failed: ${entry.failure}`,
-      "",
-    );
+    lines.push(`Collecting \`--help\` failed: ${entry.failure}`, "");
   } else {
     lines.push("(This command prints no usage block.)", "");
   }
@@ -681,7 +801,10 @@ function renderIndex(document) {
     ].join("\n"),
   );
 
-  return `${parts.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+  return `${parts
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd()}\n`;
 }
 
 // --- assembly ---------------------------------------------------------------
@@ -694,17 +817,25 @@ async function collectSubcommands(cache) {
 
   for (const entry of cases) {
     const modulePath = entry.module ?? ROUTER_PATH;
-    const anchor =
-      modulePath === ROUTER_PATH && definitionIndex(routerSource, entry.runner) !== null
-        ? {
-            file: ROUTER_PATH,
-            line: lineNumberAt(
-              routerSource,
-              definitionIndex(routerSource, entry.runner),
-            ),
-            symbol: entry.runner,
-          }
-        : await resolveHelpAnchor(modulePath, cache);
+    let anchor = await resolveDelegatedHelpAnchor(
+      routerSource,
+      entry.runner,
+      cache,
+    );
+    if (anchor === null) {
+      const localStart =
+        modulePath === ROUTER_PATH
+          ? definitionIndex(routerSource, entry.runner)
+          : null;
+      anchor =
+        localStart !== null
+          ? {
+              file: ROUTER_PATH,
+              line: lineNumberAt(routerSource, localStart),
+              symbol: entry.runner,
+            }
+          : await resolveHelpAnchor(modulePath, cache);
+    }
     const inline = NO_HELP_TEXT.get(entry.command);
     const help = inline
       ? { exitCode: 0, failure: null, text: inline }
@@ -804,7 +935,9 @@ async function main() {
   if (options.mode === "write") {
     await mkdir(path.dirname(absoluteOut), { recursive: true });
     await writeFile(absoluteOut, markdown, "utf8");
-    process.stdout.write(`wrote ${repoPath(path.relative(REPOSITORY_ROOT, absoluteOut))}\n`);
+    process.stdout.write(
+      `wrote ${repoPath(path.relative(REPOSITORY_ROOT, absoluteOut))}\n`,
+    );
     return 0;
   }
 
@@ -840,9 +973,15 @@ async function main() {
   process.stderr.write(
     [
       `${options.out} is out of date with the command tree.`,
-      firstDifference >= 0 ? `First difference at line ${firstDifference + 1}:` : "",
-      firstDifference >= 0 ? `  committed: ${committedLines[firstDifference] ?? "(end of file)"}` : "",
-      firstDifference >= 0 ? `  generated: ${generatedLines[firstDifference] ?? "(end of file)"}` : "",
+      firstDifference >= 0
+        ? `First difference at line ${firstDifference + 1}:`
+        : "",
+      firstDifference >= 0
+        ? `  committed: ${committedLines[firstDifference] ?? "(end of file)"}`
+        : "",
+      firstDifference >= 0
+        ? `  generated: ${generatedLines[firstDifference] ?? "(end of file)"}`
+        : "",
       `Run: bun ${GENERATOR_PATH} --write`,
       "",
     ]
@@ -852,22 +991,24 @@ async function main() {
   return 1;
 }
 
-main()
-  .then((code) => {
-    process.exitCode = code;
-  })
-  .catch((error) => {
-    if (error instanceof ExtractionError) {
-      process.stderr.write(`Error: ${error.message}\n`);
-    } else {
-      process.stderr.write(`Error: ${error?.stack ?? String(error)}\n`);
-    }
-    process.exitCode = 1;
-  });
+/** Direct `bun scripts/extract…` run; an import (the parser test) must not run it. */
+const isDirectRun =
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
-export {
-  parseSlashCommands,
-  parseSubcommandCases,
-  renderIndex,
-  flagsInHelp,
-};
+if (isDirectRun) {
+  main()
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((error) => {
+      if (error instanceof ExtractionError) {
+        process.stderr.write(`Error: ${error.message}\n`);
+      } else {
+        process.stderr.write(`Error: ${error?.stack ?? String(error)}\n`);
+      }
+      process.exitCode = 1;
+    });
+}
+
+export { parseSlashCommands, parseSubcommandCases, renderIndex, flagsInHelp };

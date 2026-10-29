@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -14,9 +15,11 @@ import {
   getCronFilePath,
   getLegacyCronFilePath,
   getScheduleFilePath,
+  getScheduleTask,
   migrateLegacyCronFile,
   readCronFile,
   readScheduleFile,
+  ScheduleStoreCorruptError,
   ScheduleStoreMigrationError,
   ScheduleStoreVersionError,
   toScheduleTaskV2,
@@ -210,15 +213,15 @@ describe("migrateLegacyCronFile", () => {
     expect(existsSync(getScheduleFilePath())).toBe(false);
   });
 
-  test("a v1 file that is not a schedule file is refused, untouched", () => {
+  test("a v1 file with a non-array tasks field is refused, untouched", () => {
     const legacyPath = writeLegacyFile({ version: 1, tasks: "nope" });
 
-    const result = migrateLegacyCronFile();
+    // P0-2: a corrupt legacy file is not "migrated as empty" — the next write
+    // would bury whatever the user actually had.
+    expect(() => migrateLegacyCronFile()).toThrow(ScheduleStoreMigrationError);
 
-    // Non-array tasks cannot corrupt the new store: they migrate as empty.
-    expect(result?.taskCount).toBe(0);
-    expect(existsSync(legacyPath)).toBe(false);
-    expect(readScheduleFile().tasks).toEqual([]);
+    expect(readFileSync(legacyPath, "utf-8")).toContain('"tasks"');
+    expect(existsSync(getScheduleFilePath())).toBe(false);
   });
 
   test("a higher legacy version is refused, untouched", () => {
@@ -281,6 +284,7 @@ describe("ScheduleTaskV2 adapters", () => {
         host: "short-lived",
         pid: process.pid,
         token: "tok",
+        occurrence: "2026-10-28T09:00",
         startedAt: "2026-10-28T10:00:00.000Z",
         heartbeatAt: "2026-10-28T10:00:00.000Z",
         expiresAt: "2026-10-28T10:01:30.000Z",
@@ -365,5 +369,119 @@ describe("updateScheduleTask", () => {
     expect(task?.permission).toBe("standard");
     expect(task?.catch_up).toBe(true);
     expect(task?.last_consumed_occurrence).toBe("2026-10-28T09:00");
+  });
+
+  test("persists the frozen view's terminal outcome (F-18)", () => {
+    writeLegacyFile({ version: 1, tasks: [legacyTask()] });
+    readScheduleFile();
+
+    const updated = updateScheduleTask("a1b2c3d4", (task) => {
+      task.lastOutcome = "timeout";
+      task.lastReason = "deadline";
+    });
+
+    // Writing through the view must be visible on the next read, not silently
+    // dropped when the view is folded back (M0 F-18).
+    expect(updated?.lastOutcome).toBe("timeout");
+    expect(updated?.lastReason).toBe("deadline");
+    expect(getScheduleTask("a1b2c3d4")?.lastOutcome).toBe("timeout");
+    expect(getScheduleTask("a1b2c3d4")?.lastReason).toBe("deadline");
+  });
+});
+
+// ── P0-2/P0-3: corrupt stores, migration completion, unknown fields ──
+
+describe("corrupt store (P0-2)", () => {
+  test("a truncated file refuses reads and writes and keeps its bytes", () => {
+    const filePath = getScheduleFilePath();
+    const truncated = '{"version":2,"tasks":[{"id":"a1b2';
+    writeFileSync(filePath, truncated);
+
+    expect(() => readScheduleFile()).toThrow(ScheduleStoreCorruptError);
+    expect(() =>
+      writeScheduleFile({ ...emptyScheduleFile(), tasks: [] }),
+    ).toThrow(ScheduleStoreCorruptError);
+    expect(readFileSync(filePath, "utf-8")).toBe(truncated);
+  });
+
+  test("a non-object top level and a non-array tasks field are corruption", () => {
+    const filePath = getScheduleFilePath();
+    writeFileSync(filePath, "[]");
+    expect(() => readScheduleFile()).toThrow(ScheduleStoreCorruptError);
+
+    writeFileSync(filePath, JSON.stringify({ version: 2, tasks: "nope" }));
+    expect(() => readScheduleFile()).toThrow(ScheduleStoreCorruptError);
+  });
+
+  test("a non-integer version is corruption, not a silent downgrade (F-16)", () => {
+    const filePath = getScheduleFilePath();
+    for (const version of ["3", 2.5, 0, -1]) {
+      writeFileSync(filePath, JSON.stringify({ version, tasks: [] }));
+      expect(() => readScheduleFile()).toThrow(ScheduleStoreCorruptError);
+    }
+    writeFileSync(filePath, JSON.stringify({ version: 99, tasks: [] }));
+    expect(() => readScheduleFile()).toThrow(ScheduleStoreVersionError);
+  });
+
+  test("unknown top-level fields survive a read/write round trip (F-17)", () => {
+    const filePath = getScheduleFilePath();
+    writeFileSync(
+      filePath,
+      JSON.stringify({
+        version: 2,
+        future_top_level: { hello: "world" },
+        tasks: [],
+      }),
+    );
+
+    const data = readScheduleFile();
+    writeScheduleFile(data);
+
+    const written = JSON.parse(readFileSync(filePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    expect(written.future_top_level).toEqual({ hello: "world" });
+  });
+
+  test("a write leaves no temp file behind (P0-3)", () => {
+    writeScheduleFile({ ...emptyScheduleFile(), tasks: [] });
+
+    const leftovers = readdirSync(TEST_DIR).filter((name) =>
+      name.includes(".tmp."),
+    );
+    expect(leftovers).toEqual([]);
+  });
+});
+
+describe("interrupted migration (P0-3, F-05, F-19)", () => {
+  test("a read backs up a legacy file left next to a valid store", () => {
+    const store = emptyScheduleFile();
+    store.tasks = [{ ...legacyTask(), id: "in-store" } as CronTask];
+    writeScheduleFile(store);
+    const legacyPath = writeLegacyFile({
+      version: 1,
+      tasks: [legacyTask({ id: "in-legacy" })],
+    });
+
+    const data = readScheduleFile();
+
+    // The v2 store wins; the legacy file is backed up, not read.
+    expect(data.tasks.map((task) => task.id)).toEqual(["in-store"]);
+    expect(existsSync(legacyPath)).toBe(false);
+    expect(existsSync(getCronBackupFilePath())).toBe(true);
+  });
+
+  test("a failing backup is reported by the explicit migration and leaves the legacy file", () => {
+    const store = emptyScheduleFile();
+    writeScheduleFile(store);
+    const legacyPath = writeLegacyFile({ version: 1, tasks: [] });
+    // A directory where the backup file belongs makes the rename fail.
+    mkdirSync(getCronBackupFilePath(), { recursive: true });
+
+    expect(() => migrateLegacyCronFile()).toThrow(ScheduleStoreMigrationError);
+    expect(existsSync(legacyPath)).toBe(true);
+    // A read still works: the v2 store is authoritative.
+    expect(readScheduleFile().tasks).toEqual([]);
   });
 });

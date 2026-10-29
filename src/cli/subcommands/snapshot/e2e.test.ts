@@ -37,7 +37,7 @@ import {
 } from "@/utils/secrets-store";
 import { readTarGz, type TarReadEntry, writeTarGz } from "@/utils/tar-stream";
 import { runExport } from "./export";
-import { runImport } from "./import";
+import { __setImportFaultForTests, runImport } from "./import";
 import { buildManifest, serializeManifest } from "./manifest";
 import type { SnapshotCliDeps, SnapshotEntry } from "./types";
 
@@ -98,6 +98,8 @@ function depsFor(home: string, storage: string, cwd: string): SnapshotCliDeps {
     appVersion: "0.0.0-e2e",
     hostname: () => "e2e-host",
     now: () => new Date("2026-10-26T00:00:00.000Z"),
+    // Import never probes this machine's OS timer registry in tests.
+    autostartStatus: async () => ({ registered: true }),
   };
 }
 
@@ -728,4 +730,115 @@ test("a pre-F-05 package with only crons.json imports and migrates on first read
   expect(existsAt(targetHome, "schedules.json")).toBe(true);
   expect(existsAt(targetHome, "crons.v1.json")).toBe(true);
   expect(existsAt(targetHome, "crons.json")).toBe(false);
+});
+
+test("a v2 restore retires the live crons.json and a rollback brings it back", async () => {
+  await seedSourceMachine();
+  const packagePath = workspace.resolve("retire.hryk");
+  const exported = await runExport({
+    out: packagePath,
+    deps: depsFor(sourceHome, sourceStorage, workspace.path),
+  });
+  expect(exported.ok).toBe(true);
+
+  pointAt(targetHome, targetStorage);
+  writeFileAt(targetHome, "settings.json", '{"stale":true}\n');
+  const staleLegacy = `${JSON.stringify(
+    {
+      version: 1,
+      scheduler_owner: { pid: 1, token: "old-host" },
+      tasks: [{ id: "old-task", schedule: "0 9 * * *", prompt: "old" }],
+    },
+    null,
+    2,
+  )}\n`;
+  writeFileAt(targetHome, "crons.json", staleLegacy);
+  const targetDeps = depsFor(targetHome, targetStorage, workspace.path);
+
+  // The backup must include the legacy store it is about to replace (M5 #4):
+  // a failure after placement rolls it back. The import's own machine-state
+  // step clears the scheduler lease, so the tasks are what must survive.
+  __setImportFaultForTests((point) => {
+    if (point === "after-place") throw new Error("fault: after place");
+  });
+  try {
+    const failed = await runImport({
+      from: packagePath,
+      yes: true,
+      deps: targetDeps,
+    });
+    expect(failed.ok).toBe(false);
+    expect(failed.rollback?.ok).toBe(true);
+  } finally {
+    __setImportFaultForTests(null);
+  }
+  expect(existsAt(targetHome, "crons.json")).toBe(true);
+  expect(readJsonAt(targetHome, "crons.json").tasks).toEqual([
+    { id: "old-task", schedule: "0 9 * * *", prompt: "old" },
+  ]);
+
+  // A successful v2 restore retires it: the old live store would otherwise be
+  // resurrected by a downgrade or a deleted schedules.json (M5 #5).
+  const imported = await runImport({
+    from: packagePath,
+    yes: true,
+    deps: targetDeps,
+  });
+  expect(imported.ok).toBe(true);
+  expect(existsAt(targetHome, "crons.json")).toBe(false);
+  expect(readJsonAt(targetHome, "crons.v1.json").tasks).toEqual([
+    { id: "old-task", schedule: "0 9 * * *", prompt: "old" },
+  ]);
+  expect(readAt(targetHome, "crons.v1.json")).toBe(staleLegacy);
+});
+
+test("import warns when restored tasks have no autostart timer (M5 #1)", async () => {
+  await seedSourceMachine();
+  const packagePath = workspace.resolve("autostart-warning.hryk");
+  const exported = await runExport({
+    out: packagePath,
+    deps: depsFor(sourceHome, sourceStorage, workspace.path),
+  });
+  expect(exported.ok).toBe(true);
+
+  pointAt(targetHome, targetStorage);
+  const targetDeps = {
+    ...depsFor(targetHome, targetStorage, workspace.path),
+    autostartStatus: async () => ({ registered: false }),
+  };
+  const imported = await runImport({
+    from: packagePath,
+    yes: true,
+    deps: targetDeps,
+  });
+
+  expect(imported.ok).toBe(true);
+  const warnings = imported.warnings.join("\n");
+  expect(warnings).toContain("no autostart timer is registered");
+  expect(warnings).toContain("haruyuki schedule autostart on");
+});
+
+test("export warns when the machine only has the pre-migration store (M5 #3)", async () => {
+  pointAt(sourceHome, sourceStorage);
+  writeFileAt(sourceHome, "settings.json", '{"env":{}}\n');
+  writeFileAt(
+    sourceHome,
+    "crons.json",
+    `${JSON.stringify(
+      { version: 1, tasks: [{ id: "legacy-task", prompt: "old" }] },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const packagePath = workspace.resolve("legacy-only.hryk");
+  const exported = await runExport({
+    out: packagePath,
+    deps: depsFor(sourceHome, sourceStorage, workspace.path),
+  });
+
+  expect(exported.ok).toBe(true);
+  const warnings = exported.warnings.join("\n");
+  expect(warnings).toContain("has not migrated its schedule store");
+  expect(warnings).toContain("were NOT packed");
 });

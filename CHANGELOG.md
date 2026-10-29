@@ -22,7 +22,9 @@
   失败分类（F1/F2/F3）→ 补跑 → 事件。每个 tick 最多启动 1 条，其余按到期顺序摊到后续 tick。
 - **两种宿主**：长驻进程（TUI／`haruyuki server`）每 60 秒 tick；OS 定时器每分钟唤起短命进程跑
   `haruyuki schedule tick`（内部命令，帮助里不列）。长驻租约活着时长驻优先，短命宿主直接退出、
-  不写运行记录；**调度器租约**决定谁跑，**任务级租约**保证同一条任务至多一次。
+  不写运行记录；**调度器租约**决定谁跑，**任务级租约**（原子 `crons.lock` ＋ 陈旧锁 rename 抢占
+  ＋ 派发前 token 复核）保证同一 occurrence 不会被两个宿主同时执行。进程被挂起超过租约 TTL
+  （休眠、调试断点）时仍有双跑余量，所以这里只承诺“正常路径不双跑”，不承诺绝对至多一次。
 - **`schedules.json`（version 2）**：新文件名 ＋ 版本号 ＋ `signal_state.cursor`；旧 `crons.json`
   首次读到即自动迁移（原子写，任一步失败原文件不动），迁移后改名 `crons.v1.json` 只读备份；
   读到更高版本**拒绝读写**，不会把新格式当空文件覆盖。
@@ -31,27 +33,39 @@
   列表／详情／运行记录共用全屏面板；运行记录按 `runId` 分组。
 - **任务类型两种**：`prompt`（发到新会话或指定会话）与 `command`（只允许 `compact`／`reflect`，
   复用既有的非 TUI 执行体）。等待上限、执行超时与用户取消都有终态。
-- **权限三档（无人值守）**：`standard`（只读）／`acceptEdits`（可读写文件，shell 仍拒）／
+- **权限三档（无人值守）**：`standard`（默认只读；`recall` 等安全子代理类型自动放行）／
+  `acceptEdits`（可读写文件，shell 默认拒绝，显式 allow 规则仍可放行）／
   `unrestricted`（全部工具）。调度回合里任何审批请求一律拒绝，reason 标 `unattended`。
 - **补跑与失败暂停**：`catch_up` 打开时错过的周期只补一次（带原定时间）；关闭时记 missed。
   连续 3 次 F1/F2 自动暂停（`paused(auto_failures)`），`resume` 清零。
-- **任务级租约**：领取／心跳／释放；进程崩溃后 90 秒过期，occurrence 视为已消费 → 记 F2、
-  **不重跑**。
+- **任务级租约**：领取／心跳／释放；进程崩溃后租约 90 秒过期，**由下一次 tick** 记 F2、
+  occurrence 视为已消费，不重跑（恢复发生在 tick 时，不是过期瞬间）。
 - **账本按 runId 聚合**：触发时生成 `runId`，写进队列条目与本轮上下文；cron 回合终态写
   `source: "cron" | "command"` 与 `outcome`；`/usage` 的「Automated tasks」可按 runId 聚合，
   缺账显示 `—`。
 - **开机自启**：`/schedule autostart on|off|status` 与新建向导最后一步注册 OS 条目
   （Windows `schtasks`、macOS launchd、Linux systemd-user／crontab）；OS 条目只指向稳定的
-  launcher 脚本。删除最后一个任务**不**卸载自启，避免反复重建时反复写系统配置。
+  launcher 脚本。`status`/`off` 从机器上已安装的条目（unit 文件、enable 符号链接、crontab 行、
+  plist／注册表）判定方式，不再只看 `XDG_RUNTIME_DIR`，因此 SSH 下仍能识别并关闭桌面会话注册
+  的 timer；macOS 注册改用 `bootout` ＋ `bootstrap`，重写 plist 后立即生效。`HARUYUKI_HOME`／
+  安装路径变化后 `status` 会把旧条目标为 stale 并给出旧 launcher 路径，`on` 一次即刷新。
+  删除最后一个任务**不**卸载自启，避免反复重建时反复写系统配置。
 - **侧栏「计划任务」**：只读显示当前 agent 最近将跑的 3 条（名称、下次时间、状态）；空列表显示
   占位；只在列表变化时重绘（30s 低频 ＋ 事件刷新，遵守 TUI 闪烁纪律）。
 - **启动汇总与运行通知**：启动时逐条汇总一次（已读标记，不重复），`/schedule logs` 可回看；
   任务结束按结果发通知。
 - **`haruyuki cron` 扩展**：`add` 新增 `--type`／`--command`／`--visible`／`--hidden`／
   `--permission`／`--catch-up`／`--no-catch-up`／`--timeout`／`--wait`，与面板同源；
-  `cron` 仍是唯一调度器，存储改读 `schedules.json`。
+  `--command` 在创建时就按白名单校验（拼错不再等到每次派发才失败），`--wait 0` 与
+  `/schedule add` 一致表示“目标忙时立即跳过”；`cron` 仍是唯一调度器，存储改读 `schedules.json`；
+  当 store 损坏或来自更新版本时，子命令打印一行诊断而不是堆栈。
 - **快照**：`export` 打包 `home/schedules.json`、排除 `home/crons.v1.json`；导出与导入都清空
-  调度器租约与任务级租约，目标机不会继承来源机正在运行的领取。
+  调度器租约与任务级租约，目标机不会继承来源机正在运行的领取。导出与清租约前都会校验 store
+  版本，更新版本的 `schedules.json` 拒绝解析／改写／打包；只保留旧 `crons.json`、尚未迁移的机器
+  导出时明确警告“任务未入包”并提示先迁移。导入前的备份把受管的旧 `crons.json` 一并纳入（旧包
+  回滚可恢复原 store），恢复 v2 成功后把目标机残留的 live `crons.json` 改名为只读 v1 备份，
+  避免降级后旧任务复活；导入恢复出任务但本机没有自启条目时，报告里明确提示重新注册
+  `haruyuki schedule autostart on`。
 - **反思补漏**：成功路径按既有「反思完成即删」设置删除隐藏 fork；反思子进程权限可透传任务
   权限档（默认不变，只给调度触发传值）。
 - **`wake` 任务**：显式落库 `permission: unrestricted`／`catch_up: false`／`timeout_minutes: 30`，

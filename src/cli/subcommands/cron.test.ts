@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setConfiguredBackendMode } from "@/backend/backend-mode";
@@ -290,6 +290,8 @@ describe("cron add F-05 v2 fields (R-5.12.6)", () => {
       "0 3 * * *",
       "--agent",
       "agent-f05",
+      "--conversation",
+      "conversation-test",
       "--permission",
       "acceptEdits",
       "--no-catch-up",
@@ -367,5 +369,84 @@ describe("cron add F-05 v2 fields (R-5.12.6)", () => {
 
     expect(code).toBe(1);
     expect(errors.join("\n")).toContain("--command");
+  });
+
+  test("--wait 0 is accepted and stored (M5 #7)", async () => {
+    const { code, output, stored } = await runAdd([...addArgs, "--wait", "0"]);
+
+    expect(code).toBe(0);
+    expect(output.wait_minutes).toBe(0);
+    expect(stored?.wait_minutes).toBe(0);
+  });
+
+  test("an unknown --command is refused at creation time (M5 #8)", async () => {
+    const { code, output, errors } = await runAdd([
+      "add",
+      "--name",
+      "bad-command",
+      "--description",
+      "unknown command body",
+      "--type",
+      "command",
+      "--command",
+      "compact-all",
+      "--cron",
+      "0 3 * * *",
+      "--agent",
+      "agent-f05",
+      "--conversation",
+      "conversation-test",
+    ]);
+
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("--command must be compact or reflect");
+    expect(output.id).toBeUndefined();
+  });
+
+  test("the success copy names the autostart timer host (M5 #10)", async () => {
+    const { code, errors } = await runAdd(addArgs);
+
+    expect(code).toBe(0);
+    const message = errors.join("\n");
+    expect(message).toContain("autostart timer host");
+    expect(message).not.toContain("only fires while");
+  });
+});
+
+describe("cron store diagnostics", () => {
+  async function runAgainstStore(content: string): Promise<{
+    code: number;
+    errors: string[];
+  }> {
+    const home = mkdtempSync(join(tmpdir(), "letta-cron-store-test-"));
+    process.env.HARUYUKI_HOME = home;
+    writeFileSync(join(home, "schedules.json"), content, "utf-8");
+    const errors: string[] = [];
+    console.error = mock((line: string) => errors.push(String(line)));
+    try {
+      return { code: await runCronSubcommand(["list"]), errors };
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  test("a corrupt store prints the message without a stack (P0-2)", async () => {
+    const { code, errors } = await runAgainstStore('{"version":2,"tasks":[');
+    const text = errors.join("\n");
+
+    expect(code).toBe(1);
+    expect(text).toContain("is not a valid schedule file");
+    expect(text).not.toContain("    at ");
+  });
+
+  test("a store from a newer build prints its version diagnostic", async () => {
+    const { code, errors } = await runAgainstStore(
+      '{"version":99,"scheduler_owner":null,"tasks":[]}',
+    );
+    const text = errors.join("\n");
+
+    expect(code).toBe(1);
+    expect(text).toContain("version 99");
+    expect(text).not.toContain("    at ");
   });
 });

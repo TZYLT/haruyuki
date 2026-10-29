@@ -31,6 +31,7 @@ import {
 import { basename, join } from "node:path";
 import { installMemoryGitHooks } from "@/agent/memory-git-hooks";
 import { isProcessAlive } from "@/cron/process-identity";
+import { assertSnapshotStoreVersion } from "./legacy-store";
 import { snapshotError } from "./types";
 
 export interface CronLeaseResult {
@@ -242,26 +243,29 @@ export async function clearCronLease(
 ): Promise<CronLeaseResult> {
   const schedulePath = join(appHome, SCHEDULE_FILE_NAME);
   const legacyPath = join(appHome, LEGACY_SCHEDULE_FILE_NAME);
-  const targetPath = existsSync(schedulePath)
-    ? schedulePath
-    : existsSync(legacyPath)
-      ? legacyPath
-      : undefined;
-  if (targetPath === undefined) return { cleared: false };
-  const fileName = basename(targetPath);
+  const resolveTargetPath = (): string | undefined =>
+    existsSync(schedulePath)
+      ? schedulePath
+      : existsSync(legacyPath)
+        ? legacyPath
+        : undefined;
+  const beforeLock = resolveTargetPath();
+  if (beforeLock === undefined) return { cleared: false };
 
   const lock = acquireCronLock(appHome);
   if (!lock) {
     return {
       cleared: false,
-      warning: `crons.lock is busy; the scheduler and task leases in ${fileName} were left in place (retry the import later).`,
+      warning: `crons.lock is busy; the scheduler and task leases in ${basename(beforeLock)} were left in place (retry the import later).`,
     };
   }
 
   try {
-    // Re-checked inside the lock: a migration may have replaced the file while
-    // this process waited for the advisory lock.
-    if (!existsSync(targetPath)) return { cleared: false };
+    // Re-resolved inside the lock (M5 #6): a concurrent lazy migration may have
+    // replaced crons.json with schedules.json while this process waited.
+    const targetPath = resolveTargetPath();
+    if (targetPath === undefined) return { cleared: false };
+    const fileName = basename(targetPath);
 
     let raw: string;
     try {
@@ -290,6 +294,9 @@ export async function clearCronLease(
         `${fileName} is not a JSON object; refusing to overwrite it: ${targetPath}`,
       );
     }
+    // Version gate (M5 #16): v1 (and the pre-versioned form) may be cleared in
+    // place, v2 is current, and anything newer is refused unparsed.
+    assertSnapshotStoreVersion(data, fileName, targetPath);
 
     const { cleared, next } = clearLeaseFields(data);
     if (!cleared) return { cleared: false };

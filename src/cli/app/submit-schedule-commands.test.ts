@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   handleScheduleSubmit,
   type ScheduleSubmitContext,
@@ -135,7 +138,7 @@ describe("claimed forms", () => {
     });
   });
 
-  test("add always opens the wizard, and carries the flags it was given", async () => {
+  test("a partial add opens the wizard, and carries the flags it was given", async () => {
     setScheduleSourceForTests(EMPTY_SOURCE);
     const { ctx, opened } = context();
     await handleScheduleSubmit(
@@ -160,6 +163,33 @@ describe("claimed forms", () => {
     const { ctx, opened } = context();
     await handleScheduleSubmit("/schedule add", ctx);
     expect(opened[0]?.overlay).toBe("schedule-add");
+  });
+
+  test("a fully specified add creates in one step and prints the receipt (R-5.12.1)", async () => {
+    setScheduleSourceForTests(EMPTY_SOURCE);
+    const root = await mkdtemp(join(tmpdir(), "haruyuki-schedule-add-"));
+    const previousHome = process.env.HARUYUKI_HOME;
+    process.env.HARUYUKI_HOME = root;
+    try {
+      const { ctx, opened, finished } = context();
+      const result = await handleScheduleSubmit(
+        '/schedule add --cron "0 9 * * *" --prompt 晨报 --target new --hidden --permission standard --no-catch-up',
+        ctx,
+      );
+      // One step: no overlay, one receipt row with the created facts.
+      expect(result).toEqual({ submitted: true });
+      expect(opened).toHaveLength(0);
+      expect(finished).toHaveLength(1);
+      expect(finished[0]?.success).toBe(true);
+      expect(finished[0]?.output).toContain("已创建计划任务");
+      expect(finished[0]?.output).toContain("0 9 * * *");
+      // R-5.2.5: the one-step path did not ask about autostart, and says so.
+      expect(finished[0]?.output).toContain("自启未注册");
+    } finally {
+      if (previousHome === undefined) delete process.env.HARUYUKI_HOME;
+      else process.env.HARUYUKI_HOME = previousHome;
+      await rm(root, { recursive: true });
+    }
   });
 
   test("run goes through the TUI host and says so when there is none", async () => {

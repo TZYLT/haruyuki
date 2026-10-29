@@ -26,14 +26,19 @@
  */
 
 import { runLocalCompaction } from "@/agent/compaction-execute";
+import {
+  getReflectionRun,
+  type ReflectionRunState,
+  subscribeReflectionRunFinished,
+} from "@/agent/reflection-run";
 import { getBackend } from "@/backend";
 import { LocalBackend } from "@/backend/local/local-backend";
 import { launchReflectionSubagent } from "@/cli/helpers/reflection-launcher";
 import type { PermissionMode } from "@/permissions/mode";
 import { settingsManager } from "@/settings-manager";
 import { appendUsageRecord, buildUsageRecord } from "@/usage/ledger";
+import { debugWarn } from "@/utils/debug";
 import {
-  DEFAULT_PERMISSION_TIER,
   DEFAULT_TIMEOUT_MINUTES,
   DEFAULT_WAIT_MINUTES,
   type PermissionTier,
@@ -58,6 +63,16 @@ const PERMISSION_TIERS: readonly PermissionTier[] = [
   "acceptEdits",
   "unrestricted",
 ];
+
+/**
+ * The tier an unreadable/unknown stored value executes with (F-05 M2 F13).
+ *
+ * Creation defaults stay `DEFAULT_PERMISSION_TIER` (`unrestricted`): a *new*
+ * task the user asked for. A record we cannot parse is different — it must not
+ * fail open to the most permissive tier, so it runs as `standard` (the
+ * least-privileged tier that can still do the work).
+ */
+export const FAIL_CLOSED_PERMISSION_TIER: PermissionTier = "standard";
 
 const RUN_OUTCOMES: readonly RunOutcome[] = [
   "success",
@@ -127,30 +142,16 @@ export function permissionModeForTier(tier: PermissionTier): PermissionMode {
   return TIER_TO_MODE[tier];
 }
 
-export type PermissionDecisionLike = "allow" | "deny" | "ask" | "alwaysAsk";
-
-export interface UnattendedApprovalDecision {
-  decision: "allow" | "deny";
-  reason?: string;
-}
-
 /**
- * The unattended-approval policy (Q-51): no human is at the keyboard, so every
- * `ask` becomes a denial instead of a pending approval request.
- *
- * Kept as a pure function so the rule is testable without a turn; the runners
- * install it on the run's permission state (`unattended`), and the permission
- * checker applies it where the decision is produced.
+ * Re-exported from the dependency-free policy module so the checker can import
+ * the rule without pulling this file's backend/CLI dependencies into the
+ * permission layer (F-05 M2 F14). See `unattended-approval.ts`.
  */
-export function resolveUnattendedApproval(
-  decision: PermissionDecisionLike,
-  reason = "unattended",
-): UnattendedApprovalDecision {
-  if (decision === "ask" || decision === "alwaysAsk") {
-    return { decision: "deny", reason };
-  }
-  return decision === "allow" ? { decision: "allow" } : { decision: "deny" };
-}
+export {
+  type PermissionDecisionLike,
+  resolveUnattendedApproval,
+  type UnattendedApprovalDecision,
+} from "./unattended-approval";
 
 // ── Result shape ────────────────────────────────────────────────────
 
@@ -215,6 +216,79 @@ export function isScheduledTaskPreflightError(
 // ── Command execution (C-1 / C-2) ───────────────────────────────────
 
 /**
+ * Terminal state of a scheduled reflection subprocess (F-05 M2 F7).
+ *
+ * `unknown` is the registered degradation: the launcher reported a launch but
+ * the run is not in this process's reflection registry (an injected launcher in
+ * a test, or a launch whose registry entry was already pruned). A run that did
+ * spawn is always registered before `launchReflectionSubagent` resolves, so a
+ * real launch never takes this branch.
+ */
+export type ScheduledReflectionTerminal =
+  | "succeeded"
+  | "failed"
+  | "timeout"
+  | "cancelled"
+  | "unknown";
+
+/** Wait for one reflection run to reach its terminal state (test seam). */
+export type ScheduledReflectionWaiter = (input: {
+  runId: string;
+  signal: AbortSignal;
+}) => Promise<ScheduledReflectionTerminal>;
+
+const TERMINAL_REFLECTION_STATUSES: ReadonlySet<ReflectionRunState["status"]> =
+  new Set(["succeeded", "failed", "timeout", "cancelled"]);
+
+/**
+ * Wait for the reflection run's real terminal state instead of reporting the
+ * spawn as a success (F-05 M2 F7).
+ *
+ * The launcher returns as soon as the child was spawned; the run registry is
+ * the only place that knows when the child actually finished (§5.8.8). A run
+ * that is already terminal (a fast child that finished before this call) is
+ * read from the registry, otherwise a finish subscription resolves it. The
+ * run's own deadline still governs — this wait has no timer of its own, and the
+ * scheduled run's `timeout_minutes` envelope resolves the abort.
+ */
+async function defaultWaitForReflectionTerminal(input: {
+  runId: string;
+  signal: AbortSignal;
+}): Promise<ScheduledReflectionTerminal> {
+  const current = getReflectionRun(input.runId);
+  if (!current) return "unknown";
+  const terminal = reflectionTerminalOf(current.status);
+  if (terminal) return terminal;
+  if (input.signal.aborted) return "cancelled";
+
+  return new Promise<ScheduledReflectionTerminal>((resolve) => {
+    let settled = false;
+    const settle = (terminal: ScheduledReflectionTerminal): void => {
+      if (settled) return;
+      settled = true;
+      unsubscribe();
+      input.signal.removeEventListener("abort", onAbort);
+      resolve(terminal);
+    };
+    const onAbort = (): void => settle("cancelled");
+    const unsubscribe = subscribeReflectionRunFinished((event) => {
+      if (event.runId !== input.runId) return;
+      const status = reflectionTerminalOf(event.status);
+      if (status) settle(status);
+    });
+    input.signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function reflectionTerminalOf(
+  status: ReflectionRunState["status"],
+): ScheduledReflectionTerminal | null {
+  return TERMINAL_REFLECTION_STATUSES.has(status)
+    ? (status as ScheduledReflectionTerminal)
+    : null;
+}
+
+/**
  * Seams for the two command bodies. Defaults are the real implementations; the
  * overrides exist so the policy tests never touch a backend or a child process.
  */
@@ -222,6 +296,8 @@ export interface ScheduledCommandContext {
   /** `compact` needs the local backend; `null` means this backend cannot do it. */
   resolveLocalBackend?(): CompactBackendLike | null;
   launchReflection?: typeof launchReflectionSubagent;
+  /** Defaults to {@link defaultWaitForReflectionTerminal}. */
+  waitForReflectionTerminal?: ScheduledReflectionWaiter;
   isMemfsEnabled?(agentId: string): boolean;
   /** Ledger writer; defaults to `appendUsageRecord`. */
   appendUsage?(
@@ -350,8 +426,12 @@ async function runCompactCommand(
         : {}),
     };
   } catch (error) {
+    // One outcome for both the ledger row and the run result. A cancelled
+    // compaction that throws must not write `failed` and report `cancelled`
+    // (F-05 M2 F11).
+    const outcome = signal.aborted ? "cancelled" : "failed";
     await writeCommandUsage(input, conversationId, {
-      outcome: "failed",
+      outcome,
       agentId: task.agentId,
       model: "",
       promptTokens: 0,
@@ -361,7 +441,7 @@ async function runCompactCommand(
       context,
     });
     return {
-      outcome: signal.aborted ? "cancelled" : "failed",
+      outcome,
       conversationId,
       error: error instanceof Error ? error.message : String(error),
     };
@@ -423,7 +503,16 @@ async function writeCommandUsage(
   }
 }
 
-/** `/reflect` through the shared F-03 launcher (C-2/C-3), with the task's mode. */
+/**
+ * `/reflect` through the shared F-03 launcher (C-2/C-3), with the task's mode.
+ *
+ * Registered degradation (F-05 M2 F7): the reflection launcher exposes no
+ * cancel handle for the child it spawned, so a scheduled-run timeout stops
+ * *waiting* but cannot stop the child; the child's own
+ * `reflectionSettings.timeoutMinutes` deadline still applies and its spend is
+ * recorded by the reflection run itself. The run outcome is the child's real
+ * terminal state, never the spawn.
+ */
 async function runReflectCommand(
   input: RunScheduledTaskInput,
   _command: ParsedScheduledCommand,
@@ -445,7 +534,8 @@ async function runReflectCommand(
       // C-3: the only difference from the end-of-turn path is the trigger.
       triggerSource: "scheduled",
       // C-17: the subprocess inherits the task's tier instead of unrestricted.
-      permissionMode: permissionModeForTier(task.permission),
+      // An unreadable stored tier fails closed to `standard` (C-17/F13).
+      permissionMode: permissionModeForTier(resolveTaskPermissionTier(task)),
     });
     if (!result.launched) {
       return {
@@ -454,7 +544,43 @@ async function runReflectCommand(
         error: `reflection was not launched: ${result.reason}`,
       };
     }
-    return { outcome: "success", conversationId };
+
+    // F-05 M2 F7: the launcher resolves at spawn time, so its answer is not the
+    // run's outcome. Wait for the child's real terminal state (bounded by this
+    // run's `timeout_minutes` envelope, which aborts `signal`).
+    const wait =
+      context.waitForReflectionTerminal ?? defaultWaitForReflectionTerminal;
+    const terminal = await wait({ runId: result.runId, signal });
+    switch (terminal) {
+      case "succeeded":
+        return { outcome: "success", conversationId };
+      case "timeout":
+        return {
+          outcome: "timeout",
+          conversationId,
+          error: "reflection timed out",
+        };
+      case "cancelled":
+        return {
+          outcome: "cancelled",
+          conversationId,
+          error: "reflection cancelled",
+        };
+      case "unknown":
+        // Registered degradation: no registry entry, so the terminal state is
+        // unknowable. Report the launch rather than inventing a failure.
+        debugWarn(
+          "Cron",
+          `reflection run ${result.runId} is not in this process's registry; recording the launch as its outcome`,
+        );
+        return { outcome: "success", conversationId };
+      default:
+        return {
+          outcome: "failed",
+          conversationId,
+          error: "reflection run failed",
+        };
+    }
   } catch (error) {
     return {
       outcome: signal.aborted ? "cancelled" : "failed",
@@ -518,11 +644,52 @@ function isRunOutcome(value: unknown): value is RunOutcome {
 }
 
 /**
+ * The effectful body of one run, whichever task kind it is.
+ *
+ * Command tasks go through the same envelope as prompt tasks (F-05 M2 F3):
+ * `compact`/`reflect` used to return before the timeout timer was created, so
+ * `timeout_minutes` and cancellation never reached them. This function is the
+ * only thing the envelope wraps, which is what keeps the two kinds on the same
+ * policy.
+ */
+function executeScheduledBody(input: {
+  task: ScheduleTaskV2;
+  runId: string;
+  occurrence: string;
+  signal: AbortSignal;
+  host: ScheduledTaskHostPort;
+  commandContext: ScheduledCommandContext;
+}): Promise<ScheduledPromptRunResult> {
+  if (input.task.type === "command") {
+    return runScheduledTask(
+      { task: input.task, runId: input.runId, signal: input.signal },
+      input.commandContext,
+    ).then((result) => ({
+      outcome: result.outcome,
+      ...(result.conversationId !== undefined
+        ? { conversationId: result.conversationId }
+        : {}),
+      ...(result.error !== undefined ? { error: result.error } : {}),
+    }));
+  }
+  return input.host.runPrompt({
+    task: input.task,
+    runId: input.runId,
+    occurrence: input.occurrence,
+    signal: input.signal,
+  });
+}
+
+/**
  * Run one task under the wait/timeout/cancel policy and normalize the answer.
  *
  * `task.timeoutMinutes === 0` is "unlimited": the timer is never created. This
  * is checked before `setTimeout`, because `setTimeout(fn, 0)` fires on the next
  * tick instead of never (AGENTS.md gotcha).
+ *
+ * The timeout applies to **both** task kinds (F-05 M2 F3/F4): a command body
+ * runs inside the same `AbortSignal` as a prompt turn, so the listener host can
+ * interrupt the turn it belongs to and the TUI host can drop its queued item.
  */
 export async function runScheduledTaskWithHost(
   input: ScheduledTaskPolicyInput,
@@ -531,34 +698,33 @@ export async function runScheduledTaskWithHost(
   const now = input.now ?? Date.now;
   const pollMs = Math.max(1, input.pollIntervalMs ?? TARGET_BUSY_POLL_MS);
   const sleep = input.sleep ?? abortableSleep;
+  const commandContext = input.commandContext ?? {};
 
   if (signal.aborted) {
     return { outcome: "cancelled", error: "cancelled" };
   }
 
-  if (task.type === "command") {
-    return runScheduledTask(
-      { task, runId, signal },
-      input.commandContext ?? {},
-    );
-  }
-
   // ── Wait for the target conversation (R-5.7.3) ────────────────────
-  const waitMs = minutesToMs(task.waitMinutes, DEFAULT_WAIT_MINUTES);
-  const waitDeadline = now() + waitMs;
-  for (;;) {
-    if (signal.aborted) {
-      return { outcome: "cancelled", error: "cancelled" };
+  // Command tasks (`compact`/`reflect`) take a conversation id but do not send
+  // a turn, so they have nothing to wait for; they still run under the timeout
+  // below.
+  if (task.type !== "command") {
+    const waitMs = minutesToMs(task.waitMinutes, DEFAULT_WAIT_MINUTES);
+    const waitDeadline = now() + waitMs;
+    for (;;) {
+      if (signal.aborted) {
+        return { outcome: "cancelled", error: "cancelled" };
+      }
+      if (!host.isTargetBusy(task)) break;
+      const remaining = waitDeadline - now();
+      if (waitMs <= 0 || remaining <= 0) {
+        return {
+          outcome: "skipped",
+          error: "target conversation busy",
+        };
+      }
+      await sleep(Math.min(pollMs, remaining), signal);
     }
-    if (!host.isTargetBusy(task)) break;
-    const remaining = waitDeadline - now();
-    if (waitMs <= 0 || remaining <= 0) {
-      return {
-        outcome: "skipped",
-        error: "target conversation busy",
-      };
-    }
-    await sleep(Math.min(pollMs, remaining), signal);
   }
 
   // ── Execute under the timeout (R-5.7.4) ───────────────────────────
@@ -582,11 +748,13 @@ export async function runScheduledTaskWithHost(
 
   try {
     const executed = await Promise.race([
-      host.runPrompt({
+      executeScheduledBody({
         task,
         runId,
         occurrence,
         signal: runController.signal,
+        host,
+        commandContext,
       }),
       new Promise<null>((resolve) => {
         if (runController.signal.aborted) {
@@ -630,11 +798,14 @@ export async function runScheduledTaskWithHost(
   }
 }
 
-/** The tier a task executes with, tolerating a record written by an older build. */
+/**
+ * The tier a task executes with. An unreadable record fails **closed** to
+ * `standard` instead of the most permissive tier (F-05 M2 F13).
+ */
 export function resolveTaskPermissionTier(
   task: ScheduleTaskV2,
 ): PermissionTier {
   return isTaskPermissionTier(task.permission)
     ? task.permission
-    : DEFAULT_PERMISSION_TIER;
+    : FAIL_CLOSED_PERMISSION_TIER;
 }

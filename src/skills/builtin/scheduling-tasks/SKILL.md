@@ -137,7 +137,7 @@ Optional:
 | --- | --- |
 | `--type prompt\|command` | Task type; defaults to `prompt`, and `--command` implies `command` |
 | `--timeout <minutes>` | Per-run timeout; `0` means unlimited (default 30) |
-| `--wait <minutes>` | How long to wait for a busy target conversation (default 10) |
+| `--wait <minutes>` | How long to wait for a busy target conversation; `0` means skip the run immediately when it is busy (default 10) |
 | `--tz <IANA>` | Timezone for the cron expression; defaults to this machine's timezone at creation |
 | `--name <text>` | Task name; defaults to a short prefix of the prompt or command |
 
@@ -146,7 +146,8 @@ a five-field cron expression.
 
 A `command` task is limited to the unattended-safe whitelist: `compact` and
 `reflect`. The payload is passed through verbatim, so `--command "reflect"`
-works and any other command is refused before dispatch.
+works; any other command is refused when the task is created (and checked again
+before dispatch), so a typo cannot become a task that fails every run.
 
 Targets:
 
@@ -157,14 +158,14 @@ Targets:
 
 ### Permission tiers
 
-Scheduled runs are unattended: there is no human at the keyboard, so **every
-approval request is denied** instead of waiting. The tier decides what can be
-done without asking:
+Scheduled runs are unattended: there is no human at the keyboard, so every
+approval request is denied instead of waiting. The tier decides what can run
+without asking:
 
-| Tier | Allows | Refuses |
+| Tier | Allows without asking | Needs approval (so it is denied unattended) |
 | --- | --- | --- |
-| `standard` | Reading files, searching | Writing files, shell, subagents |
-| `acceptEdits` | Reading and writing files | Shell |
+| `standard` | Reading, searching, task-list and artifact bookkeeping, and the read-only `recall` subagent (the constrained `reflection`/`memory` subagents are also auto-approved) | Writing files, shell, and every other subagent type |
+| `acceptEdits` | Reading and writing files | Shell, **unless an explicit permission allow rule matches** — allow rules are evaluated before the tier default, so a shell command the user allow-listed does run |
 | `unrestricted` | Every tool | Nothing by tier; this build does not promise delete/network bans, because the sandbox is process-level |
 
 A `reflect` command task inherits the task's tier. With `standard` it cannot
@@ -205,8 +206,10 @@ standard|acceptEdits|unrestricted`, `--catch-up`/`--no-catch-up`, `--timeout
 <minutes>`, and `--wait <minutes>`. A command task requires `--command`,
 cannot be combined with `--prompt`, and is limited to `compact`/`reflect`;
 `--visible`/`--hidden` only apply when `--conversation` is omitted or `new`.
-`--timeout` accepts `0` (unlimited); `--wait` requires at least 1. There is no
-`--tz` on this CLI: the timezone is the process timezone captured at creation.
+`--timeout` accepts `0` (unlimited); `--wait` accepts `0` too (skip the run
+immediately when the target conversation is busy, instead of queueing it for up
+to ten minutes). There is no `--tz` on this CLI: the timezone is the process
+timezone captured at creation.
 A field left out gets the store default: `prompt` type, `unrestricted`
 permission, no catch-up, a 30-minute timeout, and a 10-minute wait.
 
@@ -231,6 +234,12 @@ entry that wakes `haruyuki schedule tick` once a minute:
 The entry points at a generated launcher, not at the product binary, so it
 survives a move of the binary and carries the `HARUYUKI_HOME` override. The
 wizard's last step offers the same registration.
+
+`status` reads the entry the machine actually has, not just `XDG_RUNTIME_DIR`:
+a timer registered from a desktop session is still reported (and `off` can still
+remove it) from an SSH shell with no user manager. When `HARUYUKI_HOME` or the
+install path changed since registration, `status` reports the entry as stale;
+run `autostart on` again to point it at the new launcher.
 
 `/schedule autostart off` (or uninstalling) removes the entry. **Deleting the
 last task does not unregister autostart** — that is deliberate, so rebuilding a
@@ -358,7 +367,18 @@ useful when the prompt arrives.
 `home/crons.v1.json` backup out of the package. Both export and import clear the
 scheduler lease and every task lease (`scheduler_owner` null,
 `scheduler_owners` empty, each task's `lease` null), so a package never carries
-the exporting machine's scheduler claim into the target machine.
+the exporting machine's scheduler claim into the target machine. Export refuses a
+`schedules.json` written by a newer build instead of rewriting it.
+
+Two edges matter on old machines. A machine that has not run a schedule command
+since the upgrade still keeps its tasks in `crons.json` and has no
+`schedules.json`: export warns that those tasks were **not packed** (run any
+schedule command once to migrate, then export again). An import restores the
+tasks but never the exporting machine's OS timer registration, so it warns when
+no autostart timer is registered here — run `haruyuki schedule autostart on` on
+the target. The pre-import backup includes a legacy `crons.json`, and a
+successful v2 restore retires a leftover live `crons.json` so a downgrade cannot
+resurrect its tasks.
 
 ## Important notes
 

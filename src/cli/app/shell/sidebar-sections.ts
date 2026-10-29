@@ -296,6 +296,12 @@ export type SidebarProjection = {
    * At most three rows are drawn; a longer list reports its surplus as `+N`.
    */
   schedules: readonly SidebarScheduleRow[] | null;
+  /**
+   * The store read failed (version gate, permissions). The section says
+   * "读取失败" instead of painting a zero-task list, which would claim there are
+   * no tasks when the truth is that nothing could be read (M3 #17).
+   */
+  schedulesError?: string | null;
 };
 
 /**
@@ -486,6 +492,14 @@ function scheduleStatusWord(status: string): string {
 
 /** `计划任务` — the current agent's next three runs (R-5.12.5, M-16). */
 function schedulesSection(projection: SidebarProjection) {
+  // A failed read is not an empty store (M3 #17): "暂无计划任务" would make the
+  // rail claim a fact it does not have.
+  if (projection.schedulesError) {
+    return {
+      detail: [`读取失败：${projection.schedulesError}`],
+      summary: "计划任务 —",
+    };
+  }
   const schedules = projection.schedules;
   if (schedules === null) {
     return { detail: ["读取中…"], summary: "计划任务 —" };

@@ -16,7 +16,10 @@
  */
 
 import { getBackend } from "@/backend";
-import type { ConversationCreateBody } from "@/backend/backend";
+import type {
+  ConversationCreateBody,
+  ConversationListBody,
+} from "@/backend/backend";
 import { legacyRunOutcomeFor } from "@/cron/cron-file";
 import type {
   RunOutcome,
@@ -46,7 +49,7 @@ import { hiddenStandaloneProvenance } from "@/types/conversation-provenance";
 import type { UsageStatistics } from "@/types/protocol";
 import type { StopReasonType } from "@/types/protocol_v2";
 import { appendUsageRecord, buildUsageRecord } from "@/usage/ledger";
-import { debugWarn } from "@/utils/debug";
+import { debugLog, debugWarn } from "@/utils/debug";
 import { ensureConversationQueueRuntime } from "@/websocket/listener/conversation-runtime";
 import {
   type ConversationPermissionModeState,
@@ -60,6 +63,7 @@ import {
 } from "@/websocket/listener/runtime";
 import type { ListenerTransport } from "@/websocket/listener/transport";
 import type {
+  ConversationRuntime,
   IncomingMessage,
   ListenerRuntime,
   ListenerStreamObserver,
@@ -72,6 +76,45 @@ export type ListenerCronProcessQueuedTurn = (
   queuedTurn: IncomingMessage,
   dequeuedBatch: DequeuedBatch,
 ) => Promise<void>;
+
+/**
+ * What a pre-dispatch target lookup concluded (F-05 M2 F10). A missing,
+ * deleted or hidden conversation is an F1 ("nothing this run could start"),
+ * which the core records without counting toward the auto-pause streak.
+ */
+export type ExistingTargetState = "ok" | "missing" | "hidden";
+
+export type ExistingTargetResolver = (input: {
+  agentId: string;
+  conversationId: string;
+}) => Promise<ExistingTargetState>;
+
+/**
+ * Default lookup: a non-creating list, never `retrieveConversation` — on the
+ * local backend that call *creates* an unknown conversation, which would turn
+ * the validation itself into a write (and hide exactly the missing target this
+ * check exists to find).
+ */
+async function defaultResolveExistingTarget(input: {
+  agentId: string;
+  conversationId: string;
+}): Promise<ExistingTargetState> {
+  // The implicit conversation always exists; the conversation list hides it.
+  if (input.conversationId === "default") return "ok";
+  const body: ConversationListBody = {
+    agent_id: input.agentId,
+    summary_search: input.conversationId,
+    include_hidden: true,
+    limit: 100,
+  };
+  const rows = await getBackend().listConversations(body);
+  const row = rows.find((candidate) => candidate.id === input.conversationId);
+  if (!row) return "missing";
+  // `hidden` is a runtime annotation the SDK's `Conversation` type does not
+  // carry (`toHiddenConversationSummary` attaches it), so it is read through a
+  // guard rather than a cast.
+  return isRecord(row) && row.hidden === true ? "hidden" : "ok";
+}
 
 export interface ListenerCronRunnerDeps {
   /** Transport the queued turn reports through (the listener's own socket). */
@@ -86,6 +129,8 @@ export interface ListenerCronRunnerDeps {
   createConversation?: (
     body: ConversationCreateBody,
   ) => Promise<{ id: string }>;
+  /** Defaults to {@link defaultResolveExistingTarget}. Seam for tests. */
+  resolveExistingTarget?: ExistingTargetResolver;
   /** Defaults to the real compaction/reflection bodies. Seam for tests. */
   commandContext?: ScheduledCommandContext;
   /**
@@ -145,20 +190,39 @@ function normalizeConversationId(value: string | null | undefined): string {
   return value && value.length > 0 ? value : "default";
 }
 
+/** A stream observer plus the two side effects a run owns while it waits. */
+interface TurnTerminalObserver {
+  promise: Promise<TurnTerminal>;
+  dispose: () => void;
+}
+
 /**
- * Wait for the turn that carries this run to reach a terminal state.
+ * Wait for the turn **this run started** to reach a terminal state.
  *
  * `turn_finished` is the listener's own terminal projection and the only place a
  * turn's `usage` counters surface in-process (the alternative would be a new
  * hook in `turn.ts`, which M2 does not own). The observer is scoped by
- * conversation and removed in the caller's `finally`.
+ * conversation, by agent and — the F-05 M2 F5 fix — by **queue item id**: our
+ * item leaving the ready queue is the proof the pump consumed *this* item into
+ * the running turn. A terminal event on the same conversation while our item is
+ * still queued belongs to a foreign turn (a user turn, or another run's turn)
+ * and must not settle this run.
+ *
+ * The observer also owns cancellation (F-05 M2 F4): when the run's signal
+ * aborts, the turn it started is interrupted and a still-queued item is
+ * removed, so cancelling or timing out never leaves an unowned turn to run to
+ * completion and bill nobody, nor an orphan item to execute later. A queue
+ * clear elsewhere (`update_queue` naming our item as removed) settles the run
+ * as cancelled instead of letting it wait for a turn that will never happen.
  */
 function observeTurnTerminal(input: {
   listener: ListenerRuntime;
+  runtime: ConversationRuntime;
   agentId: string;
   conversationId: string;
+  queueItemId: string;
   signal: AbortSignal;
-}): { promise: Promise<TurnTerminal>; dispose: () => void } {
+}): TurnTerminalObserver {
   if (!input.listener.streamObservers) {
     input.listener.streamObservers = new Set<ListenerStreamObserver>();
   }
@@ -169,6 +233,29 @@ function observeTurnTerminal(input: {
     settle = (terminal) => resolve(terminal);
   });
 
+  const stillQueued = (): boolean => {
+    const queue = input.runtime.queueRuntime;
+    return (
+      queue?.peekReady().some((item) => item.id === input.queueItemId) ?? false
+    );
+  };
+
+  /**
+   * Stop what this run started. A pre-start cancellation only has a queue item
+   * to drop; once the pump consumed it, the active lease is the turn that must
+   * be aborted (`.requestCancellation()` moves `active -> cancelling`, the same
+   * transition an explicit user abort uses).
+   */
+  const interrupt = (): void => {
+    const queue = input.runtime.queueRuntime;
+    if (queue !== null && queue.removeItem(input.queueItemId) !== null) {
+      return;
+    }
+    if (input.runtime.turnLifecycle.kind === "active") {
+      input.runtime.turnLifecycle.requestCancellation();
+    }
+  };
+
   const finish = (terminal: TurnTerminal) => {
     if (disposed) return;
     disposed = true;
@@ -177,30 +264,80 @@ function observeTurnTerminal(input: {
     settle(terminal);
   };
 
-  const onAbort = () =>
+  const onAbort = () => {
+    interrupt();
     finish({
       stopReason: "cancelled",
       usage: null,
       error: "cancelled",
       aborted: true,
     });
+  };
 
-  const observer: ListenerStreamObserver = (message) => {
-    if (message.type !== "turn_finished") return;
+  const scopeMatches = (message: ObservedProtocolV2Message): boolean => {
     if (
       normalizeConversationId(scopeConversationId(message)) !==
       normalizeConversationId(input.conversationId)
     ) {
-      return;
+      return false;
     }
     const scopedAgent = message.runtime?.agent_id;
-    if (typeof scopedAgent === "string" && scopedAgent !== input.agentId) {
+    return typeof scopedAgent !== "string" || scopedAgent === input.agentId;
+  };
+
+  /**
+   * The removal id the queue's own transition reports for our item: a cron
+   * prompt carries no `clientMessageId`, so `queueRemovalTransition` names it
+   * `cm-<itemId>`.
+   */
+  const removedMarker = `cm-${input.queueItemId}`;
+
+  /** True when an `update_queue` frame says our own item was cancelled. */
+  const removedByQueueClear = (message: ObservedProtocolV2Message): boolean => {
+    const removed = (message as { removed?: unknown }).removed;
+    if (!Array.isArray(removed)) return false;
+    return removed.some((entry) => {
+      if (!isRecord(entry)) return false;
+      return (
+        entry.client_message_id === removedMarker &&
+        entry.disposition === "cancelled"
+      );
+    });
+  };
+
+  const observer: ListenerStreamObserver = (message) => {
+    if (!scopeMatches(message)) return;
+    // F4: an authoritative queue clear removed our item, so no turn will ever
+    // run for it. Settle cancelled instead of waiting for the timeout — and
+    // never interrupt whatever turn follows.
+    if (message.type === "update_queue") {
+      if (!removedByQueueClear(message) || stillQueued()) return;
+      finish({
+        stopReason: "cancelled",
+        usage: null,
+        error: "the scheduled prompt was removed from the queue",
+        aborted: true,
+      });
       return;
     }
+    if (message.type !== "turn_finished") return;
+    // F5: a foreign turn on this conversation cannot settle this run while the
+    // run's own item is still waiting in the queue.
+    if (stillQueued()) return;
+    const turnId =
+      typeof message.turn_id === "string" && message.turn_id
+        ? message.turn_id
+        : null;
     const stopReason =
       typeof message.stop_reason === "string"
         ? (message.stop_reason as StopReasonType)
         : null;
+    // F5: keep the matched turn id in the log so a run's settlement can be
+    // traced to the exact turn, not merely to its conversation.
+    debugLog(
+      "Cron",
+      `run on ${input.conversationId} settled by turn ${turnId ?? "unknown"}`,
+    );
     finish({
       stopReason,
       usage: readUsage(message.usage),
@@ -267,6 +404,11 @@ function taskRef(task: ScheduleTaskV2, conversationId: string | null) {
 /**
  * The permission state is per conversation and shared with the user's own
  * turns, so both fields are written for the run and restored afterwards.
+ *
+ * Restoration is compare-and-restore (F-05 M2 F9): only a field the run still
+ * owns is put back. If the user changed the mode while the run was in flight,
+ * their newer choice wins instead of being silently overwritten by the state
+ * that preceded the run.
  */
 function applyRunPermissionState(
   state: ConversationPermissionModeState,
@@ -274,11 +416,12 @@ function applyRunPermissionState(
 ): () => void {
   const previousMode = state.mode;
   const previousUnattended = state.unattended;
-  state.mode = permissionModeForTier(tier);
+  const runMode = permissionModeForTier(tier);
+  state.mode = runMode;
   state.unattended = true;
   return () => {
-    state.mode = previousMode;
-    state.unattended = previousUnattended;
+    if (state.mode === runMode) state.mode = previousMode;
+    if (state.unattended === true) state.unattended = previousUnattended;
   };
 }
 
@@ -289,6 +432,8 @@ export function createListenerCronRunner(
   const createConversation =
     deps.createConversation ??
     ((body: ConversationCreateBody) => getBackend().createConversation(body));
+  const resolveExistingTarget =
+    deps.resolveExistingTarget ?? defaultResolveExistingTarget;
   const now = deps.now ?? Date.now;
   const pollIntervalMs = deps.pollIntervalMs ?? TARGET_BUSY_POLL_MS;
   const runnerHost = deps.host ?? "long-lived";
@@ -315,6 +460,30 @@ export function createListenerCronRunner(
     let conversationId: string;
     if (task.target.kind === "existing") {
       conversationId = task.target.conversation_id;
+      // F-05 M2 F10: resolve the target *before* dispatch. Without this an
+      // unknown/deleted/hidden conversation surfaces as a failed turn (F2) and
+      // counts toward the auto-pause streak, when it is really "nothing this
+      // run could start" (F1).
+      let targetState: ExistingTargetState;
+      try {
+        targetState = await resolveExistingTarget({
+          agentId: task.agentId,
+          conversationId,
+        });
+      } catch (error) {
+        throw new ScheduledTaskPreflightError(
+          error instanceof Error
+            ? `failed to resolve the target conversation: ${error.message}`
+            : "failed to resolve the target conversation",
+        );
+      }
+      if (targetState !== "ok") {
+        throw new ScheduledTaskPreflightError(
+          targetState === "hidden"
+            ? `target conversation ${conversationId} is hidden and cannot receive a scheduled run`
+            : `target conversation ${conversationId} does not exist (missing or deleted)`,
+        );
+      }
     } else {
       // The SDK's create body has no `tags` / provenance fields; the old
       // scheduler cast the same way (`scheduler.ts`).
@@ -358,6 +527,16 @@ export function createListenerCronRunner(
       prompt: task.payload,
     });
 
+    // F-05 M2 F4: a run cancelled between creating/validating the target and
+    // reaching the queue must not enqueue work nobody is waiting for.
+    if (signal.aborted) {
+      return {
+        outcome: "cancelled",
+        conversationId: scopedConversationId,
+        error: "cancelled",
+      };
+    }
+
     const permissionState = getOrCreateConversationPermissionModeStateRef(
       listener,
       task.agentId,
@@ -367,12 +546,7 @@ export function createListenerCronRunner(
       permissionState,
       resolveTaskPermissionTier(task),
     );
-    const observed = observeTurnTerminal({
-      listener,
-      agentId: task.agentId,
-      conversationId: scopedConversationId,
-      signal,
-    });
+    let observed: TurnTerminalObserver | null = null;
 
     try {
       // `Omit<QueueItem, ...>` is a union, so a `cron_prompt` literal cannot be
@@ -394,6 +568,14 @@ export function createListenerCronRunner(
         };
       }
 
+      observed = observeTurnTerminal({
+        listener,
+        runtime: conversationRuntime,
+        agentId: task.agentId,
+        conversationId: scopedConversationId,
+        queueItemId: queued.id,
+        signal,
+      });
       scheduleQueuePump(
         conversationRuntime,
         transport,
@@ -418,7 +600,7 @@ export function createListenerCronRunner(
           : {}),
       };
     } finally {
-      observed.dispose();
+      observed?.dispose();
       restorePermissionState();
     }
   };

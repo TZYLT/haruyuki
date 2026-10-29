@@ -51,10 +51,17 @@ interface SchedulerState {
   opts: HostOptions;
   tombstoneToken: string | undefined;
   pendingTimer: NodeJS.Timeout | null;
+  /** P1-7/R-5.7.5: a tick never overlaps another; a wake during one is queued. */
+  tickInFlight: boolean;
+  tickQueued: boolean;
 }
 
 let schedulerState: SchedulerState | null = null;
 let taskRunner: TaskRunnerPort | null = null;
+/** M1 #13: the lease-retry timer must be cancellable by `stopScheduler`. */
+let leaseRetryTimer: NodeJS.Timeout | null = null;
+/** Bumped on stop so a stale retry callback can never resurrect the host. */
+let schedulerEpoch = 0;
 
 /** The host registers its runner before starting; `stopScheduler` clears it. */
 export function setSchedulerTaskRunner(runner: TaskRunnerPort | null): void {
@@ -132,8 +139,7 @@ function holdSchedulerLease(state: SchedulerState): boolean {
 
 // ── Tick ────────────────────────────────────────────────────────────
 
-async function runTick(state: SchedulerState): Promise<void> {
-  if (schedulerState !== state) return;
+async function runTickWork(state: SchedulerState): Promise<void> {
   try {
     if (!holdSchedulerLease(state)) return;
   } catch (err) {
@@ -162,6 +168,26 @@ async function runTick(state: SchedulerState): Promise<void> {
   }, delay);
 }
 
+async function runTick(state: SchedulerState): Promise<void> {
+  if (schedulerState !== state) return;
+  // P1-7/R-5.7.5: a long run must not be overlapped by the next interval or the
+  // jitter wake. Queue one follow-up instead, and run it when this tick ends.
+  if (state.tickInFlight) {
+    state.tickQueued = true;
+    return;
+  }
+  state.tickInFlight = true;
+  try {
+    await runTickWork(state);
+  } finally {
+    state.tickInFlight = false;
+    if (state.tickQueued) {
+      state.tickQueued = false;
+      if (schedulerState === state) runTickSafely(state);
+    }
+  }
+}
+
 function runTickSafely(state: SchedulerState): void {
   void runTick(state).catch((err) =>
     logScheduler(state.opts, `Tick error: ${leaseError(err)}`),
@@ -177,6 +203,7 @@ export function startScheduler(
   retryCount = 0,
 ): void {
   if (schedulerState) return;
+  const epoch = ++schedulerEpoch;
 
   let token: string;
   const scope = resolveCronSchedulerScope();
@@ -202,10 +229,13 @@ export function startScheduler(
       opts,
       "Cron tasks will not fire until the scheduler starts. Retrying...",
     );
-    setTimeout(
-      () => startScheduler(socket, opts, processQueuedTurn, retryCount + 1),
-      LEASE_RETRY_MS,
-    );
+    if (leaseRetryTimer) clearTimeout(leaseRetryTimer);
+    leaseRetryTimer = setTimeout(() => {
+      leaseRetryTimer = null;
+      // M1 #13: a retry armed before `stopScheduler` must not resurrect the host.
+      if (schedulerState || epoch !== schedulerEpoch) return;
+      startScheduler(socket, opts, processQueuedTurn, retryCount + 1);
+    }, LEASE_RETRY_MS);
     return;
   }
 
@@ -218,6 +248,8 @@ export function startScheduler(
     opts,
     tombstoneToken: readCronFile().scheduler_owner?.token,
     pendingTimer: null,
+    tickInFlight: false,
+    tickQueued: false,
   };
   schedulerState = state;
 
@@ -258,6 +290,13 @@ export function startScheduler(
 
 export function stopScheduler(): void {
   taskRunner = null;
+  // M1 #13: cancel the lease-retry timer and invalidate any callback already
+  // queued, so a stopped host cannot revive itself up to 30s later.
+  schedulerEpoch += 1;
+  if (leaseRetryTimer) {
+    clearTimeout(leaseRetryTimer);
+    leaseRetryTimer = null;
+  }
   if (!schedulerState) return;
   clearInterval(schedulerState.tickInterval);
   clearInterval(schedulerState.gcInterval);

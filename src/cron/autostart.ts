@@ -144,6 +144,13 @@ export interface AutostartOptions {
   launcherPath?: string;
   /** systemd availability on Linux. Defaults to "an XDG runtime dir exists". */
   systemd?: boolean;
+  /**
+   * Forces the Linux mechanism. Callers that know how this machine registered
+   * pass it; otherwise the machine's own artifacts decide (M4 #8).
+   */
+  method?: AutostartMethod;
+  /** macOS uid for the `gui/<uid>` launchctl domain; defaults to the process uid. */
+  uid?: number;
 }
 
 /**
@@ -151,8 +158,10 @@ export interface AutostartOptions {
  *
  * `HARUYUKI_CODE_BIN` wins (the same convention the shell tool and subagent
  * launcher use). Otherwise the pair is the current executable plus its
- * entrypoint script, which covers both hosts this repo ships: `bun
- * src/index.ts` in development and `node …/haruyuki.js` from the package.
+ * entrypoint: a packaged `haruyuki.js` is already the light standalone entry,
+ * while a dev `bun src/index.ts` run is redirected to the sibling
+ * `src/standalone-entry.ts` so the timer never loads the whole application
+ * just to fire `schedule tick` (C-24/P1-6).
  */
 export function resolveAutostartInvocation(
   env: NodeJS.ProcessEnv = process.env,
@@ -164,7 +173,10 @@ export function resolveAutostartInvocation(
     return { command: explicit, args: [] };
   }
   if (entrypoint) {
-    return { command: execPath, args: [entrypoint] };
+    const devEntry = /src[\\/]index\.ts$/.test(entrypoint)
+      ? `${entrypoint.slice(0, -"index.ts".length)}standalone-entry.ts`
+      : entrypoint;
+    return { command: execPath, args: [devEntry] };
   }
   return {
     command: process.platform === "win32" ? "haruyuki.cmd" : "haruyuki",
@@ -266,7 +278,12 @@ interface AutostartContext {
   runner: AutostartCommandRunner;
   launcherPath: string;
   invocation: AutostartInvocation;
-  systemd: boolean;
+  /** An XDG runtime dir says a user systemd manager is reachable right now. */
+  systemdAvailable: boolean;
+  /** Explicit mechanism override; `null` means "decide from the machine". */
+  method: AutostartMethod | null;
+  /** macOS launchctl domain uid. */
+  uid: number;
 }
 
 function failure(
@@ -293,8 +310,196 @@ function launchAgentsPlistPath(homeDir: string): string {
   );
 }
 
-function systemdUserDir(homeDir: string): string {
-  return join(homeDir, ".config", "systemd", "user");
+function launchdDomain(context: { uid: number }): string {
+  return `gui/${context.uid}`;
+}
+
+interface LinuxUnitPaths {
+  directory: string;
+  service: string;
+  timer: string;
+  /** Symlink `systemctl --user enable` creates; readable without a bus. */
+  wantsTimer: string;
+}
+
+function linuxUnitPaths(homeDir: string): LinuxUnitPaths {
+  const directory = join(homeDir, ".config", "systemd", "user");
+  return {
+    directory,
+    service: join(directory, `${AUTOSTART_SYSTEMD_UNIT}.service`),
+    timer: join(directory, `${AUTOSTART_SYSTEMD_UNIT}.timer`),
+    wantsTimer: join(
+      directory,
+      "timers.target.wants",
+      `${AUTOSTART_SYSTEMD_UNIT}.timer`,
+    ),
+  };
+}
+
+/** Registration status; a true result points at the current launcher. */
+function statusOf(
+  context: AutostartContext,
+  method: AutostartMethod,
+  registered: boolean,
+): AutostartStatus {
+  const base = {
+    registered,
+    platform: context.platform,
+    method,
+    launcherPath: context.launcherPath,
+  };
+  return registered
+    ? {
+        ...base,
+        registeredLauncherPath: context.launcherPath,
+        stale: false,
+      }
+    : base;
+}
+
+function unquotePath(value: string): string {
+  const trimmed = value.trim();
+  return /^(["']).*\1$/.test(trimmed) ? trimmed.slice(1, -1) : trimmed;
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/** First capture group of `pattern` in `text`, or `undefined`. */
+function matchGroup(pattern: RegExp, text: string): string | undefined {
+  return pattern.exec(text)?.[1];
+}
+
+/** The launcher path an existing OS entry references (M4 #8/#11). */
+async function readRegisteredLauncherPath(
+  context: AutostartContext,
+  method: AutostartMethod,
+  crontab?: string,
+): Promise<string | undefined> {
+  try {
+    switch (method) {
+      case "schtasks": {
+        const result = await context.runner({
+          file: "schtasks",
+          args: ["/Query", "/TN", AUTOSTART_TASK_NAME, "/XML"],
+        });
+        if (result.code !== 0) return undefined;
+        const command = matchGroup(
+          /<Command>([\s\S]*?)<\/Command>/,
+          result.stdout,
+        );
+        return command === undefined ? undefined : decodeXmlEntities(command);
+      }
+      case "launchd": {
+        const plistPath = launchAgentsPlistPath(context.homeDir);
+        if (!existsSync(plistPath)) return undefined;
+        const command = matchGroup(
+          /<key>ProgramArguments<\/key>\s*<array>\s*<string>([\s\S]*?)<\/string>/,
+          readFileSync(plistPath, "utf8"),
+        );
+        return command === undefined
+          ? undefined
+          : decodeXmlEntities(command).trim();
+      }
+      case "systemd-user": {
+        const { service } = linuxUnitPaths(context.homeDir);
+        if (!existsSync(service)) return undefined;
+        const raw = matchGroup(
+          /^ExecStart=(.+)$/m,
+          readFileSync(service, "utf8"),
+        );
+        return raw === undefined ? undefined : unquotePath(raw);
+      }
+      case "crontab": {
+        const content = crontab ?? (await readCrontab(context)).content;
+        const line = content
+          .split(/\r?\n/)
+          .find((entry) => entry.includes(AUTOSTART_CRON_MARKER));
+        if (!line) return undefined;
+        const schedule = line
+          .slice(0, line.indexOf(AUTOSTART_CRON_MARKER))
+          .trim();
+        const command = matchGroup(
+          /^\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(.*)$/,
+          schedule,
+        );
+        return unquotePath(command ?? schedule);
+      }
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * True when the registration no longer matches this build (R-5.2.3);
+ * `undefined` when the OS entry does not expose its path.
+ */
+function staleRegistration(
+  context: AutostartContext,
+  registeredLauncherPath: string | undefined,
+): boolean | undefined {
+  let actualLauncher: string | null = null;
+  try {
+    actualLauncher = existsSync(context.launcherPath)
+      ? readFileSync(context.launcherPath, "utf8")
+      : null;
+  } catch {
+    // Unreadable launcher: stale, not silently fine.
+  }
+  const expectedLauncher = buildAutostartLauncherScript({
+    platform: context.platform,
+    invocation: context.invocation,
+    env: context.env,
+  });
+  if (actualLauncher !== expectedLauncher) return true;
+  if (registeredLauncherPath === undefined) return undefined;
+  const normalize = (value: string) =>
+    context.platform === "win32"
+      ? value.replace(/\//g, "\\").toLowerCase()
+      : value;
+  return normalize(registeredLauncherPath) !== normalize(context.launcherPath);
+}
+
+function systemdUnitPresent(homeDir: string): boolean {
+  const units = linuxUnitPaths(homeDir);
+  const present = existsSync(units.service) || existsSync(units.timer);
+  return present || existsSync(units.wantsTimer);
+}
+
+/** `systemctl --user is-enabled`, only meaningful inside a user session. */
+async function systemdUnitEnabled(context: AutostartContext): Promise<boolean> {
+  if (existsSync(linuxUnitPaths(context.homeDir).wantsTimer)) return true;
+  if (!context.systemdAvailable) return false;
+  const result = await context.runner({
+    file: "systemctl",
+    args: ["--user", "is-enabled", `${AUTOSTART_SYSTEMD_UNIT}.timer`],
+  });
+  return result.code === 0;
+}
+
+/**
+ * Which Linux mechanism this machine is registered with: an existing unit
+ * wins, then an existing crontab line, then the XDG hint (M4 #8).
+ */
+function resolveLinuxMethod(
+  context: AutostartContext,
+  crontab: { content: string; ok: boolean },
+): AutostartMethod {
+  if (context.method === "systemd-user" || context.method === "crontab") {
+    return context.method;
+  }
+  if (systemdUnitPresent(context.homeDir)) return "systemd-user";
+  if (crontab.ok && crontab.content.includes(AUTOSTART_CRON_MARKER)) {
+    return "crontab";
+  }
+  return context.systemdAvailable ? "systemd-user" : "crontab";
 }
 
 function systemdServiceUnit(launcherPath: string): string {
@@ -413,10 +618,18 @@ export async function registerAutostart(
         return await registerWindows(context);
       case "darwin":
         return await registerLaunchd(context);
-      case "linux":
-        return context.systemd
+      case "linux": {
+        // Registering prefers the mechanism this machine already uses: an
+        // installed unit survives an XDG-less login shell, and without a user
+        // manager the crontab is the only option (M4 #8).
+        const systemd =
+          context.method === "systemd-user" ||
+          (context.method !== "crontab" &&
+            (systemdUnitPresent(context.homeDir) || context.systemdAvailable));
+        return systemd
           ? await registerSystemd(context)
           : await registerCrontab(context);
+      }
     }
   } catch (err) {
     return {
@@ -430,9 +643,11 @@ export async function registerAutostart(
 }
 
 function methodFor(context: AutostartContext): AutostartMethod {
+  if (context.method !== null) return context.method;
   if (context.platform === "win32") return "schtasks";
   if (context.platform === "darwin") return "launchd";
-  return context.systemd ? "systemd-user" : "crontab";
+  if (systemdUnitPresent(context.homeDir)) return "systemd-user";
+  return context.systemdAvailable ? "systemd-user" : "crontab";
 }
 
 function buildContext(options: AutostartOptions): AutostartContext | string {
@@ -448,7 +663,11 @@ function buildContext(options: AutostartOptions): AutostartContext | string {
     runner: options.runner ?? runProcess,
     launcherPath: resolveAutostartLauncherPath(options),
     invocation: options.invocation ?? resolveAutostartInvocation(env),
-    systemd: options.systemd ?? Boolean(env.XDG_RUNTIME_DIR?.trim()),
+    systemdAvailable: options.systemd ?? Boolean(env.XDG_RUNTIME_DIR?.trim()),
+    method: options.method ?? null,
+    uid:
+      options.uid ??
+      (typeof process.getuid === "function" ? process.getuid() : 501),
   };
 }
 
@@ -473,12 +692,7 @@ async function registerWindows(
   });
   if (result.code !== 0)
     return failure({ platform: "win32", method }, context.launcherPath, result);
-  return {
-    registered: true,
-    platform: "win32",
-    method,
-    launcherPath: context.launcherPath,
-  };
+  return statusOf(context, method, true);
 }
 
 async function registerLaunchd(
@@ -486,52 +700,52 @@ async function registerLaunchd(
 ): Promise<AutostartStatus> {
   const method = "launchd" as const;
   const plistPath = launchAgentsPlistPath(context.homeDir);
+  const domain = launchdDomain(context);
   mkdirSync(dirname(plistPath), { recursive: true });
   writeFileSync(plistPath, launchdPlist(context.launcherPath), "utf8");
 
-  // Writing the plist alone only takes effect at the next login. Load it now so
-  // "autostart on" is true immediately. Re-registering an already-loaded label
-  // exits non-zero; that is the idempotent case, not a failure.
-  const loaded = await context.runner({
+  // `bootout` + `bootstrap` replace the deprecated `load`/`unload` pair: the
+  // bootout reloads, so a rewritten plist applies immediately (M4 #12).
+  await context.runner({
     file: "launchctl",
-    args: ["load", "-w", plistPath],
+    args: ["bootout", domain, plistPath],
+  });
+  const bootstrapped = await context.runner({
+    file: "launchctl",
+    args: ["bootstrap", domain, plistPath],
   });
   if (
-    loaded.code !== 0 &&
-    !/already (loaded|bootstrapped)|Load failed: 37|service already loaded/i.test(
-      loaded.stderr,
+    bootstrapped.code !== 0 &&
+    !/already (loaded|bootstrapped)|Bootstrap failed: 37|Load failed: 37|service already loaded/i.test(
+      bootstrapped.stderr,
     )
   ) {
     return failure(
       { platform: "darwin", method },
       context.launcherPath,
-      loaded,
+      bootstrapped,
     );
   }
-  return {
-    registered: true,
-    platform: "darwin",
-    method,
-    launcherPath: context.launcherPath,
-  };
+  // `bootstrap` refuses a service marked disabled; `enable` clears that state.
+  await context.runner({
+    file: "launchctl",
+    args: ["enable", `${domain}/${AUTOSTART_LAUNCHD_LABEL}`],
+  });
+  return statusOf(context, method, true);
 }
 
 async function registerSystemd(
   context: AutostartContext,
 ): Promise<AutostartStatus> {
   const method = "systemd-user" as const;
-  const dir = systemdUserDir(context.homeDir);
-  mkdirSync(dir, { recursive: true });
+  const units = linuxUnitPaths(context.homeDir);
+  mkdirSync(units.directory, { recursive: true });
   writeFileSync(
-    join(dir, `${AUTOSTART_SYSTEMD_UNIT}.service`),
+    units.service,
     systemdServiceUnit(context.launcherPath),
     "utf8",
   );
-  writeFileSync(
-    join(dir, `${AUTOSTART_SYSTEMD_UNIT}.timer`),
-    systemdTimerUnit(),
-    "utf8",
-  );
+  writeFileSync(units.timer, systemdTimerUnit(), "utf8");
 
   const reload = await context.runner({
     file: "systemctl",
@@ -547,12 +761,7 @@ async function registerSystemd(
   if (enable.code !== 0) {
     return failure({ platform: "linux", method }, context.launcherPath, enable);
   }
-  return {
-    registered: true,
-    platform: "linux",
-    method,
-    launcherPath: context.launcherPath,
-  };
+  return statusOf(context, method, true);
 }
 
 async function registerCrontab(
@@ -585,17 +794,16 @@ async function registerCrontab(
       written,
     );
   }
-  return {
-    registered: true,
-    platform: "linux",
-    method,
-    launcherPath: context.launcherPath,
-  };
+  return statusOf(context, method, true);
 }
 
 // ── Status ─────────────────────────────────────────────────────────
 
-/** Read the current registration state without changing anything. */
+/**
+ * Read the registration state. The mechanism is probed from the machine's own
+ * artifacts, never re-decided from `XDG_RUNTIME_DIR` (M4 #8); `stale` exposes
+ * a registration left by an older install path (M4 #11).
+ */
 export async function getAutostartStatus(
   options: AutostartOptions = {},
 ): Promise<AutostartStatus> {
@@ -608,7 +816,14 @@ export async function getAutostartStatus(
       error: context,
     };
   }
-  const launcherPath = context.launcherPath;
+  const registrationInfo = (
+    registeredPath: string | undefined,
+  ): Pick<AutostartStatus, "registeredLauncherPath" | "stale"> => ({
+    // Explicitly `undefined` when the entry does not expose its path: the
+    // optimistic value from `statusOf` must not be reported as the real one.
+    registeredLauncherPath: registeredPath,
+    stale: staleRegistration(context, registeredPath) ?? false,
+  });
   try {
     switch (context.platform) {
       case "win32": {
@@ -616,79 +831,68 @@ export async function getAutostartStatus(
           file: "schtasks",
           args: ["/Query", "/TN", AUTOSTART_TASK_NAME],
         });
-        return result.code === 0
-          ? {
-              registered: true,
-              platform: "win32",
-              method: "schtasks",
-              launcherPath,
-            }
-          : {
-              registered: false,
-              platform: "win32",
-              method: "schtasks",
-              launcherPath,
-            };
+        if (result.code !== 0) return statusOf(context, "schtasks", false);
+        const registeredPath = await readRegisteredLauncherPath(
+          context,
+          "schtasks",
+        );
+        return {
+          ...statusOf(context, "schtasks", true),
+          ...registrationInfo(registeredPath),
+        };
       }
       case "darwin": {
         const plistPath = launchAgentsPlistPath(context.homeDir);
-        if (!existsSync(plistPath)) {
-          return {
-            registered: false,
-            platform: "darwin",
-            method: "launchd",
-            launcherPath,
-          };
-        }
+        if (!existsSync(plistPath)) return statusOf(context, "launchd", false);
         const result = await context.runner({
           file: "launchctl",
           args: ["list", AUTOSTART_LAUNCHD_LABEL],
         });
-        return result.code === 0
-          ? {
-              registered: true,
-              platform: "darwin",
-              method: "launchd",
-              launcherPath,
-            }
-          : {
-              registered: false,
-              platform: "darwin",
-              method: "launchd",
-              launcherPath,
-            };
+        if (result.code !== 0) return statusOf(context, "launchd", false);
+        const registeredPath = await readRegisteredLauncherPath(
+          context,
+          "launchd",
+        );
+        return {
+          ...statusOf(context, "launchd", true),
+          ...registrationInfo(registeredPath),
+        };
       }
       case "linux": {
-        if (context.systemd) {
-          const result = await context.runner({
-            file: "systemctl",
-            args: ["--user", "is-enabled", `${AUTOSTART_SYSTEMD_UNIT}.timer`],
-          });
-          return result.code === 0
-            ? {
-                registered: true,
-                platform: "linux",
-                method: "systemd-user",
-                launcherPath,
-              }
-            : {
-                registered: false,
-                platform: "linux",
-                method: "systemd-user",
-                launcherPath,
-              };
+        const crontab = await readCrontab(context);
+        const method = resolveLinuxMethod(context, crontab);
+        if (method === "systemd-user") {
+          const units = linuxUnitPaths(context.homeDir);
+          const present = existsSync(units.service) || existsSync(units.timer);
+          if (!present || !(await systemdUnitEnabled(context))) {
+            return statusOf(context, method, false);
+          }
+          const registeredPath = await readRegisteredLauncherPath(
+            context,
+            "systemd-user",
+          );
+          return {
+            ...statusOf(context, method, true),
+            ...registrationInfo(registeredPath),
+          };
         }
-        const current = await readCrontab(context);
-        const registered =
-          current.ok && current.content.includes(AUTOSTART_CRON_MARKER);
+        if (!crontab.ok) {
+          return {
+            ...statusOf(context, method, false),
+            error: "could not read the current crontab",
+          };
+        }
+        if (!crontab.content.includes(AUTOSTART_CRON_MARKER)) {
+          return statusOf(context, method, false);
+        }
+        const registeredPath = await readRegisteredLauncherPath(
+          context,
+          "crontab",
+          crontab.content,
+        );
         return {
-          registered,
-          platform: "linux",
-          method: "crontab",
-          launcherPath,
-          ...(current.ok
-            ? {}
-            : { error: "could not read the current crontab" }),
+          ...statusOf(context, method, true),
+          ...registrationInfo(registeredPath),
         };
       }
     }
@@ -697,7 +901,7 @@ export async function getAutostartStatus(
       registered: false,
       platform: context.platform,
       method: methodFor(context),
-      launcherPath,
+      launcherPath: context.launcherPath,
       error: err instanceof Error ? err.message : String(err),
     };
   }
@@ -706,9 +910,10 @@ export async function getAutostartStatus(
 // ── Unregister ─────────────────────────────────────────────────────
 
 /**
- * Remove the OS entry. Only an explicit shutdown calls this (Q-43): deleting the
- * last task does not unregister, so rebuilding a task does not rewrite machine
- * configuration every time.
+ * Remove the OS entry. Only an explicit shutdown calls this (Q-43). On Linux
+ * both mechanisms are cleaned when their artifacts are present, never decided
+ * from `XDG_RUNTIME_DIR`, so `off` over SSH still removes the desktop timer
+ * (M4 #8).
  */
 export async function unregisterAutostart(
   options: AutostartOptions = {},
@@ -731,29 +936,36 @@ export async function unregisterAutostart(
       });
     } else if (context.platform === "darwin") {
       const plistPath = launchAgentsPlistPath(context.homeDir);
-      // Unload first: removing the plist alone would leave the agent running
-      // until the next login on a machine that already loaded it.
+      // bootout stops the agent now; removing the plist alone would leave it
+      // running until the next login.
       await context.runner({
         file: "launchctl",
-        args: ["unload", "-w", plistPath],
+        args: ["bootout", launchdDomain(context), plistPath],
       });
       rmSync(plistPath, { force: true });
-    } else if (context.systemd) {
-      await context.runner({
-        file: "systemctl",
-        args: ["--user", "disable", "--now", `${AUTOSTART_SYSTEMD_UNIT}.timer`],
-      });
-      const dir = systemdUserDir(context.homeDir);
-      rmSync(join(dir, `${AUTOSTART_SYSTEMD_UNIT}.timer`), { force: true });
-      rmSync(join(dir, `${AUTOSTART_SYSTEMD_UNIT}.service`), { force: true });
-      await context.runner({
-        file: "systemctl",
-        args: ["--user", "daemon-reload"],
-      });
     } else {
-      const current = await readCrontab(context);
-      if (current.ok) {
-        const next = crontabWithoutMarker(current.content);
+      const crontab = await readCrontab(context);
+      const units = linuxUnitPaths(context.homeDir);
+      if (resolveLinuxMethod(context, crontab) === "systemd-user") {
+        await context.runner({
+          file: "systemctl",
+          args: [
+            "--user",
+            "disable",
+            "--now",
+            `${AUTOSTART_SYSTEMD_UNIT}.timer`,
+          ],
+        });
+        rmSync(units.timer, { force: true });
+        rmSync(units.service, { force: true });
+        rmSync(units.wantsTimer, { force: true });
+        await context.runner({
+          file: "systemctl",
+          args: ["--user", "daemon-reload"],
+        });
+      }
+      if (crontab.ok && crontab.content.includes(AUTOSTART_CRON_MARKER)) {
+        const next = crontabWithoutMarker(crontab.content);
         await context.runner({
           file: "crontab",
           args: ["-"],

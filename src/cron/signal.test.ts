@@ -9,6 +9,7 @@ import type {
 import {
   clearSignalSources,
   evaluateSignals,
+  evaluateSignalsWithCursors,
   listSignalSources,
   nextSignalDueAt,
   registerSignalSource,
@@ -29,10 +30,11 @@ function source(
   id: string,
   occurrences: DueOccurrence[] = [],
   nextDue?: Date | null,
+  nextCursor?: string | null,
 ): SignalSource {
   return {
     id,
-    evaluate: () => occurrences,
+    evaluate: () => ({ occurrences, nextCursor }),
     nextDueAt: () => nextDue ?? null,
   };
 }
@@ -156,5 +158,46 @@ describe("M-1: signal sources are pluggable, the core has no feature special cas
         (item) => item.taskId,
       ),
     ).toEqual(["task-9"]);
+  });
+});
+
+// ── M1 #17 / F-15: source-level cursors ─────────────────────────────
+
+describe("source cursors", () => {
+  test("a source that advances its cursor reports it beside its occurrences", () => {
+    registerSignalSource(
+      source(
+        "threshold",
+        [
+          {
+            taskId: "task-1",
+            occurrence: "threshold:12000",
+            intendedAt: "2026-10-28T14:00:00.000Z",
+          },
+        ],
+        null,
+        "cursor-42",
+      ),
+    );
+
+    const result = evaluateSignalsWithCursors({
+      now: new Date(),
+      tasks: [],
+      state,
+    });
+    expect(result.occurrences.map((item) => item.taskId)).toEqual(["task-1"]);
+    expect(result.cursors).toEqual({ threshold: "cursor-42" });
+  });
+
+  test("a source that returns no cursor leaves the row alone", () => {
+    registerSignalSource(source("cron-like", [], null, null));
+    expect(
+      evaluateSignalsWithCursors({ now: new Date(), tasks: [], state }).cursors,
+    ).toEqual({});
+  });
+
+  test("evaluateSignals keeps the occurrence-only shape", () => {
+    registerSignalSource(source("a", [], null, "cursor-a"));
+    expect(evaluateSignals({ now: new Date(), tasks: [], state })).toEqual([]);
   });
 });

@@ -549,6 +549,174 @@ test("a lock error on the jitter wake is logged without terminating the host", a
   }
 });
 
+// ── P1-7: overlapping ticks ─────────────────────────────────────────
+
+function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs;
+    const poll = () => {
+      if (predicate()) {
+        resolve();
+        return;
+      }
+      if (Date.now() > deadline) {
+        reject(new Error("waitFor timed out"));
+        return;
+      }
+      setTimeout(poll, 5);
+    };
+    poll();
+  });
+}
+
+test("a tick never overlaps a running one; the wake is queued and runs after", async () => {
+  const armed: ReturnType<typeof setInterval>[] = [];
+  const tickHandlers: Array<() => void> = [];
+  const realSetInterval = globalThis.setInterval;
+  globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
+    const handle = realSetInterval(...args);
+    armed.push(handle);
+    if (Number(args[1] ?? 0) === 60_000 && typeof args[0] === "function") {
+      tickHandlers.push(args[0] as () => void);
+    }
+    return handle;
+  }) as typeof setInterval;
+
+  for (const [index, name] of ["First", "Second"].entries()) {
+    const { task } = addTask(
+      makeInput({
+        name,
+        agent_id: `agent-local-overlap-${index}`,
+        cron: "* * * * *",
+      }),
+    );
+    updateTask(task.id, (record) => {
+      record.created_at = new Date(Date.now() - 3_600_000).toISOString();
+      record.jitter_offset_ms = 0;
+    });
+  }
+
+  const releases: Array<() => void> = [];
+  let runs = 0;
+  let concurrent = 0;
+  let maxConcurrent = 0;
+  setSchedulerTaskRunner({
+    host: "long-lived",
+    async run() {
+      runs += 1;
+      concurrent += 1;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      concurrent -= 1;
+      return { outcome: "success" };
+    },
+    cancel() {},
+  });
+
+  try {
+    startScheduler(
+      {} as ListenerTransport,
+      {
+        connectionId: "conn-overlap",
+        wsUrl: "wss://example.test/ws",
+        deviceId: "device-overlap",
+        connectionName: "listener-overlap",
+        onConnected: () => {},
+        onDisconnected: () => {},
+        onError: () => {},
+      },
+      async () => {},
+    );
+    expect(isSchedulerRunning()).toBe(true);
+    await waitFor(() => releases.length === 1);
+    expect(tickHandlers.length).toBeGreaterThan(0);
+
+    // Two wakes while the first run is still in flight: they must queue, not
+    // start a second concurrent run.
+    tickHandlers[0]?.();
+    await Bun.sleep(20);
+    tickHandlers[0]?.();
+    await Bun.sleep(20);
+    expect(runs).toBe(1);
+    expect(maxConcurrent).toBe(1);
+
+    releases[0]?.();
+    await waitFor(() => releases.length === 2);
+    expect(maxConcurrent).toBe(1);
+    releases[1]?.();
+    await Bun.sleep(30);
+    expect(runs).toBe(2);
+    expect(maxConcurrent).toBe(1);
+  } finally {
+    stopScheduler();
+    globalThis.setInterval = realSetInterval;
+    for (const handle of armed) clearInterval(handle);
+  }
+});
+
+// ── M1 #13: tracked lease-retry timers ──────────────────────────────
+
+test("stopScheduler cancels a pending lease retry and a stale callback stays dead", () => {
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const retries: Array<() => void> = [];
+  const cleared: unknown[] = [];
+  globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+    const handle = realSetTimeout(...args);
+    if (Number(args[1] ?? 0) === 30_000 && typeof args[0] === "function") {
+      retries.push(args[0] as () => void);
+    }
+    return handle;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((
+    handle: Parameters<typeof realClearTimeout>[0],
+  ) => {
+    cleared.push(handle);
+    realClearTimeout(handle);
+  }) as typeof clearTimeout;
+
+  writeFileSync(
+    path.join(TEST_DIR, "schedules.json"),
+    JSON.stringify({
+      version: 1,
+      scheduler_owner: {
+        pid: process.ppid,
+        token: "held-by-another-process",
+        started_at: new Date().toISOString(),
+      },
+      tasks: [] satisfies CronTask[],
+    }),
+  );
+
+  try {
+    startScheduler({} as ListenerTransport, {
+      connectionId: "conn-retry",
+      wsUrl: "wss://example.test/ws",
+      deviceId: "device-retry",
+      connectionName: "listener-retry",
+      onConnected: () => {},
+      onDisconnected: () => {},
+      onError: () => {},
+    });
+    expect(isSchedulerRunning()).toBe(false);
+    expect(retries).toHaveLength(1);
+    const retry = retries[0];
+    expect(retry).toBeTypeOf("function");
+
+    stopScheduler();
+    expect(cleared.length).toBeGreaterThanOrEqual(1);
+
+    // Even if the timer callback was already queued, it must not revive a
+    // stopped host.
+    retry?.();
+    expect(isSchedulerRunning()).toBe(false);
+    expect(retries).toHaveLength(1);
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+  }
+});
+
 // ── Helper ──────────────────────────────────────────────────────────
 
 function makeInput(overrides: Partial<AddTaskInput> = {}): AddTaskInput {

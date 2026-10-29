@@ -50,6 +50,65 @@ export type WizardStep =
   | "create-failed"
   | "done";
 
+/**
+ * The steps the wizard asks, in the order it asks them (M3 #15).
+ *
+ * One list, because the numbering used to be literals in `ScheduleWizard.tsx`
+ * and drifted: "9/10 超时" and "9/10 等待" shared a number, the timezone step
+ * claimed 6/10, and autostart was outside the count. A title now comes from the
+ * row's index here, so adding or reordering a step renumbers every frame without
+ * another edit. The two sub-steps (`conversation-pick`, `schedule-mode`) share
+ * their parent's slot; `create-failed`/`done` are not numbered at all.
+ */
+export const WIZARD_STEPS = [
+  { id: "type", label: "类型" },
+  { id: "target", label: "目标" },
+  { id: "conversation", label: "会话" },
+  { id: "payload", label: "内容" },
+  { id: "schedule", label: "时间" },
+  { id: "timezone", label: "时区" },
+  { id: "permission", label: "权限" },
+  { id: "catch-up", label: "补跑" },
+  { id: "timeout", label: "超时" },
+  { id: "wait", label: "等待" },
+  { id: "name", label: "名称" },
+  { id: "autostart", label: "开机自启" },
+] as const;
+
+export type WizardStepId = (typeof WIZARD_STEPS)[number]["id"];
+
+/** The numbered slot a screen step belongs to, or `null` for unnumbered ones. */
+function wizardStepSlot(step: WizardStep): WizardStepId | null {
+  if (step === "schedule-mode" || step === "schedule") return "schedule";
+  if (step === "conversation-pick") return "conversation";
+  if (step === "create-failed" || step === "done") return null;
+  return step;
+}
+
+/**
+ * `7/12 权限` — the step's title, with its number derived from `WIZARD_STEPS`.
+ *
+ * `label` overrides just the words (the payload step names the command form);
+ * the count always comes from the table.
+ */
+export function wizardStepTitle(step: WizardStep, label?: string): string {
+  const slot = wizardStepSlot(step);
+  if (slot === null) return label ?? "";
+  const index = WIZARD_STEPS.findIndex((entry) => entry.id === slot);
+  const words = label ?? WIZARD_STEPS[index]?.label ?? "";
+  return `${index + 1}/${WIZARD_STEPS.length} ${words}`;
+}
+
+/** Where a picker's cursor starts when the flags already chose a row. */
+export function cursorIndexFor(
+  items: readonly SingleSelectItem[],
+  key: string | null | undefined,
+): number {
+  if (!key) return 0;
+  const index = items.findIndex((item) => item.key === key);
+  return index >= 0 ? index : 0;
+}
+
 /** How the time step was answered. */
 export type ScheduleMode = "cron" | "every" | "at";
 
@@ -141,6 +200,7 @@ export function PickerStep({
   title,
   hint,
   items,
+  initialCursorIndex,
   onSelect,
   onCancel,
   footer,
@@ -150,6 +210,12 @@ export function PickerStep({
   title: string;
   hint: string;
   items: readonly SingleSelectItem[];
+  /**
+   * The row the cursor starts on. Pre-filled flags pass their decision through
+   * here (M3 #3): a permission picker opened with `--permission unrestricted`
+   * must not have Enter rewrite the task to `standard`.
+   */
+  initialCursorIndex?: number;
   onSelect: (key: string) => void;
   onCancel: () => void;
   footer: string;
@@ -163,6 +229,7 @@ export function PickerStep({
         </Box>
         <SingleSelectPicker
           items={[...items]}
+          initialCursorIndex={initialCursorIndex}
           onSelect={onSelect}
           onCancel={onCancel}
           footer={<Text dimColor>{footer}</Text>}
@@ -224,16 +291,31 @@ export function parseScheduleInput(
     : null;
 }
 
-/**
- * The partial flags a `/schedule add …` command already carried, and the step
- * the wizard should open on: a pre-filled field is not asked again.
- */
-export function prefillFromArgs(args: readonly string[] | undefined): {
+export interface SchedulePrefill {
   draft: ScheduleAddDraft;
   mode: ScheduleMode;
   raw: string;
   initialStep: WizardStep;
-} {
+  /** Steps the flags already answered; the wizard must not ask them again. */
+  answered: readonly WizardStep[];
+}
+
+/**
+ * The partial flags a `/schedule add …` command already carried, and the step
+ * the wizard should open on: a pre-filled field is not asked again.
+ *
+ * Two details are the fix M3 #3/#4 names:
+ *
+ * - A required step whose flag is present is *answered*, and the wizard's
+ *   forward walk skips it — so `--permission unrestricted` can no longer become
+ *   `standard` by pressing Enter on a picker whose cursor defaulted to row 0.
+ * - `--target new` is **not** answered until its visibility is: the parser
+ *   reports `--visible|--hidden` as missing, and the target picker is where that
+ *   is asked (row 0 is the visible new conversation).
+ */
+export function prefillFromArgs(
+  args: readonly string[] | undefined,
+): SchedulePrefill {
   const target = peekScheduleOverlayTarget();
   const rawArgs = args ?? (target.view === "wizard" ? (target.args ?? []) : []);
   const invocation = parseScheduleInvocation(["add", ...rawArgs]);
@@ -254,9 +336,43 @@ export function prefillFromArgs(args: readonly string[] | undefined): {
     }
   }
 
-  let initialStep: WizardStep = "type";
-  if (draft.type) initialStep = "target";
-  if (draft.target) initialStep = "payload";
-  if (draft.payload) initialStep = draft.cron ? "timezone" : "schedule-mode";
-  return { draft, mode, raw, initialStep };
+  const answered: WizardStep[] = [];
+  if (draft.type) answered.push("type");
+  // `--target new` without `--visible/--hidden` is not answered (M3 #4): the
+  // command would create a *visible* task nobody chose, so visibility is asked.
+  const targetAnswered =
+    draft.target !== undefined &&
+    !(draft.target.kind === "new" && draft.hidden === undefined);
+  if (targetAnswered) {
+    answered.push("target");
+    answered.push("conversation");
+  }
+  if (draft.payload) answered.push("payload");
+  if (draft.cron) answered.push("schedule");
+  // The timezone step has a system default; only an explicit `--tz` answers it.
+  if (draft.timezone) answered.push("timezone");
+  if (draft.permission) answered.push("permission");
+  if (draft.catchUp !== undefined) answered.push("catch-up");
+
+  // The required steps in the order they are asked. The optional three
+  // (timeout/wait/name) are always offered: they have visible defaults, so
+  // Entering through them is cheap and skipping them would hide the fields.
+  const requiredOrder: WizardStep[] = [
+    "type",
+    "target",
+    "conversation",
+    "payload",
+    "schedule",
+    "timezone",
+    "permission",
+    "catch-up",
+  ];
+  let initialStep: WizardStep = "timeout";
+  for (const candidate of requiredOrder) {
+    if (!answered.includes(candidate)) {
+      initialStep = candidate;
+      break;
+    }
+  }
+  return { draft, mode, raw, initialStep, answered };
 }

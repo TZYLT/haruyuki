@@ -20,16 +20,24 @@
 
 import { Box } from "ink";
 import { useEffect, useMemo, useState } from "react";
-import { formatScheduleDetailLines } from "@/cli/commands/schedule";
+import {
+  formatScheduleDetailLines,
+  isAutoPauseDetailLine,
+  resolveScheduleTask,
+} from "@/cli/commands/schedule";
 import { colors } from "@/cli/components/colors";
 import { Text } from "@/cli/components/Text";
 import {
   type AutostartView,
+  formatRunCostLabel,
   formatRunGroupLine,
   groupRunsByRunId,
   liveScheduleSource,
   peekScheduleOverlayTarget,
+  type RunUsageReader,
+  type RunUsageRow,
   readAutostartView,
+  readRunUsageCosts,
   type ScheduleRunGroup,
   type ScheduleTaskRow,
   scheduleNow,
@@ -86,6 +94,11 @@ export interface ScheduleOverlayProps {
   readRuns?: (taskId: string) => ScheduleRunGroup[];
   /** Injectable autostart read; the app shells out to the M4 registrar. */
   readAutostart?: () => Promise<AutostartView>;
+  /**
+   * Injectable per-run usage read (R-5.14.2). The app passes the ledger reader;
+   * a test passes a map so the frame can be judged without a real ledger.
+   */
+  readRunUsage?: RunUsageReader;
 }
 
 /** The rows the face shows: the agent's tasks, or everything for `--all`. */
@@ -301,8 +314,10 @@ function ScheduleDetailView({
           <Text
             key={`${row.id}:${index}`}
             dimColor={index > 0}
+            // M3 #18: the auto-pause warning follows the line that carries it,
+            // not a positional index that shifts whenever the field list does.
             color={
-              row.task.pausedReason === "auto_failures" && index === 4
+              isAutoPauseDetailLine(row.task, line)
                 ? colors.status.error
                 : undefined
             }
@@ -324,6 +339,7 @@ function ScheduleDetailView({
 function ScheduleRunLogView({
   task,
   groups,
+  usage,
   width,
   height,
   onBack,
@@ -332,6 +348,8 @@ function ScheduleRunLogView({
 }: {
   task: ScheduleTaskV2;
   groups: readonly ScheduleRunGroup[];
+  /** Per-run ledger rows; `null` until the one-shot read answers. */
+  usage: ReadonlyMap<string, RunUsageRow> | null;
   width: number;
   height: number;
   onBack: () => void;
@@ -340,9 +358,15 @@ function ScheduleRunLogView({
 }) {
   const listRows = Math.max(1, height - CHROME_ROWS);
   const now = scheduleNow();
+  const costOf = (group: ScheduleRunGroup): string | undefined =>
+    usage === null
+      ? undefined
+      : formatRunCostLabel(
+          group.runId === null ? undefined : usage.get(group.runId),
+        );
   const items = groups.map((group) => ({
     key: group.key,
-    label: formatRunGroupLine(group, now),
+    label: formatRunGroupLine(group, now, costOf(group)),
   }));
   const list = useOverlayList({
     owner: "schedule-run-log",
@@ -416,7 +440,7 @@ function ScheduleRunLogView({
                   color={failed ? colors.status.error : color}
                 >
                   {truncateText(
-                    formatRunGroupLine(group, now),
+                    formatRunGroupLine(group, now, costOf(group)),
                     Math.max(1, width - 2),
                   )}
                 </Text>
@@ -430,12 +454,71 @@ function ScheduleRunLogView({
 }
 
 /**
+ * `show`/`logs` named a task nothing resolves to (M3 #2).
+ *
+ * The face used to fall back to the list silently, which reads as "the command
+ * did nothing". It says what failed instead, and Escape returns to the list.
+ */
+function ScheduleNotFoundView({
+  taskRef,
+  command,
+  width,
+  onBack,
+  onClose,
+}: {
+  taskRef: string;
+  command: string;
+  width: number;
+  onBack: () => void;
+  onClose: () => void;
+}) {
+  useKeyBindings("schedule-not-found", [
+    {
+      scope: "overlay",
+      bindings: [
+        ...wizardBindings({ canGoBack: true, onBack, onCancel: onClose }),
+        {
+          id: "schedule.not-found.quit",
+          chords: [{ key: "q" }],
+          run: () => {
+            onClose();
+            return "consumed";
+          },
+        },
+      ],
+    },
+  ]);
+  return (
+    <OverlayFrame
+      command={command}
+      title="找不到任务"
+      footer={
+        <Text dimColor>{truncateText("Esc 返回列表 · q 关闭", width)}</Text>
+      }
+    >
+      <Box flexDirection="column">
+        <Text color={colors.status.error}>
+          {truncateText(`找不到任务 ${taskRef}`, width)}
+        </Text>
+        <Text dimColor>
+          {truncateText(
+            "用 /schedule list 查看任务，或检查名称 / 短 id 是否拼对。",
+            width,
+          )}
+        </Text>
+      </Box>
+    </OverlayFrame>
+  );
+}
+
+/**
  * The face: a route over the three views, one task's id, and the run-log read.
  *
  * The run log is read on the view that shows it and again when the store's
  * revision moves (a run landed while the face was open) — never per frame. The
- * autostart line is read once on mount: it is the one OS fact the panel shows,
- * and it is a subprocess read.
+ * autostart line is read on mount and re-read on demand: entering a view and a
+ * store change both re-ask the OS, because the panel must not keep saying
+ * "registered" after the entry was removed behind its back (M3 #16).
  */
 export function ScheduleOverlay({
   view: initialView = "list",
@@ -445,6 +528,7 @@ export function ScheduleOverlay({
   onClose,
   readRuns,
   readAutostart,
+  readRunUsage,
 }: ScheduleOverlayProps) {
   const snapshot = useScheduleTasks();
   const rows = useMemo(
@@ -456,26 +540,43 @@ export function ScheduleOverlay({
   const width = Math.max(1, terminalWidth - 2);
 
   const [step, setStep] = useState<ScheduleOverlayView>(initialView);
-  const [activeId, setActiveId] = useState<string | null>(taskId ?? null);
+  const [activeRef, setActiveRef] = useState<string | null>(taskId ?? null);
   const [autostart, setAutostart] = useState<AutostartView | null>(null);
 
-  // A task named by `show`/`logs` may belong to another agent (`--all` was not
-  // passed) — the face still opens on it, because the command named it.
-  const activeRow = useMemo(
-    () => snapshot.rows.find((row) => row.id === activeId) ?? null,
-    [activeId, snapshot.rows],
-  );
+  // `show`/`logs` name a task by id, short id or name; resolve the reference
+  // against the agent-scoped rows (M3 #2, #19) and keep the failure so the face
+  // can say so instead of silently showing the list.
+  const resolved = useMemo(() => {
+    if (activeRef === null) return null;
+    return resolveScheduleTask(
+      activeRef,
+      rows.map((row) => row.task),
+    );
+  }, [activeRef, rows]);
+  const activeRow = useMemo(() => {
+    if (resolved === null || "error" in resolved) return null;
+    return rows.find((row) => row.id === resolved.task.id) ?? null;
+  }, [resolved, rows]);
+  const targetError =
+    resolved !== null && "error" in resolved ? resolved.error : null;
 
+  const autostartReader = readAutostart;
   useEffect(() => {
+    // `step` and `revision` are the re-read *triggers*, not inputs to the read:
+    // the panel re-asks the OS when the face changes view and when the store
+    // moved, so an entry removed behind its back stops reading "registered"
+    // (M3 #16). They are read here so the dependency is visible to the lint.
+    void step;
+    void snapshot.revision;
     let cancelled = false;
-    const read = readAutostart ?? readAutostartView;
+    const read = autostartReader ?? readAutostartView;
     void read().then((next) => {
       if (!cancelled) setAutostart(next);
     });
     return () => {
       cancelled = true;
     };
-  }, [readAutostart]);
+  }, [autostartReader, step, snapshot.revision]);
 
   const [groups, setGroups] = useState<readonly ScheduleRunGroup[]>([]);
   const readGroups = useMemo(() => {
@@ -499,11 +600,56 @@ export function ScheduleOverlay({
     readGroups();
   }, [step, readGroups, snapshot.revision]);
 
+  // M3 #9: one ledger read per page of the run history, never per frame.
+  const [usage, setUsage] = useState<ReadonlyMap<string, RunUsageRow> | null>(
+    null,
+  );
+  const usageReader = readRunUsage ?? null;
+  useEffect(() => {
+    if (step !== "logs") return;
+    if (usageReader === null) return;
+    const runIds = groups
+      .map((group) => group.runId)
+      .filter((runId): runId is string => runId !== null);
+    let cancelled = false;
+    setUsage(null);
+    void usageReader(runIds).then((next) => {
+      if (!cancelled) setUsage(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [groups, step, usageReader]);
+
+  // Only a *loaded, healthy* store can answer "not found": before the read the
+  // rows are empty and a failed read has its own message on the list face.
+  if (
+    targetError !== null &&
+    step !== "list" &&
+    snapshot.loaded &&
+    snapshot.error === null
+  ) {
+    return (
+      <ScheduleNotFoundView
+        taskRef={activeRef ?? ""}
+        command={
+          step === "logs"
+            ? `/schedule logs ${activeRef ?? ""}`
+            : `/schedule show ${activeRef ?? ""}`
+        }
+        width={width}
+        onBack={() => setStep("list")}
+        onClose={onClose}
+      />
+    );
+  }
+
   if (step === "logs" && activeRow) {
     return (
       <ScheduleRunLogView
         task={activeRow.task}
         groups={groups}
+        usage={usage}
         width={width}
         height={terminalRows}
         onBack={() => setStep("detail")}
@@ -538,11 +684,11 @@ export function ScheduleOverlay({
         allAgents ? "还没有任何计划任务。" : "当前 agent 还没有计划任务。"
       }
       onOpenDetail={(row) => {
-        setActiveId(row.id);
+        setActiveRef(row.id);
         setStep("detail");
       }}
       onOpenLogs={(row) => {
-        setActiveId(row.id);
+        setActiveRef(row.id);
         setStep("logs");
       }}
       onClose={onClose}
@@ -559,10 +705,17 @@ export function ScheduleOverlayRoute({
   overlay,
   agentId,
   onClose,
+  readRuns,
+  readAutostart,
+  readRunUsage,
 }: {
   overlay: "schedule" | "schedule-detail" | "schedule-logs";
   agentId: string;
   onClose: () => void;
+  /** Tests inject these; the app passes none and takes the real readers. */
+  readRuns?: (taskId: string) => ScheduleRunGroup[];
+  readAutostart?: () => Promise<AutostartView>;
+  readRunUsage?: RunUsageReader;
 }) {
   const target = useMemo(() => peekScheduleOverlayTarget(), []);
   const named = target.view === "detail" || target.view === "logs";
@@ -579,6 +732,11 @@ export function ScheduleOverlayRoute({
       taskId={taskId}
       agentId={agentId}
       allAgents={allAgents}
+      readRuns={readRuns}
+      readAutostart={readAutostart}
+      // The app reads the ledger for the run history; a test passes its own
+      // reader instead (M3 #9).
+      readRunUsage={readRunUsage ?? readRunUsageCosts}
       onClose={onClose}
     />
   );

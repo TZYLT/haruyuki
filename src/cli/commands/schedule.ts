@@ -88,6 +88,7 @@ export function formatScheduleHelp(): string {
     "  --permission standard|acceptEdits|unrestricted      权限（必填）",
     "  --catch-up | --no-catch-up                          错过是否补跑（必填）",
     "  --timeout <分钟> --wait <分钟> --tz <IANA> --name <名称>",
+    "                                      0 合法：超时 0=不限时，等待 0=忙时立即跳过",
     "",
     "权限三档（无人值守，任何审批请求一律拒绝）：",
     "  只读 standard：读文件/搜索；写文件、shell、子代理都不行",
@@ -442,11 +443,13 @@ function missingRef(sub: string): ScheduleInvocation {
 // ── Task resolution and text ────────────────────────────────────────
 
 /**
- * Find a task by id, then by name among the given tasks.
+ * Find a task by id, then by short id, then by name among the given tasks.
  *
  * The TUI's rows are the agent-scoped view; a name that matches more than one
  * task is refused rather than guessed, the rule `cron-task-ref.ts` already
- * follows for the CLI.
+ * follows for the CLI. The short id is accepted because it is what every row and
+ * receipt prints (`shortId`), so `/schedule show a1b2c3d4` has to work on the
+ * value the panel showed.
  */
 export function resolveScheduleTask(
   taskRef: string,
@@ -454,6 +457,15 @@ export function resolveScheduleTask(
 ): { task: ScheduleTaskV2 } | { error: string } {
   const byId = tasks.find((task) => task.id === taskRef);
   if (byId) return { task: byId };
+  const byShortId = tasks.filter((task) => shortId(task.id) === taskRef);
+  if (byShortId.length === 1) return { task: byShortId[0] as ScheduleTaskV2 };
+  if (byShortId.length > 1) {
+    return {
+      error: `「${taskRef}」匹配到 ${byShortId.length} 个任务，请用完整 id：${byShortId
+        .map((task) => task.id)
+        .join(", ")}`,
+    };
+  }
   const byName = tasks.filter((task) => task.name === taskRef);
   if (byName.length === 1) return { task: byName[0] as ScheduleTaskV2 };
   if (byName.length > 1) {
@@ -500,6 +512,22 @@ export function formatMissingAddFlags(
   missing: readonly MissingAddFlag[],
 ): string {
   return `缺少必填参数：${missing.join("、")}`;
+}
+
+/**
+ * Whether a detail line is where an auto-paused task's warning belongs.
+ *
+ * The panel used to colour `index === 4`, which silently stopped pointing at the
+ * status line the moment the list gained or lost a field. The lines are keyed by
+ * what they say instead: the status line and the failure-streak line are the two
+ * the warning is about, and both exist in every detail rendering.
+ */
+export function isAutoPauseDetailLine(
+  task: ScheduleTaskV2,
+  line: string,
+): boolean {
+  if (task.pausedReason !== "auto_failures") return false;
+  return line.startsWith("状态") || line.startsWith("连续失败");
 }
 
 // ── Creation (one place for the one-step form and the wizard) ───────
@@ -687,9 +715,14 @@ export async function handleScheduleCommand(
     }
     case "show":
     case "logs": {
+      // Agent-scope rule (M3 #19): `list`/`show`/`logs` answer for the current
+      // agent only — the panel is the agent's own view (R-5.12.4), and a
+      // listener's `/schedule show` must not expose another agent's task. A
+      // mutation, by contrast, may name any task the machine owns: the user
+      // typed an id or name, and the store resolves it to exactly one row.
       const resolved = resolveScheduleTask(
         invocation.taskRef,
-        scheduleTasksFor(scope?.agentId, true),
+        scheduleTasksFor(scope?.agentId, false),
       );
       if ("error" in resolved) return resolved.error;
       if (invocation.kind === "show") {
@@ -708,6 +741,9 @@ export async function handleScheduleCommand(
     case "pause":
     case "resume":
     case "delete": {
+      // Cross-agent on purpose (M3 #19): the mutation resolves the reference
+      // against every task the machine owns, because the user named it. An
+      // ambiguous name is refused by `resolveScheduleTask` rather than guessed.
       const resolved = resolveScheduleTask(
         invocation.taskRef,
         scheduleTasksFor(scope?.agentId, true),
@@ -753,6 +789,43 @@ export async function handleScheduleCommand(
 }
 
 /**
+ * The pure receipt for one `autostart` answer, split out so "could not confirm"
+ * is testable without touching the OS.
+ *
+ * `unregisterAutostart` may *return* `registered: false` with an `error` when it
+ * could not read or write the crontab — that is not the same fact as "the entry
+ * is gone", and M3 #7 exists because the old receipt called it "自启已关闭".
+ */
+export function formatAutostartResult(
+  action: "on" | "off" | "status",
+  status: {
+    registered: boolean;
+    method: string | null;
+    launcherPath?: string;
+    error?: string;
+  },
+): string {
+  if (action === "on") {
+    return status.registered
+      ? `自启已注册（${status.method ?? "未知方式"}${
+          status.launcherPath ? `，${status.launcherPath}` : ""
+        }）。`
+      : `自启注册失败：${status.error ?? "未知原因"}`;
+  }
+  if (action === "off") {
+    if (status.registered) return `自启仍在：${status.error ?? "卸载未生效"}`;
+    if (status.error) {
+      return `无法确认自启已关闭：${status.error}。条目可能仍在，请手动检查。`;
+    }
+    return "自启已关闭。任务只在 Haruyuki 运行时执行。";
+  }
+  if (status.registered) {
+    return `自启：已注册（${status.method ?? "未知方式"}）。`;
+  }
+  return `自启：未注册${status.error ? `（${status.error}）` : ""}。`;
+}
+
+/**
  * `autostart on|off|status`, with the M4 failure paths treated as answers.
  *
  * `registerAutostart`/`unregisterAutostart` throw on a policy denial and may
@@ -764,24 +837,12 @@ export async function formatAutostartReceipt(
 ): Promise<string> {
   try {
     if (action === "on") {
-      const status = await registerAutostart();
-      return status.registered
-        ? `自启已注册（${status.method ?? "未知方式"}${
-            status.launcherPath ? `，${status.launcherPath}` : ""
-          }）。`
-        : `自启注册失败：${status.error ?? "未知原因"}`;
+      return formatAutostartResult(action, await registerAutostart());
     }
     if (action === "off") {
-      const status = await unregisterAutostart();
-      return status.registered
-        ? `自启仍在：${status.error ?? "卸载未生效"}`
-        : "自启已关闭。任务只在 Haruyuki 运行时执行。";
+      return formatAutostartResult(action, await unregisterAutostart());
     }
-    const status = await getAutostartStatus();
-    if (status.registered) {
-      return `自启：已注册（${status.method ?? "未知方式"}）。`;
-    }
-    return `自启：未注册${status.error ? `（${status.error}）` : ""}。`;
+    return formatAutostartResult(action, await getAutostartStatus());
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const verb = action === "on" ? "注册" : action === "off" ? "卸载" : "状态";

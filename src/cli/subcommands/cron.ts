@@ -31,12 +31,15 @@ import {
   deleteTask,
   getCronRunLogPath,
   getTask,
+  isAllowedScheduledCommand,
   isTaskPermissionTier,
   isValidCron,
   listTasks,
   parseAt,
   parseEvery,
   readCronRunLogEntriesPage,
+  ScheduleStoreCorruptError,
+  ScheduleStoreVersionError,
 } from "@/cron";
 import {
   resolveCronAddConversationTarget,
@@ -79,7 +82,8 @@ Add options:
   --catch-up             Re-run the most recent missed occurrence
   --no-catch-up          Record missed occurrences instead (default)
   --timeout <minutes>    Per-run timeout; 0 = unlimited (default 30)
-  --wait <minutes>       Wait for a busy target conversation (default 10)
+  --wait <minutes>       Wait for a busy target conversation; 0 = skip the run
+                         immediately when the target is busy (default 10)
 
 List/filter options:
   --agent <id>           Filter by agent ID
@@ -187,6 +191,15 @@ function handleAdd(values: CronArgValues): number {
     console.error("Error: --prompt cannot be used with --command.");
     return 1;
   }
+  // Validate the whitelist at creation time (M5 #8): a typo would otherwise
+  // fail on every dispatch until the task is auto-paused, long after the
+  // person who typed it has moved on.
+  if (typeValue === "command" && !isAllowedScheduledCommand(prompt)) {
+    console.error(
+      `Error: --command must be compact or reflect; got "${prompt}".`,
+    );
+    return 1;
+  }
 
   const agentId = resolveCronAgentId(values.agent);
   if (!agentId) {
@@ -235,7 +248,7 @@ function handleAdd(values: CronArgValues): number {
 
   const timeoutMinutes = parseMinutesFlag(values.timeout, "--timeout", 0);
   if (timeoutMinutes === null) return 1;
-  const waitMinutes = parseMinutesFlag(values.wait, "--wait", 1);
+  const waitMinutes = parseMinutesFlag(values.wait, "--wait", 0);
   if (waitMinutes === null) return 1;
 
   if (values.computer) {
@@ -372,7 +385,7 @@ function handleAdd(values: CronArgValues): number {
 
     console.log(JSON.stringify(output, null, 2));
     console.error(
-      "Created local schedule: it only fires while a Haruyuki session is running on this device.",
+      "Created local schedule: it fires while a Haruyuki session is running on this device, or from the autostart timer host when one is registered (`haruyuki schedule autostart status`).",
     );
     return 0;
   } catch (err) {
@@ -517,6 +530,31 @@ function handleDeleteAll(values: CronArgValues): number {
 
 // ── Entry ───────────────────────────────────────────────────────────
 
+/**
+ * The store is fail-closed (P0-2/M-10): a corrupt or newer `schedules.json` is
+ * never rewritten. That is the right behaviour, but the CLI should print the
+ * diagnostic rather than a stack trace. Returns true when it handled `error`.
+ */
+function printStoreDiagnostic(error: unknown): boolean {
+  if (
+    error instanceof ScheduleStoreCorruptError ||
+    error instanceof ScheduleStoreVersionError
+  ) {
+    console.error(`Error: ${error.message}`);
+    return true;
+  }
+  return false;
+}
+
+function runHandler(handler: () => number): number {
+  try {
+    return handler();
+  } catch (error) {
+    if (printStoreDiagnostic(error)) return 1;
+    throw error;
+  }
+}
+
 export async function runCronSubcommand(argv: string[]): Promise<number> {
   let parsed: ReturnType<typeof parseCronArgs>;
   try {
@@ -535,19 +573,19 @@ export async function runCronSubcommand(argv: string[]): Promise<number> {
 
   switch (action) {
     case "add":
-      return handleAdd(parsed.values);
+      return runHandler(() => handleAdd(parsed.values));
     case "list":
-      return handleList(parsed.values);
+      return runHandler(() => handleList(parsed.values));
     case "get":
-      return handleGet(parsed.positionals);
+      return runHandler(() => handleGet(parsed.positionals));
     case "runs":
-      return handleRuns(parsed.values);
+      return runHandler(() => handleRuns(parsed.values));
     case "delete":
     // "remove" reads naturally enough that agents/scripts reach for it, and
     // the old "Unknown action" + usage dump was easy to misread as success
     // in captured output (LET-10492).
     case "remove":
-      return handleDelete(parsed.values, parsed.positionals);
+      return runHandler(() => handleDelete(parsed.values, parsed.positionals));
     default:
       console.error(`Unknown action: ${action}`);
       printUsage();

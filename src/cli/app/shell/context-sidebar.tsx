@@ -133,6 +133,8 @@ export type SidebarProjectionInputs = {
   memfs: MemfsStats | null;
   /** The current agent's planned runs, newest-due first (F-05, R-5.12.5). */
   schedules: readonly SidebarScheduleRow[] | null;
+  /** Why the schedule store could not be read; the rail shows it (M3 #17). */
+  schedulesError?: string | null;
 };
 
 /**
@@ -168,6 +170,7 @@ export function sidebarProjectionFrom(
       : null,
     memfs: inputs.memfs,
     schedules: inputs.schedules,
+    schedulesError: inputs.schedulesError ?? null,
   };
 }
 
@@ -275,6 +278,7 @@ export function ContextSidebarSlot({
     today,
     memfs,
     schedules,
+    schedulesError: scheduleSnapshot.error,
   });
 
   return (

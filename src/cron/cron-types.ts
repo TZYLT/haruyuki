@@ -83,6 +83,14 @@ export interface CronTask {
   last_run_outcome: CronRunOutcome | null;
   last_run_reason: CronRunReason | null;
   last_run_error: string | null;
+  /**
+   * F-05 terminal outcome, kept beside the legacy enum because `CronRunOutcome`
+   * cannot express `success` / `timeout` / `cancelled`. The frozen view's
+   * `lastOutcome` round-trips through this field (F-18).
+   */
+  last_outcome_v2?: RunOutcome | null;
+  /** F-05 terminal reason for `last_outcome_v2`; free-form by design. */
+  last_run_reason_v2?: string | null;
   last_missed_at: string | null;
   missed_count: number;
   failed_count: number;
@@ -188,9 +196,20 @@ export interface TaskLease {
   host: "long-lived" | "short-lived";
   pid: number;
   token: string;
+  /**
+   * Scheduled occurrence this run claimed (null for manual runs). Recovery
+   * consumes it, so a crashed run's occurrence is never replayed (P0-4).
+   */
+  occurrence: string | null;
   startedAt: string;
   heartbeatAt: string;
   expiresAt: string;
+  /**
+   * Process identity (R-5.6.1): a reused PID must not make a dead lease holder
+   * look alive. Same fields the scheduler lease already persists.
+   */
+  process_start_ticks?: string | null;
+  boot_id?: string | null;
 }
 
 export interface ScheduleTaskV2 {
@@ -240,6 +259,15 @@ export interface DueOccurrence {
    * "missed slots", not "times we skipped a run" (R-5.10.2, Lead ruling).
    */
   missedCycles?: number;
+  /** True when `missedCycles` hit the source's enumeration cap (M1 #16). */
+  missedTruncated?: boolean;
+}
+
+/** One evaluation pass of a signal source: occurrences plus its new cursor. */
+export interface SignalEvaluation {
+  occurrences: DueOccurrence[];
+  /** Source-level cursor; `null`/`undefined` means "unchanged" (R-5.4.1/2/4). */
+  nextCursor?: string | null;
 }
 
 /** Per-signal-source cursor, persisted alongside the tasks. */
@@ -254,7 +282,7 @@ export interface SignalSource {
     now: Date;
     tasks: ScheduleTaskV2[];
     state: SignalState;
-  }): DueOccurrence[];
+  }): SignalEvaluation;
   nextDueAt(input: { now: Date; tasks: ScheduleTaskV2[] }): Date | null;
 }
 
@@ -263,6 +291,13 @@ export interface SignalSource {
 /** The only seam between the scheduler core and a host (M1↔M2). */
 export interface TaskRunnerPort {
   host: "long-lived" | "short-lived";
+  /**
+   * False when this host cannot execute the task's target (e.g. the TUI only
+   * mounts one conversation). The core then defers the occurrence — it claims
+   * no lease, consumes nothing and records no failure — and reports the task id
+   * so the host can delegate the run to a short-lived child process (P1-2).
+   */
+  canRun?(task: ScheduleTaskV2): boolean;
   run(input: {
     task: ScheduleTaskV2;
     runId: string;
@@ -281,6 +316,14 @@ export interface AutostartStatus {
   platform: "win32" | "darwin" | "linux";
   method: "schtasks" | "launchd" | "systemd-user" | "crontab" | null;
   launcherPath?: string;
+  /**
+   * True when the OS entry references a launcher other than the one this build
+   * expects (HARUYUKI_HOME or install path changed), so the panel should offer
+   * re-registration (M4 #11).
+   */
+  stale?: boolean;
+  /** Launcher path the existing OS entry actually references; unset if unknown. */
+  registeredLauncherPath?: string;
   error?: string;
 }
 

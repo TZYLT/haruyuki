@@ -11,10 +11,20 @@
 
 import type { SessionStats, TrajectoryStatsSnapshot } from "@/agent/stats";
 import { appendUsageRecord, buildUsageRecord } from "@/usage/ledger";
-import { consumeScheduledRunContext } from "@/usage/scheduled-run-context";
+import {
+  consumeScheduledRunContext,
+  type ScheduledRunContext,
+  type ScheduledRunTurnOutcome,
+} from "@/usage/scheduled-run-context";
 
 export interface TurnUsageIdentity {
   agentId: string | null;
+  /**
+   * Conversation the turn ran in. Lets the scheduled-run context be consumed by
+   * scope instead of by "the one global pending run" (M2 F5/F12): a turn in
+   * another conversation must not settle a scheduled run it never ran.
+   */
+  conversationId?: string | null;
   /** Model handle the turn actually used, when known. */
   model: string | null;
 }
@@ -46,9 +56,19 @@ export function appendTurnUsageRecord(
   // keeps the next interactive turn from inheriting the tag. The outcome rides
   // the same call: consuming is also the scheduled runner's terminal signal, so
   // a turn that failed must not be reported as `completed`.
+  const turnOutcome =
+    options.outcome ?? (options.cancelled ? "cancelled" : "completed");
+  // The conversation is passed so a context owned by another conversation is
+  // not consumed (F5): the consumer returns null then, and this turn is simply
+  // an interactive one. (`as` keeps this compatible with the scoped consumer
+  // while WS-C lands it; the optional `conversationId`/`outcome` fields below are
+  // used when present.)
   const scheduled = consumeScheduledRunContext({
-    outcome: options.outcome ?? (options.cancelled ? "cancelled" : "completed"),
-  });
+    outcome: turnOutcome,
+    ...(identity.conversationId
+      ? { conversationId: identity.conversationId }
+      : {}),
+  }) as (ScheduledRunContext & { outcome?: ScheduledRunTurnOutcome }) | null;
   const record = buildUsageRecord({
     agentId: identity.agentId ?? "unknown",
     model: identity.model ?? "unknown",
@@ -68,7 +88,15 @@ export function appendTurnUsageRecord(
     // as this same value (ledger §5.16.3). `command` tasks are scheduled too,
     // and the ledger's enum has one bucket for both (Lead's ruling).
     source: scheduled ? "cron" : "interactive",
-    ...(scheduled ? { runId: scheduled.runId } : {}),
+    ...(scheduled
+      ? {
+          runId: scheduled.runId,
+          // F12: a scheduled row must carry the outcome the runner waited on,
+          // or the Usage page cannot tell a failed run from a successful one.
+          outcome: scheduled.outcome ?? turnOutcome,
+        }
+      : {}),
+    ...(identity.conversationId ? { sessionId: identity.conversationId } : {}),
     ...(options.cancelled ? { cancelled: true } : {}),
   });
   return appendUsageRecord(record);

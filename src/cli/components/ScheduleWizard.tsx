@@ -26,7 +26,7 @@
  */
 
 import { Box } from "ink";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   type CreateScheduleResult,
   createScheduleTask,
@@ -36,6 +36,7 @@ import {
 import { colors } from "@/cli/components/colors";
 import {
   commandAllowed,
+  cursorIndexFor,
   isTimeZone,
   looksLikeConversationId,
   PERMISSION_ROWS,
@@ -48,6 +49,7 @@ import {
   StepHint,
   TextStep,
   type WizardStep,
+  wizardStepTitle,
 } from "@/cli/components/ScheduleWizardSteps";
 import { Text } from "@/cli/components/Text";
 import { shortId } from "@/cli/helpers/schedule-store";
@@ -108,6 +110,49 @@ async function backendConversationSearch(
     label: conversation.summary?.trim() || conversation.id,
   }));
 }
+
+/** The type step's rows; the same list feeds the cursor prefill. */
+const TYPE_ITEMS: readonly SingleSelectItem[] = [
+  {
+    key: "prompt",
+    label: "prompt",
+    description: "注入一段用户消息并跑一轮",
+  },
+  {
+    key: "command",
+    label: "command",
+    description: `只允许 ${[...TASK_COMMAND_WHITELIST].join(" / ")}`,
+  },
+];
+
+/** The target step's rows (R-5.12.3): new-visible, new-hidden, existing. */
+const TARGET_ITEMS: readonly SingleSelectItem[] = [
+  {
+    key: "new-visible",
+    label: "每次新建可见会话",
+    description: "任务名作为会话摘要",
+  },
+  {
+    key: "new-hidden",
+    label: "每次新建隐藏会话",
+    description: "不进会话列表，可在 /hidden-sessions 里看",
+  },
+  {
+    key: "existing",
+    label: "写进已有会话",
+    description: "该会话必须存在且非隐藏",
+  },
+];
+
+/** The catch-up question's two rows; row 0 is "补跑". */
+const CATCH_UP_ITEMS: readonly SingleSelectItem[] = [
+  {
+    key: "yes",
+    label: "补跑",
+    description: "只补最近一次；标原定与实际时间",
+  },
+  { key: "no", label: "不补跑", description: "记错过，不执行" },
+];
 
 export function ScheduleWizard({
   agentId,
@@ -170,6 +215,31 @@ export function ScheduleWizard({
 
   const wizard = useWizard<WizardStep>({ initial: prefill.initialStep });
   const { step, canGoBack, goTo, back } = wizard;
+
+  // M3 #6: two Enter presses on the autostart question used to run `create`
+  // twice and leave two tasks behind. The ref flips **before** the first await,
+  // so the second key sees a creation in flight; it is only cleared when the
+  // attempt failed and the user is back on the question to retry.
+  const creatingRef = useRef(false);
+
+  /**
+   * The next step that still needs an answer.
+   *
+   * Forward navigation skips a step whose flag already answered it (M3 #3):
+   * `--permission`/`--catch-up` are required, so a wizard that asked them again
+   * and took Enter's row 0 silently replaced the user's choice. The optional
+   * timeout/wait/name steps keep their default values and are always shown.
+   */
+  const nextAfterTime = useCallback((): WizardStep => {
+    if (permission === null) return "permission";
+    if (catchUp === null) return "catch-up";
+    return "timeout";
+  }, [catchUp, permission]);
+
+  /** Where the flow goes once the content and the time are known. */
+  const afterContent = useCallback((): WizardStep => {
+    return schedule.cron ? "timezone" : "schedule-mode";
+  }, [schedule.cron]);
 
   const leave = useCallback(() => {
     setError(null);
@@ -259,12 +329,17 @@ export function ScheduleWizard({
   /** Create the task once, then ask about autostart. A refusal keeps the task. */
   const create = useCallback(
     (wantAutostart: boolean) => {
+      if (creatingRef.current) return;
+      creatingRef.current = true;
       setError(null);
       const result = createTask
         ? createTask(draft, agentId)
         : createScheduleTask({ agentId, draft });
       setCreated(result);
       if (result.kind === "error") {
+        // The task was not made, so the question is still unanswered: clear the
+        // guard and let the user go back and try again.
+        creatingRef.current = false;
         setError(result.message);
         goTo("create-failed");
         return;
@@ -342,21 +417,12 @@ export function ScheduleWizard({
     case "type":
       return (
         <PickerStep
+          key="type"
           command="/schedule add"
-          title="新建计划任务 · 1/10 类型"
+          title={wizardStepTitle("type")}
           hint="prompt 往会话里发一段话；command 跑一个能无人值守跑完的命令。"
-          items={[
-            {
-              key: "prompt",
-              label: "prompt",
-              description: "注入一段用户消息并跑一轮",
-            },
-            {
-              key: "command",
-              label: "command",
-              description: `只允许 ${[...TASK_COMMAND_WHITELIST].join(" / ")}`,
-            },
-          ]}
+          items={TYPE_ITEMS}
+          initialCursorIndex={cursorIndexFor(TYPE_ITEMS, type)}
           onSelect={(key) => {
             setType(key === "command" ? "command" : "prompt");
             goTo("target");
@@ -367,41 +433,30 @@ export function ScheduleWizard({
         />
       );
 
-    case "target":
+    case "target": {
+      // The prefilled target picks the opening row (M3 #3), and a bare
+      // `--target new` opens on the visible-new row so Enter answers the
+      // visibility question rather than skipping it (M3 #4).
+      const targetKey =
+        targetMode === "existing"
+          ? "existing"
+          : hidden
+            ? "new-hidden"
+            : "new-visible";
       return (
         <PickerStep
+          key="target"
           command="/schedule add"
-          title="2/10 目标"
+          title={wizardStepTitle("target")}
           hint="prompt 任务落在哪个会话：每次新建，还是写进一个已有会话。"
-          items={[
-            {
-              key: "new-visible",
-              label: "每次新建可见会话",
-              description: "任务名作为会话摘要",
-            },
-            {
-              key: "new-hidden",
-              label: "每次新建隐藏会话",
-              description: "不进会话列表，可在 /hidden-sessions 里看",
-            },
-            {
-              key: "existing",
-              label: "写进已有会话",
-              description: "该会话必须存在且非隐藏",
-            },
-          ]}
+          items={TARGET_ITEMS}
+          initialCursorIndex={cursorIndexFor(TARGET_ITEMS, targetKey)}
           onSelect={(key) => {
             setError(null);
-            if (key === "new-visible") {
+            if (key === "new-visible" || key === "new-hidden") {
               setTargetMode("new");
-              setHidden(false);
-              goTo("payload");
-              return;
-            }
-            if (key === "new-hidden") {
-              setTargetMode("new");
-              setHidden(true);
-              goTo("payload");
+              setHidden(key === "new-hidden");
+              goTo(payload.trim() ? afterContent() : "payload");
               return;
             }
             setTargetMode("existing");
@@ -412,12 +467,14 @@ export function ScheduleWizard({
           width={width}
         />
       );
+    }
 
     case "conversation":
       return (
         <TextStep
+          key="conversation"
           command="/schedule add"
-          title="3/10 会话"
+          title={wizardStepTitle("conversation")}
           hint={
             currentConversationId
               ? `粘贴会话 id，或输入关键词搜索最近 10 个。当前会话 ${shortId(currentConversationId)}。`
@@ -436,7 +493,7 @@ export function ScheduleWizard({
             }
             if (trimmed === "default" || looksLikeConversationId(trimmed)) {
               setConversationId(trimmed);
-              goTo("payload");
+              goTo(payload.trim() ? afterContent() : "payload");
               return;
             }
             setError(null);
@@ -487,17 +544,19 @@ export function ScheduleWizard({
             ];
       return (
         <PickerStep
+          key="conversation-pick"
           command="/schedule add"
-          title="3/10 选择会话"
+          title={wizardStepTitle("conversation-pick", "选择会话")}
           hint={
             choices.length > 0
               ? `最近 ${choices.length} 个匹配的会话。`
               : "没有搜到可选的会话：Esc 回去直接粘 id，或选默认会话。"
           }
           items={items}
+          initialCursorIndex={cursorIndexFor(items, conversationId)}
           onSelect={(key) => {
             setConversationId(key);
-            goTo("payload");
+            goTo(payload.trim() ? afterContent() : "payload");
           }}
           onCancel={leave}
           footer="Enter 选择 · Esc 返回输入"
@@ -509,8 +568,12 @@ export function ScheduleWizard({
     case "payload":
       return (
         <TextStep
+          key="payload"
           command="/schedule add"
-          title={type === "command" ? "4/10 命令（参数原样透传）" : "4/10 内容"}
+          title={wizardStepTitle(
+            "payload",
+            type === "command" ? "命令（参数原样透传）" : "内容",
+          )}
           hint={
             type === "command"
               ? `只允许 ${[...TASK_COMMAND_WHITELIST].join(" / ")}；如 /compact 3。`
@@ -538,7 +601,7 @@ export function ScheduleWizard({
             }
             setPayload(trimmed);
             setError(null);
-            goTo(schedule.cron ? "timezone" : "schedule-mode");
+            goTo(afterContent());
           }}
           placeholder={type === "command" ? "/compact 3" : "要发给会话的内容"}
           error={error}
@@ -550,8 +613,9 @@ export function ScheduleWizard({
     case "schedule-mode":
       return (
         <PickerStep
+          key="schedule-mode"
           command="/schedule add"
-          title="5/10 时间"
+          title={wizardStepTitle("schedule-mode")}
           hint="什么时候跑。cron 表达式最精确，间隔与一次性是它的常用写法。"
           items={[
             {
@@ -583,8 +647,9 @@ export function ScheduleWizard({
     case "schedule":
       return (
         <TextStep
+          key="schedule"
           command="/schedule add"
-          title="5/10 时间"
+          title={wizardStepTitle("schedule")}
           hint={
             scheduleMode === "cron"
               ? "5 字段 cron：分 时 日 月 周。"
@@ -630,8 +695,9 @@ export function ScheduleWizard({
     case "timezone":
       return (
         <TextStep
+          key="timezone"
           command="/schedule add"
-          title="6/10 时区"
+          title={wizardStepTitle("timezone")}
           hint="IANA 时区；cron 的时间按这个时区解释。"
           value={timezone}
           onChange={(value) => {
@@ -646,7 +712,7 @@ export function ScheduleWizard({
             }
             setTimezone(trimmed);
             setError(null);
-            goTo("permission");
+            goTo(nextAfterTime());
           }}
           placeholder={Intl.DateTimeFormat().resolvedOptions().timeZone}
           error={error}
@@ -658,10 +724,13 @@ export function ScheduleWizard({
     case "permission":
       return (
         <PickerStep
+          key="permission"
           command="/schedule add"
-          title="7/10 权限"
+          title={wizardStepTitle("permission")}
           hint="无人值守时任何审批请求都会被拒绝，所以档位就是能做什么的全部。"
           items={PERMISSION_ROWS}
+          // A prefilled `--permission` opens on its own row (M3 #3).
+          initialCursorIndex={cursorIndexFor(PERMISSION_ROWS, permission)}
           onSelect={(key) => {
             if (
               key === "standard" ||
@@ -670,7 +739,7 @@ export function ScheduleWizard({
             ) {
               setPermission(key);
             }
-            goTo("catch-up");
+            goTo(catchUp === null ? "catch-up" : "timeout");
           }}
           onCancel={leave}
           footer="Enter 选择 · Esc 返回"
@@ -681,17 +750,16 @@ export function ScheduleWizard({
     case "catch-up":
       return (
         <PickerStep
+          key="catch-up"
           command="/schedule add"
-          title="8/10 补跑"
+          title={wizardStepTitle("catch-up")}
           hint="机器关机/休眠错过触发点时，要不要补最近一次。"
-          items={[
-            {
-              key: "yes",
-              label: "补跑",
-              description: "只补最近一次；标原定与实际时间",
-            },
-            { key: "no", label: "不补跑", description: "记错过，不执行" },
-          ]}
+          items={CATCH_UP_ITEMS}
+          // `--no-catch-up` must not be flipped back to 补跑 by Enter (M3 #3).
+          initialCursorIndex={cursorIndexFor(
+            CATCH_UP_ITEMS,
+            catchUp === false ? "no" : "yes",
+          )}
           onSelect={(key) => {
             setCatchUp(key === "yes");
             goTo("timeout");
@@ -705,8 +773,9 @@ export function ScheduleWizard({
     case "timeout":
       return (
         <TextStep
+          key="timeout"
           command="/schedule add"
-          title="9/10 超时"
+          title={wizardStepTitle("timeout")}
           hint="单次运行上限（分钟）。0 表示不限时。"
           value={timeoutMinutes}
           onChange={(value) => {
@@ -731,8 +800,9 @@ export function ScheduleWizard({
     case "wait":
       return (
         <TextStep
+          key="wait"
           command="/schedule add"
-          title="9/10 等待"
+          title={wizardStepTitle("wait")}
           hint="目标会话被占用时最多等多久（分钟）；超时记跳过，不计失败。"
           value={waitMinutes}
           onChange={(value) => {
@@ -757,8 +827,9 @@ export function ScheduleWizard({
     case "name":
       return (
         <TextStep
+          key="name"
           command="/schedule add"
-          title="10/10 名称"
+          title={wizardStepTitle("name")}
           hint="展示用；留空则用内容前 32 个字符。"
           value={name}
           onChange={(value) => {
@@ -780,8 +851,9 @@ export function ScheduleWizard({
     case "autostart":
       return (
         <PickerStep
+          key="autostart"
           command="/schedule add"
-          title="最后一步 · 开机自启"
+          title={wizardStepTitle("autostart")}
           hint="注册后由 OS 每分钟唤起短命宿主；不注册则只在 Haruyuki 运行时执行。"
           items={[
             {

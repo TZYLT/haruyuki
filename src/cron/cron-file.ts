@@ -25,6 +25,8 @@ import type {
   CronTaskStatus,
   RunOutcome,
   ScheduleFileData,
+  TaskTarget,
+  TaskType,
 } from "./cron-types";
 import { isValidCron } from "./parse-interval";
 
@@ -66,18 +68,44 @@ export function addTask(input: AddTaskInput): AddTaskResult {
   return withLock(() => {
     const data = readScheduleFile();
     const agentId = input.agent_id;
-    const conversationId = input.conversation_id ?? "new";
+    const taskType: TaskType = input.type ?? "prompt";
+    // R-5.5.5: `target` is the explicit answer; `conversation_id` is the legacy
+    // shape. Derive the missing one instead of always storing "new" (M0 F-09).
+    const target: TaskTarget =
+      input.target ??
+      (input.conversation_id && input.conversation_id !== "new"
+        ? { kind: "existing", conversation_id: input.conversation_id }
+        : { kind: "new", hidden: false });
+    const conversationId =
+      target.kind === "new" ? "new" : target.conversation_id;
+    if (input.target && input.conversation_id !== undefined) {
+      const derived =
+        input.target.kind === "new" ? "new" : input.target.conversation_id;
+      if (derived !== input.conversation_id) {
+        throw new Error(
+          `target and conversation_id disagree: target resolves to "${derived}", conversation_id is "${input.conversation_id}".`,
+        );
+      }
+    }
+    // R-5.5.1: a `command` task runs on an existing conversation; it cannot ask
+    // the scheduler to create one (M0 F-14).
+    if (taskType === "command" && target.kind !== "existing") {
+      throw new Error(
+        "Command schedules must target an existing conversation: they cannot create a new one (R-5.5.1).",
+      );
+    }
 
     // Pausing a task must not let an agent exceed the persisted schedule limit.
     const scheduledCount = data.tasks.filter(
       (task) =>
         task.agent_id === agentId && !TERMINAL_TASK_STATUSES.has(task.status),
     ).length;
-    if (scheduledCount >= MAX_ACTIVE_TASKS_PER_AGENT) {
-      throw new Error(
-        `Agent ${agentId} has ${scheduledCount} active or paused tasks (max ${MAX_ACTIVE_TASKS_PER_AGENT}). Delete some before adding more.`,
-      );
-    }
+    // R-5.5.6 cancelled the hard per-agent cap: exceeding the soft limit is a
+    // warning, not a refusal (M0 F-13).
+    const capWarning =
+      scheduledCount >= MAX_ACTIVE_TASKS_PER_AGENT
+        ? `Agent ${agentId} already has ${scheduledCount} active or paused schedules (soft limit ${MAX_ACTIVE_TASKS_PER_AGENT}). Delete unused schedules to keep the list manageable.`
+        : undefined;
 
     assertValidCronForPersistence(input.cron);
 
@@ -98,9 +126,9 @@ export function addTask(input: AddTaskInput): AddTaskResult {
       prompt: input.prompt,
       // F-05 v2 fields: `undefined` is left to `normalizeScheduleTask`, which
       // fills every one of them with the documented default (Q-53).
-      type: input.type,
+      type: taskType,
       payload: input.payload,
-      target: input.target,
+      target,
       permission: input.permission,
       catch_up: input.catch_up,
       timeout_minutes: input.timeout_minutes,
@@ -137,17 +165,21 @@ export function addTask(input: AddTaskInput): AddTaskResult {
 
     // A mixed-version tombstone in scheduler_owner does not count as an
     // all-agent lease — only a real all-lease or the matching scoped owner
-    // suppresses the warning.
-    let warning: string | undefined;
+    // suppresses the warning. The wording covers both hosts: a live TUI or
+    // listener, or the OS-woken short-lived host when autostart is registered.
+    const notes: string[] = [];
+    if (capWarning) notes.push(capWarning);
     if (
       !hasLiveSchedulerOwner(
         data,
         isLocalAgentId(input.agent_id) ? "local" : "cloud",
       )
     ) {
-      warning =
-        "No haruyuki server is currently running. This task will only execute when a WS listener is active.";
+      notes.push(
+        "No schedule host is running right now. This task runs while a TUI or listener is active, or when the OS-woken `haruyuki schedule tick` fires (register it with `/schedule autostart on`).",
+      );
     }
+    const warning = notes.length > 0 ? notes.join(" ") : undefined;
 
     return { task, warning };
   });

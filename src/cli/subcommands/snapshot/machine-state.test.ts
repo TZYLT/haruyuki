@@ -106,6 +106,24 @@ test("corrupt crons.json is an io_error and is never overwritten", async () => {
   expect(existsSync(join(appHome, "crons.lock"))).toBe(false);
 });
 
+test("a store written by a newer build is refused and left untouched (M5 #16)", async () => {
+  const appHome = dir.resolve("apphome");
+  const schedulePath = writeSchedulesFile(appHome, {
+    version: 99,
+    scheduler_owner: { pid: 4242, token: "newer" },
+    scheduler_owners: { local: { pid: 4242, token: "newer" } },
+    tasks: [],
+  });
+  const before = readFileSync(schedulePath, "utf-8");
+
+  const failure = clearCronLease(appHome);
+
+  await expect(failure).rejects.toBeInstanceOf(SnapshotError);
+  await expect(failure).rejects.toMatchObject({ code: "io_error" });
+  expect(readFileSync(schedulePath, "utf-8")).toBe(before);
+  expect(existsSync(join(appHome, "crons.lock"))).toBe(false);
+});
+
 test("a lease-free crons.json is a no-op", async () => {
   const appHome = dir.resolve("apphome");
   const cronPath = writeCronsFile(appHome, {

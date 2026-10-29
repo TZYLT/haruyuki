@@ -25,6 +25,7 @@ import { join, resolve } from "node:path";
 import { APP_SUBDIRS } from "@/utils/app-paths";
 import type { TarReadEntry } from "@/utils/tar-stream";
 import { isTarStreamError, readTarGz } from "@/utils/tar-stream";
+import { warnScheduleHostMissing } from "./autostart-warning";
 import { PRE_IMPORT_BACKUP_NAME, writePreImportBackup } from "./import-backup";
 import {
   assertPackagePathsSafe,
@@ -47,6 +48,7 @@ import {
   restoredReport,
   verifiedReport,
 } from "./import-report";
+import { retireLegacyCronStore } from "./legacy-store";
 import {
   clearCronLease,
   clearGitLocks,
@@ -479,7 +481,7 @@ async function clearMachineState(
     if (lease.warning) warnings.push(lease.warning);
   } catch (error) {
     warnings.push(
-      `the scheduler and task leases in schedules.json were not cleared: ${errorMessage(error)}`,
+      `the scheduler and task leases in the restored schedule store were not cleared: ${errorMessage(error)}`,
     );
   }
 
@@ -920,6 +922,8 @@ async function runPipeline(
         onProgress,
       }),
     );
+    // A restored v2 store makes a leftover live crons.json dangerous (M5 #5).
+    retireLegacyCronStore(resolved.roots.home, packagePaths, warnings);
     // The fault hook models a failure of the user-facing run only: the internal
     // restore must stay able to finish, or no rollback could ever succeed.
     if (!flags.restore) injectFault("after-place");
@@ -949,6 +953,12 @@ async function runPipeline(
 
     await reinstallMemoryHooks(repositories, warnings);
 
+    // R-5.13.5 (M5 #1): say so when the restored tasks have no timer host.
+    await warnScheduleHostMissing(
+      resolved.roots.home,
+      warnings,
+      deps.autostartStatus,
+    );
     onProgress?.({ phase: "done", message: "import complete" });
     return restoredReport({
       packagePath,

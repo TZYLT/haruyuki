@@ -6,12 +6,17 @@
  * registers here exactly like the built-in cron one. That is the whole contract
  * — this module knows nothing about tasks beyond their id and occurrence.
  *
+ * Every source also returns its own opaque cursor (R-5.4.2). The core persists
+ * the returned cursors into `signal_state` itself, so a source never touches the
+ * store; `evaluateSignals` keeps the occurrence-only shape for preflight.
+ *
  * M0 ships the registry; M1 adds the built-in cron source (`cron-signal.ts`).
  */
 
 import type {
   DueOccurrence,
   ScheduleTaskV2,
+  SignalEvaluation,
   SignalSource,
   SignalState,
 } from "./cron-types";
@@ -37,16 +42,46 @@ export function clearSignalSources(): void {
   sources.clear();
 }
 
-/**
- * Ask every registered source what is due. Sources evaluate independently; the
- * core is responsible for de-dup, lease and dispatch order.
- */
-export function evaluateSignals(input: {
+export interface EvaluateSignalsInput {
   now: Date;
   tasks: ScheduleTaskV2[];
   state: SignalState;
-}): DueOccurrence[] {
-  return listSignalSources().flatMap((source) => source.evaluate(input));
+}
+
+export interface EvaluateSignalsResult {
+  occurrences: DueOccurrence[];
+  /** New source-level cursors (`source id → cursor`) to persist, if any. */
+  cursors: Record<string, string>;
+}
+
+/**
+ * Ask every registered source what is due, collecting both the occurrences and
+ * the cursors the sources advanced to (R-5.4.1/R-5.4.2).
+ *
+ * Sources evaluate independently; the core is responsible for de-dup, lease and
+ * dispatch order. A source that returns no `nextCursor` leaves its row alone.
+ */
+export function evaluateSignalsWithCursors(
+  input: EvaluateSignalsInput,
+): EvaluateSignalsResult {
+  const occurrences: DueOccurrence[] = [];
+  const cursors: Record<string, string> = {};
+  for (const source of listSignalSources()) {
+    const evaluation: SignalEvaluation = source.evaluate(input);
+    occurrences.push(...evaluation.occurrences);
+    if (evaluation.nextCursor !== null && evaluation.nextCursor !== undefined) {
+      cursors[source.id] = evaluation.nextCursor;
+    }
+  }
+  return { occurrences, cursors };
+}
+
+/**
+ * Occurrence-only projection (the preflight and every legacy caller use this).
+ * Cursor bookkeeping is deliberately not done here — the tick owns the store.
+ */
+export function evaluateSignals(input: EvaluateSignalsInput): DueOccurrence[] {
+  return evaluateSignalsWithCursors(input).occurrences;
 }
 
 /** Earliest due time across every registered source, for the preflight. */

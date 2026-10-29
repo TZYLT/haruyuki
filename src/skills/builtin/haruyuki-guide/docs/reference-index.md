@@ -45,13 +45,13 @@ running each subcommand's own `--help` inside this repository.
 | `haruyuki connect` | — | — | `src/cli/subcommands/connect.ts:122` |
 | `haruyuki install` | — | `--agent`, `--agent-id`, `--name`, `--force` | `src/cli/subcommands/skills.ts:101` |
 | `haruyuki skills` | — | `--agent`, `--agent-id`, `--name`, `--force` | `src/cli/subcommands/skills.ts:101` |
-| `haruyuki cron` | — | `--prompt`, `--every`, `--at`, `--once`, `--cron`, `--agent`, `--conversation`, `--type`, `--command`, `--visible`, `--hidden`, `--permission`, `--catch-up`, `--no-catch-up`, `--timeout`, `--wait`, `--all` | `src/cli/subcommands/cron.ts:51` |
-| `haruyuki schedule` | — | — | `src/cli/subcommands/schedule.ts` |
+| `haruyuki cron` | — | `--prompt`, `--every`, `--at`, `--once`, `--cron`, `--agent`, `--conversation`, `--type`, `--command`, `--visible`, `--hidden`, `--permission`, `--catch-up`, `--no-catch-up`, `--timeout`, `--wait`, `--all` | `src/cli/subcommands/cron.ts:54` |
+| `haruyuki schedule` | — | — | `src/cli/subcommands/schedule.ts:241` |
 | `haruyuki channels` | — | `--channel`, `--account-id`, `--agent`, `--chat-id`, `--conversation`, `--code` | `src/cli/subcommands/channels.ts:55` |
 | `haruyuki channel-gateway` | — | — | `src/cli/subcommands/channel-gateway.ts` |
 | `haruyuki local-backend` | — | — | `src/cli/subcommands/local-backend.ts:20` |
-| `haruyuki export` | — | `--out`, `--with-project`, `--dry-run`, `--json`, `--verbose`, `--yes`, `--help` | `src/cli/subcommands/router.ts:23` |
-| `haruyuki import` | — | `--from`, `--with-project`, `--verify`, `--json`, `--verbose`, `--yes`, `--help` | `src/cli/subcommands/router.ts:28` |
+| `haruyuki export` | — | `--out`, `--with-project`, `--dry-run`, `--json`, `--verbose`, `--yes`, `--help` | `src/cli/subcommands/snapshot/cli.ts:116` |
+| `haruyuki import` | — | `--from`, `--with-project`, `--verify`, `--json`, `--verbose`, `--yes`, `--help` | `src/cli/subcommands/snapshot/cli.ts:171` |
 | `haruyuki trajectories` | `trajectory` | `--out`, `--source`, `--root`, `--transcript`, `--deepagents`, `--project`, `--json`, `--help` | `src/cli/subcommands/trajectories.ts:21` |
 
 ### `haruyuki version`
@@ -555,7 +555,7 @@ Options:
 
 ### `haruyuki cron`
 
-- Help source: `src/cli/subcommands/cron.ts:51`
+- Help source: `src/cli/subcommands/cron.ts:54`
 
 ```text
 Usage:
@@ -587,7 +587,8 @@ Add options:
   --catch-up             Re-run the most recent missed occurrence
   --no-catch-up          Record missed occurrences instead (default)
   --timeout <minutes>    Per-run timeout; 0 = unlimited (default 30)
-  --wait <minutes>       Wait for a busy target conversation (default 10)
+  --wait <minutes>       Wait for a busy target conversation; 0 = skip the run
+                         immediately when the target is busy (default 10)
 
 List/filter options:
   --agent <id>           Filter by agent ID
@@ -601,13 +602,14 @@ Output is JSON.
 
 ### `haruyuki schedule`
 
-- Help source: `src/cli/subcommands/schedule.ts`
+- Help source: `src/cli/subcommands/schedule.ts:241`
 
 ```text
 Usage: haruyuki schedule <tick|status>
 
-  tick     one scheduler tick (internal; run by the OS timer)
-  status   read-only schedule diagnostics
+  tick              one scheduler tick (internal; run by the OS timer)
+  tick --task <id>  internal: run one delegated task's due occurrence
+  status            read-only schedule diagnostics
 ```
 
 ### `haruyuki channels`
@@ -713,7 +715,7 @@ before it is replaced.
 
 ### `haruyuki export`
 
-- Help source: `src/cli/subcommands/router.ts:23`
+- Help source: `src/cli/subcommands/snapshot/cli.ts:116`
 
 ```text
 Usage:
@@ -770,7 +772,7 @@ Examples:
 
 ### `haruyuki import`
 
-- Help source: `src/cli/subcommands/router.ts:28`
+- Help source: `src/cli/subcommands/snapshot/cli.ts:171`
 
 ```text
 Usage:

@@ -16,9 +16,13 @@
  * keeps the import graph acyclic (`cron-lease` → `cron-store`).
  */
 
+import { randomBytes } from "node:crypto";
 import {
+  closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -27,6 +31,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { appHomeRoot } from "@/utils/app-paths";
+import { withLock } from "./cron-lock";
 import {
   type CronRunReason,
   type CronTask,
@@ -127,6 +132,23 @@ export class ScheduleStoreMigrationError extends Error {
   }
 }
 
+/**
+ * `schedules.json` exists but is not a schedule file this build can read
+ * (truncated JSON, wrong top level, nonsense version). Every read and write
+ * refuses and the bytes on disk are left alone: silently treating it as an
+ * empty store is how the first mutation would erase the user's tasks (P0-2).
+ */
+export class ScheduleStoreCorruptError extends Error {
+  readonly filePath: string;
+  constructor(filePath: string, detail: string) {
+    super(
+      `${filePath} is not a valid schedule file (${detail}). It was left untouched: every read and write refuses until the file is repaired or moved aside.`,
+    );
+    this.name = "ScheduleStoreCorruptError";
+    this.filePath = filePath;
+  }
+}
+
 // ── Normalizing ─────────────────────────────────────────────────────
 
 function emptySignalState(): SignalState {
@@ -184,19 +206,31 @@ export function normalizeScheduleTask(task: CronTask): CronTask {
   };
 }
 
-function normalizeScheduleFileData(data: ScheduleFileData): ScheduleFileData {
-  return {
-    version: SCHEDULE_FILE_VERSION,
-    scheduler_owner: data.scheduler_owner ?? null,
-    scheduler_owners:
-      data.scheduler_owners && typeof data.scheduler_owners === "object"
-        ? data.scheduler_owners
-        : {},
-    signal_state: normalizeSignalState(data.signal_state),
-    tasks: Array.isArray(data.tasks)
-      ? data.tasks.map(normalizeScheduleTask)
-      : [],
-  };
+/**
+ * Normalize a parsed store. Unknown top-level fields are preserved (F-17): a
+ * build that does not understand a field must not drop it on the next write.
+ */
+function normalizeScheduleFileData(raw: {
+  version?: unknown;
+  scheduler_owner?: unknown;
+  scheduler_owners?: unknown;
+  signal_state?: unknown;
+  tasks?: unknown;
+}): ScheduleFileData {
+  const data: Record<string, unknown> = { ...raw };
+  data.version = SCHEDULE_FILE_VERSION;
+  data.scheduler_owner = raw.scheduler_owner ?? null;
+  data.scheduler_owners =
+    raw.scheduler_owners && typeof raw.scheduler_owners === "object"
+      ? raw.scheduler_owners
+      : {};
+  data.signal_state = normalizeSignalState(
+    raw.signal_state as SignalState | undefined,
+  );
+  data.tasks = Array.isArray(raw.tasks)
+    ? (raw.tasks as CronTask[]).map(normalizeScheduleTask)
+    : [];
+  return data as unknown as ScheduleFileData;
 }
 
 function normalizeSignalState(state: SignalState | undefined): SignalState {
@@ -216,24 +250,127 @@ interface RawScheduleFile {
   tasks?: unknown;
 }
 
+/**
+ * Read the raw store. `null` means "the file does not exist" and nothing else:
+ * an unreadable or malformed file throws `ScheduleStoreCorruptError`, because
+ * treating it as empty is what lets the next write destroy the store (P0-2).
+ */
 function readRawScheduleFile(): RawScheduleFile | null {
   const path = getScheduleFilePath();
   if (!existsSync(path)) return null;
+  let text: string;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-    if (!parsed || typeof parsed !== "object") return null;
-    return parsed as RawScheduleFile;
-  } catch {
-    // Legacy behaviour: unreadable JSON is treated as an empty schedule list.
-    // The file is only rewritten by an explicit mutation, never by a read.
-    return null;
+    text = readFileSync(path, "utf-8");
+  } catch (error) {
+    throw new ScheduleStoreCorruptError(path, describeError(error));
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new ScheduleStoreCorruptError(
+      path,
+      `malformed JSON (${describeError(error)})`,
+    );
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new ScheduleStoreCorruptError(
+      path,
+      "the top-level value is not an object",
+    );
+  }
+  return parsed as RawScheduleFile;
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Validate the version marker. A missing version means "pre-versioned file" and
+ * is accepted (normalized on the next write); anything that is not a positive
+ * integer is corruption, not a silent downgrade (F-16).
+ */
+function assertReadableVersion(raw: RawScheduleFile): void {
+  const version = raw.version;
+  if (version === undefined) return;
+  if (
+    typeof version !== "number" ||
+    !Number.isInteger(version) ||
+    version < 1
+  ) {
+    throw new ScheduleStoreCorruptError(
+      getScheduleFilePath(),
+      `version ${JSON.stringify(version)} is not a positive integer`,
+    );
+  }
+  if (version > SCHEDULE_FILE_VERSION) {
+    throw new ScheduleStoreVersionError(version);
   }
 }
 
-function assertSupportedVersion(raw: RawScheduleFile): void {
-  const version = raw.version;
-  if (typeof version === "number" && version > SCHEDULE_FILE_VERSION) {
-    throw new ScheduleStoreVersionError(version);
+function assertReadableShape(raw: RawScheduleFile): void {
+  const path = getScheduleFilePath();
+  if (raw.tasks !== undefined) {
+    if (!Array.isArray(raw.tasks)) {
+      throw new ScheduleStoreCorruptError(path, "tasks is not an array");
+    }
+    for (const task of raw.tasks) {
+      if (!task || typeof task !== "object" || Array.isArray(task)) {
+        throw new ScheduleStoreCorruptError(
+          path,
+          "tasks contains an entry that is not an object",
+        );
+      }
+    }
+  }
+  for (const field of [
+    "scheduler_owner",
+    "scheduler_owners",
+    "signal_state",
+  ] as const) {
+    const value = raw[field];
+    if (
+      value !== undefined &&
+      value !== null &&
+      (typeof value !== "object" || Array.isArray(value))
+    ) {
+      throw new ScheduleStoreCorruptError(path, `${field} is not an object`);
+    }
+  }
+}
+
+/** Unique per writer: two processes must not share one temp file (P0-3). */
+function scheduleTmpPath(path: string): string {
+  return `${path}.tmp.${process.pid}.${randomBytes(4).toString("hex")}`;
+}
+
+function fsyncParentDirectory(dir: string): void {
+  if (process.platform === "win32") return;
+  let fd: number | null = null;
+  try {
+    fd = openSync(dir, "r");
+    fsyncSync(fd);
+  } catch {
+    // Best effort: not every filesystem allows opening a directory.
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Ignore.
+      }
+    }
+  }
+}
+
+function writeFileDurably(path: string, text: string): void {
+  const fd = openSync(path, "w");
+  try {
+    writeFileSync(fd, text);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -243,13 +380,21 @@ function writeScheduleFileUnchecked(data: ScheduleFileData): void {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
-  const tmp = `${path}.tmp`;
-  writeFileSync(
-    tmp,
-    JSON.stringify({ ...data, version: SCHEDULE_FILE_VERSION }, null, 2),
-    { flush: true },
-  );
-  renameSync(tmp, path);
+  const tmp = scheduleTmpPath(path);
+  try {
+    writeFileDurably(
+      tmp,
+      JSON.stringify({ ...data, version: SCHEDULE_FILE_VERSION }, null, 2),
+    );
+    renameSync(tmp, path);
+    fsyncParentDirectory(dir);
+  } finally {
+    try {
+      if (existsSync(tmp)) rmSync(tmp, { force: true });
+    } catch {
+      // Best effort: a leftover temp file is inert.
+    }
+  }
 }
 
 // ── Public read / write ─────────────────────────────────────────────
@@ -257,8 +402,10 @@ function writeScheduleFileUnchecked(data: ScheduleFileData): void {
 /**
  * Read the live store, migrating `crons.json` on first contact.
  *
- * A file whose version is newer than this build throws instead of being read as
- * empty: returning an empty list would let the next write erase it.
+ * A corrupt or newer-version file throws instead of reading as empty: returning
+ * an empty list would let the next write erase it (P0-2, M-10). A legacy file
+ * left beside a valid store means an interrupted migration and is backed up on
+ * the read path too (F-05, F-19).
  */
 export function readScheduleFile(): ScheduleFileData {
   const raw = readRawScheduleFile();
@@ -266,14 +413,23 @@ export function readScheduleFile(): ScheduleFileData {
     const migrated = migrateLegacyCronFile();
     return migrated ? migrated.data : emptyScheduleFile();
   }
-  assertSupportedVersion(raw);
-  return normalizeScheduleFileData(raw as unknown as ScheduleFileData);
+  assertReadableVersion(raw);
+  assertReadableShape(raw);
+  completeInterruptedMigration();
+  return normalizeScheduleFileData(raw);
 }
 
-/** Write the live store. Refuses when the file on disk belongs to a newer build. */
+/** Write the live store. Refuses when the file on disk is corrupt or newer. */
 export function writeScheduleFile(data: ScheduleFileData): void {
   const raw = readRawScheduleFile();
-  if (raw !== null) assertSupportedVersion(raw);
+  if (raw !== null) {
+    assertReadableVersion(raw);
+  } else if (existsSync(getLegacyCronFilePath())) {
+    // Writing here would bury the unmigrated tasks under a fresh store.
+    throw new ScheduleStoreMigrationError(
+      `${getLegacyCronFilePath()} still needs to be migrated to ${getScheduleFilePath()}. Read the store first (the read migrates it), then retry.`,
+    );
+  }
   writeScheduleFileUnchecked(data);
 }
 
@@ -286,75 +442,170 @@ export interface MigrationResult {
   taskCount: number;
 }
 
-/**
- * Migrate `crons.json` (version 1) to `schedules.json` (version 2).
- *
- * Order matters for rollback: the v2 file is written first and the legacy file
- * is only renamed afterwards, so a failure at any point leaves `crons.json`
- * exactly as it was. Idempotent: a second process racing this one rewrites the
- * same content and finds the legacy file already gone (the rename is best
- * effort) — both end up with the same store.
- *
- * Returns `null` when there is nothing to migrate.
- */
-export function migrateLegacyCronFile(): MigrationResult | null {
-  const legacyPath = getLegacyCronFilePath();
-  if (!existsSync(legacyPath)) return null;
+interface LegacyFileSnapshot {
+  path: string;
+  text: string;
+  raw: RawScheduleFile;
+}
 
+function readLegacyFile(): LegacyFileSnapshot | null {
+  const path = getLegacyCronFilePath();
+  if (!existsSync(path)) return null;
+  let text: string;
+  try {
+    text = readFileSync(path, "utf-8");
+  } catch (error) {
+    throw new ScheduleStoreMigrationError(
+      `Could not read ${path} (${describeError(error)}). The file was left untouched; fix or move it, then retry.`,
+    );
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(legacyPath, "utf-8"));
+    parsed = JSON.parse(text) as unknown;
   } catch {
     throw new ScheduleStoreMigrationError(
-      `Could not parse ${legacyPath}. The file was left untouched; fix or move it, then retry.`,
+      `Could not parse ${path}. The file was left untouched; fix or move it, then retry.`,
     );
   }
-  if (!parsed || typeof parsed !== "object") {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new ScheduleStoreMigrationError(
-      `${legacyPath} is not a schedule file. The file was left untouched.`,
+      `${path} is not a schedule file. The file was left untouched.`,
     );
   }
-
-  const legacy = parsed as RawScheduleFile;
-  const legacyVersion = legacy.version;
-  if (typeof legacyVersion === "number" && legacyVersion > 1) {
+  const raw = parsed as RawScheduleFile;
+  const version = raw.version;
+  if (version !== undefined) {
+    if (
+      typeof version !== "number" ||
+      !Number.isInteger(version) ||
+      version < 1
+    ) {
+      throw new ScheduleStoreMigrationError(
+        `${path} has version ${JSON.stringify(version)}, not a v1 schedule file. The file was left untouched.`,
+      );
+    }
+    if (version > 1) {
+      throw new ScheduleStoreMigrationError(
+        `${path} has version ${version}, not a v1 schedule file. The file was left untouched.`,
+      );
+    }
+  }
+  if (raw.tasks !== undefined && !Array.isArray(raw.tasks)) {
     throw new ScheduleStoreMigrationError(
-      `${legacyPath} has version ${legacyVersion}, not a v1 schedule file. The file was left untouched.`,
+      `${path} has a tasks field that is not an array. The file was left untouched.`,
     );
   }
+  return { path, text, raw };
+}
 
-  const data: ScheduleFileData = {
+function legacyData(raw: RawScheduleFile): ScheduleFileData {
+  return {
     version: SCHEDULE_FILE_VERSION,
     scheduler_owner:
-      (legacy.scheduler_owner as ScheduleFileData["scheduler_owner"]) ?? null,
+      (raw.scheduler_owner as ScheduleFileData["scheduler_owner"]) ?? null,
     scheduler_owners:
-      legacy.scheduler_owners && typeof legacy.scheduler_owners === "object"
-        ? (legacy.scheduler_owners as ScheduleFileData["scheduler_owners"])
+      raw.scheduler_owners && typeof raw.scheduler_owners === "object"
+        ? (raw.scheduler_owners as ScheduleFileData["scheduler_owners"])
         : {},
     signal_state: normalizeSignalState(
-      legacy.signal_state as SignalState | undefined,
+      raw.signal_state as SignalState | undefined,
     ),
-    tasks: Array.isArray(legacy.tasks)
-      ? (legacy.tasks as CronTask[]).map(normalizeScheduleTask)
+    tasks: Array.isArray(raw.tasks)
+      ? (raw.tasks as CronTask[]).map(normalizeScheduleTask)
       : [],
   };
+}
 
-  writeScheduleFileUnchecked(data);
-
+/**
+ * Copy the legacy bytes to the read-only `crons.v1.json` backup, verify the
+ * copy, and only then remove the legacy file. The previous backup is replaced
+ * by a rename after the new copy is durable, so a failure never leaves the
+ * machine without a backup (F-06).
+ */
+function backUpLegacyFile(snapshot: LegacyFileSnapshot): string {
   const backupPath = getCronBackupFilePath();
+  const tmp = scheduleTmpPath(backupPath);
   try {
-    if (existsSync(backupPath)) rmSync(backupPath, { force: true });
-    renameSync(legacyPath, backupPath);
+    writeFileDurably(tmp, snapshot.text);
+    if (readFileSync(tmp, "utf-8") !== snapshot.text) {
+      throw new Error("the backup copy does not match the source bytes");
+    }
+    renameSync(tmp, backupPath);
+    fsyncParentDirectory(getHaruyukiDir());
+  } catch (error) {
+    throw new ScheduleStoreMigrationError(
+      `Could not write the read-only backup ${backupPath} (${describeError(error)}). ${snapshot.path} was left in place; fix the backup path and retry.`,
+    );
+  } finally {
+    try {
+      if (existsSync(tmp)) rmSync(tmp, { force: true });
+    } catch {
+      // Best effort.
+    }
+  }
+  try {
+    rmSync(snapshot.path, { force: true });
   } catch {
-    // A failed rename leaves the v1 file in place next to the new store. It is
-    // no longer read; the backup is recreated on the next successful attempt.
+    // The verified backup exists, so a failed removal only leaves an inert
+    // duplicate; the next read retries the completion step.
+  }
+  return backupPath;
+}
+
+/**
+ * Migrate under the advisory lock. Crash-safe and idempotent: the v2 store is
+ * written first (unique temp + rename), then the backup is created and
+ * verified, then the legacy file is removed. A crash at any point leaves the
+ * legacy file readable, and the next read completes the backup instead of
+ * re-migrating (P0-3).
+ */
+function migrateLegacyUnderLock(): MigrationResult | null {
+  const snapshot = readLegacyFile();
+  if (!snapshot) return null;
+
+  if (existsSync(getScheduleFilePath())) {
+    // Interrupted migration: the v2 store already won. Only finish the backup;
+    // never rewrite a store this build did not write (F-07).
+    backUpLegacyFile(snapshot);
+    return null;
   }
 
+  const data = legacyData(snapshot.raw);
+  writeScheduleFileUnchecked(data);
+  const backupPath = backUpLegacyFile(snapshot);
   return {
     data: normalizeScheduleFileData(data),
     backupPath,
     taskCount: data.tasks.length,
   };
+}
+
+/**
+ * Migrate `crons.json` (version 1) to `schedules.json` (version 2).
+ *
+ * Returns `null` when there is nothing to migrate. Throws when the legacy file
+ * is unreadable, of a newer version, or when the backup cannot be written: a
+ * migration that reports success without a backup is a lie.
+ */
+export function migrateLegacyCronFile(): MigrationResult | null {
+  return withLock(migrateLegacyUnderLock);
+}
+
+/**
+ * Read-path completion of an interrupted migration (F-05, F-19). A valid v2
+ * store plus a leftover `crons.json` means the previous migration died between
+ * the store write and the rename; finish the backup so the legacy file stops
+ * shadowing the store. Best effort here: the v2 store is authoritative and
+ * valid, so a backup failure must not make every read throw — the explicit
+ * migration API still reports it.
+ */
+function completeInterruptedMigration(): void {
+  if (!existsSync(getLegacyCronFilePath())) return;
+  try {
+    migrateLegacyCronFile();
+  } catch {
+    // Surfaced by `migrateLegacyCronFile()`; reads stay available.
+  }
 }
 
 // ── record ⇄ ScheduleTaskV2 ─────────────────────────────────────────
@@ -376,6 +627,9 @@ const RUN_REASONS: ReadonlySet<string> = new Set<CronRunReason>([
  * (they land in the run log instead). `queued` is in flight, not an outcome.
  */
 function toRunOutcome(task: CronTask): RunOutcome | null {
+  // F-18: a value written through the frozen view round-trips; the legacy enum
+  // stays the fallback for records that predate it.
+  if (task.last_outcome_v2 !== undefined) return task.last_outcome_v2;
   switch (task.last_run_outcome) {
     case "missed":
     case "skipped":
@@ -414,7 +668,8 @@ export function toScheduleTaskV2(record: CronTask): ScheduleTaskV2 {
     lastRunAt: task.last_run_at,
     lastOutcome: toRunOutcome(task),
     lastReason:
-      typeof task.last_run_reason === "string" ? task.last_run_reason : null,
+      task.last_run_reason_v2 ??
+      (typeof task.last_run_reason === "string" ? task.last_run_reason : null),
     lastError: task.last_run_error,
     consecutiveFailures: task.consecutive_failures ?? 0,
     missedCount: task.missed_count,
@@ -467,6 +722,10 @@ export function applyScheduleTaskV2(
     fire_count: view.fireCount,
     last_run_at: view.lastRunAt,
     last_run_error: view.lastError,
+    // F-18: the frozen view is writable; persist the fields it owns instead of
+    // dropping them on the next read.
+    last_outcome_v2: view.lastOutcome,
+    last_run_reason_v2: view.lastReason,
     consecutive_failures: view.consecutiveFailures,
     missed_count: view.missedCount,
     failed_count: view.failedCount,

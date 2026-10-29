@@ -3,6 +3,7 @@
 
 import { resolve } from "node:path";
 import { getCurrentAgentId } from "@/agent/context";
+import { resolveUnattendedApproval } from "@/cron/unattended-approval";
 import { runPermissionRequestHooks } from "@/hooks";
 import {
   checkModPermissions,
@@ -208,15 +209,18 @@ export function checkPermission(
   // (F-05 Q-51). Denying here — after both engines and the dual-eval comparison
   // — keeps the listener and the TUI on one rule and means no approval object is
   // ever built. `unattended` is only set by the task runner for the duration of
-  // one scheduled run, so an ordinary session is unaffected.
+  // one scheduled run, so an ordinary session is unaffected. The rule itself is
+  // the pure shared module, so `permissions/` imports no scheduler code
+  // (F-05 M2 F14).
   if (
     modeState?.unattended &&
     (result.decision === "ask" || result.decision === "alwaysAsk")
   ) {
+    const unattended = resolveUnattendedApproval(result.decision);
     result = {
       ...result,
-      decision: "deny",
-      reason: "unattended",
+      decision: unattended.decision,
+      reason: unattended.reason ?? "unattended",
     };
   }
 

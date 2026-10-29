@@ -30,11 +30,15 @@ import { safeAppendCronRunLogForTask } from "@/cron/run-log";
 import { formatScheduledTaskPrompt } from "@/cron/scheduled-task-prompt";
 import {
   isScheduledTaskPreflightError,
+  permissionModeForTier,
+  resolveTaskPermissionTier,
   runScheduledTaskWithHost,
   type ScheduledTaskHostPort,
   ScheduledTaskPreflightError,
   TARGET_BUSY_POLL_MS,
 } from "@/cron/task-run";
+import type { PermissionMode } from "@/permissions/mode";
+import type { PermissionModeState } from "@/tools/permission-mode-state";
 import {
   awaitScheduledRunTurn,
   clearScheduledRunContext,
@@ -59,6 +63,13 @@ export interface TuiCronRunnerDeps {
   /** True while a turn is running or queued work is waiting (R-5.7.3). */
   isConversationBusy?: () => boolean;
   /**
+   * Where this TUI process can actually run a turn: its one live agent +
+   * conversation. A due task whose target is anywhere else is not run here —
+   * it becomes an F3 skipped run with a reason (P1-2), never a turn in the
+   * current conversation.
+   */
+  getActiveTarget?: () => TuiScheduleActiveTarget | null;
+  /**
    * Which host this runner is, for the run log and the task lease.
    * Defaults to `"long-lived"` (the TUI itself); the short-lived
    * `schedule tick` host passes `"short-lived"`.
@@ -68,6 +79,204 @@ export interface TuiCronRunnerDeps {
   now?: () => number;
   /** Poll interval for the busy wait. Defaults to 30s. */
   pollIntervalMs?: number;
+}
+
+/** The TUI's live session, the only place this process can run a turn. */
+export interface TuiScheduleActiveTarget {
+  agentId: string;
+  conversationId: string;
+}
+
+/**
+ * The coordinator's live session, or `null` while it is switching.
+ *
+ * A task must never run in a conversation the TUI is not mounted on, so an
+ * incomplete identity (mid-switch) is "no target", not a guess.
+ */
+export function activeTuiScheduleTarget(
+  agentId: string | null | undefined,
+  conversationId: string | null | undefined,
+): TuiScheduleActiveTarget | null {
+  if (!agentId || !conversationId) return null;
+  return { agentId, conversationId };
+}
+
+/**
+ * A task's permission tier and its unattended flag, carried at turn level.
+ *
+ * The TUI must not apply the task tier by rewriting the session's permission
+ * mode: that state is shared with the user's own turns and a mid-run restore
+ * overwrites a mode the user changed (M2 F9). So the runner registers this
+ * once, the queue hand-off takes it, and the conversation loop hands it to the
+ * approval classifier for the duration of that one turn.
+ */
+export interface TuiScheduledTurnPermission {
+  /** The task's `permission` tier, as the classifier's mode. */
+  mode: PermissionMode;
+  /** No human is watching: every `ask` becomes a deny (Q-51). */
+  unattended: true;
+  taskId: string;
+  runId: string;
+}
+
+/** Narrower mode = stricter rank; `strict` is never a task tier but sorts first. */
+const PERMISSION_MODE_RANK: Record<PermissionMode, number> = {
+  strict: -1,
+  standard: 0,
+  acceptEdits: 1,
+  unrestricted: 2,
+};
+
+/**
+ * One turn can merge several queued items (a scheduled prompt plus whatever
+ * arrived with it). The merged turn must be at least as strict as every task in
+ * it, so the narrowest tier wins and unattended stays on.
+ */
+export function mergeTuiTurnPermissions(
+  permissions: readonly TuiScheduledTurnPermission[],
+): TuiScheduledTurnPermission | null {
+  const [first, ...rest] = permissions;
+  if (!first) return null;
+  let merged = first;
+  for (const permission of rest) {
+    if (
+      PERMISSION_MODE_RANK[permission.mode] < PERMISSION_MODE_RANK[merged.mode]
+    ) {
+      merged = { ...merged, mode: permission.mode };
+    }
+  }
+  return merged;
+}
+
+/** The task's tier as the turn-level permission the loop hands to approvals. */
+export function turnPermissionForTask(
+  task: ScheduleTaskV2,
+  runId: string,
+): TuiScheduledTurnPermission {
+  return {
+    mode: permissionModeForTier(resolveTaskPermissionTier(task)),
+    unattended: true,
+    taskId: task.id,
+    runId,
+  };
+}
+
+/**
+ * The permission state the approval classifier must see for a scheduled turn.
+ *
+ * Built from the task tier, not from the UI: the "mode seen by the classifier
+ * equals the task tier" invariant is this function, and `assertScheduledTurnPermission`
+ * fails closed if the loop ever classifies with anything else.
+ */
+export function scheduledTurnPermissionState(
+  permission: TuiScheduledTurnPermission,
+): PermissionModeState {
+  return { mode: permission.mode, unattended: permission.unattended };
+}
+
+/**
+ * Fail closed if a scheduled turn lost its task permission.
+ *
+ * A cron turn classified with the user's laxer mode would be the P1-1 privilege
+ * escalation itself, so a mismatch aborts the turn instead of running it.
+ */
+export function assertScheduledTurnPermission(
+  state: PermissionModeState | undefined,
+  permission: TuiScheduledTurnPermission,
+): void {
+  if (
+    state?.mode !== permission.mode ||
+    state.unattended !== permission.unattended
+  ) {
+    throw new Error(
+      `scheduled turn ${permission.runId} lost its task permission state (F-05 P1-1)`,
+    );
+  }
+}
+
+/** How a due prompt task resolves against this TUI process's live session. */
+export type TuiScheduleTargetRouting =
+  | { kind: "run"; target: TuiScheduleActiveTarget }
+  | { kind: "skip"; reason: string; conversationId?: string };
+
+/**
+ * Resolve a due prompt task's target against the session this process owns.
+ *
+ * The TUI runs one turn pipeline for one mounted conversation (AGENTS.md's
+ * single-session model), so the only target it can honour is that session, and
+ * only for the agent that owns it. Anything else — another agent, another
+ * conversation, a new/hidden conversation, or an unknown session — is refused
+ * here with a reason the run log carries, instead of being run in the current
+ * conversation (P1-2/F2). Refusing also means a deleted or hidden target can
+ * never receive this host's dispatch (the F10 validation, TUI side).
+ */
+export function resolveTuiTaskTarget(
+  task: ScheduleTaskV2,
+  active: TuiScheduleActiveTarget | null,
+): TuiScheduleTargetRouting {
+  if (active === null) {
+    return {
+      kind: "skip",
+      reason: "TUI 会话目标未知：没有已挂载的 agent/会话，不在别处顶替运行。",
+    };
+  }
+  if (task.agentId !== active.agentId) {
+    return {
+      kind: "skip",
+      reason: `任务属于 agent ${task.agentId}，TUI 当前会话是 agent ${active.agentId}；请由该 agent 的 listener/自启宿主执行。`,
+    };
+  }
+  if (task.target.kind === "new") {
+    return {
+      kind: "skip",
+      conversationId: task.target.hidden ? "new-hidden" : "new",
+      reason:
+        "任务目标是一个新会话；TUI 只能在当前会话里执行，请由 listener/自启宿主创建该会话，或把目标改成当前会话。",
+    };
+  }
+  if (task.target.conversation_id !== active.conversationId) {
+    return {
+      kind: "skip",
+      conversationId: task.target.conversation_id,
+      reason: `任务目标会话 ${task.target.conversation_id} 不是当前会话 ${active.conversationId}；TUI 不在别的会话里顶替运行。`,
+    };
+  }
+  return { kind: "run", target: active };
+}
+
+/**
+ * Turn permissions registered by the runner, keyed by run id.
+ *
+ * The TUI queue hand-off (message-queue-bridge) carries text, not task
+ * metadata, so the bridge message alone cannot say "this turn is a standard-tier
+ * unattended run". The runner registers the permission here before enqueueing;
+ * the queue adder takes it synchronously while enqueueing and attaches it to
+ * the queue item id. Nothing else reads this map.
+ */
+const PENDING_TURN_PERMISSIONS = new Map<string, TuiScheduledTurnPermission>();
+
+export function registerTuiTurnPermission(
+  permission: TuiScheduledTurnPermission,
+): void {
+  PENDING_TURN_PERMISSIONS.set(permission.runId, permission);
+}
+
+/** Take (and remove) the permission a queued scheduled prompt registered. */
+export function takeTuiTurnPermission(
+  runId: string,
+): TuiScheduledTurnPermission | null {
+  const permission = PENDING_TURN_PERMISSIONS.get(runId) ?? null;
+  if (permission) PENDING_TURN_PERMISSIONS.delete(runId);
+  return permission;
+}
+
+export function clearTuiTurnPermission(runId: string): void {
+  PENDING_TURN_PERMISSIONS.delete(runId);
+}
+
+/** Test seam: drop permissions a failed test left registered. */
+export function __testResetTuiTurnPermissions(): void {
+  PENDING_TURN_PERMISSIONS.clear();
 }
 
 const RUNNING = new Map<string, AbortController>();
@@ -130,15 +339,46 @@ export function createTuiCronRunner(
 ): TaskRunnerPort {
   const enqueuePrompt = deps.enqueuePrompt ?? defaultEnqueuePrompt;
   const isConversationBusy = deps.isConversationBusy ?? (() => false);
+  const getActiveTarget = deps.getActiveTarget ?? (() => null);
   const now = deps.now ?? Date.now;
   const pollIntervalMs = deps.pollIntervalMs ?? TARGET_BUSY_POLL_MS;
   const runnerHost = deps.host ?? "long-lived";
 
   const host: ScheduledTaskHostPort = {
-    isTargetBusy: () => isConversationBusy(),
+    // A task this host cannot honour is answered as F3, not waited on: waiting
+    // for a conversation this process does not own would only burn wait_minutes.
+    isTargetBusy: (task) =>
+      resolveTuiTaskTarget(task, getActiveTarget()).kind === "run"
+        ? isConversationBusy()
+        : false,
     runPrompt: async ({ task, runId, occurrence, signal }) => {
-      const conversationId =
-        task.target.kind === "existing" ? task.target.conversation_id : "new";
+      const routing = resolveTuiTaskTarget(task, getActiveTarget());
+      if (routing.kind === "skip") {
+        // F3: refused before anything is started, with the reason in the run
+        // log. The turn is never moved to the current conversation (P1-2/F2).
+        return {
+          outcome: "skipped" as const,
+          ...(routing.conversationId !== undefined
+            ? { conversationId: routing.conversationId }
+            : {}),
+          error: routing.reason,
+        };
+      }
+      const conversationId = routing.target.conversationId;
+      // Turn-level permission: registered before the enqueue so the queue adder
+      // can attach it to this item (P1-1). Passing it by rewriting the session
+      // mode would leak the task tier into the user's turns (M2 F9).
+      const permission = turnPermissionForTask(task, runId);
+      registerTuiTurnPermission(permission);
+      // Set before the enqueue: the queue adder reads the context to key the
+      // permission it attaches, so both are in place when the item exists.
+      setScheduledRunContext({
+        runId,
+        taskId: task.id,
+        source: "cron",
+        agentId: task.agentId,
+        conversationId,
+      });
       try {
         enqueuePrompt({
           text: wrapPrompt(task, occurrence, now()),
@@ -148,6 +388,10 @@ export function createTuiCronRunner(
           conversationId,
         });
       } catch (error) {
+        clearTuiTurnPermission(runId);
+        if (peekScheduledRunContext()?.runId === runId) {
+          clearScheduledRunContext();
+        }
         debugWarn(
           "Cron",
           `failed to enqueue scheduled prompt for task ${task.id}: ${
@@ -161,6 +405,7 @@ export function createTuiCronRunner(
         );
       }
       if (signal.aborted) {
+        clearTuiTurnPermission(runId);
         clearScheduledRunContext();
         return {
           outcome: "cancelled" as const,
@@ -170,19 +415,15 @@ export function createTuiCronRunner(
       }
       // The turn writer consumes this once, tags its ledger row (Q-55) and, with
       // its own outcome, is what ends the wait below (R-5.9).
-      setScheduledRunContext({
-        runId,
-        taskId: task.id,
-        source: "cron",
-        agentId: task.agentId,
-        conversationId,
-      });
-
       // Not `success` on enqueue: the turn has not run yet. The run's own
       // `timeout_minutes` (enforced by `runScheduledTaskWithHost`) aborts the
       // signal, which settles this wait as `cancelled` → the policy reports
       // `timeout`; nothing in this module arms a timer.
       const terminal = await awaitScheduledRunTurn({ runId, signal });
+      // The queue adder normally took the permission while enqueueing; clear it
+      // here too so a run that never produced a turn cannot leak it to a later
+      // queue hand-off.
+      clearTuiTurnPermission(runId);
       if (terminal.outcome === "cancelled" || terminal.outcome === "timeout") {
         // The wait ended without the writer consuming the context (an abort, or
         // the run's deadline). Drop it so it cannot tag a later, unrelated turn.
@@ -206,6 +447,14 @@ export function createTuiCronRunner(
 
   return {
     host: runnerHost,
+    /**
+     * Which due tasks this host can run itself (P1-2, user ruling: delegate the
+     * rest). True only for the live agent + conversation; the core leaves every
+     * other due occurrence untouched and reports it as deferred, so the TUI host
+     * can spawn the short-lived child that creates/uses its own target.
+     */
+    canRun: (task: ScheduleTaskV2) =>
+      resolveTuiTaskTarget(task, getActiveTarget()).kind === "run",
     async run({ task, runId, occurrence, signal }) {
       const controller = new AbortController();
       const onOuterAbort = () => controller.abort();

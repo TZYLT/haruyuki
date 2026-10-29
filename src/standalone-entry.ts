@@ -1,6 +1,17 @@
 import "@/utils/startup-log-boundary";
-import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 
+// C-24/P1-6: `schedule tick` must be a light process-level entry. Dispatch it
+// before the pi-ai OAuth bootstrap and before the heavy application index, so
+// the short-lived host never loads the backend, providers, tools or listener.
+const [command, ...rest] = process.argv.slice(2);
+if (command === "schedule") {
+  const { runScheduleSubcommand } = await import("./cli/subcommands/schedule");
+  process.exit(await runScheduleSubcommand(rest));
+}
+
+const { registerBunOAuthFlows } = await import(
+  "@earendil-works/pi-ai/bun-oauth"
+);
 // pi-ai keeps Node-only OAuth implementations behind bundler-opaque imports.
 // Register the statically bundled loaders before the application imports any
 // provider runtime so the standalone haruyuki.js never looks for sibling files.

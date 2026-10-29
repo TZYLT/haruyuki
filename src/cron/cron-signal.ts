@@ -21,6 +21,7 @@ import { CronExpressionParser } from "cron-parser";
 import type {
   DueOccurrence,
   ScheduleTaskV2,
+  SignalEvaluation,
   SignalSource,
   SignalState,
 } from "./cron-types";
@@ -54,8 +55,24 @@ function wallMinuteKey(wall: Date): string {
   return `${wall.getUTCFullYear()}-${pad(wall.getUTCMonth() + 1)}-${pad(wall.getUTCDate())}T${pad(wall.getUTCHours())}:${pad(wall.getUTCMinutes())}`;
 }
 
-function occurrenceKey(wall: Date, timezone: string): string {
-  return `${wallMinuteKey(wall)}|${timezone}`;
+/**
+ * Occurrence key: wall minute, timezone, and the resolved real instant.
+ *
+ * The real instant is what makes a DST fold distinct (M1 #15): a fall-back
+ * repeats the same wall minute at two different UTC instants, so the wall key
+ * alone would mark the second pass as already consumed. Ordering stays
+ * monotonic per task — the wall minute is the primary component.
+ */
+function occurrenceKey(wall: Date, timezone: string, realAt: Date): string {
+  return `${wallMinuteKey(wall)}|${timezone}|${realAt.toISOString()}`;
+}
+
+/**
+ * Candidate key ≤ cursor. The `|` prefix branch keeps cursors written before
+ * the instant component existed (a released-build migration) consumed.
+ */
+function isAtOrBefore(candidate: string, cursor: string): boolean {
+  return candidate <= cursor || candidate.startsWith(`${cursor}|`);
 }
 
 /** Floor an instant to its minute (real timeline). */
@@ -94,24 +111,27 @@ function realSlot(wall: Date, wallNow: Date, realNow: Date): Date {
 function isConsumed(task: ScheduleTaskV2, occurrence: string): boolean {
   return (
     task.lastConsumedOccurrence !== null &&
-    occurrence <= task.lastConsumedOccurrence
+    isAtOrBefore(occurrence, task.lastConsumedOccurrence)
   );
 }
 
 /**
  * Slots between `lastConsumedOccurrence` and the found slot (inclusive), capped.
- * Counting backwards is bounded: only a real miss walks more than one step.
+ * Counting backwards is bounded: only a real miss walks more than one step. The
+ * cap is reported instead of applied silently (M1 #16).
  */
 function countSlotsSince(
   iterator: CronIterator,
   wall: Date,
+  wallNow: Date,
+  realNow: Date,
   task: ScheduleTaskV2,
   timezone: string,
-): number {
-  if (!task.lastConsumedOccurrence) return 1;
+): { cycles: number; truncated: boolean } {
+  if (!task.lastConsumedOccurrence) return { cycles: 1, truncated: false };
   let count = 1;
   let previous = wall;
-  while (count < MAX_MISSED_CYCLES) {
+  while (true) {
     let next: Date;
     try {
       next = iterator.prev().toDate();
@@ -120,10 +140,14 @@ function countSlotsSince(
     }
     if (next.getTime() >= previous.getTime()) break;
     previous = next;
-    if (occurrenceKey(next, timezone) <= task.lastConsumedOccurrence) break;
+    const key = occurrenceKey(next, timezone, realSlot(next, wallNow, realNow));
+    if (isAtOrBefore(key, task.lastConsumedOccurrence)) break;
+    if (count >= MAX_MISSED_CYCLES) {
+      return { cycles: count, truncated: true };
+    }
     count += 1;
   }
-  return count;
+  return { cycles: count, truncated: false };
 }
 
 /** One-shot tasks are due once, at `scheduled_for` plus jitter (R-5.10.4). */
@@ -156,12 +180,18 @@ function oneShotOccurrence(
 function recurringCandidate(
   task: ScheduleTaskV2,
   now: Date,
-): { occurrence: string; intendedAt: Date; missedCycles: number } | null {
+): {
+  occurrence: string;
+  intendedAt: Date;
+  missedCycles: number;
+  missedTruncated: boolean;
+} | null {
   if (task.status !== "active" || !task.recurring) return null;
   if (!isValidCron(task.cron)) return null;
 
   const timezone = timezoneOf(task);
   const wallNow = toTimezoneWallClockMinute(now, timezone);
+  const realNow = floorMinute(now);
   const iterator = createIterator(task.cron, wallNow);
   if (!iterator) return null;
 
@@ -185,8 +215,8 @@ function recurringCandidate(
     }
   }
 
-  const slotAt = realSlot(wall, wallNow, floorMinute(now));
-  const occurrence = occurrenceKey(wall, timezone);
+  const slotAt = realSlot(wall, wallNow, realNow);
+  const occurrence = occurrenceKey(wall, timezone, slotAt);
   if (isConsumed(task, occurrence)) return null;
 
   // Never consume history for a task that has no cursor yet: its first run is
@@ -196,10 +226,19 @@ function recurringCandidate(
     if (Number.isFinite(createdAt) && slotAt.getTime() < createdAt) return null;
   }
 
+  const counted = countSlotsSince(
+    iterator,
+    wall,
+    wallNow,
+    realNow,
+    task,
+    timezone,
+  );
   return {
     occurrence,
     intendedAt: new Date(slotAt.getTime() + task.jitterOffsetMs),
-    missedCycles: countSlotsSince(iterator, wall, task, timezone),
+    missedCycles: counted.cycles,
+    missedTruncated: counted.truncated,
   };
 }
 
@@ -216,6 +255,7 @@ function recurringOccurrence(
     occurrence: candidate.occurrence,
     intendedAt: candidate.intendedAt.toISOString(),
     missedCycles: candidate.missedCycles,
+    ...(candidate.missedTruncated ? { missedTruncated: true } : {}),
   };
 }
 
@@ -272,9 +312,10 @@ export function createCronSignalSource(): SignalSource {
       now: Date;
       tasks: ScheduleTaskV2[];
       state: SignalState;
-    }): DueOccurrence[] {
+    }): SignalEvaluation {
       // The per-task `last_consumed_occurrence` is the cursor, so the shared
-      // signal state carries nothing the cron source needs (R-5.4.2).
+      // signal state carries nothing the cron source needs (R-5.4.2); it
+      // returns no source-level cursor.
       void input.state;
       const occurrences: DueOccurrence[] = [];
       for (const task of input.tasks) {
@@ -283,7 +324,7 @@ export function createCronSignalSource(): SignalSource {
           : oneShotOccurrence(task, input.now);
         if (occurrence) occurrences.push(occurrence);
       }
-      return occurrences;
+      return { occurrences };
     },
     nextDueAt(input: { now: Date; tasks: ScheduleTaskV2[] }): Date | null {
       let earliest: Date | null = null;

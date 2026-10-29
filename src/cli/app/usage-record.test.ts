@@ -4,12 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TrajectoryStatsSnapshot } from "@/agent/stats";
 import { readUsageLedger } from "@/usage/ledger";
+import {
+  __testResetScheduledRunContext,
+  peekScheduledRunContext,
+  setScheduledRunContext,
+} from "@/usage/scheduled-run-context";
 import { appendTurnUsageRecord } from "./usage-record";
 
 const tempRoots: string[] = [];
 const originalHome = process.env.HARUYUKI_HOME;
 
 afterEach(async () => {
+  __testResetScheduledRunContext();
   if (originalHome === undefined) {
     delete process.env.HARUYUKI_HOME;
   } else {
@@ -146,5 +152,79 @@ describe("appendTurnUsageRecord", () => {
     const records = await readUsageLedger();
     expect(records).toHaveLength(2);
     expect(records[1]?.steps).toBe(7);
+  });
+
+  // ── F-05 M2 F12 / F5: a scheduled turn's row ───────────────────────
+
+  test("a scheduled turn's row carries runId, outcome and the conversation", async () => {
+    const root = await makeTempRoot();
+    process.env.HARUYUKI_HOME = root;
+    setScheduledRunContext({
+      runId: "run-42",
+      taskId: "task-7",
+      source: "cron",
+      agentId: "agent-1",
+      conversationId: "conv-9",
+    });
+
+    await appendTurnUsageRecord(
+      snapshotOf(),
+      { agentId: "agent-1", conversationId: "conv-9", model: "m" },
+      { outcome: "failed" },
+    );
+
+    const [record] = await readUsageLedger();
+    expect(record?.source).toBe("cron");
+    expect(record?.runId).toBe("run-42");
+    // F12: without the outcome the Usage page cannot tell a failed run apart.
+    expect(record?.outcome).toBe("failed");
+    expect(record?.sessionId).toBe("conv-9");
+  });
+
+  test("a turn in another conversation does not consume the scheduled context", async () => {
+    const root = await makeTempRoot();
+    process.env.HARUYUKI_HOME = root;
+    setScheduledRunContext({
+      runId: "run-other",
+      taskId: "task-7",
+      source: "cron",
+      conversationId: "conv-other",
+    });
+
+    // The scheduled run's turn in conv-other has not run yet; this is a user
+    // turn in conv-mine, which must stay interactive and leave the context.
+    await appendTurnUsageRecord(snapshotOf(), {
+      agentId: "agent-1",
+      conversationId: "conv-mine",
+      model: "m",
+    });
+
+    const [record] = await readUsageLedger();
+    expect(record?.source).toBe("interactive");
+    expect(record?.runId).toBeUndefined();
+    expect(record?.outcome).toBeUndefined();
+    // The other conversation's run is still waiting for its own turn.
+    expect(peekScheduledRunContext("conv-other")?.runId).toBe("run-other");
+  });
+
+  test("without a conversation id the sole pending context is consumed (compat path)", async () => {
+    const root = await makeTempRoot();
+    process.env.HARUYUKI_HOME = root;
+    setScheduledRunContext({
+      runId: "run-single",
+      taskId: "task-7",
+      source: "cron",
+    });
+
+    await appendTurnUsageRecord(snapshotOf(), {
+      agentId: "agent-1",
+      model: "m",
+    });
+
+    const [record] = await readUsageLedger();
+    expect(record?.source).toBe("cron");
+    expect(record?.runId).toBe("run-single");
+    expect(record?.outcome).toBe("completed");
+    expect(record?.sessionId).toBeUndefined();
   });
 });

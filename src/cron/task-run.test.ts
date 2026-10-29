@@ -15,6 +15,7 @@ import {
   type ScheduleTaskV2,
 } from "@/cron/cron-types";
 import {
+  FAIL_CLOSED_PERMISSION_TIER,
   isAllowedScheduledCommand,
   isTaskPermissionTier,
   parseScheduledCommand,
@@ -23,6 +24,7 @@ import {
   resolveUnattendedApproval,
   runScheduledTask,
   runScheduledTaskWithHost,
+  type ScheduledReflectionTerminal,
   type ScheduledTaskHostPort,
   TASK_COMMAND_WHITELIST,
 } from "@/cron/task-run";
@@ -137,14 +139,22 @@ describe("scheduled permission tiers (M-8)", () => {
     expect(() => permissionModeForTier("strict" as never)).toThrow();
   });
 
-  test("an unreadable stored tier falls back to the default", () => {
-    expect(resolveTaskPermissionTier(task())).toBe(DEFAULT_PERMISSION_TIER);
+  test("an unreadable stored tier fails closed to standard (F13)", () => {
+    // Creation default is `unrestricted`, but a record that cannot be parsed
+    // must not run at the most permissive tier.
+    expect(FAIL_CLOSED_PERMISSION_TIER).toBe("standard");
+    expect(
+      resolveTaskPermissionTier(task({ permission: undefined as never })),
+    ).toBe("standard");
     expect(
       resolveTaskPermissionTier(task({ permission: "strict" as never })),
-    ).toBe(DEFAULT_PERMISSION_TIER);
+    ).toBe("standard");
     expect(resolveTaskPermissionTier(task({ permission: "acceptEdits" }))).toBe(
       "acceptEdits",
     );
+    expect(
+      resolveTaskPermissionTier(task({ permission: "unrestricted" })),
+    ).toBe("unrestricted");
   });
 
   test("any ask is denied with the unattended reason (Q-51)", () => {
@@ -254,6 +264,120 @@ describe("command tasks", () => {
     expect(launches).toHaveLength(1);
     // `scheduled` is the trigger; the mode is the task's, not `unrestricted`.
     expect(launches[0]?.permissionMode).toBe("acceptEdits");
+  });
+  test("a cancelled compact writes a cancelled ledger row (F11)", async () => {
+    const controller = new AbortController();
+    const outcomes: string[] = [];
+    const result = await runScheduledTask(
+      {
+        task: task({ type: "command", payload: "/compact" }),
+        runId: "run-cancel-compact",
+        signal: controller.signal,
+      },
+      {
+        resolveLocalBackend: () =>
+          ({
+            listTopics: () => ({ blocks: [] }),
+            prepareCompaction: async () => {
+              controller.abort();
+              throw new Error("provider aborted");
+            },
+            applyCompaction: async () => {
+              throw new Error("unreachable");
+            },
+          }) as never,
+        appendUsage: async (record) => {
+          outcomes.push(String((record as { outcome?: unknown }).outcome));
+          return true;
+        },
+      },
+    );
+    expect(result.outcome).toBe("cancelled");
+    // One outcome for both the row and the run result.
+    expect(outcomes).toEqual(["cancelled"]);
+  });
+});
+
+// ── F7: reflect waits for the subprocess terminal state ─────────────
+
+describe("scheduled reflect terminal state", () => {
+  function reflectContext(
+    wait: (input: {
+      runId: string;
+      signal: AbortSignal;
+    }) => Promise<ScheduledReflectionTerminal>,
+  ) {
+    return {
+      isMemfsEnabled: () => true,
+      launchReflection: (async () => ({
+        launched: true,
+        runId: "reflection-run-1",
+      })) as never,
+      waitForReflectionTerminal: wait,
+    };
+  }
+
+  test("a failed child makes the run failed, not a spawn-time success", async () => {
+    const result = await runScheduledTask(
+      {
+        task: task({ type: "command", payload: "/reflect" }),
+        runId: "run-reflect-failed",
+        signal: neverAborts(),
+      },
+      reflectContext(async () => "failed"),
+    );
+    expect(result.outcome).toBe("failed");
+    expect(result.error).toContain("reflection");
+  });
+
+  test("the run stays pending until the child reaches a terminal state", async () => {
+    let release: (terminal: ScheduledReflectionTerminal) => void = () => {};
+    const attempt = runScheduledTask(
+      {
+        task: task({ type: "command", payload: "/reflect" }),
+        runId: "run-reflect-pending",
+        signal: neverAborts(),
+      },
+      reflectContext(
+        () =>
+          new Promise<ScheduledReflectionTerminal>((resolve) => {
+            release = resolve;
+          }),
+      ),
+    );
+    let settled = false;
+    void attempt.then(() => {
+      settled = true;
+    });
+    // Let the launcher's promise and the wait subscription land.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    release("succeeded");
+    await expect(attempt).resolves.toMatchObject({ outcome: "success" });
+  });
+
+  test("a timed-out child is a timeout", async () => {
+    const result = await runScheduledTask(
+      {
+        task: task({ type: "command", payload: "/reflect" }),
+        runId: "run-reflect-timeout",
+        signal: neverAborts(),
+      },
+      reflectContext(async () => "timeout"),
+    );
+    expect(result.outcome).toBe("timeout");
+  });
+
+  test("an unknown run is the registered degradation (launch reported)", async () => {
+    const result = await runScheduledTask(
+      {
+        task: task({ type: "command", payload: "/reflect" }),
+        runId: "run-reflect-unknown",
+        signal: neverAborts(),
+      },
+      reflectContext(async () => "unknown"),
+    );
+    expect(result.outcome).toBe("success");
   });
 });
 
@@ -407,5 +531,83 @@ describe("run envelope", () => {
     });
     expect(result.outcome).toBe("skipped");
     expect(result.error).toBe("no work");
+  });
+
+  test("a command task times out under timeout_minutes (F3/P1-4)", async () => {
+    let bodyAborted = false;
+    const result = await runScheduledTaskWithHost({
+      task: task({
+        type: "command",
+        payload: "/reflect",
+        timeoutMinutes: 0.001, // 60ms
+      }),
+      runId: "run-command-timeout",
+      occurrence: "2026-10-28T03:00:00.000Z",
+      signal: neverAborts(),
+      host: busyHost().host,
+      commandContext: {
+        isMemfsEnabled: () => true,
+        launchReflection: (async () => ({
+          launched: true,
+          runId: "reflection-run-1",
+        })) as never,
+        waitForReflectionTerminal: ({ signal: bodySignal }) => {
+          if (bodySignal.aborted) {
+            bodyAborted = true;
+            return Promise.resolve<ScheduledReflectionTerminal>("cancelled");
+          }
+          return new Promise<ScheduledReflectionTerminal>((resolve) => {
+            bodySignal.addEventListener(
+              "abort",
+              () => {
+                bodyAborted = true;
+                resolve("cancelled");
+              },
+              { once: true },
+            );
+          });
+        },
+      },
+    });
+    expect(result.outcome).toBe("timeout");
+    expect(bodyAborted).toBe(true);
+  });
+
+  test("cancelling the outer signal aborts a command body (F3/P1-4)", async () => {
+    const controller = new AbortController();
+    let bodyAborted = false;
+    const pending = runScheduledTaskWithHost({
+      task: task({ type: "command", payload: "/reflect", timeoutMinutes: 0 }),
+      runId: "run-command-cancel",
+      occurrence: "2026-10-28T03:00:00.000Z",
+      signal: controller.signal,
+      host: busyHost().host,
+      commandContext: {
+        isMemfsEnabled: () => true,
+        launchReflection: (async () => ({
+          launched: true,
+          runId: "reflection-run-1",
+        })) as never,
+        waitForReflectionTerminal: ({ signal: bodySignal }) => {
+          if (bodySignal.aborted) {
+            bodyAborted = true;
+            return Promise.resolve<ScheduledReflectionTerminal>("cancelled");
+          }
+          return new Promise<ScheduledReflectionTerminal>((resolve) => {
+            bodySignal.addEventListener(
+              "abort",
+              () => {
+                bodyAborted = true;
+                resolve("cancelled");
+              },
+              { once: true },
+            );
+          });
+        },
+      },
+    });
+    controller.abort();
+    expect((await pending).outcome).toBe("cancelled");
+    expect(bodyAborted).toBe(true);
   });
 });

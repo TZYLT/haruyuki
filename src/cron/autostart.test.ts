@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -110,7 +117,7 @@ describe("invocation resolution", () => {
     ).toEqual({ command: "C:\\Tools\\haruyuki.cmd", args: [] });
   });
 
-  test("falls back to the current executable plus entrypoint", () => {
+  test("a dev src/index.ts run is redirected to the standalone entry (C-24)", () => {
     expect(
       resolveAutostartInvocation(
         {},
@@ -119,7 +126,20 @@ describe("invocation resolution", () => {
       ),
     ).toEqual({
       command: "C:\\bun\\bun.exe",
-      args: ["C:\\repo\\src\\index.ts"],
+      args: ["C:\\repo\\src\\standalone-entry.ts"],
+    });
+  });
+
+  test("a packaged haruyuki.js entrypoint is left alone", () => {
+    expect(
+      resolveAutostartInvocation(
+        {},
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\app\\haruyuki.js",
+      ),
+    ).toEqual({
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["C:\\app\\haruyuki.js"],
     });
   });
 });
@@ -146,6 +166,12 @@ describe("windows registration", () => {
         homeDir: home,
         env: {},
       }),
+      registeredLauncherPath: resolveAutostartLauncherPath({
+        platform: "win32",
+        homeDir: home,
+        env: {},
+      }),
+      stale: false,
     });
     expect(fake.calls).toHaveLength(1);
     expect(fake.calls[0]?.file).toBe("schtasks");
@@ -200,6 +226,27 @@ describe("windows registration", () => {
 
     expect(status.registered).toBe(true);
     expect(fake.calls[0]?.args).toEqual(["/Query", "/TN", AUTOSTART_TASK_NAME]);
+  });
+
+  test("status reports no launcher path when the entry does not expose one", async () => {
+    const home = tempHome();
+    const fake = recorder((command) =>
+      command.args.includes("/XML")
+        ? { code: 1, stdout: "", stderr: "ERROR: access denied" }
+        : { code: 0, stdout: "", stderr: "" },
+    );
+
+    const status = await getAutostartStatus({
+      platform: "win32",
+      homeDir: home,
+      env: {},
+      runner: fake.runner,
+    });
+
+    expect(status.registered).toBe(true);
+    // Never claim the current launcher is the registered one when the probe
+    // failed to read it (M4 #11).
+    expect(status.registeredLauncherPath).toBeUndefined();
   });
 
   test("unregister deletes then reports the postcondition", async () => {
@@ -260,11 +307,13 @@ describe("macOS registration", () => {
     expect(plist).toContain("<key>StartInterval</key>");
     expect(plist).toContain("<integer>60</integer>");
     expect(plist).toContain(`<string>${status.launcherPath}</string>`);
-    // The plist is loaded now, not at the next login, or "autostart on" would
-    // report success and do nothing until the user reboots.
-    expect(fake.calls).toHaveLength(1);
-    expect(fake.calls[0]?.file).toBe("launchctl");
-    expect(fake.calls[0]?.args).toEqual(["load", "-w", plistPath]);
+    // bootout+bootstrap reload the agent now, so "autostart on" takes effect
+    // immediately instead of waiting for the next login (M4 #12).
+    expect(fake.calls.map((call) => call.args)).toEqual([
+      ["bootout", "gui/501", plistPath],
+      ["bootstrap", "gui/501", plistPath],
+      ["enable", `gui/501/${AUTOSTART_LAUNCHD_LABEL}`],
+    ]);
   });
 
   test("an already-loaded agent is not a registration failure", async () => {
@@ -455,6 +504,254 @@ describe("linux registration", () => {
     });
     expect(status.registered).toBe(false);
     expect(status.error).toContain("could not read the current crontab");
+  });
+});
+
+describe("linux mechanism probing (M4 #8)", () => {
+  /** Install the unit files and the enable symlink a desktop session leaves. */
+  function writeSystemdUnits(home: string, execStart: string): void {
+    const dir = join(home, ".config", "systemd", "user");
+    mkdirSync(join(dir, "timers.target.wants"), { recursive: true });
+    writeFileSync(
+      join(dir, `${AUTOSTART_SYSTEMD_UNIT}.service`),
+      `[Service]\nExecStart="${execStart}"\n`,
+    );
+    writeFileSync(join(dir, `${AUTOSTART_SYSTEMD_UNIT}.timer`), "[Timer]\n");
+    writeFileSync(
+      join(dir, "timers.target.wants", `${AUTOSTART_SYSTEMD_UNIT}.timer`),
+      "",
+    );
+  }
+
+  function systemdUnitDir(home: string): string {
+    return join(home, ".config", "systemd", "user");
+  }
+
+  function launcherFor(home: string): string {
+    return resolveAutostartLauncherPath({
+      platform: "linux",
+      homeDir: home,
+      env: {},
+    });
+  }
+
+  test("status uses the installed unit without an XDG runtime dir (SSH)", async () => {
+    const home = tempHome();
+    const launcher = launcherFor(home);
+    writeSystemdUnits(home, launcher);
+    const fake = recorder((command) =>
+      command.file === "crontab"
+        ? { code: 1, stdout: "", stderr: "no crontab for user" }
+        : { code: 1, stdout: "", stderr: "Failed to connect to bus" },
+    );
+
+    const status = await getAutostartStatus({
+      platform: "linux",
+      homeDir: home,
+      env: {},
+      runner: fake.runner,
+    });
+
+    expect(status).toMatchObject({
+      registered: true,
+      method: "systemd-user",
+      registeredLauncherPath: launcher,
+    });
+    // Only the unit files mattered; no systemd bus probe was needed.
+    expect(fake.calls.some((call) => call.file === "systemctl")).toBe(false);
+  });
+
+  test("off removes the installed timer from an XDG-less shell (SSH)", async () => {
+    const home = tempHome();
+    writeSystemdUnits(home, launcherFor(home));
+    const fake = recorder((command) =>
+      command.file === "crontab"
+        ? { code: 1, stdout: "", stderr: "no crontab for user" }
+        : { code: 1, stdout: "", stderr: "Failed to connect to bus" },
+    );
+
+    const status = await unregisterAutostart({
+      platform: "linux",
+      homeDir: home,
+      env: {},
+      runner: fake.runner,
+    });
+
+    expect(status.registered).toBe(false);
+    const dir = systemdUnitDir(home);
+    expect(existsSync(join(dir, `${AUTOSTART_SYSTEMD_UNIT}.timer`))).toBe(
+      false,
+    );
+    expect(existsSync(join(dir, `${AUTOSTART_SYSTEMD_UNIT}.service`))).toBe(
+      false,
+    );
+    // The disable attempt is made even without a bus; it is the file removal
+    // that makes the registration inert.
+    expect(
+      fake.calls.some(
+        (call) => call.file === "systemctl" && call.args.includes("disable"),
+      ),
+    ).toBe(true);
+  });
+
+  test("an existing crontab registration wins over the XDG hint", async () => {
+    const home = tempHome();
+    let crontab = "";
+    const runner = async (command: AutostartCommand) => {
+      if (command.file === "crontab" && command.args[0] === "-l") {
+        return { code: 0, stdout: crontab, stderr: "" };
+      }
+      if (command.file === "crontab") {
+        crontab = command.stdin ?? "";
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    await registerAutostart({
+      platform: "linux",
+      homeDir: home,
+      env: {},
+      systemd: false,
+      runner,
+      invocation,
+    });
+    const xdg = { XDG_RUNTIME_DIR: "/run/user/1000" };
+
+    const status = await getAutostartStatus({
+      platform: "linux",
+      homeDir: home,
+      env: xdg,
+      runner,
+      invocation,
+    });
+    expect(status).toMatchObject({ registered: true, method: "crontab" });
+    expect(status.stale).toBe(false);
+
+    const after = await unregisterAutostart({
+      platform: "linux",
+      homeDir: home,
+      env: xdg,
+      runner,
+      invocation,
+    });
+    expect(after.registered).toBe(false);
+    expect(crontab).not.toContain(AUTOSTART_CRON_MARKER);
+  });
+});
+
+describe("stale registration detection (M4 #11)", () => {
+  test("systemd ExecStart pointing at an older launcher is stale", async () => {
+    const home = tempHome();
+    const fake = recorder(() => undefined);
+    const status = await registerAutostart({
+      platform: "linux",
+      homeDir: home,
+      env: {},
+      systemd: true,
+      runner: fake.runner,
+      invocation,
+    });
+    const dir = join(home, ".config", "systemd", "user");
+    mkdirSync(join(dir, "timers.target.wants"), { recursive: true });
+    writeFileSync(
+      join(dir, `${AUTOSTART_SYSTEMD_UNIT}.service`),
+      '[Service]\nExecStart="/old/home/.haruyuki/bin/schedule-tick.sh"\n',
+    );
+    writeFileSync(
+      join(dir, "timers.target.wants", `${AUTOSTART_SYSTEMD_UNIT}.timer`),
+      "",
+    );
+
+    const probed = await getAutostartStatus({
+      platform: "linux",
+      homeDir: home,
+      env: {},
+      systemd: true,
+      runner: fake.runner,
+    });
+
+    expect(status.stale).toBe(false);
+    expect(probed.registered).toBe(true);
+    expect(probed.stale).toBe(true);
+    expect(probed.registeredLauncherPath).toBe(
+      "/old/home/.haruyuki/bin/schedule-tick.sh",
+    );
+  });
+
+  test("a launcher written by an older install is stale without a path change", async () => {
+    const home = tempHome();
+    const fake = recorder(() => undefined);
+    await registerAutostart({
+      platform: "linux",
+      homeDir: home,
+      env: {},
+      systemd: true,
+      runner: fake.runner,
+      invocation,
+    });
+    const dir = join(home, ".config", "systemd", "user");
+    mkdirSync(join(dir, "timers.target.wants"), { recursive: true });
+    writeFileSync(
+      join(dir, "timers.target.wants", `${AUTOSTART_SYSTEMD_UNIT}.timer`),
+      "",
+    );
+    const launcherPath = resolveAutostartLauncherPath({
+      platform: "linux",
+      homeDir: home,
+      env: {},
+    });
+    writeFileSync(
+      launcherPath,
+      "#!/bin/sh\nexec /old/bin/bun /old/src/index.ts\n",
+    );
+
+    const probed = await getAutostartStatus({
+      platform: "linux",
+      homeDir: home,
+      env: {},
+      systemd: true,
+      runner: fake.runner,
+    });
+
+    expect(probed.registered).toBe(true);
+    expect(probed.stale).toBe(true);
+    expect(probed.registeredLauncherPath).toBe(launcherPath);
+  });
+
+  test("macOS plist ProgramArguments pointing at an older launcher is stale", async () => {
+    const home = tempHome();
+    const fake = recorder(() => undefined);
+    await registerAutostart({
+      platform: "darwin",
+      homeDir: home,
+      env: {},
+      runner: fake.runner,
+      invocation,
+    });
+    const plistPath = join(
+      home,
+      "Library",
+      "LaunchAgents",
+      `${AUTOSTART_LAUNCHD_LABEL}.plist`,
+    );
+    const plist = readFileSync(plistPath, "utf8").replace(
+      /<string>[^<]*schedule-tick\.sh<\/string>/,
+      "<string>/old/home/.haruyuki/bin/schedule-tick.sh</string>",
+    );
+    writeFileSync(plistPath, plist);
+
+    const probed = await getAutostartStatus({
+      platform: "darwin",
+      homeDir: home,
+      env: {},
+      runner: fake.runner,
+    });
+
+    expect(probed.registered).toBe(true);
+    expect(probed.stale).toBe(true);
+    expect(probed.registeredLauncherPath).toBe(
+      "/old/home/.haruyuki/bin/schedule-tick.sh",
+    );
   });
 });
 

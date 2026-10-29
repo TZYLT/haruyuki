@@ -13,7 +13,9 @@ import {
   buildUsageRecord,
   DEFAULT_USAGE_SOURCE,
   pruneUsageRecords,
+  readScheduledRunUsage,
   readUsageLedger,
+  summarizeUsageByRunId,
   USAGE_LOCK_TIMEOUT_MS,
   type UsageRecord,
   usageDayKey,
@@ -598,5 +600,95 @@ describe("the ledger lock", () => {
     expect(after.map((record) => record.prompt).sort((a, b) => a - b)).toEqual([
       0, 1, 2, 3, 4, 5,
     ]);
+  });
+});
+
+describe("scheduled run usage (F6)", () => {
+  test("every requested run gets an entry; a run with no row is not zero spend", () => {
+    const summary = summarizeUsageByRunId(
+      [recordAt("2026-10-22T10", { runId: "run-a" })],
+      ["run-a", "run-missing"],
+    );
+    expect(summary.size).toBe(2);
+    const missing = summary.get("run-missing");
+    expect(missing?.turns).toBe(0);
+    expect(missing?.steps).toBe(0);
+    expect(missing?.cost).toBeUndefined();
+    expect(missing?.outcomes).toEqual([]);
+  });
+
+  test("sums a run's numbers, outcomes and provider cost", () => {
+    const cost = {
+      input: 1,
+      cacheRead: 2,
+      cacheWrite: 3,
+      output: 4,
+      total: 10,
+    };
+    const summary = summarizeUsageByRunId(
+      [
+        recordAt("2026-10-22T10", {
+          runId: "run-a",
+          outcome: "timeout",
+          cost,
+          steps: 2,
+        }),
+        recordAt("2026-10-22T11", {
+          runId: "run-a",
+          prompt: 5,
+          completion: 7,
+          steps: 1,
+          outcome: "timeout",
+          cost: { ...cost, total: 5 },
+        }),
+        recordAt("2026-10-22T11", { runId: "run-b" }),
+      ],
+      ["run-a"],
+    );
+    const runA = summary.get("run-a");
+    expect(runA?.turns).toBe(2);
+    expect(runA?.steps).toBe(3);
+    expect(runA?.prompt).toBe(1005);
+    expect(runA?.completion).toBe(507);
+    expect(runA?.cost?.total).toBe(15);
+    // Distinct outcomes only.
+    expect(runA?.outcomes).toEqual(["timeout"]);
+  });
+
+  test("cost stays absent when rows carry no pricing", () => {
+    const summary = summarizeUsageByRunId(
+      [recordAt("2026-10-22T10", { runId: "run-a" })],
+      ["run-a"],
+    );
+    expect(summary.get("run-a")?.turns).toBe(1);
+    expect(summary.get("run-a")?.cost).toBeUndefined();
+  });
+
+  test("readScheduledRunUsage reads the ledger and degrades to no rows", async () => {
+    const root = await makeTempRoot();
+    process.env.HARUYUKI_HOME = root;
+    const summary = await readScheduledRunUsage({ runIds: ["run-a"] });
+    expect(summary.get("run-a")?.turns).toBe(0);
+
+    await appendUsageRecord(
+      buildUsageRecord({
+        agentId: "agent-1",
+        model: "openai/gpt-5.5",
+        prompt: 10,
+        cachedInput: 1,
+        cacheWrite: 0,
+        completion: 2,
+        steps: 1,
+        wallMs: 5,
+        apiMs: 4,
+        source: "cron",
+        outcome: "completed",
+        runId: "run-a",
+      }),
+    );
+    const read = await readScheduledRunUsage({ runIds: ["run-a", "run-b"] });
+    expect(read.get("run-a")?.turns).toBe(1);
+    expect(read.get("run-a")?.outcomes).toEqual(["completed"]);
+    expect(read.get("run-b")?.turns).toBe(0);
   });
 });

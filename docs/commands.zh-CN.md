@@ -255,9 +255,10 @@ haruyuki schedule status          # 只读诊断
 
 - `--every` / `--at` / `--cron` 三选一；`--at` 是一次性。`--every` 接受 `5m` / `2h` / `1d`；`--at` 接受 `in 45m`、`3:00pm`，或带明确时区的 RFC 3339 时间戳。
 - `--conversation` 省略或设 `new` = 每次新开会话；`self` = 当前会话；`default` = agent 默认会话。
-- **F-05 新字段**（与 `/schedule add` 同源）：`--type prompt|command`、`--command <compact|reflect>`、`--visible|--hidden`、`--permission standard|acceptEdits|unrestricted`、`--catch-up|--no-catch-up`、`--timeout <分钟>`（0 = 不限）、`--wait <分钟>`。
-- 任务存在 `~/.haruyuki/schedules.json`（v2）；旧 `crons.json` 首次读取时自动迁移并改名 `crons.v1.json`。`cron` 仍是本分支**唯一**的调度器，**输出为 JSON**。
-- `schedule tick` 是**内部命令**（帮助里不列）：OS 自启条目每分钟调用它；长驻宿主（TUI / listener）活着时直接退出，不写运行记录。
+- **F-05 新字段**（与 `/schedule add` 同源）：`--type prompt|command`、`--command <compact|reflect>`、`--visible|--hidden`、`--permission standard|acceptEdits|unrestricted`、`--catch-up|--no-catch-up`、`--timeout <分钟>`（0 = 不限）、`--wait <分钟>`（0 = 目标会话忙时立即跳过，不排队等待）。
+- `--command` 在**创建任务时**就按白名单（`compact`／`reflect`）校验，拼错会直接报错，不会建出一条每次运行都失败的任务。
+- 任务存在 `~/.haruyuki/schedules.json`（v2）；旧 `crons.json` 首次读取时自动迁移并改名 `crons.v1.json`。`cron` 仍是本分支**唯一**的调度器，**输出为 JSON**。store 损坏或来自更高版本时，子命令打印一行诊断并以 1 退出，不打印堆栈，也不会改写原文件。
+- `schedule tick` 是**内部命令**（帮助里不列）：OS 自启条目每分钟调用它；`src/standalone-entry.ts` 在重型入口之前分派 `schedule`，tick 不会加载 backend／providers／tools／listener（进程启动仍会加载少量基础模块）；长驻宿主（TUI / listener）活着时直接退出，不写运行记录。
 
 ### 外部渠道（`channels`）
 
@@ -372,6 +373,7 @@ haruyuki import --from <包路径> [--with-project[=<目录>]] [--verify] [--jso
   首次打开会话可能略慢。失败会自动回滚到导入前的备份（`backups/pre-import.hryk`，只留 1 份），
   回滚也失败时给出备份绝对路径与手工恢复命令。
 - 包内有 `project/`、但导入时没给 `--with-project`：**警告并跳过项目数据**，不会写进你当前的目录。
+- **计划任务的三个边角**：① 机器升级后还没跑过任何 schedule 命令时，任务仍在旧 `crons.json`、没有 `schedules.json`；导出会明确警告「这些任务未入包」，并提示先跑一次 schedule 命令完成迁移再导出。② `schedules.json` 来自更高版本时，导出／清租约都会拒绝解析和改写，而不是降级打包。③ 导入**不会**恢复来源机的 OS 自启条目：本机没有自启时报告会提示执行 `haruyuki schedule autostart on`；导入前的备份包含受管的旧 `crons.json`（旧包回滚可恢复原 store），恢复 v2 成功后会把目标机残留的 live `crons.json` 改名为只读 v1 备份，避免降级后旧任务复活。
 - 根解析取**当前进程**的用户级根与存储根（`HARUYUKI_HOME`、`LETTA_LOCAL_BACKEND_DIR`
   可改），不接受 `--home` 覆盖。
 - 退出码：`0` 成功；`1` 运行期失败（含回滚失败）；`2` 预检拒绝（包损坏 / 版本过高 /
@@ -518,8 +520,9 @@ haruyuki import --from ./work.hryk                   # 正式恢复（手敲 ove
 
 `add` 的选项：`--cron` / `--every` / `--at` 三选一；`--prompt <文本>` 或 `--command <compact\|reflect>`（`--type` 默认 `prompt`）；`--target new\|default\|existing:<会话 id>`；`--visible` / `--hidden`（新会话必填其一）；`--permission standard\|acceptEdits\|unrestricted`（必填）；`--catch-up` / `--no-catch-up`（必填）；`--timeout <分钟>`、`--wait <分钟>`、`--tz <IANA>`、`--name <名称>`。
 
-- **权限三档**（无人值守，任何审批请求一律拒绝）：`standard` 只读；`acceptEdits` 可读写文件但 shell 仍被拒；`unrestricted` 全部工具（本版不承诺禁删／禁网）。
+- **权限三档**（无人值守，任何审批请求一律拒绝）：`standard` 默认只读（`recall` 等安全子代理类型会自动放行）；`acceptEdits` 可读写文件，shell 默认被拒，但显式 allow 规则仍会放行；`unrestricted` 全部工具（本版不承诺禁删／禁网）。
 - 任务只在宿主活着时执行：TUI / listener 是长驻宿主，OS 自启条目唤起的是短命宿主。连续 3 次 F1/F2 自动暂停，`resume` 清零。
+- **自启的状态判定**：`status` / `off` 按机器上实际安装的条目（systemd unit 文件与 enable 符号链接、crontab 行、launchd plist、schtasks 注册）判断，不只看 `XDG_RUNTIME_DIR`，所以 SSH 下仍能识别并关闭桌面会话注册的 timer；macOS 用 `bootout` + `bootstrap`，重写 plist 后立即生效。`HARUYUKI_HOME`／安装路径变化后 `status` 会把旧条目标为 stale 并显示它实际指向的旧 launcher，重新执行 `on` 即刷新。
 - 列表 / 详情 / 运行记录是全屏面板；侧栏「计划任务」显示当前 agent 最近 3 条。
 
 ### 顶层命令：记忆、话题与上下文

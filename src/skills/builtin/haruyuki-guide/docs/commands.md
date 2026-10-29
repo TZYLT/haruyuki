@@ -292,35 +292,41 @@ fresh conversation per fire; `self` requires `$HARUYUKI_CONVERSATION_ID` —
 `add` also takes the resident-scheduler fields: `--type prompt|command`, `--command
 <compact|reflect>`, `--visible`/`--hidden`, `--permission
 standard|acceptEdits|unrestricted`, `--catch-up`/`--no-catch-up`, `--timeout
-<minutes>`, and `--wait <minutes>` — `src/cli/subcommands/cron.ts:98-126`. A
+<minutes>`, and `--wait <minutes>` — `src/cli/subcommands/cron.ts:57-94`. A
 command task requires `--command`, cannot combine it with `--prompt`, and is
-limited to `compact`/`reflect`; `--visible`/`--hidden` only apply to a fresh
-conversation — `src/cli/subcommands/cron.ts:169-189`,
-`src/cli/subcommands/cron.ts:200-213`. `--timeout` accepts `0` (unlimited);
-`--wait` requires at least 1 — `src/cli/subcommands/cron.ts:237-240`. There is
-no `--tz` here: the timezone is the process timezone captured at creation. A
-field left out gets the store default (`prompt` type, `unrestricted`
-permission, no catch-up, 30-minute timeout, 10-minute wait) —
-`src/cron/cron-store.ts:159-184`, `src/cron/cron-types.ts:304-308`. This is the
-only scheduler in the build; there is no hosted scheduling path —
-`src/cli/subcommands/cron.ts:20-24`.
+limited to `compact`/`reflect`; the whitelist is checked when the task is
+created, not only at dispatch, so a typo is refused up front —
+`src/cli/subcommands/cron.ts:176-199` — while `--visible`/`--hidden` only apply
+to a fresh conversation — `src/cli/subcommands/cron.ts:200-213`. `--timeout`
+accepts `0` (unlimited) and `--wait` accepts `0` too: instead of queueing the run
+for a busy target conversation, a zero wait skips it immediately —
+`src/cli/subcommands/cron.ts:249-252`. There is no `--tz` here: the timezone is
+the process timezone captured at creation. A field left out gets the store
+default (`prompt` type, `unrestricted` permission, no catch-up, 30-minute
+timeout, 10-minute wait) — `src/cron/cron-store.ts:159-184`,
+`src/cron/cron-types.ts:304-308`. This is the only scheduler in the build; there
+is no hosted scheduling path — `src/cli/subcommands/cron.ts:20-24`.
 
 ### `haruyuki schedule` (internal)
 
-`tick` and `status` only — `src/cli/subcommands/schedule.ts:151-177`. `tick` is
-what the OS autostart entry wakes once a minute. It reads the store and
-evaluates signals before importing the backend, providers, tools, or listener,
-and exits 0 when nothing is due or a long-lived host already owns the scheduler
-— `src/cli/subcommands/schedule.ts:89-125`, `src/cron/preflight.ts:1-18`. It is
-an internal command, not part of the interactive `/schedule` hub. `status` is
-read-only diagnostics: active / paused / finished counts, whether a long-lived
-host is live, the next due instant, and the store version and task count —
-`src/cli/subcommands/schedule.ts:128-149`.
+`tick` and `status` only — `src/cli/subcommands/schedule.ts:276-304`. `tick` is
+what the OS autostart entry wakes once a minute. The process entry
+(`src/standalone-entry.ts`) dispatches `schedule` before the heavy application
+index, so a tick reads the store and evaluates signals **without** importing the
+backend, providers, tools, or listener — the process still loads a small startup
+layer, so it is light rather than module-free —
+`src/standalone-entry.ts:1-12`, `src/cli/subcommands/schedule.ts:134-202`,
+`src/cron/preflight.ts:1-66`. It exits 0 when nothing is due or a long-lived host
+already owns the scheduler. `tick` is an internal command, not part of the
+interactive `/schedule` hub. `status` is read-only diagnostics: active / paused /
+finished counts, whether a long-lived host is live, the next due instant, and the
+store version and task count; a corrupt or newer store prints a diagnostic and
+exits 1 instead of a stack trace — `src/cli/subcommands/schedule.ts:204-252`.
 
 Both hosts call one scheduler core, which starts at most one task per tick and
 leaves the rest for later ticks; the long-lived TUI or listener wins while it is
 alive — `src/cron/scheduler-core.ts:1-8`,
-`src/cron/scheduler-core.ts:671`.
+`src/cron/scheduler-core.test.ts:182`.
 
 ### `haruyuki channels`
 
@@ -430,8 +436,22 @@ and leaves the read-only `home/crons.v1.json` backup out of the package. Both
 export and import clear the scheduler lease and the per-task leases
 (`scheduler_owner` null, `scheduler_owners` empty, each task's `lease` null), so
 the target machine never inherits the exporting machine's scheduler claim —
-`src/cli/subcommands/snapshot/export.ts`,
+`src/cli/subcommands/snapshot/legacy-store.ts`,
 `src/cli/subcommands/snapshot/machine-state.ts`.
+
+Three schedule-store edges are visible to the user. A machine that has not run a
+schedule command since the upgrade still keeps its tasks in `crons.json` and has
+no `schedules.json`: export warns that those tasks were **not packed** and tells
+the user to run a schedule command once (which migrates the store) and export
+again. A `schedules.json` written by a newer build is refused instead of being
+rewritten or packed. An import never restores the exporting machine's OS timer:
+it warns when no autostart entry is registered here, and a successful v2 restore
+retires a leftover live `crons.json` (moved to the read-only v1 name) while the
+pre-import backup includes it, so a rollback can restore it —
+`src/cli/subcommands/snapshot/legacy-store.ts`,
+`src/cli/subcommands/snapshot/import-backup.ts`,
+`src/cli/subcommands/snapshot/autostart-warning.ts`,
+`src/cli/subcommands/snapshot/import.ts`.
 
 ## Slash commands
 
@@ -538,26 +558,43 @@ Scheduled runs are unattended, so every approval request is denied rather than
 left pending — `src/cron/task-run.ts:138-152`. The tier decides what runs
 without asking:
 
-| Tier | Allows | Refuses |
+| Tier | Allows without asking | Needs approval (denied unattended) |
 | --- | --- | --- |
-| `standard` | Reading files, searching | Writing files, shell, subagents |
-| `acceptEdits` | Reading and writing files | Shell |
+| `standard` | Reading, searching, task-list and artifact bookkeeping, and the read-only `recall` subagent (the constrained `reflection`/`memory` subagents are auto-approved too) | Writing files, shell, and every other subagent type |
+| `acceptEdits` | Reading and writing files | Shell, **unless an explicit permission allow rule matches**: allow rules are evaluated before the tier default, so a shell command the user allow-listed does run |
 | `unrestricted` | Every tool | Nothing by tier; this build does not promise delete/network bans because the sandbox is process-level |
+
+So `standard` is not "no subagents at all": the safe subagent types are
+auto-approved, and a subagent that needs approval is denied. Likewise
+`acceptEdits` is not "no shell at all": the tier refuses shell by default, and
+explicit allow rules still apply —
+`src/permissions/checker.ts:774-845`, `src/permissions/checker.ts:446-460`.
 
 A `reflect` command task inherits the task's tier; with `standard` it cannot
 write memory and the reflection fails.
 
 `/schedule autostart on` registers a user-level OS entry that wakes
-`haruyuki schedule tick` once a minute — Windows `schtasks`, macOS launchd, or a
-Linux systemd user timer with a marked crontab fallback —
-`src/cron/autostart.ts:1-17`, `src/cron/autostart.ts:387`,
-`src/cron/autostart.ts:713`. The entry points at a generated launcher that
+`haruyuki schedule tick` once a minute — Windows `schtasks`, macOS launchd (with
+`bootout` + `bootstrap` reloading a rewritten plist immediately), or a Linux
+systemd user timer with a marked crontab fallback —
+`src/cron/autostart.ts:1-25`, `src/cron/autostart.ts:592`,
+`src/cron/autostart.ts:698`. The entry points at a generated launcher that
 carries `HARUYUKI_HOME`, not at the product binary directly. The wizard's last
 step offers the same registration. `off` removes the entry. Deleting the last
 task deliberately does **not** unregister autostart, so rebuilding a task does
 not rewrite machine configuration every time —
-`src/cron/autostart.ts:706-711`. A failed registration is reported with the
-task kept in place.
+`src/cron/autostart.ts:918`. A failed registration is reported with the task
+kept in place.
+
+`status` and `off` probe the machine's own artifacts (`systemctl --user
+is-enabled`, the unit files and the enable symlink, the crontab line, the
+registry/plist), never just `XDG_RUNTIME_DIR`: a timer registered from a desktop
+session is still reported — and can still be removed — from an SSH shell with no
+user manager — `src/cron/autostart.ts:491-505`,
+`src/cron/autostart.ts:807`. When `HARUYUKI_HOME` or the install path changed
+since registration, `status` marks the entry stale and reports the launcher it
+actually references; `on` again rewrites the launcher and the entry —
+`src/cron/autostart.ts:444-472`, `src/cron/autostart.ts:592`.
 
 ### Overlays
 

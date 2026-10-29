@@ -56,6 +56,10 @@ import {
 } from "@/utils/tar-stream";
 import { getVersion } from "@/version";
 import {
+  preparePackagedSchedules,
+  warnLegacyCronOnlyExport,
+} from "./legacy-store";
+import {
   type BuildManifestOptions,
   buildManifest,
   parseManifest,
@@ -378,6 +382,7 @@ async function collectScope(
   });
   const collected: ScopeEntry[] = [];
   for await (const entry of walk) collected.push(entry);
+  warnLegacyCronOnlyExport(roots, collected, warnings);
   return collected;
 }
 
@@ -599,36 +604,6 @@ function preparePackagedSettings(
   if (entry === undefined) return undefined;
   const sanitized = sanitizeSettingsForPackage(readManagedJsonObject(entry));
   return Buffer.from(`${JSON.stringify(sanitized, null, 2)}\n`, "utf-8");
-}
-
-/**
- * The `home/schedules.json` body that goes into the package: a copy with the
- * scheduler lease and every task lease cleared, the shape the import side
- * writes. §5.3 A ships the file "after clearing the lease" and §5.10.1 clears
- * it again on the target, but that second clear degrades to a warning when
- * `crons.lock` is busy, so the package must not name the exporting machine.
- * `signal_state`, tasks and every other field stay verbatim.
- */
-function preparePackagedSchedules(
-  collected: readonly ScopeEntry[],
-): Buffer | undefined {
-  const entry = findPackagedFile(collected, PACKAGED_SCHEDULES_PATH);
-  if (entry === undefined) return undefined;
-  const source = readManagedJsonObject(entry);
-  const tasks = Array.isArray(source.tasks)
-    ? source.tasks.map((task) =>
-        typeof task === "object" && task !== null && !Array.isArray(task)
-          ? { ...(task as Record<string, unknown>), lease: null }
-          : task,
-      )
-    : source.tasks;
-  const cleared: Record<string, unknown> = {
-    ...source,
-    scheduler_owner: null,
-    scheduler_owners: {},
-    tasks,
-  };
-  return Buffer.from(`${JSON.stringify(cleared, null, 2)}\n`, "utf-8");
 }
 
 /** The collected file entry for a package-relative path, when it is a file. */

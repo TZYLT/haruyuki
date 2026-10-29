@@ -87,6 +87,7 @@ import type { ExecutionPhase } from "@/cli/helpers/phase-visuals";
 import { maybeLaunchPostTurnReflection } from "@/cli/helpers/post-turn-reflection";
 import { launchReflectionSubagent } from "@/cli/helpers/reflection-launcher";
 import { useTuiScheduleHost } from "@/cli/helpers/schedule-host";
+import { activeTuiScheduleTarget } from "@/cli/helpers/schedule-prompt";
 import { getStartupModelDisplayOverride } from "@/cli/helpers/startup-model-display";
 import type { ApprovalRequest } from "@/cli/helpers/stream";
 import {
@@ -166,10 +167,7 @@ import {
   debugWarn,
   isDebugEnabled,
 } from "@/utils/debug";
-import {
-  type QueuedMessage,
-  setMessageQueueAdder,
-} from "@/utils/message-queue-bridge";
+import type { QueuedMessage } from "@/utils/message-queue-bridge";
 import { appendTaskNotificationEventsToBuffer } from "@/utils/task-notifications";
 import { recordTuiPerf } from "@/utils/tui-perf";
 import { getVersion } from "@/version";
@@ -199,6 +197,11 @@ import {
   providerTypeFromModelSettings,
   reasoningEffortLlmConfigPatch,
 } from "./model-config";
+import { useTuiMessageQueueBridge } from "./queue-bridge-adapter";
+import {
+  bindScheduledTurnPermission,
+  useScheduledTurnQueue,
+} from "./scheduled-turn-permission";
 import { prepareSessionExit } from "./session";
 import {
   buildStartupCommandHints,
@@ -1244,29 +1247,14 @@ export function App({
   // Override content parts for queued submissions (to preserve part boundaries)
   const overrideContentPartsRef = useRef<MessageCreate["content"] | null>(null);
 
-  // Set up message queue bridge for background tasks
-  // This allows non-React code (Task.ts) to add notifications to queueDisplay
-  useEffect(() => {
-    // Enqueue via QueueRuntime — onEnqueued callback updates queueDisplay.
-    setMessageQueueAdder((message: QueuedMessage) => {
-      tuiQueueRef.current?.enqueue(
-        message.kind === "task_notification"
-          ? ({
-              kind: "task_notification",
-              source: "task_notification",
-              text: message.text,
-              content: message.content,
-            } as Parameters<typeof tuiQueueRef.current.enqueue>[0])
-          : ({
-              kind: "message",
-              source: message.source ?? "user",
-              content: message.text,
-            } as Parameters<typeof tuiQueueRef.current.enqueue>[0]),
-      );
-      setDequeueEpoch((e) => e + 1);
-    });
-    return () => setMessageQueueAdder(null);
-  }, []);
+  // F-05 P1-1: the task-tier permission of a queued scheduled prompt rides the
+  // queue hand-off into that turn's approval classifier (see the module).
+  const scheduledTurnQueue = useScheduledTurnQueue();
+  useTuiMessageQueueBridge({
+    tuiQueueRef,
+    bumpDequeueEpoch: () => setDequeueEpoch((e) => e + 1),
+    scheduledTurnQueue,
+  });
   const waitingForQueueCancelRef = useRef(false);
   const queueSnapshotRef = useRef<QueuedMessage[]>([]);
   const [restoreQueueOnCancel, setRestoreQueueOnCancel] = useState(false);
@@ -1384,9 +1372,13 @@ export function App({
   // core is ticked every 60 s with the TUI's own task runner; the host owns the
   // interval, the scheduler lease ("all") and the run-notification flush, so
   // this file gains one call and no state (src/cli/AGENTS.md, C-27).
+  // F-05 P1-2/P1-3: only the live agent + conversation is runnable here; the
+  // callback reads the refs so a switch or a busy flip never rebuilds the host.
   useTuiScheduleHost({
     appendTaskNotificationEvents,
     isConversationBusy: isAgentBusy,
+    getActiveTarget: () =>
+      activeTuiScheduleTarget(agentIdRef.current, conversationIdRef.current),
   });
 
   // Queue callbacks remove consumed display entries by item ID.
@@ -3222,6 +3214,15 @@ export function App({
     waitingForQueueCancelRef,
   });
 
+  // F-05 P1-1: hand a scheduled turn's task tier to the conversation loop. The
+  // queue hand-off arms it; this wrapper is the only place that can put it into
+  // `ProcessConversationOptions`, so the loop classifies that one turn with the
+  // task tier without touching the session's permission state (M2 F9).
+  const processConversationWithScheduledTurn = useMemo(
+    () => bindScheduledTurnPermission(processConversation, scheduledTurnQueue),
+    [processConversation, scheduledTurnQueue],
+  );
+
   const {
     recoverRestoredPendingApprovals,
     handleApproveCurrent,
@@ -3535,7 +3536,7 @@ export function App({
     conversationIdRef,
     interruptQueuedRef,
     needsEagerApprovalCheck,
-    processConversation,
+    processConversation: processConversationWithScheduledTurn,
     queueApprovalResults,
     queuedApprovalMetadataRef,
     queuedApprovalResultsRef,
@@ -3587,7 +3588,7 @@ export function App({
     pendingApprovals,
     pendingConversationSwitchRef,
     pendingGitReminderRef,
-    processConversation,
+    processConversation: processConversationWithScheduledTurn,
     processConversationWithQueuedApprovals,
     profileConfirmPending,
     projectDirectory,
@@ -3688,6 +3689,10 @@ export function App({
       const batch = tuiQueueRef.current?.consumeItems(queueLen);
       if (!batch) return;
 
+      // F-05 P1-1: arm this turn with the task tier of any scheduled prompt in
+      // the batch (the strictest one, merged).
+      scheduledTurnQueue.armForBatch(batch.items);
+
       const {
         text: concatenatedMessage,
         content: queuedContentParts,
@@ -3711,6 +3716,9 @@ export function App({
         .current(concatenatedMessage, submitOptions)
         .finally(() => {
           dequeueInFlightRef.current = false;
+          // A scheduled turn that never reached processConversation (a blocked
+          // hook, a refused command) must not lend its tier to a later turn.
+          scheduledTurnQueue.clearArmed();
           // If more items arrived while in-flight, bump epoch so the effect re-runs.
           if ((tuiQueueRef.current?.length ?? 0) > 0) {
             setDequeueEpoch((e) => e + 1);
@@ -3747,6 +3755,7 @@ export function App({
     dequeueEpoch,
     queuedOverlayAction,
     queueMode,
+    scheduledTurnQueue,
   ]);
 
   const {

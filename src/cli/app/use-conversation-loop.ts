@@ -127,6 +127,7 @@ import {
 } from "./model-config";
 import { notify, sendDesktopNotification } from "./notifications";
 import { isRetriableError } from "./retry";
+import { createScheduledTurnPermissionContext } from "./scheduled-turn-permission";
 import { stripSystemReminders } from "./system-reminders";
 import { appendTurnTranscriptDelta } from "./transcript-delta";
 import { prepareTuiQueuedTurn } from "./turn-input";
@@ -466,20 +467,14 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
   const processConversation = useCallback(
     async (
       initialInput: Array<MessageCreate | ApprovalCreate>,
-      options?: import("./types").ProcessConversationOptions,
+      options?: import("./scheduled-turn-permission").ScheduledConversationOptions,
     ): Promise<void> => {
-      // Transient pre-stream retries can yield for seconds.
-      // Pin the user's permission mode for the duration of the submission so
-      // auto-approvals (YOLO / unrestricted) don't regress after a retry.
-      const pinnedPermissionMode = uiPermissionModeRef.current;
-      const restorePinnedPermissionMode = () => {
-        if (permissionMode.getMode() !== pinnedPermissionMode) {
-          permissionMode.setMode(pinnedPermissionMode);
-        }
-        if (uiPermissionModeRef.current !== pinnedPermissionMode) {
-          setUiPermissionMode(pinnedPermissionMode);
-        }
-      };
+      // F-05 P1-1: a scheduler turn pins the task tier, never the UI's selection.
+      const scheduledTurn = createScheduledTurnPermissionContext(
+        options?.scheduledTurnPermission,
+        uiPermissionModeRef,
+        setUiPermissionMode,
+      );
 
       // Reset per-run approval tracking used by streaming UI.
       buffersRef.current.approvalsPending = false;
@@ -996,7 +991,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
                 if (!cancelled) {
                   // Reset interrupted flag so retry stream chunks are processed
                   buffersRef.current.interrupted = false;
-                  restorePinnedPermissionMode();
+                  scheduledTurn.restorePinnedMode();
                   continue;
                 }
               }
@@ -1074,7 +1069,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
               if (!cancelled) {
                 buffersRef.current.interrupted = false;
                 conversationBusyRetriesRef.current = 0;
-                restorePinnedPermissionMode();
+                scheduledTurn.restorePinnedMode();
                 continue;
               }
               // User pressed ESC - fall through to error handling
@@ -1266,7 +1261,8 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
             }
           };
 
-          const isAutoApprovalMode = pinnedPermissionMode === "unrestricted";
+          const isAutoApprovalMode =
+            scheduledTurn.pinnedMode === "unrestricted";
           const isUserInitiated = currentInput.some(
             (item) => item.type === "message" && item.role === "user",
           );
@@ -1597,6 +1593,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
               sessionStatsRef.current,
               {
                 agentId: agentIdRef.current,
+                conversationId: conversationIdRef.current,
                 model: llmConfigRef.current?.model ?? null,
               },
             ).snapshot;
@@ -1660,6 +1657,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
               sessionStatsRef.current,
               {
                 agentId: agentIdRef.current,
+                conversationId: conversationIdRef.current,
                 model: llmConfigRef.current?.model ?? null,
               },
               { cancelled: true },
@@ -1785,9 +1783,8 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
 
             // Check permissions for all approvals (including fancy UI tools)
             // Ensure the singleton permission mode matches what the UI shows.
-            // This prevents rare races where the footer shows YOLO but approvals still
-            // get classified using the default mode.
-            const desiredMode = uiPermissionModeRef.current;
+            // A scheduled turn classifies with its task tier instead.
+            const desiredMode = scheduledTurn.desiredMode;
             if (permissionMode.getMode() !== desiredMode) {
               permissionMode.setMode(desiredMode);
             }
@@ -1798,6 +1795,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
                 requireArgsForAutoApprove: true,
                 missingNameReason:
                   "Tool call incomplete - missing name or arguments",
+                permissionModeState: scheduledTurn.classifierState(),
                 toolContextId: approvalToolContextIdRef.current,
               });
 
@@ -2740,7 +2738,7 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
         if (!preserveTranscriptStartForApproval) {
           pendingTranscriptStartLineIndexRef.current = null;
         }
-
+        scheduledTurn.restoreAfterTurn();
         // Wakes dequeue on a normal completion; when superseded by an ESC
         // interrupt, settles the interrupt (cancelling -> idle) instead.
         finishTuiTurn({
