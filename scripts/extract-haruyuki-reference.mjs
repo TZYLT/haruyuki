@@ -42,9 +42,14 @@ const GENERATOR_PATH = "scripts/extract-haruyuki-reference.mjs";
 const OUTPUT_PATH =
   "src/skills/builtin/haruyuki-guide/docs/reference-index.md";
 
-/** Commands that print a version rather than a usage block. */
+/** Commands with no usage block: `version` prints a number, and the internal
+ * channel-gateway process does not accept `--help` at all. */
 const NO_HELP_TEXT = new Map([
   ["version", "Prints this build's version. Takes no arguments."],
+  [
+    "channel-gateway",
+    "Internal stdin/stdout channel process used with `--app-server-url`; it is not a user command and takes no `--help`.",
+  ],
 ]);
 
 class ExtractionError extends Error {
@@ -134,6 +139,14 @@ function lineNumberAt(source, index) {
  * Consecutive `case "a": case "b":` labels that share one `return` are one
  * command with aliases, which is exactly how the router expresses them.
  */
+/** `./x` and `@/x` as they resolve from the router module. */
+function resolveRouterModule(specifier) {
+  const base = specifier.startsWith("@/")
+    ? path.posix.join("src", specifier.slice(2))
+    : path.posix.join(path.posix.dirname(ROUTER_PATH), specifier);
+  return `${base}.ts`;
+}
+
 function parseSubcommandCases(source) {
   const lines = source.split(/\r?\n/);
   const cases = [];
@@ -153,7 +166,14 @@ function parseSubcommandCases(source) {
       continue;
     }
 
-    const runner = /return (run[A-Za-z]+Subcommand)\(/.exec(line);
+    // Two shapes exist: a bare call to a helper defined in this file, and an
+    // on-demand import — `return (await import("./x")).runXSubcommand(rest);` —
+    // which is what every subcommand now uses so the router stays import-free
+    // (C-24: `schedule tick` must not drag the backend graph in).
+    const runner =
+      /return\s+(?:\(\s*await\s+import\("((?:\.\/|@\/)[^"]+)"\)\s*\)\s*\.)?(run[A-Za-z]+Subcommand)\s*\(/.exec(
+        line,
+      );
     if (runner && pending.length > 0) {
       cases.push({
         command: pending[0].name,
@@ -161,7 +181,8 @@ function parseSubcommandCases(source) {
         notes: pending
           .map((entry) => entry.note)
           .filter((note) => note.length > 0),
-        runner: runner[1],
+        runner: runner[2],
+        module: runner[1] ? resolveRouterModule(runner[1]) : null,
         routerLine: index + 1,
       });
       pending = [];
@@ -669,11 +690,10 @@ async function collectSubcommands(cache) {
   const routerSource = await readRepositoryFile(ROUTER_PATH);
   cache.set(ROUTER_PATH, routerSource);
   const cases = parseSubcommandCases(routerSource);
-  const routerImports = parseImports(routerSource, ROUTER_PATH);
   const entries = [];
 
   for (const entry of cases) {
-    const modulePath = routerImports.get(entry.runner) ?? ROUTER_PATH;
+    const modulePath = entry.module ?? ROUTER_PATH;
     const anchor =
       modulePath === ROUTER_PATH && definitionIndex(routerSource, entry.runner) !== null
         ? {
