@@ -5,12 +5,12 @@
  * reported rather than rolled back: the data itself is complete, only
  * scheduler/git plumbing may need a retry (requirement doc §5.10.6).
  *
- * `src/cron` owns `crons.json`, but its lock (`withLock`) and path
- * (`getCronFilePath`) are hard-wired to `appHomeRoot()` and `writeCronFile` is
- * private, so an explicit `appHome` cannot use them. The lock below speaks the
- * same on-disk protocol (a `crons.lock` directory plus `owner.json`, five-second
- * deadline, 30-second stale-steal) so it is interoperable with the scheduler's
- * own lock, and the whole-file read-modify-write is atomic.
+ * `src/cron` owns `schedules.json`, but its lock (`withLock`) and path
+ * (`getScheduleFilePath`) are hard-wired to `appHomeRoot()`, so an explicit
+ * `appHome` cannot use them. The lock below speaks the same on-disk protocol
+ * (a `crons.lock` directory plus `owner.json`, five-second deadline, 30-second
+ * stale-steal) so it is interoperable with the scheduler's own lock, and the
+ * whole-file read-modify-write is atomic.
  */
 
 import { randomUUID } from "node:crypto";
@@ -28,7 +28,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { installMemoryGitHooks } from "@/agent/memory-git-hooks";
 import { isProcessAlive } from "@/cron/process-identity";
 import { snapshotError } from "./types";
@@ -45,7 +45,9 @@ export interface HookReinstallResult {
   failed: string[];
 }
 
-const CRON_FILE_NAME = "crons.json";
+const SCHEDULE_FILE_NAME = "schedules.json";
+/** Pre-migration store; only read here to clear leases before the lazy migration. */
+const LEGACY_SCHEDULE_FILE_NAME = "crons.json";
 const CRON_LOCK_DIR_NAME = "crons.lock";
 const CRON_LOCK_OWNER_FILE = "owner.json";
 const CRON_LOCK_TIMEOUT_MS = 5_000;
@@ -192,40 +194,82 @@ function writeJsonAtomic(path: string, value: unknown): void {
 }
 
 /**
- * Clear the scheduler lease in `crons.json` (`scheduler_owner` -> null,
- * `scheduler_owners` -> {}), keeping tasks and status untouched.
+ * The lease-clearing rewrite both store versions share. A task without a
+ * `lease` field is returned untouched; the field is only a presence check.
+ */
+function clearLeaseFields(data: Record<string, unknown>): {
+  cleared: boolean;
+  next: Record<string, unknown>;
+} {
+  const owners = isPlainObject(data.scheduler_owners)
+    ? data.scheduler_owners
+    : {};
+  let cleared =
+    (data.scheduler_owner !== null && data.scheduler_owner !== undefined) ||
+    Object.keys(owners).length > 0;
+  let tasks = data.tasks;
+  if (Array.isArray(data.tasks)) {
+    tasks = data.tasks.map((task) => {
+      if (!isPlainObject(task)) return task;
+      if (task.lease === null || task.lease === undefined) return task;
+      cleared = true;
+      return { ...task, lease: null };
+    });
+  }
+  return {
+    cleared,
+    next: { ...data, scheduler_owner: null, scheduler_owners: {}, tasks },
+  };
+}
+
+/**
+ * Clear the machine-bound leases in the schedule store: `scheduler_owner` ->
+ * null, `scheduler_owners` -> {}, and every task's `lease` -> null. Tasks and
+ * every other field (including `signal_state`) stay untouched.
  *
  * Runs inside the cron lock on a read-modify-atomic-write of the whole file. A
- * corrupt file is an error, never silently treated as empty; a lock timeout is
- * a warning because a stale lease only means another scheduler may race for it.
- * `cleared` reports that a lease was actually present and removed; an already
- * clear file (or no file at all) is a no-op.
+ * legacy package that left only `crons.json` has no `schedules.json` yet, and
+ * writing one here would invent a store before the v1 -> v2 migration ran; the
+ * v1 file is cleared in place instead, so the lazy migration on first read
+ * still produces a lease-free v2 store. A corrupt file is an error, never
+ * silently treated as empty; a lock timeout is a warning because a stale lease
+ * only means another scheduler may race for it. `cleared` reports that a lease
+ * was actually present and removed; an already clear file (or no file at all)
+ * is a no-op.
  */
 export async function clearCronLease(
   appHome: string,
 ): Promise<CronLeaseResult> {
-  const cronPath = join(appHome, CRON_FILE_NAME);
-  if (!existsSync(cronPath)) return { cleared: false };
+  const schedulePath = join(appHome, SCHEDULE_FILE_NAME);
+  const legacyPath = join(appHome, LEGACY_SCHEDULE_FILE_NAME);
+  const targetPath = existsSync(schedulePath)
+    ? schedulePath
+    : existsSync(legacyPath)
+      ? legacyPath
+      : undefined;
+  if (targetPath === undefined) return { cleared: false };
+  const fileName = basename(targetPath);
 
   const lock = acquireCronLock(appHome);
   if (!lock) {
     return {
       cleared: false,
-      warning:
-        "crons.lock is busy; the scheduler lease was left in place (retry the import later).",
+      warning: `crons.lock is busy; the scheduler and task leases in ${fileName} were left in place (retry the import later).`,
     };
   }
 
   try {
-    if (!existsSync(cronPath)) return { cleared: false };
+    // Re-checked inside the lock: a migration may have replaced the file while
+    // this process waited for the advisory lock.
+    if (!existsSync(targetPath)) return { cleared: false };
 
     let raw: string;
     try {
-      raw = readFileSync(cronPath, "utf-8");
+      raw = readFileSync(targetPath, "utf-8");
     } catch (error) {
       throw snapshotError(
         "io_error",
-        `Cannot read ${CRON_FILE_NAME} (${errorCode(error) ?? "read failed"}): ${cronPath}`,
+        `Cannot read ${fileName} (${errorCode(error) ?? "read failed"}): ${targetPath}`,
       );
     }
 
@@ -233,39 +277,28 @@ export async function clearCronLease(
     try {
       data = JSON.parse(raw);
     } catch {
-      // Deliberately not `readCronFile()`: it swallows broken JSON as an empty
-      // file, and writing that back would delete every scheduled task.
+      // Deliberately not `readScheduleFile()`: it swallows broken JSON as an
+      // empty file, and writing that back would delete every scheduled task.
       throw snapshotError(
         "io_error",
-        `${CRON_FILE_NAME} is not valid JSON; refusing to overwrite it: ${cronPath}`,
+        `${fileName} is not valid JSON; refusing to overwrite it: ${targetPath}`,
       );
     }
     if (!isPlainObject(data)) {
       throw snapshotError(
         "io_error",
-        `${CRON_FILE_NAME} is not a JSON object; refusing to overwrite it: ${cronPath}`,
+        `${fileName} is not a JSON object; refusing to overwrite it: ${targetPath}`,
       );
     }
 
-    const owners = isPlainObject(data.scheduler_owners)
-      ? data.scheduler_owners
-      : {};
-    const hadLease =
-      (data.scheduler_owner !== null && data.scheduler_owner !== undefined) ||
-      Object.keys(owners).length > 0;
-    if (!hadLease) return { cleared: false };
-
-    const next = {
-      ...data,
-      scheduler_owner: null,
-      scheduler_owners: {},
-    };
+    const { cleared, next } = clearLeaseFields(data);
+    if (!cleared) return { cleared: false };
     try {
-      writeJsonAtomic(cronPath, next);
+      writeJsonAtomic(targetPath, next);
     } catch (error) {
       throw snapshotError(
         "io_error",
-        `Cannot write ${CRON_FILE_NAME} (${errorCode(error) ?? "write failed"}): ${cronPath}`,
+        `Cannot write ${fileName} (${errorCode(error) ?? "write failed"}): ${targetPath}`,
       );
     }
 

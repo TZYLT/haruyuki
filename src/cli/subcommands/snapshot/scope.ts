@@ -2,7 +2,7 @@
  * Export scope: the one table that decides what goes into a package, plus the
  * traversal that turns it into entries.
  *
- * `SCOPE_RULES` is the contract: 26 include rows and 20 exclude rows. The home
+ * `SCOPE_RULES` is the contract: 26 include rows and 22 exclude rows. The home
  * and storage trees follow the requirement doc's appendix B line by line
  * (docs/44-2 §5.3 A/B + appendix B; docs/45-2 §2.4). The project tree does NOT:
  * the user ruled on 2026-10-26 that the narrow §5.3 C list wins over appendix B's
@@ -82,10 +82,11 @@ export const SCOPE_RULES: ScopeRule[] = [
     reason: "session start/stop ledger; /resume history depends on it",
   },
   {
-    pattern: "home/crons.json",
+    pattern: "home/schedules.json",
     scope: "home",
     include: true,
-    reason: "cron definitions; the scheduler lease is cleared on import",
+    reason:
+      "schedule definitions (v2 store); the scheduler and per-task leases are cleared on import",
   },
   {
     pattern: "home/runs/**",
@@ -229,7 +230,7 @@ export const SCOPE_RULES: ScopeRule[] = [
     reason: "settings tokens, agent secrets and channel credentials",
   },
 
-  // E. exclusions (21 rows)
+  // E. exclusions (22 rows)
   {
     pattern: "local-backend/agents/*.topics.json",
     scope: "local-backend",
@@ -311,6 +312,13 @@ export const SCOPE_RULES: ScopeRule[] = [
     include: false,
     reason:
       "our own pre-import backups; excluding them keeps a package from nesting inside the next",
+  },
+  {
+    pattern: "home/crons.v1.json",
+    scope: "home",
+    include: false,
+    reason:
+      "read-only v1 backup written by the migration; the live store is schedules.json, and the backup describes the exporting machine",
   },
   {
     pattern: "local-backend/conversations/*/system-prompt.json",
@@ -429,7 +437,7 @@ export interface CollectEntriesOptions {
 /**
  * The exclude rows, in table order, as manifest-shaped exclusions. This is what
  * `buildManifest` uses when the caller has nothing better: the rule table is the
- * contract, so it is recorded in full (20 entries) whether or not each path
+ * contract, so it is recorded in full (22 entries) whether or not each path
  * exists on this machine.
  */
 export function scopeExclusions(): SnapshotExclusion[] {

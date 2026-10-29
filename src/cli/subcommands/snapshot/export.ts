@@ -18,8 +18,8 @@
  *     entry arrives as `bytes: 0` with the empty SHA-256 and a path without a
  *     trailing slash, exactly the shape `collectEntries` reported, so the two
  *     lists line up one-to-one (docs/46-2 §1.7 rule 2).
- *   - `settings.json` and `crons.json` ship as rewritten copies (no plaintext
- *     tokens, no scheduler lease); their source files are only ever read.
+ *   - `settings.json` and `schedules.json` ship as rewritten copies (no plaintext
+ *     tokens, no scheduler or task lease); their source files are only ever read.
  *
  * `--dry-run` stops after collection and the secret read: no hashing, no file.
  * It reports the same entry count as a real run because it uses the same entry
@@ -113,10 +113,10 @@ const PARTIAL_SUFFIX = ".partial";
 const PACKAGED_SETTINGS_PATH = "home/settings.json";
 
 /**
- * Package-relative path of the cron file. It ships as a copy with the scheduler
- * lease cleared (§5.3 A, §5.10.1), so the target can never adopt ours.
+ * Path of the schedule store. It ships as a copy with the scheduler and task
+ * leases cleared (§5.3 A, §5.10.1, R-5.13.5), so the target never adopts ours.
  */
-const PACKAGED_CRONS_PATH = "home/crons.json";
+const PACKAGED_SCHEDULES_PATH = "home/schedules.json";
 
 /** Package-relative path of the generated secret partition. */
 const SECRETS_PATH = "secrets.json";
@@ -359,7 +359,7 @@ export async function runExport(
  * The walk's evidence callbacks are the only sources for the report:
  * `onWarning` collects symlink/case observations and `onExcluded` the paths the
  * walk really skipped on this machine. The latter is NOT the manifest's
- * `excluded`, which is the 20-rule table (docs/46-2 §1.7 rule 4).
+ * `excluded`, which is the 22-rule table (docs/46-2 §1.7 rule 4).
  */
 async function collectScope(
   roots: ScopeRoots,
@@ -534,13 +534,11 @@ function countSecretValues(bundle: SecretBundle): number {
 
 /**
  * Two managed files must not ship verbatim: `home/settings.json` carries
- * plaintext token fallbacks, `home/crons.json` the exporting machine's lease.
- * Both ship as rewritten copies — the source is only read (export is
- * read-only) — and the same buffers feed the dry-run totals, so a preview and a
- * real run agree on every size. A rewrite failure is an `io_error` raised
- * before the `.partial` exists: an unreadable settings or cron file would make
- * the package incomplete, and a passed-through crons.json would let the target
- * adopt a foreign lease.
+ * plaintext token fallbacks, `home/schedules.json` the exporting machine's
+ * leases. Both ship as rewritten copies (the source is only read) and the same
+ * buffers feed the dry-run totals, so a preview and a real run agree on every
+ * size. A rewrite failure is an `io_error` raised before the `.partial` exists;
+ * a passed-through schedule store would let the target adopt a foreign lease.
  */
 function preparePackageCopies(
   collected: readonly ScopeEntry[],
@@ -548,8 +546,8 @@ function preparePackageCopies(
   const copies = new Map<string, Buffer>();
   const settings = preparePackagedSettings(collected);
   if (settings !== undefined) copies.set(PACKAGED_SETTINGS_PATH, settings);
-  const crons = preparePackagedCrons(collected);
-  if (crons !== undefined) copies.set(PACKAGED_CRONS_PATH, crons);
+  const schedules = preparePackagedSchedules(collected);
+  if (schedules !== undefined) copies.set(PACKAGED_SCHEDULES_PATH, schedules);
   return copies;
 }
 
@@ -604,23 +602,31 @@ function preparePackagedSettings(
 }
 
 /**
- * The `home/crons.json` body that goes into the package: a copy with the
- * scheduler lease cleared (`scheduler_owner` -> `null`, `scheduler_owners` ->
- * `{}`), the shape the import side's `clearCronLease` writes. §5.3 A ships the
- * file "after clearing the lease" and §5.10.1 clears it again on the target,
- * but that second clear degrades to a warning when `crons.lock` is busy, so a
- * package that still named the exporting machine could start the target on
- * someone else's lease. Tasks, statuses and all other fields are verbatim.
+ * The `home/schedules.json` body that goes into the package: a copy with the
+ * scheduler lease and every task lease cleared, the shape the import side
+ * writes. §5.3 A ships the file "after clearing the lease" and §5.10.1 clears
+ * it again on the target, but that second clear degrades to a warning when
+ * `crons.lock` is busy, so the package must not name the exporting machine.
+ * `signal_state`, tasks and every other field stay verbatim.
  */
-function preparePackagedCrons(
+function preparePackagedSchedules(
   collected: readonly ScopeEntry[],
 ): Buffer | undefined {
-  const entry = findPackagedFile(collected, PACKAGED_CRONS_PATH);
+  const entry = findPackagedFile(collected, PACKAGED_SCHEDULES_PATH);
   if (entry === undefined) return undefined;
+  const source = readManagedJsonObject(entry);
+  const tasks = Array.isArray(source.tasks)
+    ? source.tasks.map((task) =>
+        typeof task === "object" && task !== null && !Array.isArray(task)
+          ? { ...(task as Record<string, unknown>), lease: null }
+          : task,
+      )
+    : source.tasks;
   const cleared: Record<string, unknown> = {
-    ...readManagedJsonObject(entry),
+    ...source,
     scheduler_owner: null,
     scheduler_owners: {},
+    tasks,
   };
   return Buffer.from(`${JSON.stringify(cleared, null, 2)}\n`, "utf-8");
 }
@@ -641,7 +647,7 @@ function findPackagedFile(
 
 interface PackSequenceInput {
   collected: readonly ScopeEntry[];
-  /** Rewritten bodies by package path (`settings.json`, `crons.json`). */
+  /** Rewritten bodies by package path (`settings.json`, `schedules.json`). */
   copies: ReadonlyMap<string, Buffer>;
   secretsBytes: Buffer;
   /** Live digest ledger; filled by the writer's `onEntry` as entries land. */
@@ -705,7 +711,7 @@ async function* packEntrySequence(
 /**
  * The entry list a dry run reports. Same paths and same byte counts as the real
  * run — a directory keeps `bytes: 0`, and a rewritten copy (`settings.json`,
- * `crons.json`) reports the copy's size — but no hash is computed (§5.7.1), so
+ * `schedules.json`) reports the copy's size — but no hash is computed (§5.7.1), so
  * every entry carries `sha256: ""`. A preview answers "what and how much",
  * never "which digest".
  */

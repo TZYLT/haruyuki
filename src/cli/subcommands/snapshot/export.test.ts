@@ -480,24 +480,34 @@ test("packages a sanitised settings copy and leaves the source untouched", async
 });
 
 /* ------------------------------------------------------------------ */
-/* Cron lease                                                           */
+/* Schedule leases                                                      */
 /* ------------------------------------------------------------------ */
 
-test("crons.json ships with the scheduler lease cleared, source untouched", async () => {
-  const cronsPath = writeFileAt(
+test("schedules.json ships with scheduler and task leases cleared, source untouched", async () => {
+  const schedulesPath = writeFileAt(
     appHome,
-    "crons.json",
+    "schedules.json",
     JSON.stringify(
       {
-        version: 1,
-        scheduler_owner: "machine-a:4242",
-        scheduler_owners: { "task-1": "machine-a" },
+        version: 2,
+        scheduler_owner: { pid: 4242, token: "machine-a" },
+        scheduler_owners: { local: { pid: 4242, token: "machine-a" } },
+        signal_state: { cursor: { cron: "2026-10-26T00:00:00.000Z" } },
         tasks: [
           {
             id: "task-1",
             cron: "0 * * * *",
             status: "active",
             prompt: "ping",
+            lease: {
+              runId: "run-1",
+              host: "long-lived",
+              pid: 4242,
+              token: "machine-a",
+              startedAt: "2026-10-26T00:00:00.000Z",
+              heartbeatAt: "2026-10-26T00:00:00.000Z",
+              expiresAt: "2026-10-26T00:01:30.000Z",
+            },
           },
         ],
       },
@@ -505,8 +515,12 @@ test("crons.json ships with the scheduler lease cleared, source untouched", asyn
       2,
     ),
   );
-  const sourceBefore = readFileSync(cronsPath, "utf-8");
-  const out = join(directory.path, "crons.hryk");
+  // The v1 backup is read-only history and must not travel; crons.json is not
+  // managed any more either, so neither old filename is packed.
+  writeFileAt(appHome, "crons.v1.json", '{"version":1,"tasks":[]}');
+  writeFileAt(appHome, "crons.json", '{"version":1,"tasks":[]}');
+  const sourceBefore = readFileSync(schedulesPath, "utf-8");
+  const out = join(directory.path, "schedules.hryk");
 
   // The preview must already count the rewritten copy's size.
   const preview = await runExport({
@@ -524,39 +538,51 @@ test("crons.json ships with the scheduler lease cleared, source untouched", asyn
   expect(preview.counts).toEqual(report.counts);
 
   const read = await readBack(out);
-  const packaged = bodyText(read, "home/crons.json");
+  const packaged = bodyText(read, "home/schedules.json");
   const parsed = JSON.parse(packaged) as Record<string, unknown>;
-  // The lease is cleared: the target machine never adopts the exporter's.
+  // Both lease levels are cleared: the target never adopts the exporter's.
   expect(parsed.scheduler_owner).toBeNull();
   expect(parsed.scheduler_owners).toEqual({});
-  // Tasks, statuses and every other field travel verbatim.
-  expect(parsed.tasks).toEqual([
-    { id: "task-1", cron: "0 * * * *", status: "active", prompt: "ping" },
-  ]);
-  expect(parsed.version).toBe(1);
+  const tasks = parsed.tasks as Record<string, unknown>[];
+  expect(tasks).toHaveLength(1);
+  expect(tasks[0]?.lease).toBeNull();
+  // Tasks, the signal cursor and every other field travel verbatim.
+  expect(tasks[0]?.id).toBe("task-1");
+  expect(tasks[0]?.cron).toBe("0 * * * *");
+  expect(tasks[0]?.prompt).toBe("ping");
+  expect(parsed.signal_state).toEqual({
+    cursor: { cron: "2026-10-26T00:00:00.000Z" },
+  });
   expect(packaged).not.toContain("machine-a");
+  expect(packaged).not.toContain("run-1");
+  expect(read.manifest.entries.some((e) => e.path === "home/crons.json")).toBe(
+    false,
+  );
+  expect(
+    read.manifest.entries.some((e) => e.path === "home/crons.v1.json"),
+  ).toBe(false);
 
-  // Export is read-only: the source keeps its lease byte for byte.
-  expect(readFileSync(cronsPath, "utf-8")).toBe(sourceBefore);
+  // Export is read-only: the source keeps its leases byte for byte.
+  expect(readFileSync(schedulesPath, "utf-8")).toBe(sourceBefore);
 
   // The packaged copy is a normal manifest entry with its own size.
   const entry = read.manifest.entries.find(
-    (candidate) => candidate.path === "home/crons.json",
+    (candidate) => candidate.path === "home/schedules.json",
   );
   expect(entry?.bytes).toBe(Buffer.byteLength(packaged, "utf-8"));
 });
 
-test("unparseable crons.json aborts before anything is written", async () => {
+test("unparseable schedules.json aborts before anything is written", async () => {
   writeFileAt(appHome, "settings.json", JSON.stringify({ permissions: {} }));
-  writeFileAt(appHome, "crons.json", "{ not json");
-  const out = join(directory.path, "bad-crons.hryk");
+  writeFileAt(appHome, "schedules.json", "{ not json");
+  const out = join(directory.path, "bad-schedules.hryk");
 
   const failure = await expectRejected(
     runExport({ out, deps: { homeRoot: appHome, storageDir } }),
   );
 
   expect(failure.code).toBe("io_error");
-  expect(failure.message).toContain("home/crons.json");
+  expect(failure.message).toContain("home/schedules.json");
   expect(existsSync(out)).toBe(false);
   expect(existsSync(`${out}.partial`)).toBe(false);
 });

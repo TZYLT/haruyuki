@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readScheduleFile } from "@/cron/cron-store";
 import { TestDirectory } from "@/test-utils/test-fs";
 import {
   __setCronLockTimeoutForTests,
@@ -13,6 +14,7 @@ import {
 import { SnapshotError } from "./types";
 
 let dir: TestDirectory;
+const initialHaruyukiHome = process.env.HARUYUKI_HOME;
 
 beforeEach(() => {
   dir = new TestDirectory();
@@ -20,12 +22,21 @@ beforeEach(() => {
 
 afterEach(() => {
   __setCronLockTimeoutForTests(null);
+  if (initialHaruyukiHome === undefined) delete process.env.HARUYUKI_HOME;
+  else process.env.HARUYUKI_HOME = initialHaruyukiHome;
   dir.cleanup();
 });
 
 function writeCronsFile(appHome: string, value: unknown): string {
   mkdirSync(appHome, { recursive: true });
   const path = join(appHome, "crons.json");
+  writeFileSync(path, JSON.stringify(value, null, 2), "utf-8");
+  return path;
+}
+
+function writeSchedulesFile(appHome: string, value: unknown): string {
+  mkdirSync(appHome, { recursive: true });
+  const path = join(appHome, "schedules.json");
   writeFileSync(path, JSON.stringify(value, null, 2), "utf-8");
   return path;
 }
@@ -169,6 +180,98 @@ test("a stale lock is stolen and the lease is cleared", async () => {
   expect(result).toEqual({ cleared: true });
   const written = JSON.parse(readFileSync(cronPath, "utf-8"));
   expect(written.scheduler_owner).toBeNull();
+});
+
+test("schedules.json loses both lease levels and keeps every other field", async () => {
+  const appHome = dir.resolve("apphome");
+  const owner = {
+    pid: 1234,
+    token: "dead-token",
+    started_at: "2026-10-20T00:00:00.000Z",
+  };
+  const taskLease = {
+    runId: "run-1",
+    host: "long-lived",
+    pid: 1234,
+    token: "dead-token",
+    startedAt: "2026-10-20T00:00:00.000Z",
+    heartbeatAt: "2026-10-20T00:00:30.000Z",
+    expiresAt: "2026-10-20T00:01:30.000Z",
+  };
+  const source = {
+    version: 2,
+    scheduler_owner: owner,
+    scheduler_owners: { local: owner },
+    signal_state: { cursor: { cron: "2026-10-20T00:00:00.000Z" } },
+    tasks: [
+      {
+        id: "task-1",
+        status: "active",
+        lease: taskLease,
+        last_consumed_occurrence: "2026-10-20T00:00:00.000Z",
+      },
+      { id: "task-2", status: "paused", lease: null },
+    ],
+  };
+  const schedulePath = writeSchedulesFile(appHome, source);
+
+  const result = await clearCronLease(appHome);
+
+  expect(result).toEqual({ cleared: true });
+  const written = JSON.parse(readFileSync(schedulePath, "utf-8"));
+  expect(written.scheduler_owner).toBeNull();
+  expect(written.scheduler_owners).toEqual({});
+  expect(written.signal_state).toEqual(source.signal_state);
+  expect(written.tasks).toEqual([
+    {
+      id: "task-1",
+      status: "active",
+      lease: null,
+      last_consumed_occurrence: "2026-10-20T00:00:00.000Z",
+    },
+    { id: "task-2", status: "paused", lease: null },
+  ]);
+  // The lock directory is released afterwards.
+  expect(existsSync(join(appHome, "crons.lock"))).toBe(false);
+});
+
+test("only a read-only crons.v1.json backup is a no-op", async () => {
+  const appHome = dir.resolve("apphome");
+  mkdirSync(appHome, { recursive: true });
+  writeFileSync(
+    join(appHome, "crons.v1.json"),
+    JSON.stringify(leaseFixture(), null, 2),
+    "utf-8",
+  );
+
+  const result = await clearCronLease(appHome);
+
+  expect(result).toEqual({ cleared: false });
+  expect(existsSync(join(appHome, "schedules.json"))).toBe(false);
+});
+
+test("a legacy crons.json is cleared in place and lazily migrates on first read", async () => {
+  const appHome = dir.resolve("apphome");
+  const cronPath = writeCronsFile(appHome, leaseFixture());
+  process.env.HARUYUKI_HOME = appHome;
+
+  const result = await clearCronLease(appHome);
+
+  expect(result).toEqual({ cleared: true });
+  // No phantom v2 store: the store's own lazy migration owns that write.
+  expect(existsSync(join(appHome, "schedules.json"))).toBe(false);
+  const legacy = JSON.parse(readFileSync(cronPath, "utf-8"));
+  expect(legacy.scheduler_owner).toBeNull();
+  expect(legacy.scheduler_owners).toEqual({});
+
+  // The first read migrates v1 -> v2 and keeps the lease-free state.
+  const migrated = readScheduleFile();
+  expect(migrated.version).toBe(2);
+  expect(migrated.tasks.map((task) => task.id)).toEqual(["task-1"]);
+  expect(migrated.tasks[0]?.lease ?? null).toBeNull();
+  expect(existsSync(join(appHome, "schedules.json"))).toBe(true);
+  expect(existsSync(join(appHome, "crons.v1.json"))).toBe(true);
+  expect(existsSync(cronPath)).toBe(false);
 });
 
 test("clearGitLocks removes lock and in-progress files only", async () => {

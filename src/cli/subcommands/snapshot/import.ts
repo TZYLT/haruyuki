@@ -479,7 +479,7 @@ async function clearMachineState(
     if (lease.warning) warnings.push(lease.warning);
   } catch (error) {
     warnings.push(
-      `the cron scheduler lease was not cleared: ${errorMessage(error)}`,
+      `the scheduler and task leases in schedules.json were not cleared: ${errorMessage(error)}`,
     );
   }
 

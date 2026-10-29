@@ -74,9 +74,10 @@ const EXPECTED_INCLUDE: readonly ExpectedRule[] = [
     reason: "session start/stop ledger; /resume history depends on it",
   },
   {
-    pattern: "home/crons.json",
+    pattern: "home/schedules.json",
     scope: "home",
-    reason: "cron definitions; the scheduler lease is cleared on import",
+    reason:
+      "schedule definitions (v2 store); the scheduler and per-task leases are cleared on import",
   },
   {
     pattern: "home/runs/**",
@@ -264,6 +265,12 @@ const EXPECTED_EXCLUDE: readonly ExpectedRule[] = [
       "our own pre-import backups; excluding them keeps a package from nesting inside the next",
   },
   {
+    pattern: "home/crons.v1.json",
+    scope: "home",
+    reason:
+      "read-only v1 backup written by the migration; the live store is schedules.json, and the backup describes the exporting machine",
+  },
+  {
     pattern: "local-backend/conversations/*/system-prompt.json",
     scope: "local-backend",
     reason: "compiled snapshot, derived",
@@ -328,13 +335,13 @@ test("SCOPE_RULES: the 26 include rules, asserted one by one", () => {
   assertRuleTable(EXPECTED_INCLUDE, true);
 });
 
-test("SCOPE_RULES: the 21 exclude rules, asserted one by one", () => {
+test("SCOPE_RULES: the 22 exclude rules, asserted one by one", () => {
   assertRuleTable(EXPECTED_EXCLUDE, false);
 });
 
-test("SCOPE_RULES: 47 unique rows, each filed under its own scope", () => {
-  expect(SCOPE_RULES).toHaveLength(47);
-  expect(new Set(SCOPE_RULES.map((rule) => rule.pattern)).size).toBe(47);
+test("SCOPE_RULES: 48 unique rows, each filed under its own scope", () => {
+  expect(SCOPE_RULES).toHaveLength(48);
+  expect(new Set(SCOPE_RULES.map((rule) => rule.pattern)).size).toBe(48);
   for (const rule of SCOPE_RULES) {
     const prefix = rule.scope === "secrets" ? "secrets.json" : rule.scope;
     expect(
@@ -345,9 +352,9 @@ test("SCOPE_RULES: 47 unique rows, each filed under its own scope", () => {
   }
 });
 
-test("scopeExclusions: the 21 exclude rows in table order", () => {
+test("scopeExclusions: the 22 exclude rows in table order", () => {
   const exclusions = scopeExclusions();
-  expect(exclusions).toHaveLength(21);
+  expect(exclusions).toHaveLength(22);
   expect(exclusions).toEqual(
     SCOPE_RULES.filter((rule) => !rule.include).map((rule) => ({
       path: rule.pattern,
@@ -395,7 +402,12 @@ function createFixture(): Fixture {
   writeFileAt(appHome, APP_SUBDIRS.settingsFile, '{"permissions":{}}');
   writeFileAt(appHome, APP_SUBDIRS.localSettingsFile, "{}");
   writeFileAt(appHome, "sessions.jsonl", '{"id":"session-1"}\n');
-  writeFileAt(appHome, "crons.json", '{"tasks":[]}');
+  writeFileAt(
+    appHome,
+    "schedules.json",
+    '{"version":2,"signal_state":{"cursor":{}},"tasks":[]}',
+  );
+  writeFileAt(appHome, "crons.v1.json", '{"version":1,"tasks":[]}');
   writeFileAt(appHome, join("runs", "task-1", "run-1.log"), "ran");
   writeFileAt(appHome, join(APP_SUBDIRS.usage, "ledger.jsonl"), "{}\n");
   writeFileAt(appHome, join(APP_SUBDIRS.skills, "alpha.md"), "alpha");
@@ -670,7 +682,7 @@ test("usesLiteralHomeRoot: exactly channels/ and transcripts/, driven by one tab
 /* Traversal: every rule exercised                                      */
 /* ------------------------------------------------------------------ */
 
-test("collectEntries: all 20 walked include rules contribute entries in their own scope", async () => {
+test("collectEntries: all 25 walked include rules contribute entries in their own scope", async () => {
   const fixture = createFixture();
   const entries = await collectAll(fixture.roots, { project: fixture.project });
   for (const rule of SCOPE_RULES) {

@@ -16,6 +16,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -25,6 +26,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import { dirname, join } from "node:path";
+import { readScheduleFile } from "@/cron/cron-store";
 import { TestDirectory } from "@/test-utils/test-fs";
 import { appHomeDirName } from "@/utils/app-paths";
 import { LOCAL_BACKEND_DIR_ENV } from "@/utils/local-backend-paths";
@@ -33,10 +35,11 @@ import {
   clearSecretsCache,
   refreshAndListSecrets,
 } from "@/utils/secrets-store";
-import { readTarGz, type TarReadEntry } from "@/utils/tar-stream";
+import { readTarGz, type TarReadEntry, writeTarGz } from "@/utils/tar-stream";
 import { runExport } from "./export";
 import { runImport } from "./import";
-import type { SnapshotCliDeps } from "./types";
+import { buildManifest, serializeManifest } from "./manifest";
+import type { SnapshotCliDeps, SnapshotEntry } from "./types";
 
 const AGENT_ID = "agent-e2e";
 const CONVERSATIONS = ["conv-alpha", "conv-beta"] as const;
@@ -127,6 +130,70 @@ async function readPackage(
   return entries;
 }
 
+/**
+ * Build a pre-F-05 package by hand: the old exporter packed `home/crons.json`
+ * and no `home/schedules.json`, which today's scope table no longer produces.
+ * The manifest keeps the same contract the importer verifies.
+ */
+async function writeLegacyPackage(
+  file: string,
+  files: ReadonlyArray<{ path: string; body: string }>,
+): Promise<void> {
+  const secrets = Buffer.from(
+    `${JSON.stringify({
+      version: 1,
+      settings: {},
+      agents: {},
+      channels: {},
+      meta: {
+        channelStoreMode: "file",
+        capturedAt: "2026-10-26T00:00:00.000Z",
+      },
+    })}\n`,
+    "utf-8",
+  );
+  const entries: SnapshotEntry[] = files.map((item) => ({
+    path: item.path,
+    scope: "home",
+    bytes: Buffer.byteLength(item.body),
+    sha256: createHash("sha256").update(item.body).digest("hex"),
+  }));
+  entries.push({
+    path: "secrets.json",
+    scope: "secrets",
+    bytes: secrets.length,
+    sha256: createHash("sha256").update(secrets).digest("hex"),
+  });
+  const manifest = buildManifest(
+    entries,
+    { home: targetHome, localBackend: targetStorage },
+    {
+      appVersion: "0.0.0-legacy",
+      createdAt: "2026-10-26T00:00:00.000Z",
+      platform: `${process.platform}-${process.arch}`,
+      hostname: "legacy-host",
+    },
+  );
+  await writeTarGz({
+    entries: (async function* () {
+      for (const item of files) {
+        yield {
+          path: item.path,
+          type: "file" as const,
+          content: Buffer.from(item.body),
+        };
+      }
+      yield { path: "secrets.json", type: "file" as const, content: secrets };
+      yield {
+        path: "manifest.json",
+        type: "file" as const,
+        content: Buffer.from(serializeManifest(manifest), "utf-8"),
+      };
+    })(),
+    outFile: file,
+  });
+}
+
 let workspace: TestDirectory;
 let sourceHome: string;
 let sourceStorage: string;
@@ -171,7 +238,7 @@ afterEach(() => {
 
 interface SeededMachine {
   sessions: string;
-  cron: string;
+  schedules: string;
   conversation: Map<string, { conversation: string; messages: string }>;
   agentRecord: string;
   memory: string;
@@ -205,17 +272,37 @@ async function seedSourceMachine(): Promise<SeededMachine> {
   ].join("\n");
   writeFileAt(sourceHome, "sessions.jsonl", sessions);
 
-  const cron = `${JSON.stringify(
+  const schedules = `${JSON.stringify(
     {
-      version: 1,
-      scheduler_owner: "source-host",
-      scheduler_owners: { "source-host": 1 },
-      tasks: [{ id: "task-1", schedule: "0 * * * *", prompt: "check" }],
+      version: 2,
+      scheduler_owner: { pid: 4242, token: "source-host" },
+      scheduler_owners: {
+        local: { pid: 4242, token: "source-host" },
+      },
+      signal_state: { cursor: { cron: "2026-10-26T00:00:00.000Z" } },
+      tasks: [
+        {
+          id: "task-1",
+          schedule: "0 * * * *",
+          prompt: "check",
+          lease: {
+            runId: "run-1",
+            host: "long-lived",
+            pid: 4242,
+            token: "source-host",
+            startedAt: "2026-10-26T00:00:00.000Z",
+            heartbeatAt: "2026-10-26T00:00:00.000Z",
+            expiresAt: "2026-10-26T00:01:30.000Z",
+          },
+        },
+      ],
     },
     null,
     2,
   )}\n`;
-  writeFileAt(sourceHome, "crons.json", cron);
+  writeFileAt(sourceHome, "schedules.json", schedules);
+  // The migration's read-only backup is history, never package content.
+  writeFileAt(sourceHome, "crons.v1.json", '{"version":1,"tasks":[]}\n');
 
   const transcript = '{"role":"system","content":"background"}\n';
   writeFileAt(
@@ -226,7 +313,7 @@ async function seedSourceMachine(): Promise<SeededMachine> {
   literalsToClean.push(join(literalBase, "transcripts"));
 
   // Two excluded trees that really exist, so the export report has evidence of
-  // what the walk skipped; the manifest carries the 20-rule table instead.
+  // what the walk skipped; the manifest carries the 22-rule table instead.
   writeFileAt(sourceHome, join("logs", "skipped.log"), "debug\n");
   writeFileAt(sourceHome, join("cache", "derived.bin"), "cache\n");
 
@@ -298,7 +385,7 @@ async function seedSourceMachine(): Promise<SeededMachine> {
 
   return {
     sessions,
-    cron,
+    schedules,
     conversation,
     agentRecord,
     memory,
@@ -380,26 +467,36 @@ test("export then import restores the same data under a second set of roots", as
     exported.counts.files,
   );
 
-  // The source machine is only ever read, and the packaged cron copy carries no
-  // scheduler lease while the source file keeps its own.
+  // The source machine is only ever read, and the packaged schedule copy carries
+  // no lease while the source file keeps its own.
   expect(readAt(sourceHome, "settings.json")).toContain(SETTINGS_API_KEY);
-  expect(readJsonAt(sourceHome, "crons.json").scheduler_owner).toBe(
-    "source-host",
-  );
+  expect(
+    readJsonAt(sourceHome, "schedules.json").scheduler_owner,
+  ).not.toBeNull();
 
   const archive = await readPackage(packagePath);
   expect(archive[archive.length - 1]?.path).toBe("manifest.json");
   expect(archive).toHaveLength(exported.counts.files + 1);
-  const packagedCron = archive.find(
-    (entry) => entry.path === "home/crons.json",
+  const packagedSchedule = archive.find(
+    (entry) => entry.path === "home/schedules.json",
   );
-  expect(packagedCron?.body).toBeDefined();
-  const packagedCronBody = JSON.parse(packagedCron?.body ?? "{}") as Record<
-    string,
-    unknown
-  >;
-  expect(packagedCronBody.scheduler_owner).toBeNull();
-  expect(packagedCronBody.scheduler_owners).toEqual({});
+  expect(packagedSchedule?.body).toBeDefined();
+  const packagedScheduleBody = JSON.parse(
+    packagedSchedule?.body ?? "{}",
+  ) as Record<string, unknown>;
+  expect(packagedScheduleBody.scheduler_owner).toBeNull();
+  expect(packagedScheduleBody.scheduler_owners).toEqual({});
+  expect(
+    (packagedScheduleBody.tasks as Record<string, unknown>[])[0]?.lease,
+  ).toBeNull();
+  expect(packagedScheduleBody.signal_state).toEqual({
+    cursor: { cron: "2026-10-26T00:00:00.000Z" },
+  });
+  // The v1 backup never travels, and the old filename is not a managed path.
+  expect(archive.some((entry) => entry.path === "home/crons.v1.json")).toBe(
+    false,
+  );
+  expect(archive.some((entry) => entry.path === "home/crons.json")).toBe(false);
   const packagedSettings = JSON.parse(
     archive.find((entry) => entry.path === "home/settings.json")?.body ?? "{}",
   ) as Record<string, unknown>;
@@ -457,7 +554,7 @@ test("export then import restores the same data under a second set of roots", as
   expect(imported.notRemapped.length).toBeGreaterThanOrEqual(3);
   // The import report carries the manifest's rule table, so a reader can see
   // what a restore leaves alone without opening the package.
-  expect(imported.excluded).toHaveLength(21);
+  expect(imported.excluded).toHaveLength(22);
 
   // ── settings: restored, token written back, bucket key rewritten ──
   const restoredSettings = readJsonAt(targetHome, "settings.json");
@@ -476,11 +573,19 @@ test("export then import restores the same data under a second set of roots", as
 
   // ── the seven item classes ────────────────────────────────────────
   expect(readAt(targetHome, "sessions.jsonl")).toBe(source.sessions);
-  const restoredCron = readJsonAt(targetHome, "crons.json");
-  expect(restoredCron.scheduler_owner).toBeNull();
-  expect(restoredCron.scheduler_owners).toEqual({});
-  expect(restoredCron.tasks).toEqual([
-    { id: "task-1", schedule: "0 * * * *", prompt: "check" },
+  const restoredSchedule = readJsonAt(targetHome, "schedules.json");
+  expect(restoredSchedule.scheduler_owner).toBeNull();
+  expect(restoredSchedule.scheduler_owners).toEqual({});
+  expect(restoredSchedule.signal_state).toEqual({
+    cursor: { cron: "2026-10-26T00:00:00.000Z" },
+  });
+  expect(restoredSchedule.tasks).toEqual([
+    {
+      id: "task-1",
+      schedule: "0 * * * *",
+      prompt: "check",
+      lease: null,
+    },
   ]);
 
   expect(readAt(targetStorage, join("agents", `${AGENT_ID}.json`))).toBe(
@@ -580,4 +685,47 @@ test("--dry-run reports the same entry count as the real package", async () => {
   expect(preview.counts).toEqual(real.counts);
   expect(preview.byScope).toEqual(real.byScope);
   expect(existsSync(realPackage)).toBe(true);
+});
+
+test("a pre-F-05 package with only crons.json imports and migrates on first read", async () => {
+  pointAt(targetHome, targetStorage);
+  writeFileAt(targetHome, "settings.json", '{"stale":true}\n');
+  const legacyCrons = `${JSON.stringify(
+    {
+      version: 1,
+      scheduler_owner: { pid: 4242, token: "source-host" },
+      scheduler_owners: { local: { pid: 4242, token: "source-host" } },
+      tasks: [{ id: "legacy-task", schedule: "0 9 * * *", prompt: "legacy" }],
+    },
+    null,
+    2,
+  )}\n`;
+  const packagePath = workspace.resolve("legacy.hryk");
+  await writeLegacyPackage(packagePath, [
+    { path: "home/crons.json", body: legacyCrons },
+  ]);
+
+  const imported = await runImport({
+    from: packagePath,
+    yes: true,
+    deps: depsFor(targetHome, targetStorage, workspace.path),
+  });
+
+  expect(imported.ok).toBe(true);
+  expect(imported.code).toBe("ok");
+  expect(imported.excluded).toHaveLength(22);
+  // The old package lands the old file; the import invents no v2 store.
+  expect(existsAt(targetHome, "crons.json")).toBe(true);
+  expect(existsAt(targetHome, "schedules.json")).toBe(false);
+
+  // The store's lazy migration turns it into a lease-free v2 store on first read.
+  const migrated = readScheduleFile();
+  expect(migrated.version).toBe(2);
+  expect(migrated.scheduler_owner).toBeNull();
+  expect(migrated.scheduler_owners).toEqual({});
+  expect(migrated.tasks.map((task) => task.id)).toEqual(["legacy-task"]);
+  expect(migrated.tasks[0]?.lease ?? null).toBeNull();
+  expect(existsAt(targetHome, "schedules.json")).toBe(true);
+  expect(existsAt(targetHome, "crons.v1.json")).toBe(true);
+  expect(existsAt(targetHome, "crons.json")).toBe(false);
 });

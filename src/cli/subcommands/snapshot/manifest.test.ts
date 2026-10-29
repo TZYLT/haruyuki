@@ -125,7 +125,7 @@ test("buildManifest: defaults are zero secrets, no warnings, and the full exclud
   const manifest = buildManifest([], ROOTS, BUILD);
   expect(manifest.counts).toEqual({ files: 0, bytes: 0, secrets: 0 });
   expect(manifest.warnings).toEqual([]);
-  expect(manifest.excluded).toHaveLength(21);
+  expect(manifest.excluded).toHaveLength(22);
   // One-to-one with the exclude rows: same order, same path, same reason.
   expect(manifest.excluded).toEqual(
     SCOPE_RULES.filter((rule) => !rule.include).map((rule) => ({
