@@ -222,7 +222,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
-| `0.4.5` | - | **Resident scheduling**: background tasks gain a generic signal entry point; long-lived and short-lived hosts share one core, with a new store, catch-up, permission tiers, run records, and OS autostart. |
+| `0.4.5` | + | **Resident scheduling**: The entire scheduling task system has been rewritten to automatically launch scheduled tasks when the software is not running, ensuring that timed tasks can truly execute on schedule, provided the computer remains powered on. |
 | `0.4.4` | + | **Compaction rework**: Enable automatic processing of abstracts and topic tags before compression, making topic-inspired compression truly practical and providing queries for topics and corresponding original texts. |
 | `0.4.3` | + | **Reflection rewritten**: reflection now runs as a hidden session that writes memory directly, so it no longer produces conflicting commits; The TUI display section will undergo beautification in the future. |
 | `0.4.2` | + | **Data export and import**: snapshot-style export and import of all data. Cross-platform is not guaranteed yet; back up your data before you start, in case something goes wrong |
