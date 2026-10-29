@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setConfiguredBackendMode } from "@/backend/backend-mode";
 import { runCronSubcommand } from "@/cli/subcommands/cron";
+import { getTask } from "@/cron";
 import { settingsManager } from "@/settings-manager";
 
 const originalFetch = globalThis.fetch;
@@ -240,5 +241,131 @@ describe("cron add execution targeting", () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("cron add F-05 v2 fields (R-5.12.6)", () => {
+  type AddOutcome = {
+    code: number;
+    output: Record<string, unknown>;
+    stored: ReturnType<typeof getTask> | undefined;
+    errors: string[];
+  };
+
+  async function runAdd(args: string[]): Promise<AddOutcome> {
+    const home = mkdtempSync(join(tmpdir(), "letta-cron-v2-test-"));
+    process.env.HARUYUKI_HOME = home;
+    installCloudApiTripwire();
+    const logs: string[] = [];
+    const errors: string[] = [];
+    console.log = mock((line: string) => logs.push(String(line)));
+    console.error = mock((line: string) => errors.push(String(line)));
+
+    try {
+      const code = await runCronSubcommand(args);
+      const output =
+        logs.length > 0
+          ? (JSON.parse(logs.join("")) as Record<string, unknown>)
+          : {};
+      const stored =
+        typeof output.id === "string" ? getTask(output.id) : undefined;
+      return { code, output, stored, errors };
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  test("a command task stores its payload, tier and tuning fields", async () => {
+    const { code, output, stored } = await runAdd([
+      "add",
+      "--name",
+      "nightly-reflect",
+      "--description",
+      "refresh memory",
+      "--type",
+      "command",
+      "--command",
+      "reflect",
+      "--cron",
+      "0 3 * * *",
+      "--agent",
+      "agent-f05",
+      "--permission",
+      "acceptEdits",
+      "--no-catch-up",
+      "--timeout",
+      "5",
+      "--wait",
+      "2",
+    ]);
+
+    expect(code).toBe(0);
+    expect(output.type).toBe("command");
+    expect(output.permission).toBe("acceptEdits");
+    expect(output.catch_up).toBe(false);
+    expect(output.timeout_minutes).toBe(5);
+    expect(output.wait_minutes).toBe(2);
+    expect(stored?.type).toBe("command");
+    expect(stored?.payload).toBe("reflect");
+    expect(stored?.permission).toBe("acceptEdits");
+  });
+
+  test("a plain prompt task keeps the v2 defaults", async () => {
+    const { code, output, stored } = await runAdd(addArgs);
+
+    expect(code).toBe(0);
+    expect(output.type).toBe("prompt");
+    expect(output.permission).toBe("unrestricted");
+    expect(output.catch_up).toBe(false);
+    expect(output.timeout_minutes).toBe(30);
+    expect(output.wait_minutes).toBe(10);
+    expect(stored?.target).toEqual({
+      kind: "existing",
+      conversation_id: "conversation-test",
+    });
+  });
+
+  test("--hidden marks a fresh conversation as hidden", async () => {
+    const { code, output } = await runAdd([
+      "add",
+      "--name",
+      "hidden-digest",
+      "--description",
+      "hidden per fire",
+      "--prompt",
+      "summarise the day",
+      "--every",
+      "1d",
+      "--agent",
+      "agent-f05",
+      "--hidden",
+    ]);
+
+    expect(code).toBe(0);
+    expect(output.target).toEqual({ kind: "new", hidden: true });
+  });
+
+  test("--hidden is refused when the target is an existing conversation", async () => {
+    const { code, errors } = await runAdd([...addArgs, "--hidden"]);
+
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("--hidden/--visible");
+  });
+
+  test("rejects an unknown permission tier and a bad --timeout", async () => {
+    const badTier = await runAdd([...addArgs, "--permission", "full"]);
+    expect(badTier.code).toBe(1);
+    expect(badTier.errors.join("\n")).toContain("--permission");
+
+    const badTimeout = await runAdd([...addArgs, "--timeout", "soon"]);
+    expect(badTimeout.code).toBe(1);
+    expect(badTimeout.errors.join("\n")).toContain("--timeout");
+  });
+
+  test("a command task without --command is refused", async () => {
+    const { code, errors } = await runAdd([...addArgs, "--type", "command"]);
+
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("--command");
   });
 });

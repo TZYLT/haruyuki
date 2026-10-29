@@ -1,5 +1,5 @@
 /**
- * Per-task cron run history backed by JSONL files next to crons.json.
+ * Per-task cron run history backed by JSONL files next to schedules.json.
  *
  * This mirrors the reference shape: job state stays in one JSON file, while
  * each job/task gets an append-only `runs/<id>.jsonl` history file.

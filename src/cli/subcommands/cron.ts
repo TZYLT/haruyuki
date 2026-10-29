@@ -8,8 +8,14 @@
  *   haruyuki cron list [--agent <id>] [--conversation <id>]
  *   haruyuki cron get <id|name>
  *   haruyuki cron runs --id <id>
+ *   haruyuki cron add --command <compact|reflect> --type command --every <interval> [options]
  *   haruyuki cron delete <id|name>   (alias: remove)
  *   haruyuki cron delete --all [--agent <id>]
+ *
+ * F-05 v2 fields map one-to-one onto `AddTaskInput` — `--type`, `--command`,
+ * `--visible`/`--hidden`, `--permission`, `--catch-up`/`--no-catch-up`,
+ * `--timeout`, `--wait` — and land in the same `schedules.json` records the
+ * TUI's `/schedule add` writes.
  *
  * Every schedule is device-local: it lives in `schedules.json` under the
  * harness root (`~/.haruyuki` unless `HARUYUKI_HOME` moves it), next to the
@@ -25,6 +31,7 @@ import {
   deleteTask,
   getCronRunLogPath,
   getTask,
+  isTaskPermissionTier,
   isValidCron,
   listTasks,
   parseAt,
@@ -47,6 +54,7 @@ Usage:
   haruyuki cron add --prompt <text> --every <interval> [options]
   haruyuki cron add --prompt <text> --at <time> [--once] [options]
   haruyuki cron add --prompt <text> --cron <expr> [options]
+  haruyuki cron add --command <compact|reflect> --type command <schedule> [options]
   haruyuki cron list [options]
   haruyuki cron get <id|name>
   haruyuki cron runs --id <id> [--limit <n>]
@@ -64,6 +72,14 @@ Add options:
   --conversation <id>    Conversation target (omit or "new" for a fresh
                          conversation per fire; "self" for the current
                          conversation; "default" for the agent default)
+  --type prompt|command  Task body kind (default prompt)
+  --command <name>       Command task body; only compact or reflect
+  --visible|--hidden     New-conversation visibility (fresh target only)
+  --permission <tier>    standard | acceptEdits | unrestricted
+  --catch-up             Re-run the most recent missed occurrence
+  --no-catch-up          Record missed occurrences instead (default)
+  --timeout <minutes>    Per-run timeout; 0 = unlimited (default 30)
+  --wait <minutes>       Wait for a busy target conversation (default 10)
 
 List/filter options:
   --agent <id>           Filter by agent ID
@@ -90,6 +106,16 @@ const CRON_OPTIONS = {
   cron: { type: "string" },
   agent: { type: "string" },
   conversation: { type: "string" },
+  // ── F-05 v2 fields (R-5.12.6) ──
+  type: { type: "string" },
+  command: { type: "string" },
+  visible: { type: "boolean" },
+  hidden: { type: "boolean" },
+  permission: { type: "string" },
+  "catch-up": { type: "boolean" },
+  "no-catch-up": { type: "boolean" },
+  timeout: { type: "string" },
+  wait: { type: "string" },
   all: { type: "boolean" },
   id: { type: "string" },
   limit: { type: "string" },
@@ -112,6 +138,21 @@ function parseCronArgs(argv: string[]) {
 
 // ── Handlers ────────────────────────────────────────────────────────
 
+/** Parse an integer-minutes flag; `null` after printing an error. */
+function parseMinutesFlag(
+  raw: string | undefined,
+  flag: string,
+  minimum: number,
+): number | undefined | null {
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < minimum) {
+    console.error(`Error: ${flag} must be an integer >= ${minimum}.`);
+    return null;
+  }
+  return parsed;
+}
+
 function handleAdd(values: CronArgValues): number {
   const name = values.name;
   if (!name || typeof name !== "string") {
@@ -125,9 +166,25 @@ function handleAdd(values: CronArgValues): number {
     return 1;
   }
 
-  const prompt = values.prompt;
+  const command = values.command;
+  const typeValue = values.type ?? (command ? "command" : "prompt");
+  if (typeValue !== "prompt" && typeValue !== "command") {
+    console.error("Error: --type must be prompt or command.");
+    return 1;
+  }
+
+  // A command task carries its body in `--command`; a prompt task in `--prompt`.
+  const prompt = typeValue === "prompt" ? values.prompt : command;
   if (!prompt || typeof prompt !== "string") {
-    console.error("Error: --prompt is required.");
+    console.error(
+      typeValue === "command"
+        ? "Error: --command is required for command tasks."
+        : "Error: --prompt is required.",
+    );
+    return 1;
+  }
+  if (typeValue === "command" && values.prompt) {
+    console.error("Error: --prompt cannot be used with --command.");
     return 1;
   }
 
@@ -139,6 +196,47 @@ function handleAdd(values: CronArgValues): number {
 
   const conversationId = resolveCronAddConversationTarget(values.conversation);
   if (conversationId === null) return 1;
+
+  if (values.hidden && values.visible) {
+    console.error("Error: --hidden and --visible are mutually exclusive.");
+    return 1;
+  }
+  let target: { kind: "new"; hidden: boolean } | undefined;
+  if (values.hidden || values.visible) {
+    if (conversationId !== "new") {
+      console.error(
+        "Error: --hidden/--visible only apply to a fresh conversation target (omit --conversation or pass new).",
+      );
+      return 1;
+    }
+    target = { kind: "new", hidden: values.hidden === true };
+  }
+
+  const permissionValue = values.permission;
+  if (permissionValue !== undefined && !isTaskPermissionTier(permissionValue)) {
+    console.error(
+      "Error: --permission must be standard, acceptEdits, or unrestricted.",
+    );
+    return 1;
+  }
+
+  if (values["catch-up"] && values["no-catch-up"]) {
+    console.error(
+      "Error: --catch-up and --no-catch-up are mutually exclusive.",
+    );
+    return 1;
+  }
+  const catchUp =
+    values["catch-up"] === true
+      ? true
+      : values["no-catch-up"] === true
+        ? false
+        : undefined;
+
+  const timeoutMinutes = parseMinutesFlag(values.timeout, "--timeout", 0);
+  if (timeoutMinutes === null) return 1;
+  const waitMinutes = parseMinutesFlag(values.wait, "--wait", 1);
+  if (waitMinutes === null) return 1;
 
   if (values.computer) {
     console.error(
@@ -217,6 +315,15 @@ function handleAdd(values: CronArgValues): number {
       cron,
       recurring,
       prompt,
+      type: typeValue,
+      payload: prompt,
+      ...(target ? { target } : {}),
+      ...(permissionValue ? { permission: permissionValue } : {}),
+      ...(catchUp !== undefined ? { catch_up: catchUp } : {}),
+      ...(timeoutMinutes !== undefined
+        ? { timeout_minutes: timeoutMinutes }
+        : {}),
+      ...(waitMinutes !== undefined ? { wait_minutes: waitMinutes } : {}),
       scheduled_for: scheduledFor,
     });
 
@@ -230,6 +337,25 @@ function handleAdd(values: CronArgValues): number {
       conversation_id: result.task.conversation_id,
       created_at: result.task.created_at,
     };
+
+    if (result.task.type) {
+      output.type = result.task.type;
+    }
+    if (result.task.target) {
+      output.target = result.task.target;
+    }
+    if (result.task.permission !== undefined) {
+      output.permission = result.task.permission;
+    }
+    if (result.task.catch_up !== undefined) {
+      output.catch_up = result.task.catch_up;
+    }
+    if (result.task.timeout_minutes !== undefined) {
+      output.timeout_minutes = result.task.timeout_minutes;
+    }
+    if (result.task.wait_minutes !== undefined) {
+      output.wait_minutes = result.task.wait_minutes;
+    }
 
     if (result.task.scheduled_for) {
       output.scheduled_for = result.task.scheduled_for;
