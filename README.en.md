@@ -108,8 +108,8 @@ bun run build        # produces haruyuki.js at the repo root (gitignored)
 node ./haruyuki.js   # start the interactive UI
 ```
 
-> The build output is a **single-file bundle** (~14.3 MiB) with production dependencies inlined;
-> `--version` should print `0.4.4 (Haruyuki)`. The number comes from `package.json`'s `version`
+> The build output is a **single-file bundle** (~14.5 MiB) with production dependencies inlined;
+> `--version` should print `0.4.5 (Haruyuki)`. The number comes from `package.json`'s `version`
 > and is **inlined at build time**, so changing it requires a rebuild.
 
 ### Option 2 — the npm package (recommended)
@@ -222,6 +222,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
+| `0.4.5` | - | **Resident scheduling**: background tasks gain a generic signal entry point; long-lived and short-lived hosts share one core, with a new store, catch-up, permission tiers, run records, and OS autostart. |
 | `0.4.4` | - | **Compaction rework**: Enable automatic processing of abstracts and topic tags before compression, making topic-inspired compression truly practical and providing queries for topics and corresponding original texts. |
 | `0.4.3` | + | **Reflection rewritten**: reflection now runs as a hidden session that writes memory directly, so it no longer produces conflicting commits; The TUI display section will undergo beautification in the future. |
 | `0.4.2` | + | **Data export and import**: snapshot-style export and import of all data. Cross-platform is not guaranteed yet; back up your data before you start, in case something goes wrong |

@@ -8,6 +8,79 @@
 > **版本号谱系说明**：本 fork 早期使用 `0.35.0-better` … `0.36.2-better` 命名；分家后**重起为 `0.1.0`**（见 `0.1.0` 条目）。
 > 因此语义化排序上 `0.36.x-better` 早于 `0.1.0`，这是**刻意的重编号**，不是版本回退。
 
+## [0.4.5] - 2026-10-29
+
+> 后台任务有了通用的信号入口：调度不再是「进程里一个 60 秒计时器」，而是
+> **信号源 → 到期评估 → 任务级租约 → 宿主执行** 的四段式；长驻进程（TUI／listener）与
+> OS 唤起的短命进程共用同一套核心，同一个到期时刻最多跑一次。
+> 存储从 `crons.json` 升到 `schedules.json`（v2，带信号游标）；`/schedule` 把列表、详情、
+> 运行记录、向导与开机自启收进一个 hub。
+
+### 新增
+
+- **常驻调度核心**：`signal.evaluate(now, cursor)` → occurrence 去重 → 任务级租约 → 派发 →
+  失败分类（F1/F2/F3）→ 补跑 → 事件。每个 tick 最多启动 1 条，其余按到期顺序摊到后续 tick。
+- **两种宿主**：长驻进程（TUI／`haruyuki server`）每 60 秒 tick；OS 定时器每分钟唤起短命进程跑
+  `haruyuki schedule tick`（内部命令，帮助里不列）。长驻租约活着时长驻优先，短命宿主直接退出、
+  不写运行记录；**调度器租约**决定谁跑，**任务级租约**保证同一条任务至多一次。
+- **`schedules.json`（version 2）**：新文件名 ＋ 版本号 ＋ `signal_state.cursor`；旧 `crons.json`
+  首次读到即自动迁移（原子写，任一步失败原文件不动），迁移后改名 `crons.v1.json` 只读备份；
+  读到更高版本**拒绝读写**，不会把新格式当空文件覆盖。
+- **`/schedule` hub（九个子命令）**：`list [--all]`、`show`、`add`、`run`、`pause`、`resume`、
+  `delete`、`logs`、`autostart on|off|status`。`add` 参数齐全时一步建好，缺参数进交互式向导；
+  列表／详情／运行记录共用全屏面板；运行记录按 `runId` 分组。
+- **任务类型两种**：`prompt`（发到新会话或指定会话）与 `command`（只允许 `compact`／`reflect`，
+  复用既有的非 TUI 执行体）。等待上限、执行超时与用户取消都有终态。
+- **权限三档（无人值守）**：`standard`（只读）／`acceptEdits`（可读写文件，shell 仍拒）／
+  `unrestricted`（全部工具）。调度回合里任何审批请求一律拒绝，reason 标 `unattended`。
+- **补跑与失败暂停**：`catch_up` 打开时错过的周期只补一次（带原定时间）；关闭时记 missed。
+  连续 3 次 F1/F2 自动暂停（`paused(auto_failures)`），`resume` 清零。
+- **任务级租约**：领取／心跳／释放；进程崩溃后 90 秒过期，occurrence 视为已消费 → 记 F2、
+  **不重跑**。
+- **账本按 runId 聚合**：触发时生成 `runId`，写进队列条目与本轮上下文；cron 回合终态写
+  `source: "cron" | "command"` 与 `outcome`；`/usage` 的「Automated tasks」可按 runId 聚合，
+  缺账显示 `—`。
+- **开机自启**：`/schedule autostart on|off|status` 与新建向导最后一步注册 OS 条目
+  （Windows `schtasks`、macOS launchd、Linux systemd-user／crontab）；OS 条目只指向稳定的
+  launcher 脚本。删除最后一个任务**不**卸载自启，避免反复重建时反复写系统配置。
+- **侧栏「计划任务」**：只读显示当前 agent 最近将跑的 3 条（名称、下次时间、状态）；空列表显示
+  占位；只在列表变化时重绘（30s 低频 ＋ 事件刷新，遵守 TUI 闪烁纪律）。
+- **启动汇总与运行通知**：启动时逐条汇总一次（已读标记，不重复），`/schedule logs` 可回看；
+  任务结束按结果发通知。
+- **`haruyuki cron` 扩展**：`add` 新增 `--type`／`--command`／`--visible`／`--hidden`／
+  `--permission`／`--catch-up`／`--no-catch-up`／`--timeout`／`--wait`，与面板同源；
+  `cron` 仍是唯一调度器，存储改读 `schedules.json`。
+- **快照**：`export` 打包 `home/schedules.json`、排除 `home/crons.v1.json`；导出与导入都清空
+  调度器租约与任务级租约，目标机不会继承来源机正在运行的领取。
+- **反思补漏**：成功路径按既有「反思完成即删」设置删除隐藏 fork；反思子进程权限可透传任务
+  权限档（默认不变，只给调度触发传值）。
+- **`wake` 任务**：显式落库 `permission: unrestricted`／`catch_up: false`／`timeout_minutes: 30`，
+  与迁移默认值一致；`wake` 仍受原有「最小区间 1 小时、每会话 20 条、固定 UTC」限制。
+
+### 变更（破坏性请先读）
+
+- **存储改名**：`~/.haruyuki/crons.json` → `~/.haruyuki/schedules.json`（v2）。旧文件自动迁移并
+  改名 `crons.v1.json` 只读备份；旧版本读不到新文件，不会把新格式当空文件覆盖。
+- **TUI 影子调度器退役**：默认关闭的实验 `tui_cron` 改为 no-op（实验定义与协议 id 保留），
+  执行权收归核心；TUI 通过自己的 `schedule-host` 取得长驻租约。
+- **审批默认拒绝**：调度回合里的审批请求不再弹出，直接拒绝（reason `unattended`）——这是权限
+  三档可用的前提。
+- **快照清单变化**：新包带 `schedules.json`、不带 `crons.v1.json`；旧包（只有 `crons.json`）
+  导入后首次读取时才迁移。
+- **自启条目**：只有显式开关或卸载会删除 OS 条目；删任务不会连带卸载。
+- **文档**：`docs/commands.zh-CN.md` 与随包 `haruyuki-guide` 的调度、快照章节同步改写；
+  `scheduling-tasks` 技能按新面重写。
+
+### 已知限制
+
+- **任务只在宿主活着时执行**：没有打开 TUI／listener、也没注册自启时，任务只是记录。
+- **本版不承诺禁删／禁网**：权限档只映射现有进程级权限模式；`reflect` 命令任务在只读档会因
+  写不了记忆而失败。
+- **每 tick 一条**：同一分钟到期多条会摊到后续 tick，面板显示还有 N 条待跑。
+- **自启失败不阻塞创建**：注册失败返回结构化错误，向导内可重试或选择「否」继续；
+  三平台之外不注册。
+- **短命宿主的唤醒依赖 OS 定时器**：间隔与平台策略有关，最短约 1 分钟。
+
 ## [0.4.4] - 2026-10-28
 
 > 压缩从「一句话概括完直接裁」变成「先算出概况与切点，你看过再落刀」。

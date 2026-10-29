@@ -254,32 +254,73 @@ npm registry — `src/cli/subcommands/skills.ts:306`,
 ### `haruyuki cron`
 
 Actions `add`, `list`, `get`, `runs`, `delete` (alias `remove`) —
-`src/cli/subcommands/cron.ts:408-427`. State lives in
-`~/.haruyuki/crons.json`, guarded by a `crons.lock` directory containing
-`owner.json` — `src/cron/cron-file.ts:122-124`,
-`src/cron/cron-file.ts:140-145`. Limits: 50 active tasks per agent, finished
-tasks garbage-collected after 24 hours, 5-second lock timeout —
-`src/cron/cron-file.ts:125-133`. Run logs go to `<haruyuki>/runs/<jobId>.jsonl`
-with a default 2000-line / 2,000,000-byte cap, and `runs` defaults to `--limit
-50` — `src/cron/run-log.ts:4-5`, `src/cron/run-log.ts:58-59`,
-`src/cli/subcommands/cron.ts:316-317`.
+`src/cli/subcommands/cron.ts:537-551`. State lives in
+`~/.haruyuki/schedules.json`, a version-2 file holding `scheduler_owner`,
+`scheduler_owners`, `signal_state.cursor`, and `tasks` —
+`src/cron/cron-store.ts:56-59`, `src/cron/cron-types.ts:246-299`. On first read
+after an upgrade a legacy `crons.json` is migrated: the v2 file is written
+first, then the legacy file is renamed to the read-only `crons.v1.json` backup —
+`src/cron/cron-store.ts:300`. A file written by a newer build is refused instead
+of being read as an empty list — `src/cron/cron-store.ts:263`. Mutations take
+the advisory `crons.lock` directory containing `owner.json` —
+`src/cron/cron-lease.ts:40-47`, `src/cron/cron-lease.ts:105`.
+
+Limits: 50 active-or-paused tasks per agent, finished tasks garbage-collected
+after 24 hours, 5-second lock timeout — `src/cron/cron-file.ts:33`,
+`src/cron/cron-file.ts:38`, `src/cron/cron-lease.ts:42`. Run logs go to
+`<haruyuki>/runs/<task-id>.jsonl` with a default 2000-line / 2,000,000-byte cap,
+and `runs` defaults to `--limit 50` — `src/cron/run-log.ts:78-79`,
+`src/cron/run-log.ts:110`, `src/cli/subcommands/cron.ts:445-446`. Entries
+written by a run carry the `runId` the log is grouped by; a missed or legacy
+entry has no `runId` and stands alone — `src/cli/helpers/schedule-store.ts:378`.
 
 Two behaviors are easy to get wrong:
 
 - **`add` requires `--name` and `--description`, and the usage text does not say
   so.** Both are enforced in the handler —
-  `src/cli/subcommands/cron.ts:113-124` — while the printed usage lists only
-  prompt, schedule, agent, and conversation options —
-  `src/cli/subcommands/cron.ts:54-64`.
+  `src/cli/subcommands/cron.ts:156-167` — while the printed usage never lists
+  either flag — `src/cli/subcommands/cron.ts:50-94`.
 - `--computer` is not supported here and fails immediately —
-  `src/cli/subcommands/cron.ts:141-146`.
+  `src/cli/subcommands/cron.ts:242-247`.
 
 `--every`, `--at`, and `--cron` are mutually exclusive, and `--once` cannot be
-combined with `--cron` — `src/cli/subcommands/cron.ts:153-161`,
-`src/cli/subcommands/cron.ts:196-201`. Omitting the conversation schedules a
+combined with `--cron` — `src/cli/subcommands/cron.ts:254-262`,
+`src/cli/subcommands/cron.ts:297-301`. Omitting the conversation schedules a
 fresh conversation per fire; `self` requires `$HARUYUKI_CONVERSATION_ID` —
-`src/cli/subcommands/cron-scope.ts:8-22`. This is the only scheduler in the
-build; there is no hosted scheduling path — `src/cli/subcommands/cron.ts:14-16`.
+`src/cli/subcommands/cron-scope.ts:8-22`.
+
+`add` also takes the resident-scheduler fields: `--type prompt|command`, `--command
+<compact|reflect>`, `--visible`/`--hidden`, `--permission
+standard|acceptEdits|unrestricted`, `--catch-up`/`--no-catch-up`, `--timeout
+<minutes>`, and `--wait <minutes>` — `src/cli/subcommands/cron.ts:98-126`. A
+command task requires `--command`, cannot combine it with `--prompt`, and is
+limited to `compact`/`reflect`; `--visible`/`--hidden` only apply to a fresh
+conversation — `src/cli/subcommands/cron.ts:169-189`,
+`src/cli/subcommands/cron.ts:200-213`. `--timeout` accepts `0` (unlimited);
+`--wait` requires at least 1 — `src/cli/subcommands/cron.ts:237-240`. There is
+no `--tz` here: the timezone is the process timezone captured at creation. A
+field left out gets the store default (`prompt` type, `unrestricted`
+permission, no catch-up, 30-minute timeout, 10-minute wait) —
+`src/cron/cron-store.ts:159-184`, `src/cron/cron-types.ts:304-308`. This is the
+only scheduler in the build; there is no hosted scheduling path —
+`src/cli/subcommands/cron.ts:20-24`.
+
+### `haruyuki schedule` (internal)
+
+`tick` and `status` only — `src/cli/subcommands/schedule.ts:151-177`. `tick` is
+what the OS autostart entry wakes once a minute. It reads the store and
+evaluates signals before importing the backend, providers, tools, or listener,
+and exits 0 when nothing is due or a long-lived host already owns the scheduler
+— `src/cli/subcommands/schedule.ts:89-125`, `src/cron/preflight.ts:1-18`. It is
+an internal command, not part of the interactive `/schedule` hub. `status` is
+read-only diagnostics: active / paused / finished counts, whether a long-lived
+host is live, the next due instant, and the store version and task count —
+`src/cli/subcommands/schedule.ts:128-149`.
+
+Both hosts call one scheduler core, which starts at most one task per tick and
+leaves the rest for later ticks; the long-lived TUI or listener wins while it is
+alive — `src/cron/scheduler-core.ts:1-8`,
+`src/cron/scheduler-core.ts:671`.
 
 ### `haruyuki channels`
 
@@ -384,10 +425,13 @@ the legacy `project/.skills/**` —
 `node_modules` stay out of the package, and an import clears only those same six
 paths. A package that carries `project/` but an import without `--with-project`
 warns and skips the project tree instead of writing into the current directory —
-`src/cli/subcommands/snapshot/import.ts:378`. Export also ships a lease-free copy
-of `crons.json` (`scheduler_owner` null, `scheduler_owners` empty) so the target
-machine never inherits the exporting machine's scheduler claim —
-`src/cli/subcommands/snapshot/export.ts:615`.
+`src/cli/subcommands/snapshot/import.ts:378`. Export packs `home/schedules.json`
+and leaves the read-only `home/crons.v1.json` backup out of the package. Both
+export and import clear the scheduler lease and the per-task leases
+(`scheduler_owner` null, `scheduler_owners` empty, each task's `lease` null), so
+the target machine never inherits the exporting machine's scheduler claim —
+`src/cli/subcommands/snapshot/export.ts`,
+`src/cli/subcommands/snapshot/machine-state.ts`.
 
 ## Slash commands
 
@@ -428,6 +472,92 @@ being sent to the model as chat text. Those entries are marked `internal` and
 `hidden`, which keeps them out of autocomplete and out of the user-typed
 surface — `src/cli/commands/registry.ts:700-760`. Typing one directly is
 answered with the hub form, not executed.
+
+### `/schedule`
+
+`/schedule` is a hub-shaped top-level command rather than one of the eight in
+the table above. It is registered at `src/cli/commands/registry.ts:565-578` and
+parsed by `parseScheduleInvocation` (`src/cli/commands/schedule.ts:391`); the
+nine names are `SCHEDULE_SUBCOMMANDS` (`src/cli/commands/schedule.ts:49-62`) and
+the help text is `formatScheduleHelp` (`src/cli/commands/schedule.ts:68-98`).
+
+| Subcommand | What it does |
+| --- | --- |
+| `list [--all]` | Tasks for the current agent, or every agent with `--all` |
+| `show <id\|name>` | One task's details and next due time |
+| `add [options]` | Create; one step outside the TUI when the required flags are present, otherwise the wizard |
+| `run <id\|name>` | Run once now, without consuming the next scheduled occurrence |
+| `pause <id\|name>` | Pause an active task |
+| `resume <id\|name>` | Resume and clear the failure streak |
+| `delete <id\|name>` | Delete the task |
+| `logs <id\|name>` | Run history grouped by `runId` |
+| `autostart on\|off\|status` | Register, remove, or report the OS wake-up entry |
+
+The TUI claims `list`, `show`, `add`, `logs`, and `run` for its panels and
+wizard; `pause`, `resume`, `delete`, and `autostart` answer in the command row.
+A listener or headless channel gets the text form of the same subcommands;
+`run` and the interactive log view need the TUI —
+`src/cli/app/submit-schedule-commands.ts:1-17`. `run` executes through the TUI
+host, so it shares the scheduler core with a timer-driven run; it sends a
+completion notification and writes a run-log row. It does not consume the next
+scheduled occurrence.
+
+`add` is one step outside the TUI when every required flag is present; with a
+missing flag it prints what is missing instead of creating anything — the check
+is `missingAddFlags` (`src/cli/commands/schedule.ts:188-199`). In the TUI,
+`/schedule add` opens the wizard and pre-fills it from whatever flags were
+passed, starting at the first missing step —
+`src/cli/components/ScheduleWizardSteps.tsx:231-261`.
+
+| Requirement | Flag |
+| --- | --- |
+| Schedule (exactly one) | `--cron <5-field>` \| `--every <5m\|2h\|1d>` \| `--at <time>` |
+| Content | `--prompt <text>` \| `--command <command>` |
+| Target | `--target new\|default\|existing:<conversation-id>` |
+| Visibility, for `--target new` | `--visible` \| `--hidden` |
+| Permission | `--permission standard\|acceptEdits\|unrestricted` |
+| Catch-up | `--catch-up` \| `--no-catch-up` |
+
+Optional flags are `--type prompt|command` (default `prompt`; `--command`
+implies `command`), `--timeout <minutes>` (default 30; `0` is unlimited),
+`--wait <minutes>` (default 10), `--tz <IANA>` (default: this machine's
+timezone at creation), and `--name <text>`. `--at` is one-shot; `--cron` and
+`--every` are recurring, and `--every` compiles to a five-field expression —
+`src/cli/commands/schedule.ts:201-382`.
+
+A `command` task may only name `compact` or `reflect`; the payload is passed
+through verbatim and anything else is refused before dispatch —
+`src/cron/task-run.ts:48-51`, `src/cron/task-run.ts:282-285`.
+
+Targets are a fresh conversation per fire (`new`, optionally hidden), the
+agent's default conversation (`default`), or one specific conversation
+(`existing:<conversation-id>`). `--visible`/`--hidden` only apply to `new` and
+one of them is required there.
+
+Scheduled runs are unattended, so every approval request is denied rather than
+left pending — `src/cron/task-run.ts:138-152`. The tier decides what runs
+without asking:
+
+| Tier | Allows | Refuses |
+| --- | --- | --- |
+| `standard` | Reading files, searching | Writing files, shell, subagents |
+| `acceptEdits` | Reading and writing files | Shell |
+| `unrestricted` | Every tool | Nothing by tier; this build does not promise delete/network bans because the sandbox is process-level |
+
+A `reflect` command task inherits the task's tier; with `standard` it cannot
+write memory and the reflection fails.
+
+`/schedule autostart on` registers a user-level OS entry that wakes
+`haruyuki schedule tick` once a minute — Windows `schtasks`, macOS launchd, or a
+Linux systemd user timer with a marked crontab fallback —
+`src/cron/autostart.ts:1-17`, `src/cron/autostart.ts:387`,
+`src/cron/autostart.ts:713`. The entry points at a generated launcher that
+carries `HARUYUKI_HOME`, not at the product binary directly. The wizard's last
+step offers the same registration. `off` removes the entry. Deleting the last
+task deliberately does **not** unregister autostart, so rebuilding a task does
+not rewrite machine configuration every time —
+`src/cron/autostart.ts:706-711`. A failed registration is reported with the
+task kept in place.
 
 ### Overlays
 
@@ -553,7 +683,8 @@ Useful when deciding whether a command is safe to run reflexively.
 
 | Area | Commands | Where |
 | --- | --- | --- |
-| Scheduler state | `cron add`, `cron delete`, `cron delete --all` | `~/.haruyuki/crons.json` — `src/cron/cron-file.ts:140-145` |
+| Scheduler state | `cron add`, `cron delete`, `cron delete --all`, `/schedule add`, `/schedule pause`, `/schedule resume`, `/schedule delete` | `~/.haruyuki/schedules.json` (version 2; `signal_state.cursor`), with a read-only `crons.v1.json` backup — `src/cron/cron-store.ts:56-72` |
+| Scheduler autostart | `/schedule autostart on`, `/schedule autostart off` | a user-level OS entry (`schtasks`, launchd, systemd-user, or crontab) — `src/cron/autostart.ts:387`, `src/cron/autostart.ts:713` |
 | Mods | `mods package/update/enable/disable/remove`, `install npm:…`, `install git:…` | the global mods root — `src/mods/paths.ts:18-34` |
 | Channels | `channels install/configure/route/pair/bind` | `~/.haruyuki/channels/<channel>/` — `src/channels/config.ts:56-73` |
 | Pins | `agents create --pinned`, `/agent pin`, `/agent unpin` | `~/.haruyuki/settings.json` — `src/cli/subcommands/agents.ts:181-183` |

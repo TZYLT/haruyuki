@@ -237,23 +237,27 @@ openssl rand -hex 32 | haruyuki secret set WEBHOOK_TOKEN --stdin
 - `--env` 要传**变量名**而不是 `$NAME`——`$NAME` 会被 harness 先行替换，值就进了命令行参数。
 - 正在跑的会话要到**下次启动**才读得到 CLI 侧的新密钥。
 
-### 计划任务（`cron`）
+### 计划任务（`cron` / `schedule`）
 
 ```bash
 haruyuki cron add --prompt <文本> --every <间隔> [options]   # 周期执行
 haruyuki cron add --prompt <文本> --at <时间> [--once]      # 定时执行
 haruyuki cron add --prompt <文本> --cron <5字段表达式>      # 原生 cron
+haruyuki cron add --command <compact|reflect> --type command <schedule> [options]
 haruyuki cron list [--agent <id>] [--conversation <id>]
 haruyuki cron get <id|名字>
 haruyuki cron runs --id <id> [--limit <n>]
 haruyuki cron delete <id|名字>     # 别名 remove
 haruyuki cron delete --all [--agent <id>]
+haruyuki schedule tick            # 内部命令：OS 定时器每分钟唤起一次
+haruyuki schedule status          # 只读诊断
 ```
 
-- `--every` 接受 `5m` / `2h` / `1d` 这类间隔。
-- `--at` 接受 `in 45m`、`3:00pm`，或带明确时区的 RFC 3339 时间戳。
+- `--every` / `--at` / `--cron` 三选一；`--at` 是一次性。`--every` 接受 `5m` / `2h` / `1d`；`--at` 接受 `in 45m`、`3:00pm`，或带明确时区的 RFC 3339 时间戳。
 - `--conversation` 省略或设 `new` = 每次新开会话；`self` = 当前会话；`default` = agent 默认会话。
-- `cron` 是本分支**唯一**的调度器，且是本地实现。**输出为 JSON**。
+- **F-05 新字段**（与 `/schedule add` 同源）：`--type prompt|command`、`--command <compact|reflect>`、`--visible|--hidden`、`--permission standard|acceptEdits|unrestricted`、`--catch-up|--no-catch-up`、`--timeout <分钟>`（0 = 不限）、`--wait <分钟>`。
+- 任务存在 `~/.haruyuki/schedules.json`（v2）；旧 `crons.json` 首次读取时自动迁移并改名 `crons.v1.json`。`cron` 仍是本分支**唯一**的调度器，**输出为 JSON**。
+- `schedule tick` 是**内部命令**（帮助里不列）：OS 自启条目每分钟调用它；长驻宿主（TUI / listener）活着时直接退出，不写运行记录。
 
 ### 外部渠道（`channels`）
 
@@ -495,6 +499,28 @@ haruyuki import --from ./work.hryk                   # 正式恢复（手敲 ove
 | `/maintenance install-github-app` | — | 在本仓库装 GitHub Action |
 
 > `/maintenance install-github-app` 装的是**上游**的 `letta-ai/letta-code-action`，本分支没有对应产物。
+
+### 顶层命令：计划任务（`/schedule`）
+
+`/schedule` 是计划任务的 hub（九个子命令）；参数齐全时一步创建，缺参数进交互式向导。
+
+| 子命令 | 参数 | 说明 |
+|---|---|---|
+| `/schedule list` | `[--all]` | 列出计划任务（默认只看当前 agent）；`--all` 看全部 agent |
+| `/schedule show` | `<id\|名称>` | 一个任务的详情 |
+| `/schedule add` | `[选项]` | 新建；参数齐全直接建好，缺参数进向导 |
+| `/schedule run` | `<id\|名称>` | 立即运行一次（不消耗下一次计划触发） |
+| `/schedule pause` | `<id\|名称>` | 暂停 |
+| `/schedule resume` | `<id\|名称>` | 恢复（清零连续失败） |
+| `/schedule delete` | `<id\|名称>` | 删除 |
+| `/schedule logs` | `<id\|名称>` | 运行记录（按 `runId` 分组） |
+| `/schedule autostart` | `on\|off\|status` | 开机自启（OS 每分钟唤起短命宿主） |
+
+`add` 的选项：`--cron` / `--every` / `--at` 三选一；`--prompt <文本>` 或 `--command <compact\|reflect>`（`--type` 默认 `prompt`）；`--target new\|default\|existing:<会话 id>`；`--visible` / `--hidden`（新会话必填其一）；`--permission standard\|acceptEdits\|unrestricted`（必填）；`--catch-up` / `--no-catch-up`（必填）；`--timeout <分钟>`、`--wait <分钟>`、`--tz <IANA>`、`--name <名称>`。
+
+- **权限三档**（无人值守，任何审批请求一律拒绝）：`standard` 只读；`acceptEdits` 可读写文件但 shell 仍被拒；`unrestricted` 全部工具（本版不承诺禁删／禁网）。
+- 任务只在宿主活着时执行：TUI / listener 是长驻宿主，OS 自启条目唤起的是短命宿主。连续 3 次 F1/F2 自动暂停，`resume` 清零。
+- 列表 / 详情 / 运行记录是全屏面板；侧栏「计划任务」显示当前 agent 最近 3 条。
 
 ### 顶层命令：记忆、话题与上下文
 
