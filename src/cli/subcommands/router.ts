@@ -108,6 +108,12 @@ export async function runSubcommand(argv: string[]): Promise<number | null> {
       // Deliberately NOT in `subcommandNeedsEarlyBackendMode`: the whole point
       // of `schedule tick` is to exit before the backend is configured (C-24).
       return (await import("./schedule")).runScheduleSubcommand(rest);
+    case "dream":
+      // F-06 M1: the short-lived dream host. `dream run` needs the full runtime
+      // (backend, providers, tools), so unlike `schedule tick` it is not a light
+      // entry; it is spawned detached by the launcher and by the scheduler's
+      // delegation, and only ever runs one task.
+      return (await import("./dream")).runDreamSubcommand(rest);
     case "channels":
       return (await import("./channels")).runChannelsSubcommand(rest);
     case "channel-gateway":

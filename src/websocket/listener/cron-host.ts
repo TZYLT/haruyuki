@@ -20,6 +20,7 @@ import type {
   ConversationCreateBody,
   ConversationListBody,
 } from "@/backend/backend";
+import { spawnDreamRunProcess } from "@/cli/helpers/dream-launcher";
 import { legacyRunOutcomeFor } from "@/cron/cron-file";
 import type {
   RunOutcome,
@@ -143,6 +144,15 @@ export interface ListenerCronRunnerDeps {
   now?: () => number;
   /** Poll interval for the "target conversation busy" wait. Defaults to 30s. */
   pollIntervalMs?: number;
+  /**
+   * F-06 M1: spawn seam for the delegated `haruyuki dream run --task` child.
+   * `onExit` is called once (spawn error or process exit) so a later tick can
+   * delegate again. Defaults to the real detached spawn.
+   */
+  spawnDreamRun?: (
+    taskId: string,
+    onExit: () => void,
+  ) => { pid?: number } | null;
 }
 
 /** One completed turn, as the listener's own terminal event reports it. */
@@ -440,6 +450,64 @@ export function createListenerCronRunner(
   const transport = deps.transport;
   const opts = deps.opts;
   const processQueuedTurn = deps.processQueuedTurn;
+  const spawnDreamRun =
+    deps.spawnDreamRun ??
+    ((taskId: string, onExit: () => void) =>
+      spawnDreamRunProcess(taskId, {}, onExit));
+
+  /**
+   * F-06 M1 (route C-16): dream task ids with a delegated child still alive.
+   * The occurrence is neither claimed nor consumed here, so without this guard
+   * two ticks could start two children for one task; the child's task-lease
+   * claim is the authoritative second line of defence.
+   */
+  const dreamDelegatedInFlight = new Set<string>();
+
+  /**
+   * The dream half of the delegation (frozen seam `TaskRunnerPort.runDream`).
+   *
+   * The run itself belongs to the short-lived `haruyuki dream run --task` child:
+   * it takes the task lease, consumes the occurrence and records the outcome.
+   * This function only starts that child and returns, so the listener tick is
+   * never blocked by a long run (C-15).
+   */
+  const runDream = async (input: {
+    task: ScheduleTaskV2;
+    runId: string;
+    occurrence: string;
+    signal: AbortSignal;
+  }): Promise<{ outcome: RunOutcome; error?: string }> => {
+    const taskId = input.task.id;
+    if (dreamDelegatedInFlight.has(taskId)) {
+      return {
+        outcome: "skipped",
+        error: `a dream child for ${taskId} is already in flight`,
+      };
+    }
+    dreamDelegatedInFlight.add(taskId);
+    let child: { pid?: number } | null;
+    try {
+      child = spawnDreamRun(taskId, () =>
+        dreamDelegatedInFlight.delete(taskId),
+      );
+    } catch (error) {
+      dreamDelegatedInFlight.delete(taskId);
+      return {
+        outcome: "failed",
+        error: `could not spawn the dream run child: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+    if (!child) {
+      dreamDelegatedInFlight.delete(taskId);
+      return {
+        outcome: "failed",
+        error: "could not spawn the dream run child",
+      };
+    }
+    return { outcome: "success" };
+  };
 
   const runPrompt = async (input: {
     task: ScheduleTaskV2;
@@ -627,6 +695,12 @@ export function createListenerCronRunner(
 
   return {
     host: runnerHost,
+    // F-06 M1: a dream task is never run in-process. The core leaves the
+    // occurrence untouched and reports the task as deferred; `scheduler.ts`
+    // then delegates it through `runDream` (the listener previously had no
+    // delegation at all, route C-16).
+    canRun: (task: ScheduleTaskV2) => task.type !== "dream",
+    runDream,
     async run({ task, runId, occurrence, signal }) {
       const controller = new AbortController();
       const onOuterAbort = () => controller.abort();

@@ -24,7 +24,11 @@ import {
   createCronSignalSource,
   ensureCronSignalSourceRegistered,
 } from "@/cron/cron-signal";
-import { readScheduleFile, toScheduleTaskV2 } from "@/cron/cron-store";
+import {
+  getScheduleTask,
+  readScheduleFile,
+  toScheduleTaskV2,
+} from "@/cron/cron-store";
 import type { ScheduleTaskV2, TaskRunnerPort } from "@/cron/cron-types";
 import { runSchedulePreflight } from "@/cron/preflight";
 import { evaluateSignals } from "@/cron/signal";
@@ -128,6 +132,76 @@ function delegatedTaskDue(
 }
 
 /**
+ * F-06 M1: replace the preflight's deliberately lightweight dream source with
+ * the real one before this host evaluates for real.
+ *
+ * The preflight over-approximates pressure/silence to stay a light process
+ * (C-24), so its registration is only good for "should we load the runtime".
+ * Both modules are imported dynamically: when nothing is due, `schedule tick`
+ * must still exit before pulling settings, the ledger or the agent graph.
+ */
+async function registerFullDreamSignalSource(): Promise<void> {
+  const [
+    { createDreamSignalSource },
+    { createDefaultDreamSignalDeps },
+    { registerSignalSource },
+  ] = await Promise.all([
+    import("@/cron/dream-signal"),
+    import("@/cron/dream-signal-deps"),
+    import("@/cron/signal"),
+  ]);
+  // Replace, not `ensure…`: the preflight registration may already exist and
+  // must not survive into the real evaluation.
+  registerSignalSource(createDreamSignalSource(createDefaultDreamSignalDeps()));
+}
+
+/**
+ * F-06 M1: hand the dream occurrences this tick deferred to a short-lived child.
+ *
+ * The core never claims or consumes a deferred dream occurrence; the child
+ * (`haruyuki dream run --task`) claims the task lease and consumes it, so the
+ * occurrence survives a failed spawn and a second child cannot double-run it.
+ * Failures are log lines — a tick must not fail because a delegation did not
+ * start.
+ */
+function delegateDeferredDreams(
+  runner: TaskRunnerPort,
+  taskIds: readonly string[] | undefined,
+): void {
+  const runDream = runner.runDream;
+  if (!runDream || !taskIds || taskIds.length === 0) return;
+  for (const taskId of taskIds) {
+    let task: ScheduleTaskV2 | null = null;
+    try {
+      task = getScheduleTask(taskId);
+    } catch {
+      continue;
+    }
+    if (!task || task.type !== "dream") continue;
+    void runDream
+      .call(runner, {
+        task,
+        runId: `delegated-dream-${Date.now().toString(36)}`,
+        occurrence: `delegated:${new Date().toISOString()}`,
+        signal: new AbortController().signal,
+      })
+      .then((result) => {
+        if (result.outcome !== "failed") return;
+        console.error(
+          `schedule tick: could not delegate dream ${taskId}: ${result.error ?? "unknown error"}`,
+        );
+      })
+      .catch((error: unknown) => {
+        console.error(
+          `schedule tick: could not delegate dream ${taskId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+  }
+}
+
+/**
  * One tick. Returns the process exit code: 0 for every "nothing to do" path and
  * for a completed run, 1 only when the runtime could not be built.
  */
@@ -175,6 +249,9 @@ export async function runScheduleTick(
   }
 
   try {
+    // The runtime is loaded: swap the preflight's lightweight dream probe for
+    // the real dependencies before evaluating (F-06 M1).
+    await registerFullDreamSignalSource();
     const includeTask = taskId
       ? (task: ScheduleTaskV2) => task.id === taskId
       : taskInShortLivedLane;
@@ -188,7 +265,11 @@ export async function runScheduleTick(
         const { runSchedulerTick } = await import("@/cron/scheduler-core");
         return runSchedulerTick(input);
       });
-    await runTick({ now, runner: runtime.runner, includeTask });
+    const result = await runTick({ now, runner: runtime.runner, includeTask });
+    // F-06 M1: this process is the long-lived host's stand-in (the OS timer
+    // woke it); a dream occurrence it deferred is delegated to the detached
+    // `dream run --task` child before this process exits.
+    delegateDeferredDreams(runtime.runner, result.deferredTaskIds);
     return 0;
   } catch (error) {
     console.error(

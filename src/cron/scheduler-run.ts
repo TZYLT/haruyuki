@@ -25,6 +25,7 @@ import type {
   TaskRunnerPort,
 } from "./cron-types";
 import { TASK_LEASE_HEARTBEAT_MS } from "./cron-types";
+import { validateDreamTaskForRun } from "./dream-signal";
 import {
   getCronRunLogPath,
   readCronRunLogEntries,
@@ -72,6 +73,11 @@ function commandNameOf(payload: string): string {
 
 /** Core-owned startup checks (R-5.7.8); a failure here never dispatches. */
 function preStartFailure(task: ScheduleTaskV2): string | null {
+  // F-06 (route C-13/C-17/C-37): a dream task never goes through the prompt
+  // dispatcher, and its run has no F-05 timeout. Rejecting a malformed record
+  // here makes it an F1 (nothing this run could start) instead of a long,
+  // unattended prompt run.
+  if (task.type === "dream") return validateDreamTaskForRun(task);
   if (task.type !== "command") return null;
   const command = commandNameOf(task.payload);
   if (!command) return "Command task has an empty payload";

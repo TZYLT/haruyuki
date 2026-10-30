@@ -28,6 +28,8 @@ import type {
   TaskTarget,
   TaskType,
 } from "./cron-types";
+import { DREAM_PLACEHOLDER_CRON } from "./dream-signal";
+import { parseDreamTaskPayload } from "./dream-task";
 import { isValidCron } from "./parse-interval";
 
 // ── Constants ───────────────────────────────────────────────────────
@@ -93,6 +95,40 @@ export function addTask(input: AddTaskInput): AddTaskResult {
       throw new Error(
         "Command schedules must target an existing conversation: they cannot create a new one (R-5.5.1).",
       );
+    }
+    // F-06 (route C-17/C-37): a dream task is the scheduler's carrier for the
+    // dream signal, not a conversation task. Its shape is what makes the
+    // scheduler defer it instead of running it as a prompt, and what keeps the
+    // 30-minute default timeout from silently cutting a long run.
+    if (taskType === "dream") {
+      if (target.kind !== "new" || !target.hidden) {
+        throw new Error(
+          "Dream schedules must target a new hidden conversation: every run creates its own hidden `origin=dream` session (F-06 R-5.7.1).",
+        );
+      }
+      if (!input.recurring) {
+        throw new Error(
+          "Dream schedules must be recurring: the trigger is the dream signal source, never a one-off slot (F-06 R-5.2.5).",
+        );
+      }
+      if (input.timeout_minutes !== 0) {
+        throw new Error(
+          "Dream schedules must set timeout_minutes to 0 (unlimited): the F-05 default of 30 minutes would silently cut a long dream run (F-06 R-5.3.4).",
+        );
+      }
+      if (input.cron !== DREAM_PLACEHOLDER_CRON) {
+        throw new Error(
+          `Dream schedules must use the placeholder cron "${DREAM_PLACEHOLDER_CRON}": the cron source skips dream tasks, the dream signal source owns the trigger (F-06 R-5.2.6).`,
+        );
+      }
+      if (
+        input.payload !== undefined &&
+        parseDreamTaskPayload(input.payload) === undefined
+      ) {
+        throw new Error(
+          "Dream schedule payload is malformed: expected a JSON DreamTaskPayload ({version: 1}).",
+        );
+      }
     }
 
     // Pausing a task must not let an agent exceed the persisted schedule limit.

@@ -28,6 +28,10 @@ import { type SpawnOptions, spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { useEffect, useRef } from "react";
 import {
+  ensureDreamTask,
+  spawnDreamRunProcess,
+} from "@/cli/helpers/dream-launcher";
+import {
   createTuiCronRunner,
   type TuiScheduleActiveTarget,
 } from "@/cli/helpers/schedule-prompt";
@@ -38,17 +42,22 @@ import {
 } from "@/cli/helpers/schedule-store";
 import {
   claimSchedulerLease,
+  ensureDreamSignalSourceRegistered,
+  getScheduleTask,
   type RunOutcome,
   refreshSchedulerLease,
   releaseSchedulerLease,
   runScheduledTaskNow,
   runSchedulerTick,
+  type ScheduleTaskV2,
   type TaskRunnerPort,
 } from "@/cron";
+import { createDefaultDreamSignalDeps } from "@/cron/dream-signal-deps";
 import {
   type ScheduleEvent,
   subscribeScheduleEvents,
 } from "@/cron/schedule-events";
+import { readDreamSettings } from "@/dream-settings";
 import { debugWarn } from "@/utils/debug";
 
 /** How often the TUI checks the store (R-5.3.1's 60 s tick). */
@@ -148,6 +157,14 @@ export interface TuiScheduleHostOptions {
   runner?: TaskRunnerPort;
   /** Spawn seam for the delegated short-lived host; tests only. */
   spawnDelegatedTick?: SpawnDelegatedTick;
+  /**
+   * F-06 M1: spawn seam for the delegated `haruyuki dream run --task` child;
+   * tests only. Defaults to the detached real spawn.
+   */
+  spawnDreamRun?: (
+    taskId: string,
+    onExit: () => void,
+  ) => { pid?: number } | null;
   tickIntervalMs?: number;
   firstTickMs?: number;
 }
@@ -166,6 +183,8 @@ export interface TuiScheduleHost {
 }
 
 let currentHost: TuiScheduleHost | null = null;
+/** F-06 M1: the debounced turn-end wake requested by `requestTuiScheduleTick`. */
+let requestedTickTimer: NodeJS.Timeout | null = null;
 
 /** The live host, for the submit layer's `/schedule run`. */
 export function currentTuiScheduleHost(): TuiScheduleHost | null {
@@ -206,7 +225,57 @@ export function startTuiScheduleHost(
   options: TuiScheduleHostOptions,
 ): TuiScheduleHost {
   const now = options.now ?? (() => new Date());
-  const runner = createRunner(options);
+  // F-06 M1: dream task ids whose delegated child is still alive. A delegated
+  // dream occurrence is deliberately left unconsumed by the core, so this is
+  // what stops a second child for the same task while the first runs.
+  const dreamDelegatedInFlight = new Set<string>();
+  const baseRunner = createRunner(options);
+  const runner: TaskRunnerPort | null = baseRunner
+    ? {
+        ...baseRunner,
+        // A dream task is never run in this process (route C-13/C-15): the
+        // core defers it and the host delegates it to the short-lived
+        // `dream run --task` child through `runDream`.
+        canRun: (task: ScheduleTaskV2) =>
+          task.type === "dream" ? false : (baseRunner.canRun?.(task) ?? true),
+        runDream: async (input) => {
+          const taskId = input.task.id;
+          if (dreamDelegatedInFlight.has(taskId)) {
+            return {
+              outcome: "skipped",
+              error: `a dream child for ${taskId} is already in flight`,
+            };
+          }
+          dreamDelegatedInFlight.add(taskId);
+          const spawnDream =
+            options.spawnDreamRun ??
+            ((id: string, onExit: () => void) =>
+              spawnDreamRunProcess(id, {}, onExit));
+          try {
+            const child = spawnDream(taskId, () =>
+              dreamDelegatedInFlight.delete(taskId),
+            );
+            if (!child) {
+              dreamDelegatedInFlight.delete(taskId);
+              return {
+                outcome: "failed",
+                error: "could not spawn the dream run child",
+              };
+            }
+          } catch (error) {
+            dreamDelegatedInFlight.delete(taskId);
+            return {
+              outcome: "failed",
+              error: `could not spawn the dream run child: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            };
+          }
+          // Spawned, not finished: the child owns the run and its accounting.
+          return { outcome: "success" };
+        },
+      }
+    : null;
   let leaseToken: string | null = null;
   let leaseLossLogged = false;
   let disposed = false;
@@ -312,6 +381,29 @@ export function startTuiScheduleHost(
     }
   };
 
+  /**
+   * F-06 M1: make sure the configured agent has its dream task before the tick
+   * evaluates. A dream task is the scheduler's carrier for the dream signal, and
+   * the config flow only flips settings, so the first tick for a configured
+   * agent creates the record. Failure is one log line: dreams are an optional
+   * feature and must never stop the scheduler from running normal tasks.
+   */
+  const ensureConfiguredDreamTask = (): void => {
+    const agentId = options.getActiveTarget?.()?.agentId;
+    if (!agentId) return;
+    try {
+      if (!readDreamSettings(agentId).enabled) return;
+      ensureDreamTask(agentId);
+    } catch (error) {
+      debugWarn(
+        "dream",
+        `could not prepare the dream task: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  };
+
   const tick = async (): Promise<void> => {
     if (disposed || ticking || !runner) return;
     if (!tryClaim()) return;
@@ -326,13 +418,43 @@ export function startTuiScheduleHost(
     }
     ticking = true;
     try {
+      // F-06 M1: the dream signal source must be registered before the core
+      // evaluates, and the TUI process has no `startScheduler` to do it.
+      ensureDreamSignalSourceRegistered(createDefaultDreamSignalDeps());
+      ensureConfiguredDreamTask();
       const result = await runSchedulerTick({ now: now(), runner });
       if (result.started || result.missed > 0) refreshScheduleTasks(now());
       // The core leaves due tasks this host's runner said `canRun === false`
       // alone (neither claimed nor consumed) and reports their ids (P1-2): the
       // TUI's own session is the only thing it can run, so everything else is
-      // handed to a short-lived child.
+      // handed to a short-lived child. A dream task goes to `dream run --task`
+      // through the frozen `runDream` seam; everything else keeps the existing
+      // `schedule tick --task` delegation.
       for (const taskId of result.deferredTaskIds ?? []) {
+        let deferred: ScheduleTaskV2 | null = null;
+        try {
+          deferred = getScheduleTask(taskId);
+        } catch {
+          deferred = null;
+        }
+        if (deferred?.type === "dream") {
+          void runner
+            .runDream?.({
+              task: deferred,
+              runId: `delegated-dream-${Date.now().toString(36)}`,
+              occurrence: `delegated:${new Date().toISOString()}`,
+              signal: new AbortController().signal,
+            })
+            .catch((error) => {
+              debugWarn(
+                "dream",
+                `could not delegate dream ${taskId}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
+            });
+          continue;
+        }
         delegateTask(taskId);
       }
     } catch (error) {
@@ -400,6 +522,11 @@ export function startTuiScheduleHost(
         leaseToken = null;
       }
       if (currentHost === host) currentHost = null;
+      if (requestedTickTimer) {
+        // A wake requested for a host that is being disposed must not fire.
+        clearTimeout(requestedTickTimer);
+        requestedTickTimer = null;
+      }
     },
   };
   currentHost = host;
@@ -478,6 +605,28 @@ export async function runScheduledTaskViaTuiHost(
     };
   }
   return { kind: "ran", outcome: raced.outcome, error: raced.error };
+}
+
+/**
+ * F-06 M1 (R-5.2.4): ask the live TUI host to evaluate soon.
+ *
+ * The TUI runs its own host leg instead of `startScheduler`, so the internal
+ * `requestSchedulerTick()` (cron-side) is a no-op here. This is the TUI
+ * counterpart: debounced, non-blocking, never runs a task inline — it only
+ * wakes the same `tick()` the 60 s interval calls, so the core's lease and
+ * policy still decide everything. A no-op when no host is mounted.
+ */
+export function requestTuiScheduleTick(delayMs = 200): void {
+  const host = currentHost;
+  if (!host || requestedTickTimer !== null) return;
+  requestedTickTimer = setTimeout(() => {
+    requestedTickTimer = null;
+    void host.tick().catch(() => {
+      // The host already logs its own tick failures; a nudge must never become
+      // an unhandled rejection.
+    });
+  }, delayMs);
+  requestedTickTimer.unref?.();
 }
 
 /**

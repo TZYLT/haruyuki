@@ -179,6 +179,18 @@ export interface ScheduledTaskHostPort {
     occurrence: string;
     signal: AbortSignal;
   }): Promise<ScheduledPromptRunResult>;
+  /**
+   * F-06 (Q-47): run a dream task. A host that cannot support dreams leaves
+   * this unset, and the run is a typed pre-start failure (F1) instead of
+   * falling through to `runPrompt` (route C-13). The short-lived
+   * `haruyuki dream run --task` host wires this to S1 `runDreamTask`.
+   */
+  runDream?(input: {
+    task: ScheduleTaskV2;
+    runId: string;
+    occurrence: string;
+    signal: AbortSignal;
+  }): Promise<{ outcome: RunOutcome; error?: string }>;
 }
 
 // ── Failure classification (R-5.9.1) ────────────────────────────────
@@ -347,7 +359,7 @@ export async function runScheduledTask(
     return {
       outcome: "failed",
       error:
-        "Prompt tasks must be run by a host runner; runScheduledTask only executes command tasks.",
+        "Prompt and dream tasks must be run by a host runner; runScheduledTask only executes command tasks.",
     };
   }
 
@@ -660,6 +672,24 @@ function executeScheduledBody(input: {
   host: ScheduledTaskHostPort;
   commandContext: ScheduledCommandContext;
 }): Promise<ScheduledPromptRunResult> {
+  // F-06 (route C-13): a dream task is never a prompt. Checking this before the
+  // prompt branch is the whole safety property — `TaskType` widening produced
+  // no compile error, so this runtime branch is what keeps a dream from being
+  // sent to the model as an unattended user turn.
+  if (input.task.type === "dream") {
+    const runDream = input.host.runDream;
+    if (!runDream) {
+      throw new ScheduledTaskPreflightError(
+        "this host cannot run dream tasks (no runDream seam); refusing to fall through to the prompt runner",
+      );
+    }
+    return runDream({
+      task: input.task,
+      runId: input.runId,
+      occurrence: input.occurrence,
+      signal: input.signal,
+    });
+  }
   if (input.task.type === "command") {
     return runScheduledTask(
       { task: input.task, runId: input.runId, signal: input.signal },
@@ -705,10 +735,10 @@ export async function runScheduledTaskWithHost(
   }
 
   // ── Wait for the target conversation (R-5.7.3) ────────────────────
-  // Command tasks (`compact`/`reflect`) take a conversation id but do not send
-  // a turn, so they have nothing to wait for; they still run under the timeout
-  // below.
-  if (task.type !== "command") {
+  // Only a prompt task sends a turn (command tasks run their body directly; a
+  // dream task creates its own hidden session inside S1), so only a prompt has
+  // a target conversation to wait for. Both still run under the timeout below.
+  if (task.type === "prompt") {
     const waitMs = minutesToMs(task.waitMinutes, DEFAULT_WAIT_MINUTES);
     const waitDeadline = now() + waitMs;
     for (;;) {

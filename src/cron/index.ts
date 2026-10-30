@@ -102,6 +102,47 @@ export type {
   TaskTarget,
   TaskType,
 } from "./cron-types";
+// ── Dream signal source + dream task payload (F-06 M1, T1) ──────────
+// Additive exports only: the M0 surface above is frozen.
+export {
+  createDreamSignalSource,
+  DREAM_ATTEMPT_COOLDOWN_MINUTES,
+  DREAM_MAX_ATTEMPTS_PER_DAY,
+  DREAM_PLACEHOLDER_CRON,
+  DREAM_SIGNAL_SOURCE_ID,
+  type DreamAttemptInput,
+  type DreamEligibility,
+  type DreamEligibilityInput,
+  type DreamRunMarker,
+  type DreamSignalDeps,
+  type DreamSignalState,
+  type DreamSkipReason,
+  deferDreamSignal,
+  dreamDayKey,
+  dreamOccurrenceKey,
+  EMPTY_DREAM_SIGNAL_STATE,
+  ensureDreamSignalSourceRegistered,
+  evaluateDreamEligibility,
+  getDreamSignalStatePath,
+  isDreamSignalSourceRegistered,
+  isWithinDreamIdleWindow,
+  markDreamAttempt,
+  markDreamRunActive,
+  markDreamRunFinished,
+  nextDreamWindowStart,
+  parseDreamWindowMinute,
+  readDreamSignalState,
+  rollDreamStateForDay,
+  validateDreamTaskForRun,
+  writeDreamSignalState,
+} from "./dream-signal";
+export { createDefaultDreamSignalDeps } from "./dream-signal-deps";
+export {
+  DREAM_TASK_PAYLOAD_VERSION,
+  type DreamTaskPayload,
+  parseDreamTaskPayload,
+  serializeDreamTaskPayload,
+} from "./dream-task";
 export {
   cronMatchesTime,
   estimatePeriodMs,
@@ -161,6 +202,7 @@ export {
 export {
   CRON_SCHEDULER_SCOPE_ENV,
   isSchedulerRunning,
+  requestSchedulerTick,
   resolveCronSchedulerScope,
   runCronTaskNow,
   setSchedulerTaskRunner,

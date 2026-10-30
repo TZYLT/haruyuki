@@ -1,9 +1,11 @@
 import type { AgentState } from "@letta-ai/letta-client/resources/agents/agents";
 import { regenerateConversationDescription } from "@/agent/conversation-description";
+import { markDreamActivity } from "@/agent/dream/dream-activity";
 import type { Line } from "@/cli/helpers/accumulator";
 import { getReflectionSettings } from "@/cli/helpers/memory-reminder";
 import { maybeLaunchPostTurnReflection } from "@/cli/helpers/post-turn-reflection";
 import { appendTranscriptDeltaJsonl } from "@/cli/helpers/reflection-transcript";
+import { requestSchedulerTick } from "@/cron/scheduler";
 import { settingsManager } from "@/settings-manager";
 import { debugWarn } from "@/utils/debug";
 import type { ListenerTransport } from "./transport";
@@ -35,6 +37,14 @@ export async function completeSuccessfulListenerTurn(params: {
     }
     return params.isInterrupted() ? "interrupted" : "completed";
   }
+
+  // F-06 (R-5.2.2 + R-5.2.4): the turn just ended, so this agent's dream silence
+  // window starts now, and a dream that became eligible during the turn should
+  // not wait out the remaining 60 s tick. Both are no-ops unless dreams are
+  // configured, and the tick request never runs a task inline — it only nudges
+  // the long-lived scheduler host this process already started.
+  markDreamActivity(params.agentId);
+  requestSchedulerTick();
 
   const continueText = await emitListenerTurnEnd({
     agentId: params.agentId,

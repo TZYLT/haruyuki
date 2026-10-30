@@ -319,6 +319,11 @@ export function createCronSignalSource(): SignalSource {
       void input.state;
       const occurrences: DueOccurrence[] = [];
       for (const task of input.tasks) {
+        // F-06 (route C-37): a `dream` task is never a cron slot. The dream
+        // signal source owns its trigger; if this source also evaluated it, the
+        // two sources would both judge the same task due and the scheduler
+        // would dispatch it twice.
+        if (task.type === "dream") continue;
         const occurrence = task.recurring
           ? recurringOccurrence(task, input.now)
           : oneShotOccurrence(task, input.now);
@@ -329,6 +334,8 @@ export function createCronSignalSource(): SignalSource {
     nextDueAt(input: { now: Date; tasks: ScheduleTaskV2[] }): Date | null {
       let earliest: Date | null = null;
       for (const task of input.tasks) {
+        // F-06 (route C-37): the dream source reports its own next wake.
+        if (task.type === "dream") continue;
         const dueAt = nextActionAt(task, input.now);
         if (!dueAt) continue;
         if (!earliest || dueAt.getTime() < earliest.getTime()) earliest = dueAt;

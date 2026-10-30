@@ -12,13 +12,15 @@ import {
   refreshSchedulerLease,
   releaseSchedulerLease,
 } from "./cron-lease";
-import { readCronFile } from "./cron-store";
+import { getScheduleTask, readCronFile } from "./cron-store";
 import type {
   CronSchedulerScope,
   CronTask,
   ScheduleTaskV2,
   TaskRunnerPort,
 } from "./cron-types";
+import { ensureDreamSignalSourceRegistered } from "./dream-signal";
+import { createDefaultDreamSignalDeps } from "./dream-signal-deps";
 import {
   recordMissingScheduleRunner,
   runScheduledTaskNow,
@@ -60,6 +62,10 @@ let schedulerState: SchedulerState | null = null;
 let taskRunner: TaskRunnerPort | null = null;
 /** M1 #13: the lease-retry timer must be cancellable by `stopScheduler`. */
 let leaseRetryTimer: NodeJS.Timeout | null = null;
+/** F-06 M1: the debounced wake requested by `requestSchedulerTick`. */
+let pendingTickTimer: NodeJS.Timeout | null = null;
+/** How long a requested tick waits, so several turn ends coalesce into one. */
+const REQUESTED_TICK_DELAY_MS = 250;
 /** Bumped on stop so a stale retry callback can never resurrect the host. */
 let schedulerEpoch = 0;
 
@@ -139,6 +145,57 @@ function holdSchedulerLease(state: SchedulerState): boolean {
 
 // ── Tick ────────────────────────────────────────────────────────────
 
+/**
+ * Hand the dream occurrences this tick deferred to a short-lived child.
+ *
+ * The core deliberately never claims a dream task lease or consumes its
+ * occurrence (`canRun === false` path): the short-lived `dream run --task`
+ * child claims the lease and consumes the occurrence itself, so there is
+ * exactly one owner at a time and a failed spawn leaves the occurrence for the
+ * next tick. The runner's own in-flight guard stops two children for one task
+ * while the first is alive; the child's lease claim is the authoritative
+ * de-dupe. Failures are one log line each — a tick must not fail because a
+ * delegation could not start.
+ */
+function delegateDeferredDreams(
+  runner: TaskRunnerPort,
+  taskIds: readonly string[],
+  opts: HostOptions,
+): void {
+  const runDream = runner.runDream;
+  if (!runDream || taskIds.length === 0) return;
+  for (const taskId of taskIds) {
+    let task: ScheduleTaskV2 | null = null;
+    try {
+      task = getScheduleTask(taskId);
+    } catch {
+      continue;
+    }
+    if (!task || task.type !== "dream") continue;
+    const runId = `delegated-dream-${Date.now().toString(36)}`;
+    void runDream
+      .call(runner, {
+        task,
+        runId,
+        occurrence: `delegated:${new Date().toISOString()}`,
+        signal: new AbortController().signal,
+      })
+      .then((result) => {
+        if (result.outcome !== "failed") return;
+        logScheduler(
+          opts,
+          `could not delegate dream task ${taskId}: ${result.error ?? "unknown error"}`,
+        );
+      })
+      .catch((error) => {
+        logScheduler(
+          opts,
+          `could not delegate dream task ${taskId}: ${leaseError(error)}`,
+        );
+      });
+  }
+}
+
 async function runTickWork(state: SchedulerState): Promise<void> {
   try {
     if (!holdSchedulerLease(state)) return;
@@ -146,6 +203,11 @@ async function runTickWork(state: SchedulerState): Promise<void> {
     logScheduler(state.opts, `Lease check error: ${leaseError(err)}`);
     return;
   }
+
+  // F-06 M1: register the dream signal source before any evaluation, so a
+  // dream task this host owns is never judged only by the cron source (C-37).
+  // Presence-guarded: a test or an earlier registration keeps its deps.
+  ensureDreamSignalSourceRegistered(createDefaultDreamSignalDeps());
 
   const runner = taskRunner;
   const now = new Date();
@@ -156,6 +218,13 @@ async function runTickWork(state: SchedulerState): Promise<void> {
   }
 
   const result = await runSchedulerTick({ now, runner, includeTask });
+  // F-06 (Q-47/C-16): the core leaves a due dream occurrence untouched (no
+  // claim, no consume, no failure) and reports the task. The long-lived host
+  // delegates it to a short-lived `dream run --task` child through the runner's
+  // `runDream` seam; spawning returns immediately, so a 45-minute run can never
+  // stall this tick (C-15). The listener has no host leg of its own — this is
+  // the delegation TUI already had (C-16).
+  delegateDeferredDreams(runner, result.deferredTaskIds, state.opts);
   // Real jitter delay: the occurrence's intended instant is a little in the
   // future, so wake for it instead of waiting out the next 60s tick.
   if (schedulerState !== state || !result.nextDueAt) return;
@@ -192,6 +261,26 @@ function runTickSafely(state: SchedulerState): void {
   void runTick(state).catch((err) =>
     logScheduler(state.opts, `Tick error: ${leaseError(err)}`),
   );
+}
+
+/**
+ * F-06 M1 (R-5.2.4): ask the running long-lived host to evaluate soon.
+ *
+ * Called at the end of a turn (TUI conversation loop, listener turn
+ * completion) so a dream that just became eligible does not wait out the
+ * remaining 60 s tick. It is a **request**, not a run: it debounces, is
+ * non-blocking, never creates a scheduler, and the evaluation itself still goes
+ * through the normal tick (lease check, core policy). A no-op when no
+ * long-lived host owns this process.
+ */
+export function requestSchedulerTick(): void {
+  const state = schedulerState;
+  if (!state || pendingTickTimer !== null) return;
+  pendingTickTimer = setTimeout(() => {
+    pendingTickTimer = null;
+    if (schedulerState === state) runTickSafely(state);
+  }, REQUESTED_TICK_DELAY_MS);
+  pendingTickTimer.unref?.();
 }
 
 // ── Public API ──────────────────────────────────────────────────────
@@ -296,6 +385,11 @@ export function stopScheduler(): void {
   if (leaseRetryTimer) {
     clearTimeout(leaseRetryTimer);
     leaseRetryTimer = null;
+  }
+  if (pendingTickTimer) {
+    // A wake requested for a host that is stopping must not fire after it did.
+    clearTimeout(pendingTickTimer);
+    pendingTickTimer = null;
   }
   if (!schedulerState) return;
   clearInterval(schedulerState.tickInterval);

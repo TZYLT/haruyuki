@@ -36,6 +36,7 @@ import {
   rotateChatGPTPlanOnQuotaLimit,
 } from "@/agent/chatgpt-plan-rotation";
 import { getResumeDataFromBackend } from "@/agent/check-approval";
+import { markDreamActivity } from "@/agent/dream/dream-activity";
 import { getStreamToolContextId, sendMessageStream } from "@/agent/message";
 import { getModelInfoForLlmConfig } from "@/agent/model";
 import { INTERRUPT_RECOVERY_ALERT } from "@/agent/prompt-assets";
@@ -74,6 +75,7 @@ import {
 import type { ExecutionPhase } from "@/cli/helpers/phase-visuals";
 import { getQueuedNotificationSummaries } from "@/cli/helpers/queued-message-parts";
 import { safeJsonParseOr } from "@/cli/helpers/safe-json-parse";
+import { requestTuiScheduleTick } from "@/cli/helpers/schedule-host";
 import {
   type ApprovalRequest,
   advanceStreamSequenceCursor,
@@ -2739,6 +2741,12 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
           pendingTranscriptStartLineIndexRef.current = null;
         }
         scheduledTurn.restoreAfterTurn();
+        // F-06 (R-5.2.2 + R-5.2.4): the turn reached a terminal state, so this
+        // agent's dream silence window starts now and the TUI schedule host may
+        // evaluate dreams without waiting out the rest of its 60 s tick. Both
+        // calls are no-ops when dreams are off / no schedule host is mounted.
+        if (agentIdRef.current) markDreamActivity(agentIdRef.current);
+        requestTuiScheduleTick();
         // Wakes dequeue on a normal completion; when superseded by an ESC
         // interrupt, settles the interrupt (cancelling -> idle) instead.
         finishTuiTurn({
