@@ -12,14 +12,8 @@
  * a dynamic import *after* this returns.
  */
 
-import { readDreamSettings } from "@/dream-settings";
 import { ensureCronSignalSourceRegistered } from "./cron-signal";
 import { readScheduleFile, toScheduleTaskV2 } from "./cron-store";
-import {
-  ensureDreamSignalSourceRegistered,
-  isDreamRunMarkerActive,
-  readDreamSignalState,
-} from "./dream-signal";
 import { evaluateSignals, nextSignalDueAt } from "./signal";
 
 export interface SchedulePreflightInput {
@@ -36,41 +30,15 @@ export interface SchedulePreflightResult {
 }
 
 /**
- * Register the dream source for the probe only (F-06 M1, R-5.2.6).
+ * Must not import anything that reaches the backend.
  *
- * Dream deps are deliberately **over-approximated**: pressure is reported at
- * the threshold and silence as satisfied, so this probe answers "a dream run
- * might be due" without importing S3's pressure reader or S2's activity
- * reader — `schedule tick` must stay a light process (C-24). The real
- * evaluation happens inside the runtime the probe decides to start, and the
- * delegated short-lived dream host records `nextEligibleAt` when it declines,
- * so an over-approximation costs at most one child per cooldown window.
+ * Feature signal sources are registered by the caller before this runs; the
+ * core only owns the cron source (M-1: no feature special case here).
  */
-function registerDreamSignalSourceForPreflight(): void {
-  ensureDreamSignalSourceRegistered({
-    readState: (agentId) => readDreamSignalState(agentId),
-    readSettings: () => readDreamSettings(),
-    readSettingsForAgent: (agentId) => readDreamSettings(agentId),
-    readPressure: () => Number.MAX_SAFE_INTEGER,
-    readLastActiveAt: () => null,
-    // Same age bound as the real deps: a marker left by a killed process must
-    // not keep the probe (and therefore the trigger) suppressed forever.
-    isRunning: (agentId) =>
-      isDreamRunMarkerActive(
-        readDreamSignalState(agentId).running,
-        readDreamSettings(agentId),
-        new Date(),
-      ),
-    now: () => new Date(),
-  });
-}
-
-/** Must not import anything that reaches the backend. */
 export function runSchedulePreflight(
   input: SchedulePreflightInput,
 ): SchedulePreflightResult {
   ensureCronSignalSourceRegistered();
-  registerDreamSignalSourceForPreflight();
   let tasks: ReturnType<typeof toScheduleTaskV2>[];
   let state: { cursor: Record<string, string> };
   try {

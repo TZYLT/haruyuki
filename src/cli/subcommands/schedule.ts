@@ -30,6 +30,7 @@ import {
   toScheduleTaskV2,
 } from "@/cron/cron-store";
 import type { ScheduleTaskV2, TaskRunnerPort } from "@/cron/cron-types";
+import { ensureDreamPreflightSignalSource } from "@/cron/dream-preflight";
 import { runSchedulePreflight } from "@/cron/preflight";
 import { evaluateSignals } from "@/cron/signal";
 import { settingsManager } from "@/settings-manager";
@@ -297,6 +298,10 @@ export async function runScheduleTick(
     // never loaded the runtime. A failure is logged and the tick continues, so
     // an unreadable settings file cannot stop ordinary cron tasks too.
     await initializeSettingsForDreamProbe();
+    // The dream source is registered by this caller, not by `preflight.ts`:
+    // the signal core stays feature-agnostic (M-1). Registration is light
+    // (state + settings readers only) and presence-guarded.
+    ensureDreamPreflightSignalSource();
     const preflight = runSchedulePreflight({ now });
     if (preflight.error) {
       console.error(`schedule tick: ${preflight.error}`);

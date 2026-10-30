@@ -9,6 +9,7 @@ import {
   registerSignalSource,
   serializeDreamTaskPayload,
 } from "@/cron";
+import { ensureDreamPreflightSignalSource } from "@/cron/dream-preflight";
 import { runSchedulePreflight } from "@/cron/preflight";
 import { listSignalSources } from "@/cron/signal";
 import { settingsManager } from "@/settings-manager";
@@ -23,6 +24,9 @@ beforeEach(async () => {
   clearSignalSources();
   await settingsManager.reset();
   await settingsManager.initialize();
+  // The caller (`haruyuki schedule tick`) registers the dream source before
+  // the probe; the core preflight stays feature-agnostic (M-1).
+  ensureDreamPreflightSignalSource();
 });
 
 afterEach(async () => {
