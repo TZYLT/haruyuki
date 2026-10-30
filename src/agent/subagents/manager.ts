@@ -14,7 +14,6 @@ import { getScopedMemoryFilesystemRoot } from "@/agent/memory-filesystem";
 import { detectMemoryFormat } from "@/agent/memory-format";
 import recallSubagentPrompt from "@/agent/prompts/recall_subagent.md";
 import recallSubagentLocalPrompt from "@/agent/prompts/recall_subagent_local.md";
-import { getActiveReflectionRun } from "@/agent/reflection-run";
 import { updateSubagent } from "@/agent/subagent-state.js";
 import { wrapSubagentLauncher } from "@/agent/subagents/sandbox";
 import { getDesktopAccessToken } from "@/auth/desktop-credentials";
@@ -50,6 +49,7 @@ import {
   type SubagentMemoryScope,
   type SubagentResult,
 } from ".";
+import { resolveAutomatedRunUsageTag } from "./automated-run-usage";
 import { buildSubagentPrompt } from "./context-budget";
 import { allocateSubagentName } from "./names";
 import { collectRemoteTurnResult } from "./remote-turn-wait";
@@ -388,16 +388,11 @@ async function executeSubagent(
       ),
       USER_CWD: subagentWorkingDirectory,
     };
-    // F-03 §5.16.2: a reflection child records its own spend, so it needs the
-    // source and the run it belongs to. Resolved from the run controller rather
-    // than from the subagent config (which is a static file): the run id exists
-    // only while the parent process is launching, and only one run is active per
-    // agent, which is the same single-writer premise the launcher relies on.
-    // Every other subagent type launches untagged and records nothing.
-    const reflectionRun =
-      type === "reflection" && parentAgentId
-        ? getActiveReflectionRun(parentAgentId)
-        : undefined;
+    // F-03 §5.16.2 / F-06: a harness-owned automated child records its own
+    // spend, so it needs the source and the run it belongs to. The resolution
+    // (reflection, dream) lives in `automated-run-usage`; this pinned file only
+    // keeps the seam.
+    const automatedRun = resolveAutomatedRunUsageTag(type, parentAgentId);
     const childEnv = composeSubagentChildEnv({
       parentProcessEnv,
       backendMode,
@@ -412,10 +407,10 @@ async function executeSubagent(
       inheritedBaseUrl,
       transcriptPath,
       subagentId,
-      ...(reflectionRun
+      ...(automatedRun
         ? {
-            usageSource: "reflection",
-            usageRunId: reflectionRun.runId,
+            usageSource: automatedRun.usageSource,
+            usageRunId: automatedRun.usageRunId,
           }
         : {}),
       subagentName:
@@ -655,6 +650,7 @@ async function executeSubagent(
         success: !completionError,
         error: completionError,
         totalTokens: state.resultStats?.totalTokens,
+        ...(state.resultStats?.usage ? { usage: state.resultStats.usage } : {}),
         stepCount: state.resultStats?.stepCount,
         durationMs: state.resultStats?.durationMs,
       });
@@ -674,6 +670,7 @@ async function executeSubagent(
         success: false,
         error: state.finalError,
         totalTokens: state.resultStats?.totalTokens,
+        ...(state.resultStats?.usage ? { usage: state.resultStats.usage } : {}),
         stepCount: state.resultStats?.stepCount,
         durationMs: state.resultStats?.durationMs,
       });

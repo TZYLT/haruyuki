@@ -83,6 +83,17 @@ export interface SubagentResult {
   success: boolean;
   error?: string;
   totalTokens?: number;
+  /**
+   * Token split the child reported for this run (F-06 budget accounting).
+   * `totalTokens` alone cannot feed the budget formula, which weighs output,
+   * uncached input/cache-write and cache-read tokens differently.
+   */
+  usage?: {
+    prompt: number;
+    cachedInput: number;
+    cacheWrite: number;
+    completion: number;
+  };
   stepCount?: number;
   durationMs?: number;
 }

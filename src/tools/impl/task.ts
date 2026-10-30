@@ -157,6 +157,13 @@ export interface SpawnBackgroundSubagentTaskArgs {
     agentId?: string;
     conversationId?: string;
     model?: string;
+    /** Per-bucket token split the child reported, for automated-run budgets. */
+    usage?: {
+      prompt: number;
+      cachedInput: number;
+      cacheWrite: number;
+      completion: number;
+    };
     stepCount?: number;
     durationMs?: number;
     report?: string;
@@ -460,6 +467,7 @@ export function spawnBackgroundSubagentTask(
           agentId: result.agentId,
           conversationId: result.conversationId,
           model: result.model,
+          ...(result.usage ? { usage: result.usage } : {}),
           stepCount: result.stepCount,
           durationMs: result.durationMs,
           report: result.report,

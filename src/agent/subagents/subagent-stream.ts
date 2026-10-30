@@ -36,6 +36,13 @@ export interface ExecutionState {
     durationMs: number;
     totalTokens: number;
     stepCount?: number;
+    /** Per-bucket split from the result envelope (F-06 budget fallback). */
+    usage?: {
+      prompt: number;
+      cachedInput: number;
+      cacheWrite: number;
+      completion: number;
+    };
   } | null;
   displayedToolCalls: Set<string>;
   toolCallStatuses: Map<string, "success" | "error">;
@@ -220,6 +227,24 @@ function handleResultEvent(
     return;
   }
   state.finalResult = event.result || "";
+  const usageRecord = event.usage as
+    | (typeof event.usage & {
+        prompt_tokens?: number;
+        cached_input_tokens?: number;
+        cache_write_tokens?: number;
+        completion_tokens?: number;
+      })
+    | undefined;
+  const bucket = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) && value > 0
+      ? value
+      : 0;
+  const hasSplit =
+    usageRecord !== undefined &&
+    (usageRecord.prompt_tokens !== undefined ||
+      usageRecord.cached_input_tokens !== undefined ||
+      usageRecord.cache_write_tokens !== undefined ||
+      usageRecord.completion_tokens !== undefined);
   state.resultStats = {
     durationMs: event.duration_ms || 0,
     totalTokens: event.usage?.total_tokens || 0,
@@ -227,6 +252,16 @@ function handleResultEvent(
       typeof event.usage?.step_count === "number"
         ? event.usage.step_count
         : undefined,
+    ...(hasSplit
+      ? {
+          usage: {
+            prompt: bucket(usageRecord.prompt_tokens),
+            cachedInput: bucket(usageRecord.cached_input_tokens),
+            cacheWrite: bucket(usageRecord.cache_write_tokens),
+            completion: bucket(usageRecord.completion_tokens),
+          },
+        }
+      : {}),
   };
 
   if (event.is_error) {

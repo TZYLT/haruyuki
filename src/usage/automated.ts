@@ -235,6 +235,49 @@ export async function recordTimedOutReflectionRun(
   });
 }
 
+/**
+ * The zero-token marker a parent writes for an automated run that ended without
+ * a child-reported row (route C-27): a timeout, a cancellation, a crash, or a
+ * budget stop after the last turn already reported its own spend.
+ *
+ * It exists so every run has a terminal ledger line carrying the run's
+ * *outcome* — "money was spent and this is how the run ended" — without
+ * inventing token numbers the parent never saw. A child that completed a turn
+ * already wrote that turn's real row; this marker adds the ending, it does not
+ * replace or duplicate the numbers.
+ */
+export interface AutomatedRunMarkerInput {
+  source: AutomatedUsageSource;
+  outcome: AutomatedUsageOutcome;
+  runId: string;
+  agentId: string;
+  /** The conversation the run wrote into (dream's hidden session). */
+  sessionId: string;
+  parentSessionId?: string;
+  model: string;
+  wallMs: number;
+}
+
+/** Record the zero-token marker row for an automated run's terminal state. */
+export async function recordAutomatedRunMarker(
+  input: AutomatedRunMarkerInput,
+): Promise<boolean> {
+  return recordAutomatedUsage({
+    source: input.source,
+    outcome: input.outcome,
+    runId: input.runId,
+    sessionId: input.sessionId,
+    agentId: input.agentId,
+    model: input.model.trim() || "unknown",
+    usage: ZERO_TOKENS,
+    wallMs: Math.max(0, Math.round(input.wallMs)),
+    apiMs: 0,
+    ...(input.parentSessionId !== undefined
+      ? { parentSessionId: input.parentSessionId }
+      : {}),
+  });
+}
+
 /** One child turn, as the child's own headless entrypoint sees it. */
 export interface AutomatedTurnUsageInput {
   /** Defaults to `process.env`; injectable for tests. */
