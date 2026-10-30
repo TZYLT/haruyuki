@@ -16,7 +16,17 @@ import {
   projectHiddenSessionRows,
 } from "@/cli/helpers/hidden-session-rows";
 import { namedKeyChords } from "@/cli/helpers/input-keys";
+import {
+  BLOCKQUOTE_RE,
+  CODE_FENCE_CLOSE_RE,
+  CODE_FENCE_OPEN_RE,
+  HEADER_RE,
+  HORIZONTAL_RULE_RE,
+  LIST_ITEM_RE,
+} from "@/cli/helpers/markdown-blocks";
+import { registerMouseHandler } from "@/cli/helpers/mouse-router";
 import { truncateText } from "@/cli/helpers/truncate-text";
+import { wrapRows, wrapRowsWithPrefix } from "@/cli/helpers/wrap-rows";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import {
   useTerminalRows,
@@ -63,10 +73,50 @@ import { Text } from "./Text";
 /** Header, separator and footer rows the body does not get. */
 const CHROME_ROWS = 12;
 
+/** How many rows one wheel notch scrolls (one third of a typical window). */
+const DETAIL_WHEEL_ROWS = 3;
+
 /** How many lines one expanded row may add before it is cut with a notice. */
 const HIDDEN_SESSION_DETAIL_MAX_LINES = 200;
 
 type DetailLineKind = "meta" | "row" | "detail" | "separator" | "note";
+
+/** How one line of a message body is coloured (R-5.7.4's "row-level md"). */
+export type DetailTone =
+  | "header"
+  | "list"
+  | "quote"
+  | "code"
+  | "rule"
+  | "plain";
+
+/**
+ * Classify one logical line of a body and say whether it left a code fence open.
+ *
+ * The predicates are `markdown-blocks`' own, shared with `MarkdownDisplay` and
+ * the transcript row model — the requirement explicitly asks for row-level
+ * colouring, not a second markdown renderer, so the view only decides the tone
+ * of a line, never re-wraps or re-parses it (`MarkdownDisplay`'s `wrap`/
+ * `Transform` would break the fixed frame height).
+ */
+export function classifyDetailTone(
+  line: string,
+  inCodeBlock: boolean,
+): { tone: DetailTone; inCodeBlock: boolean } {
+  if (inCodeBlock) {
+    return { tone: "code", inCodeBlock: !CODE_FENCE_CLOSE_RE.test(line) };
+  }
+  if (CODE_FENCE_OPEN_RE.test(line)) {
+    return { tone: "code", inCodeBlock: true };
+  }
+  if (HEADER_RE.test(line)) return { tone: "header", inCodeBlock: false };
+  if (LIST_ITEM_RE.test(line)) return { tone: "list", inCodeBlock: false };
+  if (BLOCKQUOTE_RE.test(line)) return { tone: "quote", inCodeBlock: false };
+  if (HORIZONTAL_RULE_RE.test(line)) {
+    return { tone: "rule", inCodeBlock: false };
+  }
+  return { tone: "plain", inCodeBlock: false };
+}
 
 interface DetailLine {
   /** React key, stable while the window is on screen. */
@@ -78,6 +128,8 @@ interface DetailLine {
    */
   rowKey: string | null;
   kind: DetailLineKind;
+  /** `detail` rows: the tone the line is drawn in when the cursor is elsewhere. */
+  tone?: DetailTone;
 }
 
 /** Everything the layout needs; pure so a key handler can re-run it. */
@@ -110,7 +162,15 @@ function keyedRows(
   });
 }
 
-/** The lines one row draws: always its head, then its detail when expanded. */
+/**
+ * The lines one row draws: a wrapped head, then its detail when expanded.
+ *
+ * The detail view is the one place in the hidden-session faces that must *wrap*
+ * rather than clip (R-5.7.4): a tool result's content is the thing the reader
+ * opened the face for. The wrap budget is `wrap-rows`' (the larger of the two
+ * width systems, C-32), and every physical row is exactly one frame row, so the
+ * window arithmetic below still counts lines.
+ */
 function rowLines(
   key: string,
   row: HiddenSessionRow,
@@ -118,25 +178,33 @@ function rowLines(
   width: number,
 ): DetailLine[] {
   const head = `${row.time ? `${row.time} ` : ""}${row.role}: ${row.text}`;
-  const lines: DetailLine[] = [
-    {
-      key: `${key}:head`,
-      text: truncateText(head, width),
-      rowKey: key,
-      kind: "row",
-    },
-  ];
+  const lines: DetailLine[] = wrapRows(head, width).map((text, index) => ({
+    key: `${key}:head:${index}`,
+    text,
+    rowKey: key,
+    kind: "row",
+  }));
   if (!expanded) return lines;
 
   const detail = row.detail.split("\n").filter((line) => line.length > 0);
   const shown = detail.slice(0, HIDDEN_SESSION_DETAIL_MAX_LINES);
+  let inCodeBlock = false;
   for (const [index, line] of shown.entries()) {
-    lines.push({
-      key: `${key}:detail:${index}`,
-      text: truncateText(`    ${line}`, width),
-      rowKey: key,
-      kind: "detail",
-    });
+    const classified = classifyDetailTone(line, inCodeBlock);
+    inCodeBlock = classified.inCodeBlock;
+    for (const [wrapIndex, text] of wrapRowsWithPrefix(
+      "    ",
+      line,
+      width,
+    ).entries()) {
+      lines.push({
+        key: `${key}:detail:${index}:${wrapIndex}`,
+        text,
+        rowKey: key,
+        kind: "detail",
+        tone: classified.tone,
+      });
+    }
   }
   const withheld = detail.length - shown.length;
   if (withheld > 0) {
@@ -556,6 +624,28 @@ export function HiddenSessionDetail({
     { scope: "overlay", bindings: confirmDelete ? [] : bindings },
   ]);
 
+  // F-06 R-5.7.4: the wheel scrolls this face while it is up. The claim is on the
+  // `page` layer because the overlay is drawn over the transcript's place — a
+  // notch over the detail must not scroll the band underneath. Only the
+  // full-screen shell reports wheel notches, so this is inert in the append
+  // shell without needing to branch on which shell mounted it. Registered once
+  // and reading the fresh scroll through a ref, so a live gesture never sees a
+  // reordered handler chain (`mouse-router.ts`).
+  const scrollRef = useRef<(delta: number) => void>(scrollBy);
+  scrollRef.current = scrollBy;
+  useEffect(() => {
+    return registerMouseHandler(
+      (report) => {
+        if (!report.wheel) return false;
+        scrollRef.current(
+          report.wheel === "up" ? -DETAIL_WHEEL_ROWS : DETAIL_WHEEL_ROWS,
+        );
+        return true;
+      },
+      { layer: "page", name: "hidden-session-detail-wheel" },
+    );
+  }, []);
+
   // Page the new segment on demand, and only when the reader reaches the end of
   // what is loaded: a full first page may or may not be the last one (§5.3.1).
   useEffect(() => {
@@ -650,11 +740,31 @@ export function HiddenSessionDetail({
         <Box flexDirection="column">
           {body.map((line) => {
             const isCursor = line === lines[cursorLine];
+            // Row-level markdown tone, never a second renderer: the cursor's
+            // highlight wins while it is on one of these rows.
+            const toneColor = isCursor
+              ? colors.selector.itemHighlighted
+              : line.tone === "header"
+                ? colors.text.sectionHeader
+                : line.tone === "quote"
+                  ? colors.text.secondary
+                  : line.tone === "list"
+                    ? colors.text.primary
+                    : undefined;
+            const dimmed =
+              !isCursor &&
+              (line.tone === "code" ||
+                line.tone === "rule" ||
+                line.kind === "meta" ||
+                line.kind === "separator" ||
+                line.kind === "note");
             return (
               <Text
                 key={line.key}
-                bold={isCursor}
-                color={isCursor ? colors.selector.itemHighlighted : undefined}
+                bold={isCursor || line.tone === "header"}
+                italic={line.tone === "quote"}
+                dimColor={dimmed}
+                color={toneColor}
               >
                 {line.text || " "}
               </Text>

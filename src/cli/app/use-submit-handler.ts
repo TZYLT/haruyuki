@@ -13,6 +13,7 @@ import {
   STALE_APPROVAL_RECOVERY_DENIAL_REASON,
 } from "@/agent/approval-recovery";
 import { getResumeDataFromBackend } from "@/agent/check-approval";
+import { markDreamActivity } from "@/agent/dream/dream-activity";
 import {
   ensureMemoryFilesystemDirs,
   getScopedMemoryFilesystemRoot,
@@ -330,6 +331,17 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
         userCancelledRef.current = false;
         setDequeueEpoch((e: number) => e + 1);
         return { submitted: true };
+      }
+
+      // F-06 S2: the user is back, so a running dream run aborts on its next
+      // check (R-5.8.2). Synchronous and failure-isolated on purpose: a marker
+      // that cannot be written must never make the send fail.
+      if (!isSystemOnly) {
+        try {
+          markDreamActivity(agentIdRef.current);
+        } catch {
+          // Best effort: the run controller treats a missing marker as "idle".
+        }
       }
 
       // If the user just cycled reasoning tiers, flush the final choice before
@@ -2259,10 +2271,41 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           return { submitted: true };
         }
 
+        // F-06 M4: `/dream` is the dream command group now (R-5.9.1); `/reflect`
+        // keeps reflection. The action module owns the four entrances and the
+        // status face; this branch only hands it the two UI seams the submit
+        // path owns — the Settings page tab, and the first-run wizard overlay.
+        if (/^\/dream(?:\s|$)/.test(trimmed)) {
+          const { handleDreamSlashCommand } = await import(
+            "@/cli/commands/dream"
+          );
+          const commandInput = trimmed;
+          return handleDreamSlashCommand(commandInput, {
+            agentId: commandScope.agentId,
+            commandRunner,
+            openSettings: () =>
+              runShellCommand("/settings", {
+                openTabs: () =>
+                  openOverlay("tabs", "/tabs", "Tab list", "Tab list closed"),
+                openOverlay,
+                tabStrip,
+              }),
+            openWizard: () => {
+              openOverlay(
+                "dream-wizard",
+                commandInput,
+                "Configure dream runs...",
+                "Dream setup closed",
+              );
+              return true;
+            },
+          });
+        }
+
         // F-03: reflection is manual or trigger-driven, and always reflects
         // this conversation. The cross-conversation modes were removed, so the
         // parser rejects them (with the current usage) before any launch work.
-        if (/^\/(dream|reflect|reflection)(?:\s|$)/.test(trimmed)) {
+        if (/^\/(reflect|reflection)(?:\s|$)/.test(trimmed)) {
           const agentId = commandScope.agentId;
           const cmd = commandRunner.start(msg, "Starting reflection...");
           try {

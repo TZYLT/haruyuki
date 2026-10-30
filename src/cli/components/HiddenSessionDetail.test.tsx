@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Message } from "@letta-ai/letta-client/resources/agents/messages";
 import { __testSetBackend } from "@/backend";
-import { HiddenSessionDetail } from "@/cli/components/HiddenSessionDetail";
+import {
+  classifyDetailTone,
+  HiddenSessionDetail,
+} from "@/cli/components/HiddenSessionDetail";
 import { terminalTextWidth } from "@/cli/helpers/char-width";
+import {
+  resetMouseHandlers,
+  routeMouseReport,
+} from "@/cli/helpers/mouse-router";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
 import type { HiddenConversationSummary } from "@/types/conversation-provenance";
 
@@ -144,6 +151,7 @@ function frame(rows: string[]): string {
 
 afterEach(() => {
   resetInkTtyState();
+  resetMouseHandlers();
   __testSetBackend(null);
 });
 
@@ -498,5 +506,184 @@ describe("the hidden session detail", () => {
     } finally {
       tty.stop();
     }
+  });
+});
+
+describe("the readable detail (F-06 R-5.7.4)", () => {
+  function messageWith(content: string, id = "m1"): Message {
+    return message(id, "user_message", { content });
+  }
+
+  test("wraps a long line instead of clipping it, and the frame height is unchanged", async () => {
+    const long = "the quick brown fox jumps over the lazy dog "
+      .repeat(4)
+      .trim();
+    const heightFor = async (content: string, id: string): Promise<number> => {
+      const backend = new DetailBackend();
+      backend.messages = [messageWith(content, id)];
+      const { tty } = mount(
+        sessionFixture({ origin: "dream", context_mode: "standalone" }),
+        backend,
+        { columns: 40, rows: 20 },
+      );
+      try {
+        await painted(tty);
+        return (await tty.rows({ keepTrailingBlanks: true })).length;
+      } finally {
+        tty.stop();
+      }
+    };
+    const shortHeight = await heightFor("short", "short");
+    const longHeight = await heightFor(long, "long");
+    expect(longHeight).toBe(shortHeight);
+  });
+
+  test("every wrapped row fits the columns, and words are not split mid-run", async () => {
+    const backend = new DetailBackend();
+    backend.messages = [
+      messageWith(
+        "a sentence with several ordinary words that must wrap on word boundaries",
+      ),
+    ];
+    const { tty } = mount(
+      sessionFixture({ origin: "dream", context_mode: "standalone" }),
+      backend,
+      { columns: 30, rows: 20 },
+    );
+    try {
+      const rows = (await painted(tty)).filter((row) => row.length > 0);
+      for (const row of rows) {
+        expect(terminalTextWidth(row)).toBeLessThanOrEqual(30);
+      }
+      const text = rows.join(" ").replace(/\s+/g, " ");
+      expect(text).toContain("a sentence with several ordinary words");
+      // The wrap keeps whole words: no row is a fragment of "ordinary".
+      expect(rows.some((row) => row.trimEnd().endsWith("ordina"))).toBe(false);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("CJK and emoji wrap without severing a grapheme cluster", async () => {
+    const family = "👨‍👩‍👧";
+    const backend = new DetailBackend();
+    backend.messages = [
+      messageWith(`梦游会在夜里整理记忆和报告，${family}${family}${family}`),
+    ];
+    const { tty } = mount(
+      sessionFixture({ origin: "dream", context_mode: "standalone" }),
+      backend,
+      { columns: 20, rows: 20 },
+    );
+    try {
+      const rows = (await painted(tty)).filter((row) => row.length > 0);
+      for (const row of rows) {
+        expect(terminalTextWidth(row)).toBeLessThanOrEqual(20);
+      }
+      // The cluster is never cut: it appears whole on some row (never as an
+      // orphaned half). Counting the full sequences on the frame is enough.
+      expect((rows.join("").match(new RegExp(family, "gu")) ?? []).length).toBe(
+        3,
+      );
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the wheel scrolls the window (page layer)", async () => {
+    const backend = new DetailBackend();
+    backend.messages = Array.from({ length: 20 }, (_, index) =>
+      message(`m${index + 1}`, "user_message", {
+        content: `row number ${index + 1}`,
+      }),
+    );
+    const { tty } = mount(
+      sessionFixture({ origin: "dream", context_mode: "standalone" }),
+      backend,
+      { rows: 18 },
+    );
+    try {
+      const before = frame(await painted(tty));
+      expect(before).toContain("lines 1-");
+      // Each notch is its own input event in the real app, so each one sees the
+      // cursor the previous notch left; a settled frame between them is what
+      // makes that true here too.
+      for (let notch = 0; notch < 3; notch += 1) {
+        const claimed = routeMouseReport({
+          kind: "press",
+          button: "none",
+          wheel: "down",
+          column: 1,
+          row: 1,
+          modifiers: { shift: false, alt: false, ctrl: false },
+        });
+        expect(claimed).toBe(true);
+        await settle(40);
+      }
+      const after = frame(await painted(tty));
+      expect(after).not.toContain("lines 1-");
+      expect(after).toMatch(/lines \d+-\d+ of \d+/);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("an expanded detail wraps its long lines and keeps the frame inside the width", async () => {
+    const backend = new DetailBackend();
+    backend.messages = [
+      message("m1", "user_message", { content: "run it" }),
+      message("m2", "tool_return_message", {
+        status: "success",
+        tool_call_id: "call-1",
+        tool_return: `line one ${"x".repeat(120)}\n## a heading that is long ${"y".repeat(80)}`,
+      }),
+    ];
+    const { tty } = mount(
+      sessionFixture({ origin: "dream", context_mode: "standalone" }),
+      backend,
+      { columns: 40, rows: 22 },
+    );
+    try {
+      await painted(tty);
+      await tty.press(DOWN, DOWN, ENTER);
+      // The heading sits below the first window; walk to it to prove the detail
+      // itself wrapped (not just the head line).
+      await tty.press(PAGE_DOWN);
+      const rows = (await painted(tty)).filter((row) => row.length > 0);
+      for (const row of rows) {
+        expect(terminalTextWidth(row)).toBeLessThanOrEqual(40);
+      }
+      expect(rows.join("\n")).toContain("## a heading");
+    } finally {
+      tty.stop();
+    }
+  });
+});
+
+describe("classifyDetailTone", () => {
+  test("classifies the block kinds the requirement names", () => {
+    expect(classifyDetailTone("## Heading", false)).toEqual({
+      tone: "header",
+      inCodeBlock: false,
+    });
+    expect(classifyDetailTone("- a list item", false).tone).toBe("list");
+    expect(classifyDetailTone("1. numbered", false).tone).toBe("list");
+    expect(classifyDetailTone("> quoted", false).tone).toBe("quote");
+    expect(classifyDetailTone("---", false).tone).toBe("rule");
+    expect(classifyDetailTone("plain text", false).tone).toBe("plain");
+  });
+
+  test("fences open, colour their contents, and close", () => {
+    const opened = classifyDetailTone("```ts", false);
+    expect(opened).toEqual({ tone: "code", inCodeBlock: true });
+    expect(classifyDetailTone("const x = 1;", true)).toEqual({
+      tone: "code",
+      inCodeBlock: true,
+    });
+    const closed = classifyDetailTone("```", true);
+    expect(closed).toEqual({ tone: "code", inCodeBlock: false });
+    expect(classifyDetailTone("plain after the fence", false).tone).toBe(
+      "plain",
+    );
   });
 });

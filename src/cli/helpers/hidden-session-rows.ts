@@ -23,6 +23,7 @@
  * `other` row, because a transcript with a hole in it is worse than an ugly row.
  */
 import type { Message } from "@letta-ai/letta-client/resources/agents/messages";
+import { cleanVisibleText, visibleTextFromContent } from "@/agent/message-text";
 import { isRecord } from "@/utils/type-guards";
 
 /**
@@ -359,13 +360,13 @@ function toToolReturn(
 ): HiddenSessionToolReturn {
   const status = returnStatus(entry, message);
   const output = [
-    contentText(entry.tool_return ?? message.tool_return),
-    contentText(entry.func_response ?? message.func_response),
-    contentText(entry.stdout ?? message.stdout),
+    rawToolText(entry.tool_return ?? message.tool_return),
+    rawToolText(entry.func_response ?? message.func_response),
+    rawToolText(entry.stdout ?? message.stdout),
   ]
     .filter((part) => part.length > 0)
     .join("\n");
-  const stderr = contentText(entry.stderr ?? message.stderr);
+  const stderr = rawToolText(entry.stderr ?? message.stderr);
   return {
     toolCallId:
       stringValue(entry.tool_call_id) || stringValue(message.tool_call_id),
@@ -393,11 +394,54 @@ function stringValue(value: unknown): string {
 }
 
 /**
- * Text of message content: a plain string, or the `text` parts of the SDK's
- * content union. Non-text parts collapse to `[type]` so an image-only message
- * still renders as something rather than as an empty row.
+ * Text of message content: the shared visible-text projection (`agent/message-text`,
+ * F-06 C-36) — a plain string or the `text` parts of the SDK's content union,
+ * with injected reminder/alert/notification blocks removed and whitespace
+ * normalized.
+ *
+ * The viewer keeps one thing the shared layer does not: non-text parts (an
+ * image, a file attachment) are dropped by the "visible text" projection, but a
+ * hidden-session reader still wants to know the message carried one — so they
+ * render as `[type]` markers. A payload **only** of non-text parts shows just
+ * the markers; a mixed payload shows its text and then the markers, so the
+ * picture is not silently swallowed. Machine payloads (tool returns,
+ * stdout/stderr) deliberately do **not** go through this: a tool's output is raw
+ * bytes and stripping harness-looking text from it would corrupt what the tool
+ * actually printed — they use `rawToolText` below.
  */
 function contentText(content: unknown): string {
+  if (typeof content === "string") return cleanVisibleText(content);
+  if (!Array.isArray(content)) return "";
+  const markers = nonTextMarkers(content);
+  const visible = cleanVisibleText(visibleTextFromContent(content));
+  if (visible.length === 0) return markers.join("\n").trim();
+  return markers.length === 0 ? visible : `${visible}\n${markers.join("\n")}`;
+}
+
+/** `[image]`, `[file]`, … for the typed parts `visibleTextFromContent` drops. */
+function nonTextMarkers(content: readonly unknown[]): string[] {
+  const markers: string[] = [];
+  for (const part of content) {
+    if (typeof part === "string") continue;
+    if (!isRecord(part)) continue;
+    const type = stringValue(part.type);
+    // A `text` part is the visible text itself (or an empty one); only a part
+    // of another type is information `visibleTextFromContent` cannot express.
+    if (type.length === 0 || type === "text") continue;
+    markers.push(`[${type}]`);
+  }
+  return markers;
+}
+
+/**
+ * Text of a machine payload (a tool return, stdout, stderr): the stored value as
+ * written, trimmed only.
+ *
+ * Unlike {@link contentText} this must not remove injected-looking blocks: a
+ * tool that cat'd a file containing `<system-reminder>` really did print it, and
+ * the hidden-session detail exists to show what the tool returned.
+ */
+function rawToolText(content: unknown): string {
   if (typeof content === "string") return content.trim();
   if (Array.isArray(content)) {
     const parts: string[] = [];

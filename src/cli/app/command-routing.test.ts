@@ -150,4 +150,36 @@ describe("command routing", () => {
       });
     }
   });
+
+  test("/dream is its own command group, not a /reflect alias", () => {
+    const dream = commands["/dream"];
+    const reflect = commands["/reflect"];
+    expect(dream).toBeDefined();
+    expect(reflect).toBeDefined();
+    // F-06 R-5.9.1: the alias is gone, so the two must not share a handler.
+    expect(dream?.handler).not.toBe(reflect?.handler);
+    expect(dream?.desc ?? "").not.toMatch(/alias/i);
+    expect(dream?.args ?? "").toContain("run");
+  });
+
+  test("only the read-only /dream forms pass a busy turn", () => {
+    // The status face and `config` are views; `run`/`on`/`off` change state.
+    for (const input of ["/dream", "/dream status", "/dream config"]) {
+      expect({ input, bypass: isNonStateCommand(input) }).toEqual({
+        input,
+        bypass: true,
+      });
+    }
+    for (const input of [
+      "/dream run",
+      "/dream run --budget 50000",
+      "/dream on",
+      "/dream off",
+    ]) {
+      expect({ input, bypass: isNonStateCommand(input) }).toEqual({
+        input,
+        bypass: false,
+      });
+    }
+  });
 });

@@ -156,3 +156,24 @@ describe("command registry", () => {
     });
   });
 });
+
+describe("the dream command group (F-06)", () => {
+  test("/dream is registered as the dream group, not a reflection alias", () => {
+    const dream = commands["/dream"];
+    const reflect = commands["/reflect"];
+    expect(dream).toBeDefined();
+    expect(reflect).toBeDefined();
+    // R-5.9.1: `/dream` no longer forwards to reflection.
+    expect(dream?.handler).not.toBe(reflect?.handler);
+    expect(dream?.args ?? "").toContain("run [--budget <tokens>]");
+    expect(dream?.args ?? "").toContain("on | off");
+  });
+
+  test("an unknown subcommand answers with the usage line and runs nothing", async () => {
+    const result = await executeCommand("/dream wander", {
+      agentId: "agent-dream-registry",
+    });
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Usage: /dream");
+  });
+});

@@ -411,3 +411,111 @@ describe("pure formatting helpers", () => {
     expect(formatHiddenSessionRowTime("yesterday")).toBe("yesterday");
   });
 });
+
+/**
+ * F-06 C-36: the text cleaning is `agent/message-text`'s, not this module's.
+ *
+ * These pin the boundary rather than the whole shared table (T3 owns that):
+ * conversation text is cleaned, machine output is not, and a payload that is
+ * only non-text parts still renders a marker because the detail view is a
+ * transcript reader, not the "visible text" projection `SessionRead` returns.
+ */
+describe("shared visible-text cleaning", () => {
+  test("a paired injected block is removed from conversation text", () => {
+    const [row] = projectHiddenSessionMessage(
+      wire("c1", {
+        message_type: "user_message",
+        content:
+          "why is the build red?\n<system-reminder>internal note</system-reminder>",
+      }),
+    );
+    expect(row?.text).toBe("why is the build red?");
+  });
+
+  test("an unpaired opening tag is a quote and stays", () => {
+    const [row] = projectHiddenSessionMessage(
+      wire("c2", {
+        message_type: "user_message",
+        content: "the log printed <system-reminder> and then stopped",
+      }),
+    );
+    expect(row?.text).toBe(
+      "the log printed <system-reminder> and then stopped",
+    );
+  });
+
+  test("line endings and trailing spaces are normalized", () => {
+    const [row] = projectHiddenSessionMessage(
+      wire("c3", {
+        message_type: "assistant_message",
+        content: "first  \r\nsecond\t\r\n\r\n\r\nthird   ",
+      }),
+    );
+    expect(row?.text).toBe("first\nsecond\n\nthird");
+  });
+
+  test("a message left with only a reminder still draws the placeholder, not a blank row", () => {
+    expect(
+      textOf(
+        wire("c4", {
+          message_type: "assistant_message",
+          content: "<system-reminder>only plumbing</system-reminder>",
+        }),
+      ),
+    ).toEqual(["(empty)"]);
+  });
+
+  test("machine output is not stripped: the tool really printed that text", () => {
+    const [row] = projectHiddenSessionMessage(
+      wire("c5", {
+        message_type: "tool_return_message",
+        tool_returns: [
+          {
+            status: "success",
+            tool_return:
+              "<system-reminder>printed by the tool</system-reminder>",
+          },
+        ],
+      }),
+    );
+    expect(row?.detail).toContain(
+      "<system-reminder>printed by the tool</system-reminder>",
+    );
+  });
+
+  test("a non-text-only payload keeps its marker when no text part exists", () => {
+    expect(
+      textOf(
+        wire("c6", {
+          message_type: "assistant_message",
+          content: [{ type: "image", source: { type: "base64" } }],
+        }),
+      ),
+    ).toEqual(["[image]"]);
+  });
+
+  test("a mixed text + image payload shows the text and the marker", () => {
+    expect(
+      textOf(
+        wire("c7", {
+          message_type: "user_message",
+          content: [
+            { type: "text", text: "look at this chart" },
+            { type: "image", source: { type: "base64" } },
+          ],
+        }),
+      ),
+    ).toEqual(["look at this chart\n[image]"]);
+  });
+
+  test("plain text payloads carry no marker", () => {
+    expect(
+      textOf(
+        wire("c8", {
+          message_type: "user_message",
+          content: [{ type: "text", text: "just words" }],
+        }),
+      ),
+    ).toEqual(["just words"]);
+  });
+});

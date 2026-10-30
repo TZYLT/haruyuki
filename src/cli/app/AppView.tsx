@@ -20,6 +20,10 @@ import { AgentSelector } from "@/cli/components/AgentSelector";
 import { BtwPane, type BtwState } from "@/cli/components/BtwPane";
 import { CompactionOverlay } from "@/cli/components/CompactionOverlay";
 import { ConversationSelector } from "@/cli/components/ConversationSelector";
+import {
+  DreamWizard,
+  dreamWizardCompletedText,
+} from "@/cli/components/DreamWizard";
 import { ExperimentSelector } from "@/cli/components/ExperimentSelector";
 import { FeedbackDialog } from "@/cli/components/FeedbackDialog";
 import { Input } from "@/cli/components/InputRich";
@@ -654,6 +658,21 @@ export function AppView(props: AppViewRenderProps) {
                 onCompleted={() =>
                   completeOverlay("schedule-add")?.finish(
                     "Scheduled task created",
+                  )
+                }
+              />
+            )}
+
+            {/* F-06: the first-run dream setup wizard, raised by `/dream on`
+                before the master switch is written. It owns its own keys and
+                writes settings only on the final step. */}
+            {activeOverlay === "dream-wizard" && (
+              <DreamWizard
+                agentId={agentId}
+                onClose={closeOverlay}
+                onCompleted={() =>
+                  completeOverlay("dream-wizard")?.finish(
+                    dreamWizardCompletedText(),
                   )
                 }
               />

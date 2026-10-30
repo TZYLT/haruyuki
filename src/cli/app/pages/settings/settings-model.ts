@@ -107,6 +107,12 @@ export type SettingsItem = {
   /** `false` means the row is drawn dimmed with `reason`, and cannot be edited. */
   editable: boolean;
   reason?: string;
+  /**
+   * A value shape the generic checks cannot express, run by the inline editor
+   * before the write (`/dream`'s window list, and the two nullable caps whose
+   * "no limit" is a word rather than a number). Returns the error, or `null`.
+   */
+  validate?: (value: string) => string | null;
   /** The effective value, as the canonical string the other functions read. */
   read: (ctx: SettingsContext) => string | null;
   /** The same path the slash command uses, side effects included. */
@@ -251,6 +257,10 @@ export function validateValue(item: SettingsItem, raw: string): string | null {
     if (!options.some((option) => option.value === raw)) {
       return "not one of the options";
     }
+  }
+  if (item.validate) {
+    const error = item.validate(raw);
+    if (error) return error;
   }
   return null;
 }

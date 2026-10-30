@@ -98,10 +98,38 @@ describe("the schema", () => {
   });
 
   test("the inventory is pinned, so an addition is a decision", () => {
-    // 32 writable + 13 read-only at P3. Changing this list is fine; changing the
+    // 32 writable + 13 read-only at P3; F-06 M4 added 15 writable dream knobs
+    // and one read-only setup row. Changing this list is fine; changing the
     // number without a docs update is what this test is for.
-    expect(SETTINGS_ITEMS.filter((item) => item.editable)).toHaveLength(32);
-    expect(SETTINGS_ITEMS).toHaveLength(45);
+    expect(SETTINGS_ITEMS.filter((item) => item.editable)).toHaveLength(47);
+    expect(SETTINGS_ITEMS).toHaveLength(61);
+  });
+
+  test("the Dream group carries R-5.9.2's minimal set, one control per key", () => {
+    const ids = SETTINGS_ITEMS.filter((item) => item.group === "dream").map(
+      (item) => item.id,
+    );
+    for (const id of [
+      "dreamEnabled",
+      "dreamPermissionMode",
+      "dreamIdleWindows",
+      "dreamSilenceMinutes",
+      "dreamPressureThreshold",
+      "dreamBudgetFactor",
+      "dreamMaxPerRun",
+      "dreamMaxPerDay",
+      "dreamTimeLimitMinutes",
+      "dreamAutoTrigger",
+      "dreamOverBudgetApprovals",
+      "dreamTier-tidy",
+      "dreamTier-think",
+      "dreamTier-task",
+      "dreamTier-wander",
+    ]) {
+      expect(ids).toContain(id);
+    }
+    // The per-agent override map is not a second control over the same knobs.
+    expect(ids).not.toContain("dreamSettingsByAgent");
   });
 
   test("the copy is English: no CJK left in a label or a reason", () => {

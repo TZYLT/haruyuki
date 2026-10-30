@@ -24,6 +24,10 @@ import { readRecallSettings } from "@/recall-settings";
 import { updateSettings as updateStoredSettings } from "@/settings";
 import { settingsManager } from "@/settings-manager";
 import { readTopicSettings } from "@/topic-settings";
+import {
+  DREAM_SETTINGS_GROUP,
+  DREAM_SETTINGS_ITEMS,
+} from "./dream-settings-schema";
 import type {
   SettingsContext,
   SettingsGroup,
@@ -141,6 +145,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
   { id: "topic", section: "context", label: "Topic & pressure" },
   { id: "recall", section: "memory", label: "Passive recall" },
   { id: "reflection", section: "memory", label: "Reflection" },
+  DREAM_SETTINGS_GROUP,
   { id: "experiments", section: "integrations", label: "Experiments" },
 ];
 
@@ -517,6 +522,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
       await writeReflection(ctx, { deleteSessionOnSuccess: value === "true" });
     },
   },
+  ...DREAM_SETTINGS_ITEMS,
   {
     id: "memfs",
     section: "memory",

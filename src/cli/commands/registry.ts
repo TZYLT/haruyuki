@@ -14,6 +14,7 @@ import {
   handleFontWidthCommand,
   handleTerminalCommand,
 } from "./config-commands";
+import { handleDreamCommand } from "./dream";
 import { formatHubHelpFor } from "./hubs";
 import { handleMemoryRepositoryCommand } from "./memory-repository";
 import { handleRecallCommand } from "./recall";
@@ -165,10 +166,10 @@ export const commands: Record<string, Command> = {
     },
   },
   "/dream": {
-    desc: "Reflect on this conversation's memory (alias for /reflect)",
+    desc: "Dream: run, status, configure (permission, windows, budget)",
+    args: "[status] | run [--budget <tokens>] | config | on | off",
     order: 49,
-    args: "[--instruction TEXT]",
-    handler: handleReflectionCommand,
+    handler: (args, scope) => handleDreamCommand(args, scope),
   },
   "/reflect": {
     desc: "Launch reflection on this conversation (/reflect [--instruction TEXT])",

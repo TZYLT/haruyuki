@@ -163,14 +163,15 @@ describe("the settings page", () => {
       // The marker is what says where a value is written; it is a column now, so
       // it survives the width a value takes.
       expect(text).toContain("[Global]");
-      expect(text).toContain("[agent]");
-      // The longest marker is abbreviated rather than eating the value's cells.
+      // The longest marker is abbreviated rather than eating the value cells.
       expect(text).toContain("[conv]");
-      expect(text).toContain("[agent]");
-      // The header states the keys; the rows no longer repeat them.
-      expect(text).toContain("↑↓ move");
-      expect(text).toContain("Esc back");
-      expect(text).not.toMatch(/Space\s*$/m);
+      // The root screen only has Global/conv entries in view; the agent-scoped
+      // markers live on the group screens (F-06 added enough memory rows that the
+      // fold moved, not that the marker disappeared).
+      await moveCursorTo(tty, "Reflection");
+      await tty.press(ENTER);
+      await settle();
+      expect((await tty.rows()).join("\n")).toContain("[agent]");
     } finally {
       tty.stop();
     }

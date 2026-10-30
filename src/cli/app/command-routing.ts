@@ -48,7 +48,6 @@ const NON_STATE_COMMANDS = new Set([
   "/rename", // agent/convo rename
   "/btw",
   "/reload", // runtime surface reload (has its own busy guard)
-  "/dream", // Cloud admission or Code-managed background reflection
   "/reflect",
 ]);
 
@@ -129,8 +128,21 @@ function isReadOnlyTopicForm(trimmed: string): boolean {
   );
 }
 
+/**
+ * `/dream` is four commands wearing one name (F-06 R-5.9.2): the status face and
+ * `config` are views, while `run`, `on` and `off` change state (a delegated run,
+ * the master switch). Only the views may pass a busy turn — a run must not start
+ * behind the agent's own back, and a settings write waits like the rest.
+ */
+function isReadOnlyDreamForm(trimmed: string): boolean {
+  if (!trimmed.startsWith("/dream")) return false;
+  const rest = trimmed.slice("/dream".length).trim();
+  return rest === "" || rest === "status" || rest === "config";
+}
+
 export function isNonStateCommand(msg: string): boolean {
   const trimmed = msg.trim().toLowerCase();
+  if (isReadOnlyDreamForm(trimmed)) return true;
   if (NON_STATE_COMMANDS.has(trimmed)) return true;
   if (isReadOnlyTopicForm(trimmed)) return true;
   for (const cmd of NON_STATE_COMMANDS) {

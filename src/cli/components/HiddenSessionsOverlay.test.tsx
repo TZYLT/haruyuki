@@ -42,6 +42,38 @@ interface FixtureRow {
   origin?: string;
   context_message_count: number;
   last_message_at: string;
+  /** F-06: a run record on the conversation, as the backend returns it. */
+  dream?: Record<string, unknown>;
+  reflection?: Record<string, unknown>;
+}
+
+/**
+ * A dream run record shaped exactly like `DreamRunMetadata` (the reader drops
+ * anything malformed whole, so the fixture must be a real record, not a stub).
+ */
+function dreamMetadata(
+  index: number,
+  status: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    runId: `run-${index}`,
+    triggerSource: "idle",
+    agentId: AGENT_ID,
+    conversationId: `${AGENT_ID}-conv-${String(index).padStart(2, "0")}`,
+    tierPlan: ["tidy", "think", "task", "wander"],
+    tierReached: "think",
+    startedAt: Date.parse(ACTIVE_AT),
+    endedAt: Date.parse(ACTIVE_AT) + 60_000,
+    baselineSha: "0123456789abcdef",
+    budgetTokens: 100_000,
+    spentTokens: 41_200,
+    timeLimitMinutes: null,
+    status,
+    reportPath: null,
+    handoff: null,
+    ...overrides,
+  };
 }
 
 function fixtureRow(index: number, agentId = AGENT_ID): FixtureRow {
@@ -136,6 +168,9 @@ function mount(options: {
   backend?: HiddenBackend;
   columns?: number;
   rows?: number;
+  readRunCosts?: (
+    runIds: readonly string[],
+  ) => Promise<ReadonlyMap<string, string>>;
 }): Harness {
   const backend = options.backend ?? new HiddenBackend();
   __testSetBackend(backend);
@@ -146,6 +181,9 @@ function mount(options: {
       onClose={() => {
         closes += 1;
       }}
+      readRunCosts={
+        options.readRunCosts ?? (async () => new Map<string, string>())
+      }
     />,
     { columns: options.columns ?? 80, rows: options.rows ?? 30 },
   );
@@ -583,6 +621,165 @@ describe("deleting from the list", () => {
 
       await tty.press(ESCAPE);
       expect(frame(await painted(tty))).toContain("Hidden session 1");
+    } finally {
+      tty.stop();
+    }
+  });
+});
+
+describe("the run group header (F-06 R-5.7.2)", () => {
+  /** A fixture row that carries a dream run record, like a real hidden session. */
+  function dreamRow(
+    status: string,
+    index = 1,
+    overrides: Record<string, unknown> = {},
+  ): FixtureRow {
+    return {
+      ...fixtureRow(index),
+      origin: "dream",
+      dream: dreamMetadata(index, status, overrides),
+    };
+  }
+
+  function costReader(
+    labels: ReadonlyMap<string, string>,
+  ): (runIds: readonly string[]) => Promise<ReadonlyMap<string, string>> {
+    return async (runIds) =>
+      new Map(runIds.map((runId) => [runId, labels.get(runId) ?? "—"]));
+  }
+
+  test("leads with source, status, time and cost, and keeps the row at four lines", async () => {
+    const backend = new HiddenBackend();
+    backend.rows = [dreamRow("succeeded", 1), fixtureRow(2)];
+    const { tty } = mount({
+      backend,
+      readRunCosts: costReader(new Map([["run-1", "$ 0.01234"]])),
+    });
+    try {
+      const rows = await painted(tty);
+      const first = rows.indexOf("> dream · succeeded · 2h ago · $ 0.01234");
+      expect(first).toBeGreaterThan(-1);
+      // Header, then title and agent/ctx, then the blank separator: four rows,
+      // the same budget a non-run row uses (C-34).
+      expect(rows[first + 1]).toBe("  Hidden session 1");
+      expect(rows[first + 2]).toBe("  agent-hidden · ctx 1");
+      expect(rows[first + 3]).toBe("");
+      // The following non-run row keeps its own three-line layout untouched.
+      expect(rows[first + 4]).toBe("  Hidden session 2");
+      expect(rows[first + 5]).toBe("  background · agent-hidden · ctx 2");
+      expect(rows[first + 6]).toBe("  2h ago");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a run with no ledger row paints — for its cost", async () => {
+    const backend = new HiddenBackend();
+    backend.rows = [dreamRow("succeeded", 1)];
+    const { tty } = mount({ backend, readRunCosts: costReader(new Map()) });
+    try {
+      const frame = (await painted(tty)).join("\n");
+      expect(frame).toContain("> dream · succeeded · 2h ago · —");
+      expect(frame).not.toContain("$ 0.00000");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a reflection run row gets the same header, from its own record", async () => {
+    const backend = new HiddenBackend();
+    backend.rows = [
+      {
+        ...fixtureRow(1),
+        origin: "reflection",
+        reflection: {
+          runId: "reflect-1",
+          triggerSource: "manual",
+          parentConversationId: "parent-1",
+          startedAt: Date.parse(ACTIVE_AT),
+          deadlineAt: null,
+          status: "timeout",
+        },
+      },
+    ];
+    const { tty } = mount({ backend, readRunCosts: costReader(new Map()) });
+    try {
+      expect((await painted(tty)).join("\n")).toContain(
+        "> reflection · timeout · 2h ago · —",
+      );
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("f shows only failed runs, and f again shows every run", async () => {
+    const backend = new HiddenBackend();
+    backend.rows = [
+      dreamRow("succeeded", 1),
+      dreamRow("failed", 2),
+      dreamRow("budget_exhausted", 3),
+      dreamRow("cancelled", 4),
+      fixtureRow(5),
+    ];
+    const { tty } = mount({
+      backend,
+      rows: 40,
+      readRunCosts: costReader(new Map()),
+    });
+    try {
+      await painted(tty);
+      await tty.press("f");
+      const filtered = await painted(tty);
+      const text = frame(filtered);
+      expect(text).toContain("> dream · failed · 2h ago · —");
+      expect(text).toContain("f all runs");
+      // Budget exhaustion and cancellation are deliberate stops, not failures.
+      expect(text).not.toContain("dream · succeeded");
+      expect(text).not.toContain("budget exhausted");
+      expect(text).not.toContain("dream · cancelled");
+      // Rows with no run record are not failures either.
+      expect(text).not.toContain("Hidden session 5");
+
+      await tty.press("f");
+      const restored = frame(await painted(tty));
+      expect(restored).toContain("dream · succeeded");
+      expect(restored).toContain("Hidden session 5");
+      expect(restored).toContain("f failed only");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the empty failed filter names itself and how to leave it", async () => {
+    const backend = new HiddenBackend();
+    backend.rows = [dreamRow("succeeded", 1), fixtureRow(2)];
+    const { tty } = mount({ backend, readRunCosts: costReader(new Map()) });
+    try {
+      await painted(tty);
+      await tty.press("f");
+      const text = frame(await painted(tty));
+      expect(text).toContain("No failed runs in the loaded pages.");
+      expect(text).toContain("Press f to show every run.");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a narrow terminal keeps the header inside the frame", async () => {
+    const backend = new HiddenBackend();
+    backend.rows = [dreamRow("succeeded", 1)];
+    const { tty } = mount({
+      backend,
+      columns: 40,
+      readRunCosts: costReader(new Map([["run-1", "$ 0.01234"]])),
+    });
+    try {
+      const rows = await painted(tty);
+      for (const entry of rows) {
+        expect(terminalTextWidth(entry)).toBeLessThanOrEqual(40);
+      }
+      // The four elements survive the clipping in order.
+      expect(rows.join("\n")).toContain("dream · succeeded");
     } finally {
       tty.stop();
     }

@@ -4,6 +4,13 @@ import { Box } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Backend, getBackend } from "@/backend";
 import type { ConversationMessageListBody } from "@/backend/backend";
+import {
+  type DreamRunCost,
+  dreamRunStatusLabel,
+  formatDreamRunCostLabel,
+  formatDreamRunTime,
+  isDreamRunFailure,
+} from "@/cli/commands/dream";
 import { colors } from "@/cli/components/colors";
 import { buildConversationTitleMessages } from "@/cli/helpers/conversation-title";
 import { namedKeyChords } from "@/cli/helpers/input-keys";
@@ -23,6 +30,8 @@ import {
   readConversationProvenance,
   toHiddenConversationSummary,
 } from "@/types/conversation-provenance";
+import type { DreamRunStatus } from "@/types/dream-run-metadata";
+import { readScheduledRunUsage } from "@/usage/ledger";
 import { HiddenSessionDeleteConfirm } from "./HiddenSessionDeleteConfirm";
 import { HiddenSessionDetail } from "./HiddenSessionDetail";
 import { PasteAwareTextInput } from "./PasteAwareTextInput";
@@ -133,6 +142,94 @@ function agentLabel(agentId: string | null | undefined): string {
 }
 
 /**
+ * What a run's group header is about, or `null` for a row that is not a run.
+ *
+ * The header is four things (R-5.7.2): source, status, time, cost. Source is the
+ * provenance origin; status and time come from the run record the conversation
+ * carries (dream first, then reflection — they use the same word for every
+ * shared state); cost is the ledger aggregate by run id, which is why it arrives
+ * asynchronously and paints `—` until it does (R-5.7.3).
+ */
+interface RunHeader {
+  runId: string;
+  source: "dream" | "reflection";
+  status: DreamRunStatus;
+  startedAt: number;
+}
+
+function runHeaderFor(row: HiddenConversationSummary): RunHeader | null {
+  const provenance = readConversationProvenance(row);
+  if (provenance.dream) {
+    return {
+      runId: provenance.dream.runId,
+      source: "dream",
+      status: provenance.dream.status,
+      startedAt: provenance.dream.startedAt,
+    };
+  }
+  if (provenance.reflection) {
+    return {
+      runId: provenance.reflection.runId,
+      source: "reflection",
+      status: provenance.reflection.status,
+      startedAt: provenance.reflection.startedAt,
+    };
+  }
+  return null;
+}
+
+/** A run a reader asked to see only when it failed (`f`). */
+function isFailedRunRow(row: HiddenConversationSummary): boolean {
+  const header = runHeaderFor(row);
+  return header !== null && isDreamRunFailure(header.status);
+}
+
+/** Injected by tests so a frame assertion never reads the real ledger. */
+export type RunCostReader = (
+  runIds: readonly string[],
+) => Promise<ReadonlyMap<string, string>>;
+
+/**
+ * The production cost reader: one ledger read for a page's run ids, painted as
+ * `—` when the ledger has no row (or no price) for a run.
+ */
+async function readRunCostLabels(
+  runIds: readonly string[],
+): Promise<ReadonlyMap<string, string>> {
+  const labels = new Map<string, string>();
+  if (runIds.length === 0) return labels;
+  try {
+    const summaries = await readScheduledRunUsage({ runIds });
+    for (const runId of runIds) {
+      const summary = summaries.get(runId);
+      const cost: DreamRunCost = {
+        turns: summary?.turns ?? 0,
+        cost:
+          summary && summary.turns > 0 ? (summary.cost?.total ?? null) : null,
+      };
+      labels.set(runId, formatDreamRunCostLabel(cost));
+    }
+  } catch {
+    for (const runId of runIds) {
+      labels.set(runId, formatDreamRunCostLabel(undefined));
+    }
+  }
+  return labels;
+}
+
+/** `dream · succeeded · 2h ago · $ 0.01234` — the four elements (C-34). */
+function groupHeaderLine(
+  header: RunHeader,
+  costLabel: string | undefined,
+  now: number,
+): string {
+  return `${header.source} · ${dreamRunStatusLabel(header.status)} · ${formatDreamRunTime(
+    header.startedAt,
+    now,
+  )} · ${costLabel ?? formatDreamRunCostLabel(undefined)}`;
+}
+
+/**
  * The conversation's first user message, which is what a summary-less row shows.
  *
  * `limit: 1` and `order: "asc"` on the log (`include_out_of_context`), so an
@@ -173,15 +270,48 @@ function SessionRow({
   title,
   isCursor,
   width,
+  costLabel,
 }: {
   row: HiddenConversationSummary;
   title: string;
   isCursor: boolean;
   width: number;
+  costLabel: string | undefined;
 }) {
   const provenance = readConversationProvenance(row);
+  const header = runHeaderFor(row);
   const line = Math.max(1, width - 2);
   const titleColor = isCursor ? colors.selector.itemHighlighted : undefined;
+
+  // A run row leads with its group header, attached to the group's first row so
+  // the height budget stays four lines (C-34): header, title, agent/ctx, blank.
+  // The time the header already carries is not repeated as a fourth line.
+  if (header) {
+    return (
+      <Box flexDirection="column" marginBottom={1}>
+        <Box flexDirection="row">
+          <Text color={titleColor}>{isCursor ? "> " : "  "}</Text>
+          <Text bold={isCursor} color={titleColor}>
+            {truncateText(groupHeaderLine(header, costLabel, Date.now()), line)}
+          </Text>
+        </Box>
+        <Box flexDirection="row" marginLeft={2}>
+          <Text bold={isCursor} color={titleColor}>
+            {truncateText(title, line)}
+          </Text>
+        </Box>
+        <Box flexDirection="row" marginLeft={2}>
+          <Text dimColor>
+            {truncateText(
+              `${agentLabel(row.agent_id)} · ctx ${row.context_message_count}`,
+              line,
+            )}
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
+
   const meta = truncateText(
     `${provenance.origin} · ${agentLabel(row.agent_id)} · ctx ${row.context_message_count}`,
     line,
@@ -208,9 +338,12 @@ function SessionRow({
 export function HiddenSessionsOverlay({
   agentId,
   onClose,
+  readRunCosts = readRunCostLabels,
 }: {
   agentId: string;
   onClose: () => void;
+  /** Injected by tests; defaults to the ledger's per-run aggregate. */
+  readRunCosts?: RunCostReader;
 }) {
   const backendRef = useRef<Backend | null>(null);
 
@@ -233,6 +366,15 @@ export function HiddenSessionsOverlay({
   // (a re-render must not re-read) and the state is the paint.
   const titleCacheRef = useRef(new Map<string, string>());
   const [titles, setTitles] = useState<ReadonlyMap<string, string>>(
+    () => new Map(),
+  );
+
+  // F-06: the "failed only" single switch (R-5.7.5) and the per-run cost the
+  // group header paints. Costs are keyed by run id and cached for the mount; the
+  // state is the paint, the ref is the cache (R-5.7.8: no per-tick setState).
+  const [failuresOnly, setFailuresOnly] = useState(false);
+  const runCostCacheRef = useRef(new Map<string, string>());
+  const [runCosts, setRunCosts] = useState<ReadonlyMap<string, string>>(
     () => new Map(),
   );
 
@@ -315,9 +457,50 @@ export function HiddenSessionsOverlay({
     [titles],
   );
 
+  // One ledger read for the page's run ids, once each; a run the ledger has no
+  // row for paints `—` and is cached as such so it is not re-asked every render.
+  useEffect(() => {
+    const missing = new Set<string>();
+    for (const row of rows) {
+      const header = runHeaderFor(row);
+      if (header && !runCostCacheRef.current.has(header.runId)) {
+        missing.add(header.runId);
+      }
+    }
+    if (missing.size === 0) return;
+
+    let cancelled = false;
+    void (async () => {
+      let labels: ReadonlyMap<string, string>;
+      try {
+        labels = await readRunCosts([...missing]);
+      } catch {
+        labels = new Map();
+      }
+      if (cancelled) return;
+      for (const runId of missing) {
+        runCostCacheRef.current.set(
+          runId,
+          labels.get(runId) ?? formatDreamRunCostLabel(undefined),
+        );
+      }
+      setRunCosts(new Map(runCostCacheRef.current));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rows, readRunCosts]);
+
+  // The rows the list actually shows: the filter is a client-side view over the
+  // loaded pages, and paging keeps walking pages until a matching row appears.
+  const runRows = useMemo(
+    () => (failuresOnly ? rows.filter(isFailedRunRow) : rows),
+    [rows, failuresOnly],
+  );
+
   const listItems = useMemo<OverlayListItem[]>(
-    () => rows.map((row) => ({ key: row.id, label: titleFor(row) })),
-    [rows, titleFor],
+    () => runRows.map((row) => ({ key: row.id, label: titleFor(row) })),
+    [runRows, titleFor],
   );
 
   const terminalRows = useTerminalRows();
@@ -350,7 +533,7 @@ export function HiddenSessionsOverlay({
       ? {}
       : {
           onConfirm: (key: string) => {
-            const row = rows.find((candidate) => candidate.id === key);
+            const row = runRows.find((candidate) => candidate.id === key);
             if (row) setDetail(row);
           },
         }),
@@ -374,11 +557,21 @@ export function HiddenSessionsOverlay({
         },
       },
       {
+        id: "hidden-sessions.failures",
+        chords: [{ key: "f" }],
+        run: () => {
+          if (searchMode) return "declined";
+          setFailuresOnly((current) => !current);
+          list.setCursor(0);
+          return "consumed";
+        },
+      },
+      {
         id: "hidden-sessions.delete",
         chords: [{ key: "d" }],
         run: () => {
           if (searchMode) return "declined";
-          const row = rows[list.cursor];
+          const row = runRows[list.cursor];
           if (!row) return "declined";
           setPendingDelete(row);
           return "consumed";
@@ -403,31 +596,38 @@ export function HiddenSessionsOverlay({
   // what "scroll to the bottom" means on a windowed list. The page machine ends
   // the sequence on a short page, so no bookkeeping is needed here — and search
   // pages the same way (§5.2.7), because the cursor is the last matching row's id.
-  const nearEnd = list.cursor >= rows.length - 2;
+  // With the failed-only filter on, an empty page still reads as "near the end",
+  // so the walk keeps asking until a matching row or the last page arrives.
+  const nearEnd = list.cursor >= runRows.length - 2;
   useEffect(() => {
     if (isLoading || !nearEnd || !page.hasMore) return;
     void page.loadMore();
   }, [isLoading, nearEnd, page.hasMore, page.loadMore]);
 
   const scopeHint = allAgents ? "a this agent only" : "a all agents";
+  const filterHint = failuresOnly ? "f all runs" : "f failed only";
   const hintLine = searchMode
     ? "type to filter · enter leaves the field · esc clears · ↑↓ still scroll"
-    : `↑↓ scroll · / search · ${scopeHint} · esc close`;
+    : `↑↓ scroll · / search · ${filterHint} · ${scopeHint} · esc close`;
   // Both footer lines are clipped to one line each: a wrapped footer changes the
   // frame's height as the terminal narrows, which would push the rows the window
   // reserved out of the frame (the height budget below counts two footer lines).
   const footerWidth = Math.max(1, terminalWidth - 2);
 
-  const emptyMessage = query
-    ? `No hidden sessions match "${query}".`
-    : allAgents
-      ? "No hidden sessions yet. Background sessions appear after a reflection or a subagent runs."
-      : "No hidden sessions for this agent.";
-  const emptyHint = query
-    ? "esc clears the search."
-    : allAgents
-      ? undefined
-      : "Press a to look across all agents.";
+  const emptyMessage = failuresOnly
+    ? "No failed runs in the loaded pages."
+    : query
+      ? `No hidden sessions match "${query}".`
+      : allAgents
+        ? "No hidden sessions yet. Background sessions appear after a reflection or a subagent runs."
+        : "No hidden sessions for this agent.";
+  const emptyHint = failuresOnly
+    ? "Press f to show every run."
+    : query
+      ? "esc clears the search."
+      : allAgents
+        ? undefined
+        : "Press a to look across all agents.";
 
   if (pendingDelete) {
     return (
@@ -502,27 +702,29 @@ export function HiddenSessionsOverlay({
         </Box>
       )}
 
-      {!isLoading && !page.error && rows.length === 0 && (
+      {!isLoading && !page.error && runRows.length === 0 && (
         <Box flexDirection="column">
           <Text dimColor>{emptyMessage}</Text>
           {emptyHint !== undefined && <Text dimColor>{emptyHint}</Text>}
         </Box>
       )}
 
-      {rows.length > 0 && (
+      {runRows.length > 0 && (
         <OverlayListView
           items={listItems}
           cursor={list.cursor}
           rows={listRows}
           renderRow={(_item, index, isCursor) => {
-            const row = rows[index];
+            const row = runRows[index];
             if (!row) return null;
+            const header = runHeaderFor(row);
             return (
               <SessionRow
                 row={row}
                 title={titleFor(row)}
                 isCursor={isCursor}
                 width={terminalWidth}
+                costLabel={header ? runCosts.get(header.runId) : undefined}
               />
             );
           }}
