@@ -175,7 +175,15 @@ export interface AddTaskResult {
 /** Execution permission tier (Q-50). Maps onto the existing `PermissionMode`. */
 export type PermissionTier = "standard" | "acceptEdits" | "unrestricted";
 
-export type TaskType = "prompt" | "command";
+/**
+ * What a due occurrence runs.
+ *
+ * `dream` (F-06) is not a prompt and not a scheduled command: the scheduler
+ * only decides *whether* it should run, and a host that implements
+ * `runDream` hands it to the short-lived `haruyuki dream run --task` child.
+ * Dispatch must never fall through to the prompt runner for it (route C-13).
+ */
+export type TaskType = "prompt" | "command" | "dream";
 
 export type RunOutcome =
   | "success"
@@ -348,7 +356,14 @@ export interface AutostartStatus {
 
 // ── Persisted file shape ───────────────────────────────────────────
 
-export const SCHEDULE_FILE_VERSION = 2;
+/**
+ * Bumped 2 → 3 for F-06 (Q-48): a v2 build that reads a v3 file refuses the
+ * whole store instead of treating a `dream` task as a prompt task and running
+ * it unattended. The record shape is unchanged, so no data migration is
+ * needed — the read gate accepts older versions and the next write stamps the
+ * current one.
+ */
+export const SCHEDULE_FILE_VERSION = 3;
 
 export interface ScheduleFileData {
   version: typeof SCHEDULE_FILE_VERSION;

@@ -92,14 +92,26 @@ const USAGE_SOURCES: readonly UsageSource[] = [
 /** The source a record without `source` is read as (old ledgers stay readable). */
 export const DEFAULT_USAGE_SOURCE: UsageSource = "interactive";
 
-/** How the run that spent the tokens ended (F-03 §5.16.1). */
-export type UsageOutcome = "completed" | "timeout" | "failed" | "cancelled";
+/**
+ * How the run that spent the tokens ended (F-03 §5.16.1).
+ *
+ * `budget_exhausted` (F-06 Q-02/O-1) is a dream run that stopped at its token
+ * budget: the run is not a failure — it finished, committed what it had and
+ * wrote a handoff — so it must not count toward the F1/F2 failure streak.
+ */
+export type UsageOutcome =
+  | "completed"
+  | "timeout"
+  | "failed"
+  | "cancelled"
+  | "budget_exhausted";
 
 const USAGE_OUTCOMES: readonly UsageOutcome[] = [
   "completed",
   "timeout",
   "failed",
   "cancelled",
+  "budget_exhausted",
 ];
 
 function isUsageSource(value: unknown): value is UsageSource {

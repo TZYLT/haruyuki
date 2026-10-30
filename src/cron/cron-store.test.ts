@@ -27,6 +27,7 @@ import {
   writeScheduleFile,
 } from "@/cron/cron-store";
 import type { CronTask } from "@/cron/cron-types";
+import { SCHEDULE_FILE_VERSION } from "@/cron/cron-types";
 
 // ── Test setup ──────────────────────────────────────────────────────
 
@@ -103,10 +104,10 @@ describe("store paths", () => {
   });
 });
 
-// ── v1 → v2 migration ───────────────────────────────────────────────
+// ── v1 → current migration ──────────────────────────────────────────
 
 describe("migrateLegacyCronFile", () => {
-  test("maps a v1 file to v2, keeps identity and history, and backs the original up", () => {
+  test("maps a v1 file to the current version, keeps identity and history, and backs the original up", () => {
     const legacyPath = writeLegacyFile({
       version: 1,
       scheduler_owner: null,
@@ -120,7 +121,7 @@ describe("migrateLegacyCronFile", () => {
     expect(result?.backupPath).toBe(getCronBackupFilePath());
 
     const data = readScheduleFile();
-    expect(data.version).toBe(2);
+    expect(data.version).toBe(SCHEDULE_FILE_VERSION);
     expect(data.signal_state).toEqual({ cursor: {} });
 
     const task = data.tasks[0];
@@ -153,12 +154,12 @@ describe("migrateLegacyCronFile", () => {
     expect((backup.tasks as unknown[]).length).toBe(1);
   });
 
-  test("writes a v2 header and signal state on disk", () => {
+  test("writes the current version header and signal state on disk", () => {
     writeLegacyFile({ version: 1, tasks: [legacyTask()] });
     migrateLegacyCronFile();
 
     const raw = readJson(getScheduleFilePath());
-    expect(raw.version).toBe(2);
+    expect(raw.version).toBe(SCHEDULE_FILE_VERSION);
     expect(raw.signal_state).toEqual({ cursor: {} });
     expect(raw.scheduler_owner).toBeNull();
   });
@@ -421,6 +422,31 @@ describe("corrupt store (P0-2)", () => {
     }
     writeFileSync(filePath, JSON.stringify({ version: 99, tasks: [] }));
     expect(() => readScheduleFile()).toThrow(ScheduleStoreVersionError);
+  });
+
+  test("a v2 store is read and re-stamped with the current version (Q-48)", () => {
+    // The v3 bump (F-06) is a downgrade guard, not a data migration: a store
+    // written by a v2 build must stay readable, and the next write must stamp
+    // the current version so an older build refuses it instead of running a
+    // `dream` task as a prompt.
+    const filePath = getScheduleFilePath();
+    writeFileSync(filePath, JSON.stringify({ version: 2, tasks: [] }));
+
+    const data = readScheduleFile();
+    // Reading normalizes the in-memory view; the disk file is untouched until
+    // the next write.
+    expect(data.version).toBe(SCHEDULE_FILE_VERSION);
+    expect(
+      (JSON.parse(readFileSync(filePath, "utf-8")) as Record<string, unknown>)
+        .version,
+    ).toBe(2);
+
+    writeScheduleFile(data);
+    const written = JSON.parse(readFileSync(filePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    expect(written.version).toBe(SCHEDULE_FILE_VERSION);
   });
 
   test("unknown top-level fields survive a read/write round trip (F-17)", () => {

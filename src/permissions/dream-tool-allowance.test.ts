@@ -41,6 +41,20 @@ describe("dream tool allowance", () => {
     expect(decide("MemoryCommit", "standard", true)).toBe("allow");
   });
 
+  test("every dream tool is allowed inside a dream run, and only there", () => {
+    // The run's own reporting tools (M3) are declared with the run and would
+    // otherwise end in `ask`, which an unattended child reads as a denial.
+    for (const toolName of [
+      "MemoryCommit",
+      "DreamStatus",
+      "DreamDone",
+      "DreamAuthorization",
+    ]) {
+      expect(decide(toolName, "acceptEdits", true)).toBe("allow");
+      expect(decide(toolName, "acceptEdits", false)).toBe("ask");
+    }
+  });
+
   test("the same call asks outside a dream run", () => {
     expect(decide("MemoryCommit", "acceptEdits", false)).toBe("ask");
     expect(decide("MemoryCommit", "unrestricted", false)).toBe("allow");

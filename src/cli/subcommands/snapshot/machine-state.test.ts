@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readScheduleFile } from "@/cron/cron-store";
+import { SCHEDULE_FILE_VERSION } from "@/cron/cron-types";
 import { TestDirectory } from "@/test-utils/test-fs";
 import {
   __setCronLockTimeoutForTests,
@@ -282,9 +283,9 @@ test("a legacy crons.json is cleared in place and lazily migrates on first read"
   expect(legacy.scheduler_owner).toBeNull();
   expect(legacy.scheduler_owners).toEqual({});
 
-  // The first read migrates v1 -> v2 and keeps the lease-free state.
+  // The first read migrates v1 -> current and keeps the lease-free state.
   const migrated = readScheduleFile();
-  expect(migrated.version).toBe(2);
+  expect(migrated.version).toBe(SCHEDULE_FILE_VERSION);
   expect(migrated.tasks.map((task) => task.id)).toEqual(["task-1"]);
   expect(migrated.tasks[0]?.lease ?? null).toBeNull();
   expect(existsSync(join(appHome, "schedules.json"))).toBe(true);

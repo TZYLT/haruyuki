@@ -27,6 +27,7 @@ import {
 import os from "node:os";
 import { dirname, join } from "node:path";
 import { readScheduleFile } from "@/cron/cron-store";
+import { SCHEDULE_FILE_VERSION } from "@/cron/cron-types";
 import { TestDirectory } from "@/test-utils/test-fs";
 import { appHomeDirName } from "@/utils/app-paths";
 import { LOCAL_BACKEND_DIR_ENV } from "@/utils/local-backend-paths";
@@ -720,9 +721,9 @@ test("a pre-F-05 package with only crons.json imports and migrates on first read
   expect(existsAt(targetHome, "crons.json")).toBe(true);
   expect(existsAt(targetHome, "schedules.json")).toBe(false);
 
-  // The store's lazy migration turns it into a lease-free v2 store on first read.
+  // The store's lazy migration turns it into a lease-free store on first read.
   const migrated = readScheduleFile();
-  expect(migrated.version).toBe(2);
+  expect(migrated.version).toBe(SCHEDULE_FILE_VERSION);
   expect(migrated.scheduler_owner).toBeNull();
   expect(migrated.scheduler_owners).toEqual({});
   expect(migrated.tasks.map((task) => task.id)).toEqual(["legacy-task"]);
