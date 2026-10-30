@@ -851,6 +851,12 @@ function getDefaultDecision(
     "TopicMark",
     // Reads the derived topic index. No transcript writes, no context change.
     "TopicQuery",
+    // Reads one conversation's cleaned visible text (F-06 R-5.4.2). Read-only,
+    // refuses hidden / subagent / automated conversations, and is the
+    // recommended alternative to paging raw transcripts; auto-allow for the
+    // same reason `Read` is. The dream-run allowance below also needs it:
+    // unattended `ask` would otherwise deny the run its own context tool.
+    "SessionRead",
   ];
 
   if (autoAllowTools.includes(toolName)) {

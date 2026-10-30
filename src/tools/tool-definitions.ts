@@ -2,6 +2,9 @@ import { defineTool, type ToolAssets } from "./define-tool";
 import ApplyPatchDescription from "./descriptions/ApplyPatch.md";
 import AskUserQuestionDescription from "./descriptions/AskUserQuestion.md";
 import BashDescription from "./descriptions/Bash.md";
+import DreamAuthorizationDescription from "./descriptions/DreamAuthorization.md";
+import DreamDoneDescription from "./descriptions/DreamDone.md";
+import DreamStatusDescription from "./descriptions/DreamStatus.md";
 import EditDescription from "./descriptions/Edit.md";
 import EnterWorktreeDescription from "./descriptions/EnterWorktree.md";
 import ExecCommandDescription from "./descriptions/ExecCommand.md";
@@ -14,6 +17,7 @@ import MonitorDescription from "./descriptions/Monitor.md";
 import ReadDescription from "./descriptions/Read.md";
 import ReadArtifactFileDescription from "./descriptions/ReadArtifactFile.md";
 import ReadLSPDescription from "./descriptions/ReadLSP.md";
+import SessionReadDescription from "./descriptions/SessionRead.md";
 import SetWorkingDirectoryDescription from "./descriptions/SetWorkingDirectory.md";
 import SkillDescription from "./descriptions/Skill.md";
 import TaskDescription from "./descriptions/Task.md";
@@ -36,6 +40,9 @@ import { apply_patch } from "./impl/apply-patch";
 import { read_artifact_file, write_artifact_file } from "./impl/artifact-files";
 import { ask_user_question_async } from "./impl/ask-user-question";
 import { bash } from "./impl/bash";
+import { dream_authorization } from "./impl/dream-authorization";
+import { dream_done } from "./impl/dream-done";
+import { dream_status } from "./impl/dream-status";
 import { edit } from "./impl/edit";
 import { enter_worktree } from "./impl/enter-worktree";
 import { exec_command, write_stdin } from "./impl/exec-command";
@@ -47,6 +54,7 @@ import { memory_commit } from "./impl/memory-commit";
 import { monitor } from "./impl/monitor";
 import { read } from "./impl/read";
 import { read_lsp } from "./impl/read-lsp";
+import { session_read } from "./impl/session-read";
 import { set_working_directory } from "./impl/set-working-directory";
 import { skill } from "./impl/skill";
 import { task } from "./impl/task";
@@ -67,6 +75,9 @@ import { write } from "./impl/write";
 import ApplyPatchSchema from "./schemas/ApplyPatch.json";
 import AskUserQuestionSchema from "./schemas/AskUserQuestion.json";
 import BashSchema from "./schemas/Bash.json";
+import DreamAuthorizationSchema from "./schemas/DreamAuthorization.json";
+import DreamDoneSchema from "./schemas/DreamDone.json";
+import DreamStatusSchema from "./schemas/DreamStatus.json";
 import EditSchema from "./schemas/Edit.json";
 import EnterWorktreeSchema from "./schemas/EnterWorktree.json";
 import ExecCommandSchema from "./schemas/ExecCommand.json";
@@ -79,6 +90,7 @@ import MonitorSchema from "./schemas/Monitor.json";
 import ReadSchema from "./schemas/Read.json";
 import ReadArtifactFileSchema from "./schemas/ReadArtifactFile.json";
 import ReadLSPSchema from "./schemas/ReadLSP.json";
+import SessionReadSchema from "./schemas/SessionRead.json";
 import SetWorkingDirectorySchema from "./schemas/SetWorkingDirectory.json";
 import SkillSchema from "./schemas/Skill.json";
 import TaskSchema from "./schemas/Task.json";
@@ -135,6 +147,21 @@ const toolDefinitions = {
     schema: BashSchema,
     description: buildBashDescriptionForPlatform(),
     impl: bash,
+  }),
+  DreamAuthorization: defineTool({
+    schema: DreamAuthorizationSchema,
+    description: DreamAuthorizationDescription.trim(),
+    impl: dream_authorization,
+  }),
+  DreamDone: defineTool({
+    schema: DreamDoneSchema,
+    description: DreamDoneDescription.trim(),
+    impl: dream_done,
+  }),
+  DreamStatus: defineTool({
+    schema: DreamStatusSchema,
+    description: DreamStatusDescription.trim(),
+    impl: dream_status,
   }),
   EnterWorktree: defineTool({
     schema: EnterWorktreeSchema,
@@ -207,6 +234,11 @@ const toolDefinitions = {
     schema: ReadLSPSchema,
     description: ReadLSPDescription.trim(),
     impl: read_lsp,
+  }),
+  SessionRead: defineTool({
+    schema: SessionReadSchema,
+    description: SessionReadDescription.trim(),
+    impl: session_read,
   }),
   SetWorkingDirectory: defineTool({
     schema: SetWorkingDirectorySchema,

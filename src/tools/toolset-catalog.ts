@@ -60,6 +60,7 @@ export const TOOLSET_CATALOG: Readonly<Record<ToolsetName, ToolsetDefinition>> =
         "UpdatePlan",
         "TopicMark",
         "TopicQuery",
+        "SessionRead",
       ],
     },
     none: {
@@ -96,6 +97,7 @@ export const TOOLSET_CATALOG: Readonly<Record<ToolsetName, ToolsetDefinition>> =
         "Write",
         "TopicMark",
         "TopicQuery",
+        "SessionRead",
       ],
     },
     codex: {
@@ -121,6 +123,7 @@ export const TOOLSET_CATALOG: Readonly<Record<ToolsetName, ToolsetDefinition>> =
         "UpdatePlan",
         "TopicMark",
         "TopicQuery",
+        "SessionRead",
       ],
     },
   };

@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Case-insensitive substring to match against each entry's title, scope, quote and source conversation id. Omit it to list every active entry — checking \"am I allowed to do this?\" usually needs the entries themselves, not a keyword guess."
+    },
+    "include_expired": {
+      "type": "boolean",
+      "description": "Also list entries whose `expires` date has passed. Default false: an expired entry authorizes nothing, so it is hidden and only counted."
+    }
+  },
+  "additionalProperties": false,
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

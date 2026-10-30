@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "handoff": {
+      "type": "string",
+      "maxLength": 4000,
+      "description": "Where the next run should continue: what remains, which files are half-done, and what to do first. If the run completed everything planned, say so explicitly (\"nothing left; memory is tidy\"). One short paragraph — the report carries the detail."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["done", "handoff"],
+      "description": "\"done\" when the planned work is complete; \"handoff\" when you are stopping early (budget, time, or a task that needs the user). Defaults to \"done\". This word is for your own bookkeeping — the harness decides the run's terminal status."
+    }
+  },
+  "required": ["handoff"],
+  "additionalProperties": false,
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

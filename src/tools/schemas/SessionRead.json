@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "properties": {
+    "conversation_id": {
+      "type": "string",
+      "description": "The conversation to read. Omit it to read the current conversation. Hidden conversations (reflection, dream and subagent runs) are refused with an error — this tool only reads ordinary conversations."
+    },
+    "message_start": {
+      "type": "number",
+      "minimum": 1,
+      "description": "First visible message to include, 1-based and inclusive. Visible messages are the cleaned ones this tool prints; reasoning and tool rows are not counted. Defaults to 1."
+    },
+    "message_end": {
+      "type": "number",
+      "minimum": 1,
+      "description": "Last visible message to include, 1-based and inclusive. Defaults to the last message. The range is applied before `query` and `offset`."
+    },
+    "query": {
+      "type": "string",
+      "description": "Keep only messages whose visible text contains this substring, case-insensitively. Useful for finding where a decision or a piece of work appeared without paging through everything."
+    },
+    "max_chars": {
+      "type": "number",
+      "minimum": 400,
+      "maximum": 20000,
+      "description": "Character budget for this page, including the header and the paging note. Defaults to 8000. A long message is cut with an ellipsis when the budget runs out."
+    },
+    "offset": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Number of matching messages to skip, for paging. Pass the `next offset` the previous page reported, keeping `query`, `message_start` and `message_end` the same; do not guess an offset."
+    }
+  },
+  "additionalProperties": false,
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
