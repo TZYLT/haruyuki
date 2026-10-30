@@ -20,7 +20,10 @@ import { __testSetBackend } from "@/backend";
 import { DeterministicPongExecutor } from "@/backend/dev/headless-turn-executor";
 import { LocalBackend } from "@/backend/local/local-backend";
 import { settingsManager } from "@/settings-manager";
-import { DREAM_TOOL_NAMES } from "@/tools/dream-tool-names";
+import {
+  DREAM_REQUIRED_TOOL_NAMES,
+  DREAM_TOOL_NAMES,
+} from "@/tools/dream-tool-names";
 import { toolFilter } from "@/tools/filter";
 import { getExecutionContextById } from "@/tools/manager";
 import { prepareToolExecutionContextForScope } from "@/tools/toolset";
@@ -129,6 +132,28 @@ describe("dream tool declaration", () => {
     expect((await clientToolNames(agent.id, conversation.id)).names).toContain(
       "SessionRead",
     );
+  });
+
+  test("a dream conversation still declares the ordinary tools its prompts require", async () => {
+    // The dream prompts tell the tiers to read and edit memory files, which a
+    // model-derived preset may not carry (codex has no Read/Edit/Write/Glob/Grep;
+    // `none` is empty). Lead's declaration list adds them; this pins that the
+    // declared payload the prompt describes is actually there.
+    const agent = await backend.createAgent({ name: "Dream file tools" });
+    const session = await createDreamSession({
+      agentId: agent.id,
+      runId: "run-4",
+    });
+    const declared = await clientToolNames(agent.id, session.conversationId);
+    for (const toolName of DREAM_REQUIRED_TOOL_NAMES) {
+      expect(declared.names).toContain(toolName);
+    }
+    expect(DREAM_REQUIRED_TOOL_NAMES).toContain("Read");
+    expect(DREAM_REQUIRED_TOOL_NAMES).toContain("Write");
+    expect(DREAM_REQUIRED_TOOL_NAMES).toContain("Edit");
+    expect(DREAM_REQUIRED_TOOL_NAMES).toContain("Glob");
+    expect(DREAM_REQUIRED_TOOL_NAMES).toContain("Grep");
+    expect(DREAM_REQUIRED_TOOL_NAMES).toContain("SessionRead");
   });
 
   test("AskUserQuestion is excluded from a dream conversation", async () => {

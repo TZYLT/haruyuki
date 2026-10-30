@@ -20,13 +20,13 @@
 import { type SpawnOptions, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { dirname, resolve } from "node:path";
+import { isDreamRunLive } from "@/agent/dream/dream-liveness";
 import {
   addTask,
   type CronTask,
   DREAM_PLACEHOLDER_CRON,
   getScheduleTask,
   listTasks,
-  readDreamSignalState,
   serializeDreamTaskPayload,
 } from "@/cron";
 import {
@@ -265,7 +265,11 @@ export async function startDreamRun(
   }
   let running = false;
   try {
-    running = readDreamSignalState(input.agentId).running !== null;
+    // Not the bare marker: a crashed run leaves the marker behind, and that
+    // remnant used to make `/dream run` refuse forever. T2's `isDreamRunLive`
+    // combines marker + lease + owner liveness + an age bound, so a dead run
+    // reads as "not live" and the user keeps the manual escape hatch.
+    running = isDreamRunLive(input.agentId);
   } catch {
     running = false;
   }

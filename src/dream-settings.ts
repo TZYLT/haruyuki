@@ -424,7 +424,18 @@ export function updateDreamSettings(
   agentId?: string,
 ): void {
   if (!agentId) {
-    settingsManager.updateSettings(globalUpdatesFromPatch(patch));
+    const updates = globalUpdatesFromPatch(patch);
+    // `tiers` is a *map* of four independent switches, not one value: a caller
+    // that reports only the tier the user just toggled must not erase the other
+    // three back to their defaults (F-06 review: two settings-page toggles in a
+    // row used to undo each other).
+    if (patch.tiers !== undefined) {
+      updates.dreamTiers = {
+        ...(settingsManager.getSettings().dreamTiers ?? {}),
+        ...patch.tiers,
+      };
+    }
+    settingsManager.updateSettings(updates);
     return;
   }
   const current = settingsManager.getSettings().dreamSettingsByAgent ?? {};
@@ -434,6 +445,11 @@ export function updateDreamSettings(
     if (patch[key] !== undefined) {
       (merged as Record<string, unknown>)[key] = patch[key];
     }
+  }
+  // Same merge for the per-agent override: the stored override only carries the
+  // tiers a user touched, and a one-tier patch must not drop the others.
+  if (patch.tiers !== undefined) {
+    merged.tiers = { ...(existing.tiers ?? {}), ...patch.tiers };
   }
   settingsManager.updateSettings({
     dreamSettingsByAgent: { ...current, [agentId]: merged },

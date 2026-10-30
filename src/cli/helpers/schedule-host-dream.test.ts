@@ -229,3 +229,31 @@ describe("requestTuiScheduleTick (turn-end nudge, R-5.2.4)", () => {
     expect(() => requestTuiScheduleTick(10)).not.toThrow();
   });
 });
+
+// ── Lead fix: startup crash recovery (R-5.8.4) ──────────────────────
+
+describe("TUI host startup recovery", () => {
+  test("runs exactly once when the host starts, without touching the tick", async () => {
+    const { runner } = fakeRunner();
+    const recoveries: string[] = [];
+    const host = startTuiScheduleHost({
+      appendTaskNotificationEvents: () => true,
+      runner,
+      now: () => NOW,
+      firstTickMs: NEVER,
+      tickIntervalMs: NEVER,
+      recoverStaleRuns: async () => {
+        recoveries.push("recover");
+        return {};
+      },
+    });
+    try {
+      await Bun.sleep(20);
+      expect(recoveries).toEqual(["recover"]);
+      await host.tick();
+      expect(recoveries).toEqual(["recover"]);
+    } finally {
+      host.dispose();
+    }
+  });
+});

@@ -35,7 +35,7 @@ import {
 import { isOwnMemoryWrite } from "./memory-write-allowance";
 import { permissionMode } from "./mode";
 import { isMemoryDirCommand, isReadOnlyShellCommand } from "./read-only-shell";
-import { checkReflectionWriteBlock } from "./reflection-write-guard";
+import { checkMemoryWriteBlock } from "./reflection-write-guard";
 import { sessionPermissions } from "./session";
 import type {
   PermissionCheckResult,
@@ -336,24 +336,25 @@ function checkPermissionForEngine(
     };
   }
 
-  // Reflection write guard — while a reflection run owns this agent's memory
-  // repository, its file-write tools are rejected. Deliberately *before* deny
-  // rules, mode overrides and the own-memory allowance: neither a permission
-  // mode nor an allow rule may bypass the single-writer contract (§5.7.5).
-  // Reads and Bash are never blocked (§5.7.3).
-  const reflectionBlock = checkReflectionWriteBlock({
+  // Single-writer guard: while a reflection run (in-process) or a live dream
+  // run (own process) owns this agent's memory repository, the parent's
+  // file-write tools are rejected. Deliberately *before* deny rules, mode
+  // overrides and the own-memory allowance: neither a permission mode nor an
+  // allow rule may bypass the contract (§5.7.5, F-06 R-5.1.4). Reads and Bash
+  // are never blocked (§5.7.3).
+  const memoryWriteBlock = checkMemoryWriteBlock({
     toolName: permissionToolName,
     toolArgs,
     agentId: agentId ?? null,
     workingDirectory,
   });
-  if (reflectionBlock) {
-    traceEvent(trace, "reflection-write-guard", "Reflection run holds memory");
+  if (memoryWriteBlock) {
+    traceEvent(trace, memoryWriteBlock.trace, memoryWriteBlock.matchedRule);
     return {
       result: {
         decision: "deny",
-        matchedRule: "reflection run owns the memory repository",
-        reason: reflectionBlock.message,
+        matchedRule: memoryWriteBlock.matchedRule,
+        reason: memoryWriteBlock.message,
       },
       trace,
     };

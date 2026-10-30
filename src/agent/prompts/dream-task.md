@@ -21,9 +21,22 @@ time and continue.
 - time limit: `{{time_limit}}`
 - tiers planned, in this order: {{tier_plan}}
 
+## Turns
+
+Each turn handles **exactly one tier**; the harness starts the next tier in a
+new turn, after checking the budget. So a normal turn ends like this: finish
+this tier's work, commit it, and end the turn. The next tier arrives as a new
+message.
+
+**Do not call `DreamDone` at the end of a turn unless the whole run must stop
+now** — the budget is exhausted, or the remaining work needs the user. Calling
+`DreamDone` ends the whole run and skips every remaining tier. The harness
+already knows how to continue; you do not need to signal "this tier is done".
+
 Work through the tiers in order. Read `dream-tiers.md` for what each tier may do
-and produce. The run ends when the tiers are done or when the budget says stop;
-call `DreamDone` in either case and write the report body as your last message.
+and produce. The whole run ends when the last tier is done or when the budget
+says stop; only then call `DreamDone` and write the report body as your last
+message.
 
 ## Tools
 
@@ -60,11 +73,14 @@ Do not commit:
 ## Report
 
 Your final message is the report body: what you changed and why, what you
-learned, and what is left (with enough detail for the next run to continue).
-Write it in plain Markdown; do not add frontmatter — the harness adds it.
+learned, and what is left — enough detail that the user, or a later run reading
+`maintenance/dream-report.md`, can continue. Write it in plain Markdown; do not
+add frontmatter — the harness adds it.
 
 ## Handoff
 
 Before the final message, call `DreamDone` once with `handoff`: one short
-paragraph saying where the next run should start, or that nothing is left.
-{{handoff_from_previous}}
+paragraph saying where the work should resume in a later run, or that nothing is
+left. The handoff is written to the run record and included in
+`maintenance/dream-report.md`; a later run can read that report if it needs the
+context. There is no automatic handoff message between runs.

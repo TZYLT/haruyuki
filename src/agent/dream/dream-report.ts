@@ -21,11 +21,16 @@
  * The agent never commits this path (`dream-task.md` says so): committing it
  * here, alone, is the whole point of the split.
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCurrentAgentName } from "@/agent/context";
 import { getScopedMemoryFilesystemRoot } from "@/agent/memory-filesystem";
 import { commitMemoryWrite } from "@/agent/memory-git";
+import {
+  DEFAULT_MEMORY_CONSTRAINTS_CONFIG,
+  MEMORY_CONSTRAINTS_CONFIG_PATH,
+  parseMemoryConstraintsConfig,
+} from "@/memory-constraints";
 import type { DreamRunMetadata } from "@/types/dream-run-metadata";
 
 /** First-level directory the report lives in (`R-5.6.2`, Q-41). */
@@ -38,10 +43,14 @@ export const DREAM_REPORT_PATH = `${DREAM_REPORT_DIR}/${DREAM_REPORT_FILENAME}`;
 export const DREAM_REPORT_INDEX_PATH = `${DREAM_REPORT_DIR}/MEMORY.md`;
 /**
  * Body cap. The memory constraints limit a projected file to 20,000 characters
- * including frontmatter, so the body is cut below that with a visible notice
- * rather than letting the whole commit fail.
+ * by default (including frontmatter), so the body is cut below that with a
+ * visible notice rather than letting the whole commit fail. The effective limit
+ * is read from the repository's `.memfs.config.json` when present — see
+ * {@link resolveDreamReportFileLimit}.
  */
 export const DREAM_REPORT_MAX_BODY_CHARS = 16_000;
+/** Room for the two newlines around the body plus the trailing newline. */
+const REPORT_FILE_FRAMING_CHARS = 8;
 
 /** Content of the directory index when the harness has to create it. */
 export const DREAM_REPORT_INDEX_CONTENT = `# Maintenance
@@ -112,9 +121,65 @@ export function buildFallbackDreamReportBody(
   return lines.join("\n");
 }
 
-function clampReportBody(body: string): string {
-  if (body.length <= DREAM_REPORT_MAX_BODY_CHARS) return body;
-  return `${body.slice(0, DREAM_REPORT_MAX_BODY_CHARS - 80).trimEnd()}\n\n(Report truncated at ${DREAM_REPORT_MAX_BODY_CHARS} characters by the harness.)`;
+/**
+ * The repository's effective per-file character limit.
+ *
+ * `maxFileCharacters` is global and defaults to 20,000; a tracked
+ * `.memfs.config.json` may lower it. Per-glob `fileCharacterLimits` overrides are
+ * deliberately not consulted: this writer owns exactly one path, and a
+ * repository that caps `maintenance/**` below its global cap is rare enough that
+ * the commit rejection (which the controller surfaces as a report-write failure)
+ * is the honest outcome rather than a second, drifting glob matcher here.
+ *
+ * A missing or unparsable config falls back to the default: the pre-commit hook
+ * re-reads the real config and rejects the commit for its own reason if the file
+ * is actually too large.
+ */
+export function resolveDreamReportFileLimit(memoryDir: string): number {
+  const fallback =
+    DEFAULT_MEMORY_CONSTRAINTS_CONFIG.maxFileCharacters ??
+    DREAM_REPORT_MAX_BODY_CHARS + 200;
+  try {
+    const raw = readFileSync(
+      join(memoryDir, MEMORY_CONSTRAINTS_CONFIG_PATH),
+      "utf8",
+    );
+    const parsed = parseMemoryConstraintsConfig(raw);
+    return typeof parsed.maxFileCharacters === "number"
+      ? parsed.maxFileCharacters
+      : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Body budget that keeps the whole report file inside the repository limit:
+ * the frontmatter is measured on the real content, and the framing newlines are
+ * subtracted before the 16,000-character ceiling is applied.
+ */
+export function resolveDreamReportBodyLimit(input: {
+  memoryDir: string;
+  metadata: DreamRunMetadata;
+  now: number;
+}): number {
+  const frontmatterChars = buildDreamReportFrontmatter(
+    input.metadata,
+    input.now,
+  ).length;
+  const available =
+    resolveDreamReportFileLimit(input.memoryDir) -
+    frontmatterChars -
+    REPORT_FILE_FRAMING_CHARS;
+  return Math.max(1, Math.min(DREAM_REPORT_MAX_BODY_CHARS, available));
+}
+
+function clampReportBody(body: string, bodyLimit: number): string {
+  const limit = Math.max(1, Math.min(bodyLimit, DREAM_REPORT_MAX_BODY_CHARS));
+  if (body.length <= limit) return body;
+  const notice = `\n\n(Report truncated at ${limit} characters by the harness.)`;
+  const bodyChars = Math.max(1, limit - notice.length);
+  return `${body.slice(0, bodyChars).trimEnd()}${notice}`;
 }
 
 /** Assemble the full file: v2 frontmatter plus body, in the validated order. */
@@ -122,11 +187,12 @@ export function buildDreamReportFile(
   metadata: DreamRunMetadata,
   body: string | undefined,
   now: number,
+  bodyLimit: number = DREAM_REPORT_MAX_BODY_CHARS,
 ): string {
   const trimmed = typeof body === "string" ? body.trim() : "";
   const resolvedBody =
     trimmed.length > 0 ? trimmed : buildFallbackDreamReportBody(metadata);
-  return `${buildDreamReportFrontmatter(metadata, now)}\n\n${clampReportBody(resolvedBody)}\n`;
+  return `${buildDreamReportFrontmatter(metadata, now)}\n\n${clampReportBody(resolvedBody, bodyLimit)}\n`;
 }
 
 /**
@@ -154,9 +220,15 @@ export async function writeDreamReport(
   if (!existsSync(indexFile)) {
     writeFileSync(indexFile, DREAM_REPORT_INDEX_CONTENT, "utf8");
   }
+  const now = Date.now();
   writeFileSync(
     reportFile,
-    buildDreamReportFile(input.metadata, input.body, Date.now()),
+    buildDreamReportFile(
+      input.metadata,
+      input.body,
+      now,
+      resolveDreamReportBodyLimit({ memoryDir, metadata: input.metadata, now }),
+    ),
     "utf8",
   );
 

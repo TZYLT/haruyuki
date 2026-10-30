@@ -519,3 +519,39 @@ describe("shared visible-text cleaning", () => {
     ).toEqual(["just words"]);
   });
 });
+
+describe("review-fix regressions", () => {
+  test("CRLF in a tool return is normalised before the detail splits lines", () => {
+    const [row] = projectHiddenSessionMessage(
+      wire("crlf", {
+        message_type: "tool_return_message",
+        tool_returns: [
+          {
+            status: "success",
+            tool_return: "line one\r\nline two\rline three",
+          },
+        ],
+      }),
+    );
+    expect(row?.detail).toBe("line one\nline two\nline three");
+    expect(row?.detail).not.toContain("\r");
+    expect(row?.text).toBe("← success · line one");
+  });
+
+  test("an unknown type's JSON fallback does not re-leak an injected reminder", () => {
+    const [row] = projectHiddenSessionMessage(
+      wire("leak", {
+        message_type: "mystery_message",
+        content: [
+          {
+            type: "text",
+            text: "<system-reminder>secret plumbing</system-reminder>",
+          },
+        ],
+      }),
+    );
+    expect(row).toBeDefined();
+    expect(row?.text).not.toContain("<system-reminder>");
+    expect(row?.text).not.toContain("secret plumbing");
+  });
+});

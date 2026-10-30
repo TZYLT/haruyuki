@@ -76,12 +76,18 @@ Every tier follows the same ground rules:
   apply.
 - **Priority: lowest.** This is the first tier to drop when the budget is short.
 
-## Finishing
+## Finishing the whole run (not each tier)
+
+Only do this when the **whole run** is ending: after the last tier, or when the
+budget/user forces an early stop. Finishing a single tier's turn is just
+"commit this tier's work and end the turn" — the harness starts the next tier in
+a new turn. Do not run this procedure at the end of every tier.
 
 1. Commit whatever is coherent and worth keeping.
 2. Call `DreamStatus` if you are unsure how much room is left.
 3. Call `DreamDone` once with a `handoff` paragraph: what is left, which files
-   are half-done, and what the next run should do first. If everything planned is
+   are half-done, and what should happen if the work resumes later. The report
+   carries this for the user and for any later run. If everything planned is
    complete, say so explicitly.
 4. Write the report body as your final message — what changed and why, what you
    concluded, what is left. The harness adds frontmatter and commits it

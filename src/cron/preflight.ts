@@ -17,6 +17,7 @@ import { ensureCronSignalSourceRegistered } from "./cron-signal";
 import { readScheduleFile, toScheduleTaskV2 } from "./cron-store";
 import {
   ensureDreamSignalSourceRegistered,
+  isDreamRunMarkerActive,
   readDreamSignalState,
 } from "./dream-signal";
 import { evaluateSignals, nextSignalDueAt } from "./signal";
@@ -52,7 +53,14 @@ function registerDreamSignalSourceForPreflight(): void {
     readSettingsForAgent: (agentId) => readDreamSettings(agentId),
     readPressure: () => Number.MAX_SAFE_INTEGER,
     readLastActiveAt: () => null,
-    isRunning: (agentId) => readDreamSignalState(agentId).running !== null,
+    // Same age bound as the real deps: a marker left by a killed process must
+    // not keep the probe (and therefore the trigger) suppressed forever.
+    isRunning: (agentId) =>
+      isDreamRunMarkerActive(
+        readDreamSignalState(agentId).running,
+        readDreamSettings(agentId),
+        new Date(),
+      ),
     now: () => new Date(),
   });
 }

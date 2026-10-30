@@ -47,15 +47,18 @@ export interface VisibleMessageText {
  * adds a wrapper.
  */
 const INJECTED_BLOCK_PATTERN =
-  /<(system-reminder|system-alert|task-notification)>[\s\S]*?<\/\1>/g;
+  /<(system-reminder|system-alert|task-notification)\b[^>]*>[\s\S]*?<\/\1>/gi;
 
 /**
  * Normalize a text run: line endings, injected blocks, trailing spaces and
  * runs of blank lines. Returns `""` when nothing visible is left.
  *
- * Only **paired** blocks are removed. A message that merely quotes an opening
- * tag (`<system-reminder>` in a bug report, say) keeps the quote, which is the
- * same rule the F-04 recall projection applies.
+ * Only **paired** blocks are removed. The pattern tolerates attributes, extra
+ * whitespace and any case (`<SYSTEM-REMINDER kind="note">`), because a future
+ * producer may add an attribute and a cleaner that stops matching would leak
+ * harness plumbing into "visible text". A message that merely quotes an
+ * opening tag with no closing tag (`<system-reminder>` in a bug report, say)
+ * keeps the quote, which is the same rule the F-04 recall projection applies.
  */
 export function cleanVisibleText(text: string): string {
   return text

@@ -56,6 +56,15 @@ import { getRuntimeContext } from "@/runtime-context";
 
 const TOOL_NAME = "DreamAuthorization";
 
+/**
+ * The task tier's discipline. The tool cannot verify a quote against a user
+ * conversation, so it says out loud that unverified is not permission: writing
+ * or editing an entry to authorize the agent's own work is itself a discipline
+ * violation, not a way to pass the gate.
+ */
+const AUTHORIZATION_DISCIPLINE =
+  "Entries must quote the user's own words. Writing or editing an authorization entry to cover your own work violates the task-tier discipline, and an unverified quote is not permission: do not manufacture or amend entries.";
+
 /** The preferred carrier, relative to the memory repository root. */
 export const DREAM_AUTHORIZATION_PATH = "authorization.md";
 /** The legacy-layout carrier, read when the preferred file does not exist. */
@@ -231,16 +240,25 @@ export function parseDreamAuthorizationEntries(
   const entries: DreamAuthorizationEntry[] = [];
   const problems: string[] = [];
   for (const draft of drafts) {
-    const missing = DREAM_AUTHORIZATION_REQUIRED_FIELDS.filter(
-      (field) => (draft.fields[field] ?? "").trim().length === 0,
-    );
+    // Normalize first, then judge: `- scope: ""` has two characters but says
+    // nothing, and treating it as present would turn an empty entry into an
+    // ACTIVE authorization (F-06 review finding).
+    const scope = stripOuterQuotes(draft.fields.scope ?? "");
+    const source = stripOuterQuotes(draft.fields.source ?? "");
+    const quote = stripOuterQuotes(draft.fields.quote ?? "");
+    const rawExpires = stripOuterQuotes(draft.fields.expires ?? "");
+    const missing: string[] = [];
+    if (scope.length === 0) missing.push("scope");
+    if (rawExpires.length === 0) missing.push("expires");
+    if (source.length === 0) missing.push("source");
+    if (quote.length === 0) missing.push("quote");
     if (missing.length > 0) {
       problems.push(
         `line ${draft.line}: "${draft.title || "(untitled entry)"}" is missing required field${missing.length === 1 ? "" : "s"} ${missing.join(", ")} — ignored, so it authorizes nothing.`,
       );
       continue;
     }
-    const expires = normalizeExpires(draft.fields.expires ?? "");
+    const expires = normalizeExpires(rawExpires);
     if (expires === undefined) {
       problems.push(
         `line ${draft.line}: "${draft.title || "(untitled entry)"}" has an invalid \`expires\` value ${JSON.stringify(draft.fields.expires)} — use YYYY-MM-DD or never; the entry is ignored.`,
@@ -250,10 +268,10 @@ export function parseDreamAuthorizationEntries(
     entries.push({
       title: draft.title,
       line: draft.line,
-      scope: stripOuterQuotes(draft.fields.scope ?? ""),
+      scope,
       expires,
-      source: stripOuterQuotes(draft.fields.source ?? ""),
-      quote: stripOuterQuotes(draft.fields.quote ?? ""),
+      source,
+      quote,
     });
   }
   return { entries, problems };
@@ -407,6 +425,7 @@ export async function dream_authorization(
     lines.push(
       "No authorization: do not infer one from earlier conversation, and skip anything that would need it.",
     );
+    lines.push(AUTHORIZATION_DISCIPLINE);
   } else {
     lines.push(
       `${TOOL_NAME}: ${reported.length} matching authorization entr${reported.length === 1 ? "y" : "ies"} in ${relativePath} (read-only).`,
@@ -417,6 +436,7 @@ export async function dream_authorization(
     lines.push(
       "An entry authorizes only what its scope and quote say, and only until it expires. A task not covered by one of these entries is not authorized.",
     );
+    lines.push(AUTHORIZATION_DISCIPLINE);
   }
   if (expiredHidden > 0) {
     lines.push(

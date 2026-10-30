@@ -20,6 +20,7 @@ import {
   resolveDreamBudgetTokens,
 } from "@/dream-budget-math";
 import type { ResolvedDreamSettings } from "@/dream-settings";
+import type { DreamTier } from "@/types/dream-run-metadata";
 
 /** Ratios of the base allowance that earn a reminder (R-5.3.5). */
 export const DREAM_BUDGET_THRESHOLDS: readonly number[] = [0.4, 0.8, 1];
@@ -216,14 +217,21 @@ export function buildDreamBudgetReminder(
 export function describeDreamBudgetStop(
   tracker: DreamBudgetTracker,
   lastTier?: string,
+  remainingTiers: readonly DreamTier[] = [],
 ): string {
   const spent = formatTokenCount(tracker.spentTokens);
   const allowance = formatTokenCount(tracker.allowanceTokens);
-  return [
-    `Budget exhausted after spending ${spent} of ${allowance} budget tokens.`,
-    lastTier
-      ? `The ${lastTier} tier completed; later tiers were not started.`
-      : `No tier completed.`,
-    `Continue from the next unfinished tier on the next run.`,
-  ].join(" ");
+  const remaining =
+    remainingTiers.length > 0
+      ? ` Remaining tiers not started: ${remainingTiers.join(", ")}.`
+      : "";
+  return (
+    [
+      `Budget exhausted after spending ${spent} of ${allowance} budget tokens.`,
+      lastTier
+        ? `The ${lastTier} tier completed; later tiers were not started.`
+        : `No tier completed.`,
+      `Continue from the next unfinished tier on the next run.`,
+    ].join(" ") + remaining
+  );
 }

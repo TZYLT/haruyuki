@@ -3,9 +3,12 @@ import type { Message } from "@letta-ai/letta-client/resources/agents/messages";
 import { __testSetBackend } from "@/backend";
 import {
   classifyDetailTone,
+  HIDDEN_SESSION_DETAIL_MAX_ROWS,
   HiddenSessionDetail,
+  rowLines,
 } from "@/cli/components/HiddenSessionDetail";
 import { terminalTextWidth } from "@/cli/helpers/char-width";
+import type { HiddenSessionRow } from "@/cli/helpers/hidden-session-rows";
 import {
   resetMouseHandlers,
   routeMouseReport,
@@ -147,6 +150,30 @@ async function painted(tty: ReturnType<typeof mountInkTty>): Promise<string[]> {
 
 function frame(rows: string[]): string {
   return rows.join("\n");
+}
+
+/**
+ * Poll the painted frame instead of sleeping a fixed time.
+ *
+ * The wheel handler only sets state; how long the re-render takes depends on
+ * the machine. A fixed wait here was the one flaky step in this file (three
+ * notches would all read the same stale cursor on a loaded runner).
+ */
+async function waitFor(
+  tty: ReturnType<typeof mountInkTty>,
+  predicate: (text: string) => boolean,
+  timeoutMs = 1000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let text = "";
+  while (Date.now() < deadline) {
+    text = await tty.text();
+    if (predicate(text)) return text;
+    await settle(20);
+  }
+  throw new Error(
+    `frame never matched within ${timeoutMs}ms: ${JSON.stringify(text)}`,
+  );
 }
 
 afterEach(() => {
@@ -597,35 +624,93 @@ describe("the readable detail (F-06 R-5.7.4)", () => {
         content: `row number ${index + 1}`,
       }),
     );
+    // 15 terminal rows leave a 3-row window, so ONE notch (3 rows) moves the
+    // window's start and the footer changes: the assertion has an observable
+    // signal after a single event rather than after an arbitrary number of
+    // them.
     const { tty } = mount(
       sessionFixture({ origin: "dream", context_mode: "standalone" }),
       backend,
-      { rows: 18 },
+      { rows: 15 },
     );
     try {
-      const before = frame(await painted(tty));
-      expect(before).toContain("lines 1-");
-      // Each notch is its own input event in the real app, so each one sees the
-      // cursor the previous notch left; a settled frame between them is what
-      // makes that true here too.
-      for (let notch = 0; notch < 3; notch += 1) {
-        const claimed = routeMouseReport({
-          kind: "press",
-          button: "none",
-          wheel: "down",
-          column: 1,
-          row: 1,
-          modifiers: { shift: false, alt: false, ctrl: false },
-        });
-        expect(claimed).toBe(true);
-        await settle(40);
-      }
-      const after = frame(await painted(tty));
-      expect(after).not.toContain("lines 1-");
+      expect(frame(await painted(tty))).toContain("lines 1-");
+      const claimed = routeMouseReport({
+        kind: "press",
+        button: "none",
+        wheel: "down",
+        column: 1,
+        row: 1,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+      expect(claimed).toBe(true);
+      const after = await waitFor(tty, (text) => !text.includes("lines 1-"));
       expect(after).toMatch(/lines \d+-\d+ of \d+/);
     } finally {
       tty.stop();
     }
+  });
+
+  test("the wheel does nothing while the delete confirmation is up", async () => {
+    const backend = new DetailBackend();
+    backend.messages = Array.from({ length: 20 }, (_, index) =>
+      message(`m${index + 1}`, "user_message", {
+        content: `row number ${index + 1}`,
+      }),
+    );
+    const { tty } = mount(
+      sessionFixture({ origin: "dream", context_mode: "standalone" }),
+      backend,
+      { rows: 15 },
+    );
+    try {
+      expect(frame(await painted(tty))).toContain("lines 1-");
+      await tty.press("d");
+      expect(await tty.text()).toContain("Delete this hidden session?");
+
+      // The confirmation is modal: the handler claims the notch and does not
+      // scroll, so the router reports it consumed (the shell's content layer
+      // must not scroll the transcript behind the dialog), and the window
+      // behind the dialog did not move.
+      const claimed = routeMouseReport({
+        kind: "press",
+        button: "none",
+        wheel: "down",
+        column: 1,
+        row: 1,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+      expect(claimed).toBe(true);
+
+      await tty.press(ESCAPE);
+      const after = await waitFor(tty, (text) => text.includes("lines 1-"));
+      expect(after).not.toContain("Delete this hidden session?");
+      // The wheel notch was swallowed by the modal, not deferred: the window is
+      // exactly where it was before the dialog opened.
+      expect(after).toContain("lines 1-");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a wrapped detail is capped at a bounded number of physical rows", () => {
+    const row: HiddenSessionRow = {
+      id: "long",
+      kind: "tool_result",
+      role: "tool",
+      time: "",
+      text: "head",
+      detail: Array.from({ length: 300 }, () => "x".repeat(200)).join("\n"),
+      collapsible: true,
+    };
+    const lines = rowLines("long#0", row, true, 20);
+    const detailRows = lines.filter((line) => line.kind === "detail");
+    expect(detailRows.length).toBe(HIDDEN_SESSION_DETAIL_MAX_ROWS);
+    expect(lines.length).toBeLessThanOrEqual(
+      HIDDEN_SESSION_DETAIL_MAX_ROWS + 4,
+    );
+    // The note is clipped to the same width as every other row.
+    expect(lines.some((line) => line.text.includes("detail tr"))).toBe(true);
   });
 
   test("an expanded detail wraps its long lines and keeps the frame inside the width", async () => {

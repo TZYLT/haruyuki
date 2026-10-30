@@ -140,6 +140,7 @@ export async function executeDreamRun(
   deps: DreamRunDeps,
 ): Promise<DreamRunTaskResult> {
   const { task, runId, signal } = input;
+  const manual = input.manual === true;
   const startedAtDate = deps.now();
   const startedAt = startedAtDate.getTime();
 
@@ -233,7 +234,14 @@ export async function executeDreamRun(
       );
     }
 
-    const pressure = deps.readPressure(agentId);
+    const measuredPressure = deps.readPressure(agentId);
+    // A manual `/dream run` is the user asking right now; on a fresh ledger the
+    // measured pressure is 0, which would resolve a 0 budget and make the run a
+    // no-op. Use the configured threshold as the floor for manual runs only —
+    // the automatic trigger keeps the measured value (R-5.3.1).
+    const pressure = manual
+      ? Math.max(measuredPressure, settings.pressureThreshold)
+      : measuredPressure;
     const budgetTokens = resolveDreamRunBudgetTokens({
       settings,
       pressure,
@@ -248,7 +256,7 @@ export async function executeDreamRun(
 
     const initialMetadata: DreamRunMetadata = {
       runId,
-      triggerSource: input.occurrence.length > 0 ? "scheduled" : "manual",
+      triggerSource: manual ? "manual" : "scheduled",
       agentId,
       conversationId,
       tierPlan,
@@ -355,7 +363,26 @@ export async function executeDreamRun(
     if (timeoutHit) terminalStatus = "timeout";
     else if (userBack) terminalStatus = "cancelled";
     else if (externalAbort && !terminalStatus) terminalStatus = "cancelled";
-    else if (!terminalStatus) terminalStatus = "succeeded";
+    else if (!terminalStatus) {
+      // The tier loop finished its plan. If the last turn crossed the budget
+      // and tiers are still unstarted (defensive: a turn may end the plan
+      // early), the run is budget_exhausted; otherwise it succeeded, but the
+      // 100 % reminder it crossed must not be dropped silently.
+      const completedTiers = progress.tierReached
+        ? progress.tierPlan.indexOf(progress.tierReached) + 1
+        : 0;
+      const remainingTiers = progress.tierPlan.slice(completedTiers);
+      if (tracker.isExhausted() && remainingTiers.length > 0) {
+        terminalStatus = "budget_exhausted";
+        handoff = describeDreamBudgetStop(
+          tracker,
+          progress.tierReached ?? undefined,
+          remainingTiers,
+        );
+      } else {
+        terminalStatus = "succeeded";
+      }
+    }
 
     if (terminalStatus === "cancelled" && handoff === null) {
       handoff =
@@ -366,10 +393,25 @@ export async function executeDreamRun(
         "The configured time limit was reached; the memory checkout was rolled back to the run baseline. The next run should start over from the same plan.";
     }
     if (terminalStatus === "budget_exhausted" && handoff === null) {
+      const completedTiers = progress.tierReached
+        ? progress.tierPlan.indexOf(progress.tierReached) + 1
+        : 0;
       handoff = describeDreamBudgetStop(
         tracker,
         progress.tierReached ?? undefined,
+        progress.tierPlan.slice(completedTiers),
       );
+    }
+    if (
+      terminalStatus === "succeeded" &&
+      tracker.isExhausted() &&
+      progress.reminders.length > 0
+    ) {
+      // The final turn crossed 100 %: keep the reminder text with the report
+      // instead of discarding it (there is no next turn to deliver it to).
+      handoff = [handoff, ...progress.reminders]
+        .filter((part): part is string => typeof part === "string")
+        .join("\n\n");
     }
 
     // ── Rollback: timeout only. Crash rollback lives in dream-recovery. ──
@@ -445,7 +487,10 @@ export async function executeDreamRun(
       );
     }
 
-    if (finalStatus === "succeeded" || finalStatus === "budget_exhausted") {
+    if (finalStatus === "succeeded") {
+      // R-5.2.3: pressure is "since the last *successful* dream". A run that
+      // stopped at its budget did not digest the backlog, so the marker stays
+      // where it was and the remaining rot can trigger the next run.
       deps.recordPressureBaseline(agentId, finishedAt);
     }
 

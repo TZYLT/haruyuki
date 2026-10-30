@@ -167,6 +167,12 @@ export interface TuiScheduleHostOptions {
   ) => { pid?: number } | null;
   tickIntervalMs?: number;
   firstTickMs?: number;
+  /**
+   * F-06 fix (R-5.8.4): one-shot startup recovery of dream runs a killed process
+   * left behind. Defaults to T2's `recoverDreamRuns()`; tests inject a spy. It
+   * is fire-and-forget (the TUI is long-lived) and idempotent.
+   */
+  recoverStaleRuns?: () => Promise<unknown>;
 }
 
 export interface TuiScheduleHost {
@@ -225,6 +231,24 @@ export function startTuiScheduleHost(
   options: TuiScheduleHostOptions,
 ): TuiScheduleHost {
   const now = options.now ?? (() => new Date());
+  // F-06 fix (R-5.8.4): repair dream runs a killed process left behind, once per
+  // host start. Fire-and-forget because the TUI is long-lived, and the heavy
+  // recovery graph is imported dynamically so the host's module graph stays as
+  // it was. Idempotent: running it again from a later host start is harmless.
+  const recoverStaleRuns =
+    options.recoverStaleRuns ??
+    (async () => {
+      const { recoverDreamRuns } = await import("@/agent/dream/dream-recovery");
+      return recoverDreamRuns();
+    });
+  void recoverStaleRuns().catch((error: unknown) => {
+    debugWarn(
+      "dream",
+      `startup dream recovery failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  });
   // F-06 M1: dream task ids whose delegated child is still alive. A delegated
   // dream occurrence is deliberately left unconsumed by the core, so this is
   // what stops a second child for the same task while the first runs.

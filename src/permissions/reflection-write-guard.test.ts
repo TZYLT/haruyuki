@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setCurrentAgentId } from "@/agent/context";
+import { createDreamLease, deleteDreamLease } from "@/agent/dream/dream-lease";
 import { getScopedMemoryFilesystemRoot } from "@/agent/memory-filesystem";
 import {
   attachReflectionTask,
@@ -10,9 +11,16 @@ import {
   resetReflectionRuns,
   startReflectionRun,
 } from "@/agent/reflection-run";
+import {
+  EMPTY_DREAM_SIGNAL_STATE,
+  writeDreamSignalState,
+} from "@/cron/dream-signal";
 import { checkPermission } from "@/permissions/checker";
 import { permissionMode } from "@/permissions/mode";
-import { checkReflectionWriteBlock } from "@/permissions/reflection-write-guard";
+import {
+  checkDreamWriteBlock,
+  checkReflectionWriteBlock,
+} from "@/permissions/reflection-write-guard";
 
 const AGENT_ID = "agent-reflection-guard-test";
 const OTHER_AGENT_ID = "agent-reflection-guard-other";
@@ -38,6 +46,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetReflectionRuns();
+  deleteDreamLease(AGENT_ID);
   setCurrentAgentId(null);
   permissionMode.reset();
   for (const key of ENV_KEYS) {
@@ -213,5 +222,104 @@ describe("permission checker with an active reflection run", () => {
     const result = check("Edit", { file_path: join(memoryDir, "persona.md") });
     expect(result.decision).toBe("allow");
     expect(result.reason).toBe("Agent memory directory operation");
+  });
+});
+
+describe("dream write guard (F-06 R-5.1.4)", () => {
+  const live = {
+    isRunLive: () => true,
+    isDreamContext: () => false,
+    readRunningRunId: () => "run-dream",
+  } as const;
+
+  const dreamGuard = (
+    toolName: string,
+    toolArgs: Record<string, unknown>,
+    deps: Record<string, unknown> = {},
+  ) =>
+    checkDreamWriteBlock(
+      {
+        toolName,
+        toolArgs,
+        agentId: AGENT_ID,
+        workingDirectory: "/Users/test/project",
+      },
+      { ...live, ...deps },
+    );
+
+  test("blocks memory writes while a live dream run owns the checkout", () => {
+    for (const toolName of ["Write", "Edit"]) {
+      const block = dreamGuard(toolName, {
+        file_path: join(memoryDir, "persona.md"),
+      });
+      expect(block?.blocked).toBe(true);
+      expect(block?.message).toStartWith("Permission denied:");
+      expect(block?.message).toContain("dream run run-dream");
+    }
+    const patched = dreamGuard("ApplyPatch", {
+      input: [
+        "*** Begin Patch",
+        `*** Update File: ${join(memoryDir, "notes.md")}`,
+        "*** End Patch",
+      ].join("\n"),
+    });
+    expect(patched?.blocked).toBe(true);
+  });
+
+  test("blocks the memory commit tool outright while a run is live", () => {
+    const block = dreamGuard("MemoryCommit", {
+      reason: "tidy notes",
+      paths: ["MEMORY.md"],
+    });
+    expect(block?.blocked).toBe(true);
+    expect(block?.message).toContain("memory commits");
+  });
+
+  test("does not block the dream child's own writes", () => {
+    expect(
+      dreamGuard(
+        "Write",
+        { file_path: join(memoryDir, "persona.md") },
+        { isDreamContext: () => true },
+      ),
+    ).toBeNull();
+  });
+
+  test("does not block outside paths, reads or shell commands", () => {
+    expect(
+      dreamGuard("Write", { file_path: "/Users/test/project/notes.md" }),
+    ).toBeNull();
+    expect(
+      dreamGuard("Read", { file_path: join(memoryDir, "persona.md") }),
+    ).toBeNull();
+    expect(dreamGuard("Bash", { cmd: "git -C . status" })).toBeNull();
+    // No live run: no block even for a memory path.
+    expect(
+      dreamGuard(
+        "Write",
+        { file_path: join(memoryDir, "persona.md") },
+        { isRunLive: () => false },
+      ),
+    ).toBeNull();
+  });
+
+  test("permission checker denies while a live dream run owns the checkout", () => {
+    writeDreamSignalState(AGENT_ID, {
+      ...EMPTY_DREAM_SIGNAL_STATE,
+      running: { runId: "run-dream", startedAt: Date.now() },
+    });
+    createDreamLease({ agentId: AGENT_ID, runId: "run-dream" });
+
+    const result = checkPermission(
+      "Edit",
+      { file_path: join(memoryDir, "persona.md") },
+      { allow: ["Edit"], deny: [], ask: [] },
+      "/Users/test/project",
+      undefined,
+      AGENT_ID,
+    );
+    expect(result.decision).toBe("deny");
+    expect(result.matchedRule).toBe("dream run owns the memory repository");
+    expect(result.reason).toStartWith("Permission denied:");
   });
 });

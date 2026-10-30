@@ -129,6 +129,21 @@ export function addTask(input: AddTaskInput): AddTaskResult {
           "Dream schedule payload is malformed: expected a JSON DreamTaskPayload ({version: 1}).",
         );
       }
+      // One carrier per agent (Lead fix): `ensureDreamTask` runs on every TUI
+      // tick and on every `/dream run`, so a lost race or a re-enable must reuse
+      // the existing record instead of stacking a second signal carrier — two
+      // carriers would both be judged due by the dream source and produce two
+      // delegated runs for one agent. This runs inside `withLock`, so the
+      // check-then-insert is atomic with respect to other processes.
+      const existingDream = data.tasks.find(
+        (task) =>
+          task.agent_id === agentId &&
+          (task.type ?? "prompt") === "dream" &&
+          (task.status === "active" || task.status === "paused"),
+      );
+      if (existingDream) {
+        return { task: { ...existingDream } };
+      }
     }
 
     // Pausing a task must not let an agent exceed the persisted schedule limit.

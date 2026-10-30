@@ -209,9 +209,13 @@ function otherRow(
   base: { id: string; time: string },
   message: Record<string, unknown>,
 ): HiddenSessionRow {
+  // The JSON fallback is a last resort for unknown shapes, but it must not
+  // re-introduce what `contentText` just removed: a payload whose only text was
+  // an injected reminder block would otherwise be printed back as raw JSON.
+  const fallback = cleanVisibleText(jsonish(message.content));
   const text =
     contentText(message.content) ||
-    jsonish(message.content) ||
+    fallback ||
     stringValue(message.summary) ||
     stringValue(message.reasoning) ||
     "(no content)";
@@ -440,9 +444,15 @@ function nonTextMarkers(content: readonly unknown[]): string[] {
  * Unlike {@link contentText} this must not remove injected-looking blocks: a
  * tool that cat'd a file containing `<system-reminder>` really did print it, and
  * the hidden-session detail exists to show what the tool returned.
+ *
+ * Line endings are the one normalisation it does apply: a CRLF payload keeps a
+ * `\r` at the end of every stored line, and the detail view splits on `\n`, so
+ * the carriage return would be written into the frame and move the terminal's
+ * cursor back to column 0 (garbling the painted row). `\r\n?` → `\n` changes
+ * nothing else the tool printed.
  */
 function rawToolText(content: unknown): string {
-  if (typeof content === "string") return content.trim();
+  if (typeof content === "string") return normalizeLineEndings(content);
   if (Array.isArray(content)) {
     const parts: string[] = [];
     for (const part of content) {
@@ -459,9 +469,14 @@ function rawToolText(content: unknown): string {
       const type = stringValue(part.type);
       if (type.length > 0) parts.push(`[${type}]`);
     }
-    return parts.join("\n").trim();
+    return normalizeLineEndings(parts.join("\n"));
   }
   return "";
+}
+
+/** CRLF / lone CR → LF, then trim (the only change a payload's bytes get). */
+function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n?/g, "\n").trim();
 }
 
 function jsonish(value: unknown): string {

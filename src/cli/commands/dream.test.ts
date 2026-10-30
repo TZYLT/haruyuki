@@ -255,6 +255,7 @@ describe("the on/off switch", () => {
         ...deps({
           isConfigured: () => false,
           writeSettings: (patch) => writes.push(patch),
+          readSettings: () => settings({ enabled: true }),
         }),
       },
     );
@@ -273,6 +274,7 @@ describe("the on/off switch", () => {
         ...deps({
           isConfigured: () => true,
           writeSettings: (patch) => writes.push(patch),
+          readSettings: () => settings({ enabled: true }),
           ensureTask: (id) => {
             ensured.push(id);
             return {};
@@ -308,6 +310,59 @@ describe("the on/off switch", () => {
     expect(output).toContain("run /dream on again to retry");
   });
 
+  test("a per-agent override that keeps dream off is named, not claimed as enabled", async () => {
+    const writes: unknown[] = [];
+    const output = await handleDreamCommand(
+      ["on"],
+      { agentId: AGENT_ID },
+      {
+        ...deps({
+          isConfigured: () => true,
+          writeSettings: (patch) => writes.push(patch),
+          readSettings: () => settings({ enabled: false }),
+          ensureTask: () => ({ id: "task-1", status: "active" }),
+        }),
+      },
+    );
+    expect(writes).toEqual([{ enabled: true }]);
+    expect(output).toContain("per-agent override");
+    expect(output).not.toContain("will trigger");
+  });
+
+  test("auto-trigger off is named instead of promising idle runs", async () => {
+    const output = await handleDreamCommand(
+      ["on"],
+      { agentId: AGENT_ID },
+      {
+        ...deps({
+          isConfigured: () => true,
+          readSettings: () => settings({ enabled: true, autoTrigger: false }),
+          ensureTask: () => ({ id: "task-1", status: "active" }),
+        }),
+      },
+    );
+    expect(output).toContain("automatic triggering is off");
+    expect(output).toContain("/dream run");
+    expect(output).not.toContain("Runs will trigger");
+  });
+
+  test("a paused carrier task names its status and the resume command", async () => {
+    const output = await handleDreamCommand(
+      ["on"],
+      { agentId: AGENT_ID },
+      {
+        ...deps({
+          isConfigured: () => true,
+          readSettings: () => settings({ enabled: true }),
+          ensureTask: () => ({ id: "task-9", status: "paused" }),
+        }),
+      },
+    );
+    expect(output).toContain("schedule task is paused");
+    expect(output).toContain("/schedule resume task-9");
+    expect(output).not.toContain("Runs will trigger");
+  });
+
   test("the first TUI enable raises the wizard instead of writing the switch", async () => {
     const runner = fakeRunner();
     const writes: unknown[] = [];
@@ -337,6 +392,7 @@ describe("the on/off switch", () => {
       commandRunner: runner,
       isConfigured: () => true,
       writeSettings: () => {},
+      readSettings: () => settings({ enabled: true }),
       ensureTask: () => ({}),
       openWizard: () => {
         wizardOpened += 1;
@@ -356,6 +412,7 @@ describe("the on/off switch", () => {
       isConfigured: () => false,
       openWizard: () => false,
       writeSettings: (patch) => writes.push(patch),
+      readSettings: () => settings({ enabled: true }),
       ensureTask: () => ({}),
     });
     expect(writes).toEqual([{ enabled: true }]);

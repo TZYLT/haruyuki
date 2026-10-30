@@ -331,7 +331,9 @@ describe("executeDreamRun · budget", () => {
       "budget_exhausted",
     ]);
     expect(harness.rollbacks).toHaveLength(0);
-    expect(harness.pressureBaselines).toHaveLength(1);
+    // R-5.2.3: only a successful run moves the "since last success" boundary.
+    expect(harness.pressureBaselines).toHaveLength(0);
+    expect(final?.handoff).toContain("Remaining tiers not started: think");
     expect(harness.finished).toEqual(["agent-a:budget_exhausted"]);
   });
 
@@ -355,6 +357,73 @@ describe("executeDreamRun · budget", () => {
     expect(result.outcome).toBe("success");
     expect(harness.turns).toHaveLength(2);
     expect(harness.metadata.at(-1)?.status).toBe("succeeded");
+  });
+});
+
+describe("executeDreamRun · manual runs", () => {
+  test("manual pressure floor: pressure 0 uses the configured threshold", async () => {
+    const harness = makeHarness({
+      overrides: { readPressure: () => 0 },
+    });
+    const result = await executeDreamRun(
+      { ...RUN_INPUT, manual: true },
+      harness.deps,
+    );
+    expect(result.outcome).toBe("success");
+    // 75,000 threshold x 0.8 factor = 60,000, capped at 100,000.
+    const first = harness.metadata[0];
+    expect(first?.budgetTokens).toBe(60_000);
+    expect(first?.triggerSource).toBe("manual");
+    expect(harness.metadata.at(-1)?.triggerSource).toBe("manual");
+    expect(harness.turns).toHaveLength(2);
+  });
+
+  test("automatic runs keep the measured pressure (0 stays 0)", async () => {
+    const harness = makeHarness({
+      overrides: { readPressure: () => 0 },
+    });
+    const result = await executeDreamRun(RUN_INPUT, harness.deps);
+    expect(result.outcome).toBe("success");
+    const first = harness.metadata[0];
+    expect(first?.budgetTokens).toBe(0);
+    expect(first?.triggerSource).toBe("scheduled");
+    expect(harness.turns).toHaveLength(0);
+    expect(harness.metadata.at(-1)?.status).toBe("budget_exhausted");
+  });
+});
+
+describe("executeDreamRun · last tier overrun", () => {
+  test("a successful final tier that crossed 100% keeps the reminder text", async () => {
+    const harness = makeHarness({
+      settings: makeSettings({
+        tiers: { tidy: true, think: false, task: false, wander: false },
+      }),
+      spawnedTurn: () => ({
+        success: true,
+        report: "tidied",
+        aborted: false,
+        // 200k against an 80k allowance: all three reminders crossed.
+        usage: { ...EMPTY_PARTS, outputTokens: 200_000 },
+      }),
+    });
+    const result = await executeDreamRun(RUN_INPUT, harness.deps);
+    expect(result.outcome).toBe("success");
+    const final = harness.metadata.at(-1);
+    expect(final?.status).toBe("succeeded");
+    // The 40/80/100 reminder text is not dropped when there is no next turn.
+    expect(final?.handoff).toContain("budget reached");
+    expect(final?.handoff).toContain("do not ask for approval");
+    expect(harness.markers).toHaveLength(0);
+    expect(harness.pressureBaselines).toHaveLength(1);
+  });
+
+  test("automatic runs never inherit a manual trigger source", async () => {
+    const harness = makeHarness();
+    await executeDreamRun(
+      { ...RUN_INPUT, occurrence: "2026-10-30T23:00" },
+      harness.deps,
+    );
+    expect(harness.metadata[0]?.triggerSource).toBe("scheduled");
   });
 });
 

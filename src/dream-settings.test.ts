@@ -226,6 +226,29 @@ describe("read/update through the settings manager", () => {
     expect(settingsManager.getSettings().dreamEnabled).toBe(true);
   });
 
+  test("partial tier patches merge instead of replacing the map", async () => {
+    await settingsManager.initialize();
+    // F-06 review: the settings page writes one tier per toggle. Replacing the
+    // map meant the second toggle silently re-enabled the first tier.
+    updateDreamSettings({ tiers: { tidy: false } });
+    updateDreamSettings({ tiers: { think: false } });
+    expect(readDreamSettings().tiers).toMatchObject({
+      tidy: false,
+      think: false,
+      task: true,
+      wander: true,
+    });
+
+    updateDreamSettings({ tiers: { tidy: false } }, "agent-a");
+    updateDreamSettings({ tiers: { think: false } }, "agent-a");
+    expect(readDreamSettings("agent-a").tiers).toMatchObject({
+      tidy: false,
+      think: false,
+      task: true,
+      wander: true,
+    });
+  });
+
   test("updateDreamSettings writes and clears a per-agent override", async () => {
     await settingsManager.initialize();
     updateDreamSettings({ enabled: true, pressureThreshold: 1_000 }, "agent-a");

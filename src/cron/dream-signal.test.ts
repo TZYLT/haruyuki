@@ -5,6 +5,7 @@ import type { ScheduleTaskV2 } from "@/cron/cron-types";
 import {
   createDreamSignalSource,
   DREAM_ATTEMPT_COOLDOWN_MINUTES,
+  DREAM_MARKER_MIN_STALE_MS,
   DREAM_MAX_ATTEMPTS_PER_DAY,
   DREAM_PLACEHOLDER_CRON,
   DREAM_SIGNAL_SOURCE_ID,
@@ -12,9 +13,11 @@ import {
   type DreamSignalState,
   deferDreamSignal,
   dreamDayKey,
+  dreamRunMarkerStaleAfterMs,
   EMPTY_DREAM_SIGNAL_STATE,
   evaluateDreamEligibility,
   getDreamSignalStatePath,
+  isDreamRunMarkerActive,
   isWithinDreamIdleWindow,
   markDreamAttempt,
   markDreamRunActive,
@@ -26,21 +29,25 @@ import {
   validateDreamTaskForRun,
   writeDreamSignalState,
 } from "@/cron/dream-signal";
+import { createDefaultDreamSignalDeps } from "@/cron/dream-signal-deps";
 import {
   DREAM_SETTINGS_DEFAULTS,
   type ResolvedDreamSettings,
 } from "@/dream-settings";
+import { settingsManager } from "@/settings-manager";
 
 const TEST_DIR = path.join(import.meta.dir, "__dream_signal_test_tmp__");
 const origHome = process.env.HARUYUKI_HOME;
 
-beforeEach(() => {
+beforeEach(async () => {
+  await settingsManager.reset();
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.HARUYUKI_HOME = TEST_DIR;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await settingsManager.reset();
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   if (origHome) process.env.HARUYUKI_HOME = origHome;
   else delete process.env.HARUYUKI_HOME;
@@ -240,11 +247,13 @@ describe("trigger eligibility", () => {
       }).reason,
     ).toBe("cooldown");
     expect(eligibility({ isRunning: true }).reason).toBe("already_running");
+    // A raw `state.running` marker is NOT consulted (it can be a crash
+    // remnant); the caller's liveness answer is authoritative (Lead fix).
     expect(
       eligibility({
         state: emptyState({ running: { runId: "r", startedAt: 1 } }),
       }).reason,
-    ).toBe("already_running");
+    ).toBe("eligible");
     // R-5.2.2: 30 minutes of silence.
     expect(
       eligibility({
@@ -523,5 +532,138 @@ describe("dream task validation (route C-17/C-37)", () => {
     expect(validateDreamTaskForRun(dreamTask({ payload: "{bad" }))).toContain(
       "payload",
     );
+  });
+});
+
+// ── Lazy S3/S2 reads (Lead fix: light evaluation) ───────────────────
+
+describe("lightweight evaluation", () => {
+  test("outside the window neither pressure nor activity is read", () => {
+    let pressureReads = 0;
+    let activityReads = 0;
+    const source = createDreamSignalSource(
+      deps({
+        readPressure: () => {
+          pressureReads += 1;
+          return 10_000_000;
+        },
+        readLastActiveAt: () => {
+          activityReads += 1;
+          return null;
+        },
+      }),
+    );
+    const evaluation = source.evaluate({
+      now: local(2026, 10, 30, 15, 0), // noon: outside the 22:00-07:00 window
+      tasks: [dreamTask()],
+      state: { cursor: {} },
+    });
+    expect(evaluation.occurrences).toEqual([]);
+    expect(pressureReads).toBe(0);
+    expect(activityReads).toBe(0);
+  });
+
+  test("inside the window each read happens once, in gate order", () => {
+    let pressureReads = 0;
+    let activityReads = 0;
+    const source = createDreamSignalSource(
+      deps({
+        readPressure: () => {
+          pressureReads += 1;
+          return 80_000;
+        },
+        readLastActiveAt: () => {
+          activityReads += 1;
+          return null;
+        },
+      }),
+    );
+    const evaluation = source.evaluate({
+      now: local(2026, 10, 30, 23, 30),
+      tasks: [dreamTask()],
+      state: { cursor: {} },
+    });
+    expect(evaluation.occurrences).toHaveLength(1);
+    expect(pressureReads).toBe(1);
+    expect(activityReads).toBe(1);
+  });
+
+  test("a cooldown early return does not read pressure", () => {
+    let pressureReads = 0;
+    const now = local(2026, 10, 30, 23, 30);
+    const source = createDreamSignalSource(
+      deps({
+        readState: () =>
+          emptyState({
+            dayKey: dreamDayKey(now),
+            nextEligibleAt: now.getTime() + 5 * 60_000,
+          }),
+        readPressure: () => {
+          pressureReads += 1;
+          return 10_000_000;
+        },
+      }),
+    );
+    const evaluation = source.evaluate({
+      now,
+      tasks: [dreamTask()],
+      state: { cursor: {} },
+    });
+    expect(evaluation.occurrences).toEqual([]);
+    expect(pressureReads).toBe(0);
+  });
+});
+
+// ── Run marker liveness (Lead fix: crash remnant must not deadlock) ──
+
+describe("dream run marker liveness", () => {
+  test("age bound is max(1h, (limit ?? 24h) + 30m)", () => {
+    expect(dreamRunMarkerStaleAfterMs({ timeLimitMinutes: 10 })).toBe(
+      DREAM_MARKER_MIN_STALE_MS,
+    );
+    expect(dreamRunMarkerStaleAfterMs({ timeLimitMinutes: 180 })).toBe(
+      210 * 60_000,
+    );
+    expect(dreamRunMarkerStaleAfterMs({ timeLimitMinutes: null })).toBe(
+      (24 * 60 + 30) * 60_000,
+    );
+  });
+
+  test("a marker is active only while younger than the bound", () => {
+    const now = local(2026, 10, 30, 23, 0);
+    const fresh = { runId: "r", startedAt: now.getTime() - 5 * 60_000 };
+    const old = { runId: "r", startedAt: now.getTime() - 25 * 60 * 60_000 };
+    expect(isDreamRunMarkerActive(fresh, { timeLimitMinutes: null }, now)).toBe(
+      true,
+    );
+    expect(isDreamRunMarkerActive(old, { timeLimitMinutes: null }, now)).toBe(
+      false,
+    );
+    // A configured short limit lowers the bound to the 1h floor.
+    const twoHoursOld = {
+      runId: "r",
+      startedAt: now.getTime() - 2 * 60 * 60_000,
+    };
+    expect(
+      isDreamRunMarkerActive(twoHoursOld, { timeLimitMinutes: 10 }, now),
+    ).toBe(false);
+    expect(isDreamRunMarkerActive(null, { timeLimitMinutes: null }, now)).toBe(
+      false,
+    );
+  });
+
+  test("the production deps stop believing an over-age marker", async () => {
+    await settingsManager.initialize();
+    settingsManager.updateSettings({
+      dreamEnabled: true,
+      dreamTimeLimitMinutes: 10,
+    });
+    const now = Date.now();
+    markDreamRunActive("agent-1", "dead-run", new Date(now - 2 * 60 * 60_000));
+    const signalDeps = createDefaultDreamSignalDeps();
+    expect(signalDeps.isRunning("agent-1")).toBe(false);
+
+    markDreamRunActive("agent-1", "fresh-run", new Date(now - 5 * 60_000));
+    expect(signalDeps.isRunning("agent-1")).toBe(true);
   });
 });

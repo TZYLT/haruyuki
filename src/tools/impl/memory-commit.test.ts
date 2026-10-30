@@ -146,6 +146,16 @@ describe("memory_commit argument validation", () => {
     ).toBe("error");
   });
 
+  test("refuses a NUL byte in a path instead of throwing", async () => {
+    const { deps } = await setup();
+    const result = await memory_commit(
+      { reason: "x", paths: ["notes.md\0hidden"] },
+      deps,
+    );
+    expect(result.status).toBe("error");
+    expect(result.content).toContain("invalid path");
+  });
+
   test("refuses a directory that is not a git repository", async () => {
     const pristine = await mkdtemp(
       join(tmpdir(), "haruyuki-memory-commit-bare-"),

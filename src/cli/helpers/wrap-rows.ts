@@ -11,19 +11,32 @@
  * **larger** of the two per string, which is what `wrappedCellWidth` does — the
  * row then fits whichever renderer is right.
  *
+ * **ANSI is an atom, not text.** A stored message can carry colour sequences
+ * (pasted output, a tool return that printed escapes). Escape bytes draw no
+ * columns, so measuring them as text makes every coloured word look wider than
+ * it is, and splitting a word by grapheme can land in the middle of
+ * `ESC[31m` — half a sequence printed to the terminal leaks colour or eats the
+ * bytes after it. So the wrapper tokenizes with `ansi-scan`: every escape
+ * sequence is a zero-width unit that is never split, and widths are measured on
+ * the visible bytes only.
+ *
  * Everything here is pure and width-parameterised so the detail view, and its
  * tests, can lay out lines without rendering them.
  */
 
+import stripAnsi from "strip-ansi";
+import { scanAnsi } from "./ansi-scan";
 import { terminalTextWidth } from "./char-width";
 import { inkStringWidth } from "./text-metrics";
 
 /**
  * Columns a string occupies for wrapping: the larger of the terminal's answer
- * and Ink's (C-32). Never negative.
+ * and Ink's (C-32). Never negative. ANSI is stripped first: it occupies no
+ * column on either side, and counting its bytes is how a coloured word used to
+ * be wrapped early.
  */
 export function wrappedCellWidth(text: string): number {
-  return Math.max(terminalTextWidth(text), inkStringWidth(text));
+  return Math.max(terminalTextWidth(text), inkStringWidth(stripAnsi(text)));
 }
 
 /**
@@ -39,61 +52,95 @@ function graphemes(text: string): string[] {
   return Array.from(segmenter.segment(text), (part) => part.segment);
 }
 
-/** Hard-split one word that has no space to break on (CJK, URLs, hashes). */
-function splitLongWord(word: string, width: number): string[] {
-  const parts: string[] = [];
-  let current = "";
-  let currentWidth = 0;
-  for (const cluster of graphemes(word)) {
-    const clusterWidth = wrappedCellWidth(cluster);
-    if (current !== "" && currentWidth + clusterWidth > width) {
-      parts.push(current);
-      current = "";
-      currentWidth = 0;
-    }
-    current += cluster;
-    currentWidth += clusterWidth;
-  }
-  if (current !== "") parts.push(current);
-  return parts.length > 0 ? parts : [""];
+/** One indivisible piece of a row: a cluster, one column of space, or an escape. */
+interface WrapUnit {
+  text: string;
+  width: number;
 }
 
 /**
- * Greedy word wrap of one hard-break-free segment.
+ * Tokenize one hard-break-free segment into wrap units.
  *
- * Spaces stay inside a row (a sentence keeps its spaces) but are dropped at a
- * break, the way the transcript's own pre-wrap does; a word longer than the
- * width is hard-split by grapheme cluster, which is also how CJK breaks — it
- * has no spaces to wrap on.
+ * Escape sequences stay whole and weigh zero; text becomes grapheme clusters;
+ * control characters are kept (they still affect what the terminal does) and
+ * measured the same way the old wrapper did.
  */
-function wrapSegment(segment: string, width: number): string[] {
-  if (segment === "") return [""];
-  const words = segment.split(" ");
-  const rows: string[] = [];
-  let current = "";
-
-  for (const word of words) {
-    if (wrappedCellWidth(word) > width) {
-      if (current !== "") {
-        rows.push(current);
-        current = "";
-      }
-      const parts = splitLongWord(word, width);
-      rows.push(...parts.slice(0, -1));
-      current = parts.at(-1) ?? "";
+function unitsOf(segment: string): WrapUnit[] {
+  const units: WrapUnit[] = [];
+  for (const token of scanAnsi(segment)) {
+    if (token.kind === "escape") {
+      units.push({ text: token.value, width: 0 });
       continue;
     }
-
-    if (current === "") {
-      current = word;
-    } else if (wrappedCellWidth(`${current} ${word}`) <= width) {
-      current = `${current} ${word}`;
-    } else {
-      rows.push(current);
-      current = word;
+    if (token.kind === "control") {
+      units.push({ text: token.value, width: wrappedCellWidth(token.value) });
+      continue;
+    }
+    for (const cluster of graphemes(token.value)) {
+      units.push({ text: cluster, width: wrappedCellWidth(cluster) });
     }
   }
-  if (current !== "") rows.push(current);
+  return units;
+}
+
+/** A row's text; trailing spaces paint nothing, so they are not kept. */
+function rowText(units: readonly WrapUnit[]): string {
+  let end = units.length;
+  while (end > 0 && units[end - 1]?.text === " ") end -= 1;
+  return units
+    .slice(0, end)
+    .map((unit) => unit.text)
+    .join("");
+}
+
+function widthOf(units: readonly WrapUnit[]): number {
+  let width = 0;
+  for (const unit of units) width += unit.width;
+  return width;
+}
+
+/** Greedy wrap of one segment's units, breaking on spaces where possible. */
+function wrapUnits(units: readonly WrapUnit[], width: number): string[] {
+  const rows: string[] = [];
+  let row: WrapUnit[] = [];
+  let rowWidth = 0;
+  // Index in `row` of the last space: the preferred break point.
+  let spaceAt = -1;
+
+  const startRow = (next: readonly WrapUnit[]): void => {
+    row = [...next];
+    rowWidth = widthOf(next);
+    spaceAt = -1;
+    for (let index = 0; index < row.length; index += 1) {
+      if (row[index]?.text === " ") spaceAt = index;
+    }
+  };
+
+  const flush = (cut: number | null): void => {
+    const emitted = cut === null ? row : row.slice(0, cut);
+    // A leading space is dropped rather than emitting a blank row.
+    if (emitted.length > 0) rows.push(rowText(emitted));
+    startRow(cut === null ? [] : row.slice(cut + 1));
+  };
+
+  for (const unit of units) {
+    const isSpace = unit.text === " " && unit.width === 1;
+    const hasVisible = row.some((entry) => entry.width > 0);
+    if (hasVisible && unit.width > 0 && rowWidth + unit.width > width) {
+      if (isSpace) {
+        // The space itself is the break: it is dropped, not wrapped.
+        flush(null);
+        continue;
+      }
+      if (spaceAt > 0) flush(spaceAt);
+      else flush(null);
+    }
+    row.push(unit);
+    rowWidth += unit.width;
+    if (isSpace) spaceAt = row.length - 1;
+  }
+
+  if (row.length > 0) rows.push(rowText(row));
   return rows.length > 0 ? rows : [""];
 }
 
@@ -101,14 +148,15 @@ function wrapSegment(segment: string, width: number): string[] {
  * Wrap `text` to `width` columns.
  *
  * `\n` is a hard break (a detail's code block keeps its own shape); every
- * returned row is at most `width` columns under both width systems. Empty input
- * is one empty row, not zero: a blank line still occupies a frame row.
+ * returned row is at most `width` columns under both width systems, and an
+ * escape sequence is never split across rows. Empty input is one empty row,
+ * not zero: a blank line still occupies a frame row.
  */
 export function wrapRows(text: string, width: number): string[] {
   const usable = Math.max(1, Math.trunc(width));
   const rows: string[] = [];
   for (const segment of text.split("\n")) {
-    rows.push(...wrapSegment(segment, usable));
+    rows.push(...wrapUnits(unitsOf(segment), usable));
   }
   return rows;
 }

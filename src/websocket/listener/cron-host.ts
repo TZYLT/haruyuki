@@ -153,6 +153,12 @@ export interface ListenerCronRunnerDeps {
     taskId: string,
     onExit: () => void,
   ) => { pid?: number } | null;
+  /**
+   * F-06 fix (R-5.8.4): one-shot startup recovery of dream runs a killed
+   * process left behind. Runs when this runner is constructed (i.e. at listener
+   * host startup), fire-and-forget; defaults to T2's `recoverDreamRuns()`.
+   */
+  recoverStaleRuns?: () => Promise<unknown>;
 }
 
 /** One completed turn, as the listener's own terminal event reports it. */
@@ -454,6 +460,26 @@ export function createListenerCronRunner(
     deps.spawnDreamRun ??
     ((taskId: string, onExit: () => void) =>
       spawnDreamRunProcess(taskId, {}, onExit));
+
+  /**
+   * F-06 fix (R-5.8.4): the listener host is constructed at startup, so this is
+   * the startup recovery point. Fire-and-forget (the listener is long-lived) and
+   * idempotent; a failure is one log line.
+   */
+  const recoverStaleRuns =
+    deps.recoverStaleRuns ??
+    (async () => {
+      const { recoverDreamRuns } = await import("@/agent/dream/dream-recovery");
+      return recoverDreamRuns();
+    });
+  void recoverStaleRuns().catch((error: unknown) => {
+    debugWarn(
+      "dream",
+      `startup dream recovery failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  });
 
   /**
    * F-06 M1 (route C-16): dream task ids with a delegated child still alive.

@@ -5,6 +5,7 @@ import {
   addTask,
   clearSignalSources,
   DREAM_PLACEHOLDER_CRON,
+  markDreamRunActive,
   registerSignalSource,
   serializeDreamTaskPayload,
 } from "@/cron";
@@ -113,5 +114,25 @@ describe("preflight registers the dream source (F-06 M1)", () => {
       now: new Date(Date.parse(task.created_at) + 60_000),
     });
     expect(result.due).toBe(true);
+  });
+});
+
+// ── Lead fix: a crash-remnant marker must not suppress the probe ────
+
+describe("preflight marker staleness", () => {
+  test("an over-age running marker does not block the probe; a fresh one does", async () => {
+    addDreamTask();
+    settingsManager.updateSettings({
+      dreamEnabled: true,
+      dreamIdleWindows: [{ start: "00:00", end: "23:59" }],
+      // A short configured limit lowers the liveness bound to the 1h floor.
+      dreamTimeLimitMinutes: 10,
+    });
+    const now = Date.now();
+    markDreamRunActive("agent-1", "dead-run", new Date(now - 2 * 60 * 60_000));
+    expect(runSchedulePreflight({ now: new Date(now) }).due).toBe(true);
+
+    markDreamRunActive("agent-1", "fresh-run", new Date(now - 5 * 60_000));
+    expect(runSchedulePreflight({ now: new Date(now) }).due).toBe(false);
   });
 });

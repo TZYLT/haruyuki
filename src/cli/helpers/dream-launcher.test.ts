@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
+import { createDreamLease, deleteDreamLease } from "@/agent/dream/dream-lease";
 import {
   type DreamRunCommandOptions,
   dreamRunCommand,
@@ -67,7 +68,10 @@ describe("S5 startDreamRun (route §2.3.5)", () => {
 
   test("refuses while a run is already active", async () => {
     settingsManager.updateSettings({ dreamEnabled: true });
+    // A live run = fresh marker AND a lease whose owner process is alive
+    // (Lead fix: the marker alone is not proof of liveness).
     markDreamRunActive("agent-1", "run-live", new Date());
+    createDreamLease({ agentId: "agent-1", runId: "run-live", taskId: null });
     const calls: SpawnCall[] = [];
     const result = await startDreamRun(
       { agentId: "agent-1" },
@@ -77,6 +81,7 @@ describe("S5 startDreamRun (route §2.3.5)", () => {
     expect(result.reason).toContain("already in progress");
     expect(calls).toEqual([]);
     expect(readDreamSignalState("agent-1").running?.runId).toBe("run-live");
+    deleteDreamLease("agent-1");
   });
 
   test("prepares the dream task and spawns a detached manual child", async () => {
@@ -159,5 +164,40 @@ describe("dreamRunCommand", () => {
     // The budget is only passed when it is a positive integer.
     const zero = dreamRunCommand("abc123", { budgetOverrideTokens: 0 });
     expect(zero.args).not.toContain("--budget");
+  });
+});
+
+// ── Lead fix: S5 uses real run liveness, not the bare marker ────────
+
+describe("S5 liveness (crash remnant must not block /dream run)", () => {
+  test("a marker without a live lease no longer refuses the launch", async () => {
+    settingsManager.updateSettings({ dreamEnabled: true });
+    // A killed run's remnant: the signal marker stayed, no lease file exists.
+    markDreamRunActive("agent-1", "dead-run", new Date());
+    expect(readDreamSignalState("agent-1").running?.runId).toBe("dead-run");
+
+    const calls: SpawnCall[] = [];
+    const result = await startDreamRun(
+      { agentId: "agent-1" },
+      spawnRecorder(calls),
+    );
+    expect(result.started).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a live lease with a fresh marker still refuses (single run)", async () => {
+    settingsManager.updateSettings({ dreamEnabled: true });
+    markDreamRunActive("agent-1", "live-run", new Date());
+    createDreamLease({ agentId: "agent-1", runId: "live-run", taskId: null });
+
+    const calls: SpawnCall[] = [];
+    const result = await startDreamRun(
+      { agentId: "agent-1" },
+      spawnRecorder(calls),
+    );
+    expect(result.started).toBe(false);
+    expect(result.reason).toContain("already in progress");
+    expect(calls).toEqual([]);
+    deleteDreamLease("agent-1");
   });
 });

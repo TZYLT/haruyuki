@@ -102,3 +102,34 @@ describe("wrapRowsWithPrefix", () => {
     expect(rows.map((row) => row.slice(4)).join("")).toBe("a".repeat(8));
   });
 });
+
+describe("ANSI escape sequences (F-06 review fix)", () => {
+  const ESC = "\u001B";
+  const RED = `${ESC}[31m`;
+  const RESET = `${ESC}[0m`;
+  const SGR_RE = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
+
+  test("a coloured word is as wide as its visible text", () => {
+    expect(wrappedCellWidth(`${RED}AB${RESET}`)).toBe(2);
+    expect(wrapRows(`${RED}AB${RESET}`, 2)).toEqual([`${RED}AB${RESET}`]);
+  });
+
+  test("a wrap never emits half an escape sequence", () => {
+    const text = `${RED}abcdefghij${RESET}`;
+    for (const width of [1, 2, 3, 4, 7]) {
+      const rows = wrapRows(text, width);
+      // Rejoining is lossless and no row carries a dangling ESC: every escape
+      // in a row is a complete sequence.
+      expect(rows.join("")).toBe(text);
+      for (const row of rows) {
+        expect(row.replace(SGR_RE, "")).not.toContain("\u001B");
+      }
+    }
+  });
+
+  test("the reset stays with the last visible cluster, not on a row of its own", () => {
+    const rows = wrapRows(`${RED}AB${RESET}`, 1);
+    expect(rows).toEqual([`${RED}A`, `B${RESET}`]);
+    expect(rows.some((row) => row.replace(SGR_RE, "") === "")).toBe(false);
+  });
+});

@@ -20,6 +20,7 @@
  * the same exported helpers directly; this one exists so the short-lived path
  * can be diagnosed from a shell.
  */
+import { readDreamActivity } from "@/agent/dream/dream-activity";
 import { readDreamPressure } from "@/agent/dream/dream-pressure";
 import { createDreamTaskRunner } from "@/cli/helpers/dream-host";
 import {
@@ -29,6 +30,7 @@ import {
   ensureDreamSignalSourceRegistered,
   evaluateDreamEligibility,
   getScheduleTask,
+  isDreamRunMarkerActive,
   isWithinDreamIdleWindow,
   listTasks,
   nextDreamWindowStart,
@@ -59,6 +61,13 @@ async function ensureSettingsReady(): Promise<void> {
       }`,
     );
   }
+}
+
+/** One diagnostic line for a store that cannot be read, mirroring `schedule`. */
+function storeErrorLine(error: unknown): string {
+  const name = error instanceof Error ? error.name : "Error";
+  const message = error instanceof Error ? error.message : String(error);
+  return `store unreadable (${name}: ${message})`;
 }
 
 const USAGE = [
@@ -143,7 +152,16 @@ async function runDreamOnce(argv: string[]): Promise<number> {
     return 2;
   }
   await ensureSettingsReady();
-  const task = getScheduleTask(args.taskId);
+  let task: ReturnType<typeof getScheduleTask>;
+  try {
+    task = getScheduleTask(args.taskId);
+  } catch (error) {
+    // A corrupt or newer-version schedule store is a diagnostic, not a crash:
+    // the delegated child has no visible stderr (stdio is ignored), so a clean
+    // one-line message plus a non-zero exit is the only signal it can leave.
+    console.error(`dream run: ${storeErrorLine(error)}`);
+    return 1;
+  }
   if (!task) {
     console.error(`dream run: task ${args.taskId} not found`);
     return 1;
@@ -212,7 +230,13 @@ async function runDreamOnce(argv: string[]): Promise<number> {
 
 /** `haruyuki dream status` — read-only diagnostics for operators. */
 export function runDreamStatus(): number {
-  const tasks = listTasks().filter((task) => task.type === "dream");
+  let tasks: ReturnType<typeof listTasks>;
+  try {
+    tasks = listTasks().filter((task) => task.type === "dream");
+  } catch (error) {
+    console.error(`dream status: ${storeErrorLine(error)}`);
+    return 1;
+  }
   if (tasks.length === 0) {
     console.log("dream: no dream tasks (configure dreams to create one)");
     return 0;
@@ -248,16 +272,27 @@ export function runDreamStatus(): number {
       `  last attempt: ${state.lastAttemptAt ? new Date(state.lastAttemptAt).toISOString() : "—"} · last outcome: ${state.lastOutcome ?? "—"} · running: ${state.running ? state.running.runId : "no"}`,
     );
     if (record.type === "dream") {
-      const task = getScheduleTask(record.id);
+      let task: ReturnType<typeof getScheduleTask>;
+      try {
+        task = getScheduleTask(record.id);
+      } catch (error) {
+        console.error(
+          `  would trigger now: unknown (${storeErrorLine(error)})`,
+        );
+        continue;
+      }
       if (task) {
+        // Same sources as the real gate: S2 activity (not a hardcoded null) and
+        // the age-bounded run marker, so the operator view cannot claim
+        // "eligible" while the trigger is actually blocked.
         const eligibility = evaluateDreamEligibility({
           task,
           settings,
           state,
           now,
           pressure,
-          lastActiveAt: null,
-          isRunning: state.running !== null,
+          lastActiveAt: readDreamActivity(agentId),
+          isRunning: isDreamRunMarkerActive(state.running, settings, now),
         });
         console.log(`  would trigger now: ${eligibility.reason}`);
       }

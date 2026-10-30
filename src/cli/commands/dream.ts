@@ -556,11 +556,38 @@ async function runStatus(deps: ResolvedDeps): Promise<ActionResult> {
 function runOn(deps: ResolvedDeps): ActionResult {
   const configured = deps.isConfigured(deps.agentId);
   deps.writeSettings({ enabled: true });
-  const taskFailure = ensureDreamCarrierTask(deps);
-  if (taskFailure !== null) {
+  const carrier = ensureDreamCarrierTask(deps);
+  if (carrier.failure !== null) {
     return {
       ok: true,
-      output: `Dream enabled, but the dream task could not be created: ${taskFailure}. Automatic runs cannot trigger until it exists; run /dream on again to retry.`,
+      output: `Dream enabled, but the dream task could not be created: ${carrier.failure}. Automatic runs cannot trigger until it exists; run /dream on again to retry.`,
+    };
+  }
+  // The write went to the global layer, but the resolved value is what the
+  // trigger actually reads. A per-agent override can keep the agent off, and
+  // saying "enabled" then would be a lie the user has no way to see.
+  const resolved = deps.readSettings(deps.agentId);
+  if (!resolved.enabled) {
+    return {
+      ok: true,
+      output:
+        "Dream was written to the global settings, but this agent has a per-agent override that keeps it off. Update or clear that override in Settings → Dream to make this take effect.",
+    };
+  }
+  if (!resolved.autoTrigger) {
+    return {
+      ok: true,
+      output:
+        "Dream enabled, but automatic triggering is off. Only /dream run will start a run; turn it on in Settings → Dream to allow idle runs.",
+    };
+  }
+  if (carrier.status !== null && carrier.status !== "active") {
+    const resume = carrier.taskId
+      ? `/schedule resume ${carrier.taskId}`
+      : "/schedule resume";
+    return {
+      ok: true,
+      output: `Dream enabled, but its schedule task is ${carrier.status}. Automatic runs stay off until you resume it (${resume}).`,
     };
   }
   return {
@@ -569,6 +596,14 @@ function runOn(deps: ResolvedDeps): ActionResult {
       ? "Dream enabled. Runs will trigger in the next idle window once pressure reaches the threshold."
       : "Dream enabled. Setup is incomplete: run /dream on in the TUI to open the setup wizard.",
   };
+}
+
+/** What the carrier-task seam handed back, flattened for the enable reply. */
+interface CarrierTaskOutcome {
+  failure: string | null;
+  taskId: string | null;
+  /** The persisted task status; `null` when the seam returned no readable task. */
+  status: string | null;
 }
 
 /**
@@ -582,12 +617,24 @@ function runOn(deps: ResolvedDeps): ActionResult {
  * text instead of thrown: the switch *was* written, so the user's next action is
  * "retry the task", not "dreams are off".
  */
-function ensureDreamCarrierTask(deps: ResolvedDeps): string | null {
+function ensureDreamCarrierTask(deps: ResolvedDeps): CarrierTaskOutcome {
   try {
-    deps.ensureTask(deps.agentId);
-    return null;
+    const task = deps.ensureTask(deps.agentId);
+    const record =
+      typeof task === "object" && task !== null
+        ? (task as Record<string, unknown>)
+        : {};
+    return {
+      failure: null,
+      taskId: typeof record.id === "string" ? record.id : null,
+      status: typeof record.status === "string" ? record.status : null,
+    };
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    return {
+      failure: error instanceof Error ? error.message : String(error),
+      taskId: null,
+      status: null,
+    };
   }
 }
 

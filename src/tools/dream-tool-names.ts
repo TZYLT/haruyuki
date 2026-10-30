@@ -19,6 +19,27 @@ export const DREAM_TOOL_NAMES: readonly DreamToolName[] = [
   "DreamAuthorization",
 ];
 
+/**
+ * Ordinary tools the dream prompts require (R-5.4.3), added to the declaration
+ * alongside the dream family.
+ *
+ * The run reuses the agent's stable toolset, but a model-derived preset may not
+ * carry them: the `codex` preset has no `Read`/`Write`/`Edit`/`Glob`/`Grep`
+ * (its shell tool is also disabled for dream runs), and the `none` preset is
+ * empty. A dream prompt that says "read the memory files" must not advertise a
+ * toolset that cannot do it, so the scope resolver adds these names explicitly.
+ * Every name is filtered against `TOOL_DEFINITIONS` before it reaches `include`.
+ */
+export const DREAM_REQUIRED_TOOL_NAMES: readonly string[] = [
+  "TopicQuery",
+  "SessionRead",
+  "Read",
+  "Edit",
+  "Write",
+  "Glob",
+  "Grep",
+];
+
 export function isDreamToolName(value: unknown): value is DreamToolName {
   return (
     typeof value === "string" &&

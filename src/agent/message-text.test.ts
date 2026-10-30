@@ -29,6 +29,14 @@ describe("cleanVisibleText", () => {
     expect(cleanVisibleText(text)).toBe("before  after");
   });
 
+  test("strips tag variants: attributes, extra space, any case", () => {
+    const text =
+      'before<system-reminder kind="note">a</system-reminder>' +
+      "<SYSTEM-ALERT>b</SYSTEM-ALERT>" +
+      "<task-notification >c</task-notification>after";
+    expect(cleanVisibleText(text)).toBe("beforeafter");
+  });
+
   test("keeps a quoted opening tag; only paired blocks go", () => {
     expect(cleanVisibleText("quote: <system-reminder> is a tag")).toBe(
       "quote: <system-reminder> is a tag",

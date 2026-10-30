@@ -32,6 +32,8 @@ import {
 import type { ScheduleTaskV2, TaskRunnerPort } from "@/cron/cron-types";
 import { runSchedulePreflight } from "@/cron/preflight";
 import { evaluateSignals } from "@/cron/signal";
+import { settingsManager } from "@/settings-manager";
+import { debugWarn } from "@/utils/debug";
 
 /** The backend lane a short-lived host competes for (this fork is local-only). */
 const BACKEND_LANE = "local";
@@ -59,8 +61,65 @@ export interface ScheduleTickDeps {
     started: ScheduleTaskV2 | null;
     deferredTaskIds?: string[];
   }>;
+  /**
+   * Test seam: startup crash recovery (F-06 fix, R-5.8.4). Defaults to a
+   * dynamic import of T2's `recoverDreamRuns()` so the light path never pays
+   * for the dream recovery graph.
+   */
+  recoverStaleRuns?: () => Promise<unknown>;
 }
 
+/**
+ * F-06 fix (P1): this subcommand runs before `src/index.ts` initializes the
+ * settings manager, so the dream preflight would otherwise read the defaults
+ * (`dreamEnabled: false`) and never load the runtime for a configured dream.
+ * `settingsManager.initialize()` is a settings-file read, not a backend load, so
+ * the cron-only light path (C-24) is preserved. A failure is one line and a
+ * quiet exit 0; the next OS tick retries.
+ */
+async function initializeSettingsForDreamProbe(): Promise<void> {
+  try {
+    await settingsManager.initialize();
+  } catch (error) {
+    // Continue: an unreadable settings file must not also stop ordinary cron
+    // tasks. `readDreamSettings` treats "not initialized" as "dream disabled",
+    // so the probe simply cannot see a dream this tick; the next OS tick retries.
+    console.error(
+      `schedule tick: settings unreadable: ${
+        error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : String(error)
+      }`,
+    );
+  }
+}
+
+/**
+ * F-06 fix (P1/R-5.8.4): repair dream runs that crashed earlier, once per host
+ * start. Idempotent and never throws; the recovery graph is imported dynamically
+ * so the "nothing due" path never pays for it.
+ */
+async function runStartupDreamRecovery(
+  recover?: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    if (recover) {
+      await recover();
+      return;
+    }
+    const { recoverDreamRuns } = await import("@/agent/dream/dream-recovery");
+    await recoverDreamRuns();
+  } catch (error) {
+    debugWarn(
+      "dream",
+      `startup dream recovery failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+/** A listener/runtime for one OS-woken tick, plus how to stop it. */
 async function startListenerRuntime(): Promise<ShortLivedRuntime | null> {
   const [
     { startLocalChannelListenerWithHandle, stopListenerClient },
@@ -232,6 +291,12 @@ export async function runScheduleTick(
       return 0;
     }
   } else {
+    // F-06 fix (P1): the dream probe resolves settings, which are not loaded yet
+    // in a subcommand process (`src/index.ts` initializes them after routing).
+    // Without this, a configured dream looked disabled and the autostart path
+    // never loaded the runtime. A failure is logged and the tick continues, so
+    // an unreadable settings file cannot stop ordinary cron tasks too.
+    await initializeSettingsForDreamProbe();
     const preflight = runSchedulePreflight({ now });
     if (preflight.error) {
       console.error(`schedule tick: ${preflight.error}`);
@@ -249,6 +314,10 @@ export async function runScheduleTick(
   }
 
   try {
+    // F-06 fix (P1/R-5.8.4): repair dream runs a killed process left behind
+    // before this host evaluates. Awaited (not fire-and-forget) because this
+    // process is about to exit after the tick.
+    await runStartupDreamRecovery(deps.recoverStaleRuns);
     // The runtime is loaded: swap the preflight's lightweight dream probe for
     // the real dependencies before evaluating (F-06 M1).
     await registerFullDreamSignalSource();

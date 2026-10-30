@@ -8,7 +8,10 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { setConversationId } from "@/agent/context";
-import { runOutsideRuntimeContext } from "@/runtime-context";
+import {
+  runOutsideRuntimeContext,
+  runWithRuntimeContext,
+} from "@/runtime-context";
 import {
   SESSION_READ_DEFAULT_MAX_CHARS,
   SESSION_READ_MAX_MAX_CHARS,
@@ -307,6 +310,127 @@ describe("session_read failures", () => {
     );
     expect(result.status).toBe("error");
     expect(result.content).toContain("no conversation to read");
+  });
+});
+
+describe("session_read ownership", () => {
+  function withAgent<T>(agentId: string, run: () => Promise<T>): Promise<T> {
+    return runWithRuntimeContext({ agentId, conversationId: "conv-1" }, run);
+  }
+
+  test("reads a conversation owned by the calling agent", async () => {
+    const backend = fakeBackend({
+      record: { id: "conv-1", hidden: false, agent_id: "agent-1" },
+      messages: MESSAGES,
+    });
+    const result = await withAgent("agent-1", () => read({}, backend));
+    expect(result.status).toBe("success");
+    expect(result.content).toContain("hi, here is the answer");
+  });
+
+  test("refuses a conversation that belongs to another agent", async () => {
+    const backend = fakeBackend({
+      record: { id: "conv-1", hidden: false, agent_id: "agent-1" },
+      messages: MESSAGES,
+    });
+    const result = await withAgent("agent-2", () => read({}, backend));
+    expect(result.status).toBe("error");
+    expect(result.content).toContain("belongs to another agent");
+    expect(result.content).not.toContain("hi, here is the answer");
+  });
+
+  test("allows a record with no agent_id, which cannot be checked", async () => {
+    const backend = fakeBackend({
+      record: { id: "conv-1", hidden: false },
+      messages: MESSAGES,
+    });
+    const result = await withAgent("agent-2", () => read({}, backend));
+    expect(result.status).toBe("success");
+  });
+});
+
+describe("session_read scan cap", () => {
+  function cappedBackend(all: unknown[]): SessionReadBackend {
+    return {
+      retrieveConversation: async () => ({ id: "conv-long", hidden: false }),
+      listConversationMessages: async (_id, body) => {
+        const limit = body?.limit ?? all.length;
+        return { items: all.slice(0, limit) };
+      },
+    };
+  }
+
+  const LONG = Array.from({ length: 6_000 }, (_value, index) => ({
+    message_type: "user_message",
+    content: [{ type: "text", text: `message-${index + 1}` }],
+  }));
+
+  test("says when only the first 5,000 stored messages were scanned", async () => {
+    const result = await read(
+      { conversation_id: "conv-long" },
+      cappedBackend(LONG),
+    );
+    expect(result.status).toBe("success");
+    expect(result.content).toContain(
+      "Only the first 5000 stored messages are scanned",
+    );
+    expect(result.content).toContain("message_start=5001");
+  });
+
+  test("a start past the scan window explains the cap, not a small count", async () => {
+    const result = await read(
+      { conversation_id: "conv-long", message_start: 5001 },
+      cappedBackend(LONG),
+    );
+    expect(result.status).toBe("error");
+    expect(result.content).toContain("scanned window");
+    expect(result.content).toContain("scan cap");
+    expect(result.content).not.toContain("only 5000 visible");
+  });
+});
+
+describe("session_read page progress", () => {
+  function longMessages(query: string): SessionReadBackend {
+    return fakeBackend({
+      record: { id: "conv-progress", hidden: false },
+      messages: Array.from({ length: 3 }, () => ({
+        message_type: "user_message",
+        content: [{ type: "text", text: `${query} ${"body ".repeat(50)}` }],
+      })),
+    });
+  }
+
+  test("a tiny budget still advances instead of repeating an offset", async () => {
+    const query = `needle ${"q".repeat(20)}`;
+    const first = await read(
+      {
+        conversation_id: "conv-progress",
+        query,
+        max_chars: SESSION_READ_MIN_MAX_CHARS,
+      },
+      longMessages(query),
+    );
+    expect(first.status).toBe("success");
+    const reported = /next offset=(\d+)/.exec(first.content)?.[1];
+    expect(reported).toBeDefined();
+    const nextOffset = Number(reported);
+    expect(nextOffset).toBeGreaterThan(0);
+    // The keyword echo is clamped so the header cannot eat the whole budget.
+    const headerLine = first.content.split("\n")[1] ?? "";
+    expect(headerLine.length).toBeLessThanOrEqual(100);
+
+    const second = await read(
+      {
+        conversation_id: "conv-progress",
+        query,
+        max_chars: SESSION_READ_MIN_MAX_CHARS,
+        offset: nextOffset,
+      },
+      longMessages(query),
+    );
+    expect(second.status).toBe("success");
+    expect(second.content).not.toBe(first.content);
+    expect(second.content).toContain("user:");
   });
 });
 

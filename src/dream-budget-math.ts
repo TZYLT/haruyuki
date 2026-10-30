@@ -87,6 +87,11 @@ export interface DreamBudgetInput {
  * The run's token allowance: `min(pressure * factor, maxPerRun)`, or the manual
  * override when one was passed. Always at least 1 when any allowance is
  * possible, never negative.
+ *
+ * A manual `--budget` override is an explicit user instruction and is
+ * deliberately **not** re-clamped to `maxPerRun` (user ruling in the F-06
+ * review): the cap bounds the automatic formula, not a number the user typed.
+ * An automatic run can never exceed the cap.
  */
 export function resolveDreamBudgetTokens(input: DreamBudgetInput): number {
   const override = input.overrideTokens;

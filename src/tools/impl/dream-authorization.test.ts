@@ -18,6 +18,7 @@ import {
   parseDreamAuthorizationEntries,
   utcDateString,
 } from "@/tools/impl/dream-authorization";
+import { TOOL_DEFINITIONS } from "@/tools/tool-definitions";
 
 const NOW = Date.UTC(2026, 9, 30, 12, 0);
 const roots: string[] = [];
@@ -236,5 +237,45 @@ describe("dream_authorization", () => {
     // authorizations these are; no agent context is an error.
     expect(result.status).toBe("error");
     expect(result.content).toContain("no agent");
+  });
+
+  test("quoted-empty values are treated as missing, not as an entry", () => {
+    const { entries, problems } =
+      parseDreamAuthorizationEntries(`## Empty but present
+- scope: ""
+- expires: never
+- source: ""
+- quote: ""
+`);
+    expect(entries).toEqual([]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("scope");
+    expect(problems[0]).toContain("source");
+    expect(problems[0]).toContain("quote");
+  });
+
+  test("the tool reports a quoted-empty entry as malformed and authorizes nothing", async () => {
+    const root = withFile(
+      DREAM_AUTHORIZATION_PATH,
+      [
+        "## Empty but present",
+        '- scope: ""',
+        "- expires: never",
+        '- source: ""',
+        '- quote: ""',
+        "",
+      ].join("\n"),
+    );
+    const result = await call({}, root);
+    expect(result.status).toBe("success");
+    expect(result.content).toContain("no active authorization entries");
+    expect(result.content).toContain("malformed entry ignored");
+  });
+
+  test("the description states the no-self-authoring discipline", () => {
+    const description = TOOL_DEFINITIONS.DreamAuthorization.description;
+    expect(description).toContain("violates the task-tier discipline");
+    expect(description).toContain("does not verify the quote");
+    expect(description).toContain("No entry means no authorization");
   });
 });

@@ -150,9 +150,18 @@ export interface DreamEligibilityInput {
   settings: ResolvedDreamSettings;
   state: DreamSignalState;
   now: Date;
-  pressure: number;
-  /** Last user interaction for the agent (S2); `null` = none recorded. */
-  lastActiveAt: number | null;
+  /**
+   * S3 pressure. A function is accepted so the expensive read (usage ledger +
+   * memFS stats) only happens when the cheap gates (window, day counter,
+   * cooldown) have already passed — R-5.2.4 wants a lightweight per-tick
+   * evaluation, and a call outside the window must not touch the ledger.
+   */
+  pressure: number | (() => number);
+  /**
+   * Last user interaction for the agent (S2); `null` = none recorded. Also
+   * accepts a thunk for the same reason as `pressure`.
+   */
+  lastActiveAt: number | null | (() => number | null);
   isRunning: boolean;
 }
 
@@ -161,6 +170,52 @@ export interface DreamEligibility {
   reason: DreamSkipReason;
   /** Earliest instant this agent may be evaluated again, when known. */
   nextEligibleAt: number | null;
+}
+
+// ── Run marker liveness (cron-side) ─────────────────────────────────
+
+/**
+ * A `running` marker older than this can no longer be trusted as "a run is
+ * alive". The floor is one hour; a run with a configured time limit gets its
+ * limit plus a 30-minute grace, and a run with no limit (the default) is
+ * assumed dead after 24.5 hours — the marker is a breadcrumb, not a lock.
+ */
+export const DREAM_MARKER_MIN_STALE_MS = 60 * 60_000;
+
+/** Grace added on top of a configured time limit before a marker is stale. */
+export const DREAM_MARKER_LIMIT_GRACE_MINUTES = 30;
+
+/** Assumed run length when the agent configured no time limit. */
+export const DREAM_MARKER_DEFAULT_LIMIT_MINUTES = 24 * 60;
+
+/** How long a `running` marker stays authoritative for the trigger. */
+export function dreamRunMarkerStaleAfterMs(
+  settings: Pick<ResolvedDreamSettings, "timeLimitMinutes">,
+): number {
+  const limitMinutes =
+    settings.timeLimitMinutes ?? DREAM_MARKER_DEFAULT_LIMIT_MINUTES;
+  return Math.max(
+    DREAM_MARKER_MIN_STALE_MS,
+    (limitMinutes + DREAM_MARKER_LIMIT_GRACE_MINUTES) * MS_PER_MINUTE,
+  );
+}
+
+/**
+ * True when the state file's in-flight marker should still suppress a new
+ * trigger. A marker left by a killed process would otherwise deadlock the
+ * agent forever (there is no production path that clears it before the next
+ * run, and the next run is exactly what the marker suppresses); the age bound
+ * makes that self-healing. T2's `isDreamRunLive` adds the authoritative
+ * lease-owner check on the host side.
+ */
+export function isDreamRunMarkerActive(
+  marker: DreamRunMarker | null,
+  settings: Pick<ResolvedDreamSettings, "timeLimitMinutes">,
+  now: Date,
+): boolean {
+  if (!marker) return false;
+  const startedAt = Number.isFinite(marker.startedAt) ? marker.startedAt : 0;
+  return now.getTime() - startedAt < dreamRunMarkerStaleAfterMs(settings);
 }
 
 // ── Windows ─────────────────────────────────────────────────────────
@@ -309,22 +364,33 @@ export function evaluateDreamEligibility(
       nextEligibleAt: state.nextEligibleAt,
     };
   }
-  if (input.isRunning || state.running !== null) {
+  // `isRunning` is the caller's liveness answer (production: marker age bound,
+  // host: lease-owner check). A raw `state.running` fallback here would undo the
+  // age bound and let a crash remnant deadlock the trigger again (Lead fix).
+  if (input.isRunning) {
     return { eligible: false, reason: "already_running", nextEligibleAt: null };
   }
 
   // R-5.2.2: silence since the last interaction. `null` means "no interaction
   // was recorded in this process" — there is nothing the user is waiting on, so
   // the silence requirement is satisfied (a recorded recent interaction is the
-  // only thing that can block a run).
-  if (input.lastActiveAt !== null) {
+  // only thing that can block a run). The S2 read is lazy: it runs only after
+  // every cheap gate above has passed.
+  const lastActiveAt =
+    typeof input.lastActiveAt === "function"
+      ? input.lastActiveAt()
+      : input.lastActiveAt;
+  if (lastActiveAt !== null) {
     const silentMs = settings.silenceMinutes * MS_PER_MINUTE;
-    if (nowMs - input.lastActiveAt < silentMs) {
+    if (nowMs - lastActiveAt < silentMs) {
       return { eligible: false, reason: "user_active", nextEligibleAt: null };
     }
   }
 
-  if (!(input.pressure >= settings.pressureThreshold)) {
+  // The S3 read is the expensive one (usage ledger + memFS); same laziness.
+  const pressure =
+    typeof input.pressure === "function" ? input.pressure() : input.pressure;
+  if (!(pressure >= settings.pressureThreshold)) {
     return { eligible: false, reason: "low_pressure", nextEligibleAt: null };
   }
   return { eligible: true, reason: "eligible", nextEligibleAt: nowMs };
@@ -605,8 +671,11 @@ export function createDreamSignalSource(deps: DreamSignalDeps): SignalSource {
           settings,
           state,
           now: input.now,
-          pressure: deps.readPressure(task.agentId),
-          lastActiveAt: deps.readLastActiveAt(task.agentId),
+          // Thunks, not values: outside the window / disabled / daily-limit /
+          // cooldown early returns must not read the ledger or the activity file
+          // (R-5.2.4 "lightweight evaluation").
+          pressure: () => deps.readPressure(task.agentId),
+          lastActiveAt: () => deps.readLastActiveAt(task.agentId),
           isRunning: deps.isRunning(task.agentId),
         });
         if (!eligibility.eligible) continue;

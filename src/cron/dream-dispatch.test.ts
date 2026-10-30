@@ -5,6 +5,7 @@ import {
   addTask,
   DREAM_PLACEHOLDER_CRON,
   getScheduleTask,
+  listTasks,
   serializeDreamTaskPayload,
   updateTask,
 } from "@/cron";
@@ -312,5 +313,58 @@ describe("dream task creation validation", () => {
     expect(() => addTask({ ...baseInput(), payload: "{nope" })).toThrow(
       /payload/,
     );
+  });
+});
+
+// ── Lead fix: one dream carrier per agent (cron-file addTask dedupe) ──
+
+describe("dream carrier dedupe", () => {
+  test("a second addTask for the same agent returns the existing carrier", () => {
+    const first = addDreamTask();
+    const second = addDreamTask();
+    expect(second).toBe(first);
+    expect(
+      listTasks().filter(
+        (task) => task.type === "dream" && task.agent_id === "agent-dream",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("a paused carrier is still the agent's carrier (no second one)", () => {
+    const first = addDreamTask();
+    updateTask(first, (task) => {
+      task.status = "paused";
+      task.paused_reason = "auto_failures";
+    });
+    expect(addDreamTask()).toBe(first);
+    expect(listTasks().filter((task) => task.type === "dream")).toHaveLength(1);
+  });
+
+  test("another agent still gets its own carrier", () => {
+    const first = addDreamTask();
+    const second = addTask({
+      agent_id: "agent-other",
+      name: "Dream",
+      description: "",
+      cron: DREAM_PLACEHOLDER_CRON,
+      timezone: "UTC",
+      recurring: true,
+      prompt: "",
+      payload: serializeDreamTaskPayload({ version: 1 }),
+      type: "dream",
+      target: { kind: "new", hidden: true },
+      timeout_minutes: 0,
+      wait_minutes: 0,
+    }).task.id;
+    expect(second).not.toBe(first);
+    expect(listTasks().filter((task) => task.type === "dream")).toHaveLength(2);
+  });
+
+  test("an invalid dream record still throws instead of returning the carrier", () => {
+    addDreamTask();
+    expect(() => addDreamTask({ timeout_minutes: 30 })).toThrow(
+      /timeout_minutes/,
+    );
+    expect(listTasks().filter((task) => task.type === "dream")).toHaveLength(1);
   });
 });

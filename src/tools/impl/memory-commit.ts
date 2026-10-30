@@ -63,6 +63,10 @@ export interface MemoryCommitDeps {
  */
 export function normalizeMemoryCommitPath(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
+  // A NUL byte cannot be passed to `git add` (Node rejects it in an argv
+  // element), and catching it here keeps the failure a fixable model error
+  // instead of a thrown tool exception.
+  if (raw.includes("\0")) return null;
   const trimmed = raw.trim().replace(/\\/g, "/");
   if (trimmed.length === 0) return null;
   if (trimmed.startsWith("/") || /^[A-Za-z]:/.test(trimmed)) return null;
@@ -101,9 +105,9 @@ export async function memory_commit(
       `${TOOL_NAME}: "reason" is ${reason.length} characters; the limit is ${MEMORY_COMMIT_MAX_REASON_CHARS}.`,
     );
   }
-  if (reason.includes("\n")) {
+  if (reason.includes("\n") || reason.includes("\r")) {
     return error(
-      `${TOOL_NAME}: "reason" must be one line (no newlines); put details in the memory file itself.`,
+      `${TOOL_NAME}: "reason" must be one line (no newlines or carriage returns); put details in the memory file itself.`,
     );
   }
   if (!Array.isArray(args.paths) || args.paths.length === 0) {

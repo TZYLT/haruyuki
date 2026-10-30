@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { runDreamSubcommand } from "@/cli/subcommands/dream";
-import { addTask } from "@/cron";
+import { markDreamActivity } from "@/agent/dream/dream-activity";
+import { runDreamStatus, runDreamSubcommand } from "@/cli/subcommands/dream";
+import {
+  addTask,
+  DREAM_PLACEHOLDER_CRON,
+  getScheduleFilePath,
+  serializeDreamTaskPayload,
+} from "@/cron";
 import { settingsManager } from "@/settings-manager";
 
 const TEST_DIR = path.join(import.meta.dir, "__dream_subcommand_test_tmp__");
@@ -59,3 +65,62 @@ describe("haruyuki dream subcommand", () => {
     expect(await runDreamSubcommand(["status"])).toBe(0);
   });
 });
+
+// ── Lead fixes: clean store diagnostics + honest status eligibility ──
+
+describe("store errors are diagnostics, not rejections", () => {
+  test("dream run on a corrupt store prints one line and exits 1", async () => {
+    writeFileSync(getScheduleFilePath(), "{not json");
+    await expect(runDreamSubcommand(["run", "--task", "abc"])).resolves.toBe(1);
+  });
+
+  test("dream status on a corrupt store exits 1", async () => {
+    writeFileSync(getScheduleFilePath(), "{not json");
+    await expect(runDreamSubcommand(["status"])).resolves.toBe(1);
+  });
+});
+
+describe("status eligibility uses the real activity source", () => {
+  test("a user-active agent is reported as user_active, not eligible", async () => {
+    await settingsManager.initialize();
+    settingsManager.updateSettings({
+      dreamEnabled: true,
+      dreamIdleWindows: [{ start: "00:00", end: "23:59" }],
+      dreamSilenceMinutes: 30,
+      dreamPressureThreshold: 1,
+    });
+    addDreamTaskForStatus();
+    markDreamActivity("agent-status", Date.now());
+
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => {
+      lines.push(args.map((value) => String(value)).join(" "));
+    };
+    try {
+      expect(runDreamStatus()).toBe(0);
+    } finally {
+      console.log = original;
+    }
+    const joined = lines.join("\n");
+    expect(joined).toContain("would trigger now: user_active");
+    expect(joined).not.toContain("would trigger now: eligible");
+  });
+});
+
+function addDreamTaskForStatus(): string {
+  return addTask({
+    agent_id: "agent-status",
+    name: "Dream",
+    description: "",
+    cron: DREAM_PLACEHOLDER_CRON,
+    timezone: "UTC",
+    recurring: true,
+    prompt: "",
+    payload: serializeDreamTaskPayload({ version: 1 }),
+    type: "dream",
+    target: { kind: "new", hidden: true },
+    timeout_minutes: 0,
+    wait_minutes: 0,
+  }).task.id;
+}

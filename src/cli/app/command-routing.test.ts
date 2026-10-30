@@ -182,4 +182,31 @@ describe("command routing", () => {
       });
     }
   });
+
+  test("a /dream typo without the word boundary is not a read-only form", () => {
+    // F-06 review P1: `slice("/dream".length).trim()` made `/dreamstatus` look
+    // exactly like `/dream status`, so a typo skipped the busy guard and fell
+    // through to the "send as a message" path. The match now stops at the word.
+    for (const input of ["/dreamstatus", "/dreamconfig", "/dreamon"]) {
+      expect({ input, bypass: isNonStateCommand(input) }).toEqual({
+        input,
+        bypass: false,
+      });
+      // The queue-bypass decision the busy guard reads is the same predicate.
+      expect({
+        input,
+        bypass: shouldSlashCommandBypassQueue(input),
+      }).toEqual({ input, bypass: false });
+    }
+    for (const input of [
+      "/dream  status",
+      "/dream\tconfig",
+      "  /dream status  ",
+    ]) {
+      expect({ input, bypass: isNonStateCommand(input) }).toEqual({
+        input,
+        bypass: true,
+      });
+    }
+  });
 });

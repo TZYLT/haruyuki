@@ -14,7 +14,7 @@ import { readDreamActivity } from "@/agent/dream/dream-activity";
 import { readDreamPressure } from "@/agent/dream/dream-pressure";
 import { readDreamSettings } from "@/dream-settings";
 import type { DreamSignalDeps } from "./dream-signal";
-import { readDreamSignalState } from "./dream-signal";
+import { isDreamRunMarkerActive, readDreamSignalState } from "./dream-signal";
 
 /** Overrides are for tests and for hosts that need a frozen clock. */
 export function createDefaultDreamSignalDeps(
@@ -26,9 +26,19 @@ export function createDefaultDreamSignalDeps(
     readSettingsForAgent: (agentId) => readDreamSettings(agentId),
     readPressure: (agentId) => readDreamPressure(agentId),
     readLastActiveAt: (agentId) => readDreamActivity(agentId),
-    // The run marker lives in the same state file the host writes, so the
-    // source needs no cross-process dream lock to answer "is a run active".
-    isRunning: (agentId) => readDreamSignalState(agentId).running !== null,
+    // The run marker lives in the same state file the host writes, but a marker
+    // left by a killed process must not suppress the trigger forever (Lead
+    // fix): it is authoritative only while it is younger than the run's own
+    // time limit (+grace). T2's `isDreamRunLive` does the lease-owner check at
+    // the S5/startup call sites; this cron-side predicate stays cheap.
+    isRunning: (agentId) => {
+      const settings = readDreamSettings(agentId);
+      return isDreamRunMarkerActive(
+        readDreamSignalState(agentId).running,
+        settings,
+        new Date(),
+      );
+    },
     now: () => new Date(),
     ...overrides,
   };

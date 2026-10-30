@@ -34,6 +34,28 @@ function lease(overrides: Partial<DreamRunLease> = {}): DreamRunLease {
   };
 }
 
+function terminalMetadata(
+  status: DreamRunMetadata["status"],
+): DreamRunMetadata {
+  return {
+    runId: "run-1",
+    triggerSource: "scheduled",
+    agentId: "agent-a",
+    conversationId: "local-conv-1",
+    tierPlan: ["tidy"],
+    tierReached: "tidy",
+    startedAt: 1_000,
+    endedAt: 5_000,
+    baselineSha: "base-sha",
+    budgetTokens: 100,
+    spentTokens: 10,
+    timeLimitMinutes: null,
+    status,
+    reportPath: "maintenance/dream-report.md",
+    handoff: "finished",
+  };
+}
+
 interface Recorded {
   rollbacks: Array<{ memoryDir: string; baselineSha: string }>;
   reports: Array<{ conversationId: string; body: string }>;
@@ -42,6 +64,7 @@ interface Recorded {
   finished: Array<{ agentId: string; outcome: string }>;
   deleted: string[];
   released: number;
+  clearedOverrides: string[];
 }
 
 function makeDeps(overrides: Partial<DreamRecoveryDeps> = {}): {
@@ -56,6 +79,7 @@ function makeDeps(overrides: Partial<DreamRecoveryDeps> = {}): {
     finished: [],
     deleted: [],
     released: 0,
+    clearedOverrides: [],
   };
   const deps: DreamRecoveryDeps = {
     listLeases: () => [],
@@ -101,6 +125,9 @@ function makeDeps(overrides: Partial<DreamRecoveryDeps> = {}): {
     },
     markRunFinished: (agentId, outcome) => {
       recorded.finished.push({ agentId, outcome });
+    },
+    clearBudgetOverride: (taskId) => {
+      recorded.clearedOverrides.push(taskId);
     },
     now: () => new Date(9_000),
     ...overrides,
@@ -208,6 +235,60 @@ describe("recoverStaleDreamRuns", () => {
     const result = await recoverStaleDreamRuns(deps);
     expect(result.deferred).toBe(1);
     expect(recorded.deleted).toHaveLength(0);
+  });
+
+  test("a terminal record is only cleaned up: no rollback, no record rewrite", async () => {
+    for (const status of [
+      "succeeded",
+      "cancelled",
+      "budget_exhausted",
+      "timeout",
+      "failed",
+      "unfinished",
+    ] as const) {
+      const { deps, recorded } = makeDeps({
+        listLeases: () => [lease()],
+        readRunMetadata: async () => ({
+          ...terminalMetadata(status),
+        }),
+      });
+      const result = await recoverStaleDreamRuns(deps);
+      expect(result.recovered).toBe(1);
+      expect(recorded.rollbacks).toHaveLength(0);
+      expect(recorded.metadata).toHaveLength(0);
+      expect(recorded.reports).toHaveLength(0);
+      expect(recorded.markers).toHaveLength(0);
+      expect(recorded.finished).toEqual([
+        { agentId: "agent-a", outcome: status },
+      ]);
+      expect(recorded.deleted).toEqual(["agent-a"]);
+      expect(recorded.clearedOverrides).toEqual(["task-1"]);
+    }
+  });
+
+  test("a terminal record that has no lease task id is still cleaned up", async () => {
+    const { deps, recorded } = makeDeps({
+      listLeases: () => [lease({ taskId: null })],
+      readRunMetadata: async () => terminalMetadata("succeeded"),
+    });
+    const result = await recoverStaleDreamRuns(deps);
+    expect(result.recovered).toBe(1);
+    expect(recorded.rollbacks).toHaveLength(0);
+    expect(recorded.clearedOverrides).toHaveLength(0);
+  });
+
+  test("the repaired record gets the report path the writer returned", async () => {
+    const { deps, recorded } = makeDeps({ listLeases: () => [lease()] });
+    await recoverStaleDreamRuns(deps);
+    expect(recorded.metadata[0]?.metadata.reportPath).toBe(
+      "maintenance/dream-report.md",
+    );
+  });
+
+  test("a running run clears the stale budget override while repairing", async () => {
+    const { deps, recorded } = makeDeps({ listLeases: () => [lease()] });
+    await recoverStaleDreamRuns(deps);
+    expect(recorded.clearedOverrides).toEqual(["task-1"]);
   });
 
   test("the repair never throws, even when listing blows up", async () => {

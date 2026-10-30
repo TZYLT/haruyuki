@@ -306,3 +306,30 @@ describe("writeDreamReport", () => {
     TEST_TIMEOUT_MS,
   );
 });
+
+describe("writeDreamReport under a stricter memory limit", () => {
+  test(
+    "fits the body inside .memfs.config.json maxFileCharacters",
+    async () => {
+      seedRepository();
+      writeFileSync(
+        join(memoryDir, ".memfs.config.json"),
+        JSON.stringify({ version: 1, maxFileCharacters: 900 }, null, 2),
+      );
+      repoOrThrow().git("add", "-A");
+      repoOrThrow().git("commit", "--no-verify", "-m", "strict limits");
+
+      const result = await writeDreamReport({
+        agentId: AGENT_ID,
+        conversationId: "conv-dream-1",
+        metadata: metadata(),
+        body: "word ".repeat(2_000),
+      });
+      expect(result.committed).toBe(true);
+      const content = readFileSync(reportFile(), "utf8");
+      expect(content.length).toBeLessThanOrEqual(900);
+      expect(content).toContain("Report truncated at");
+    },
+    TEST_TIMEOUT_MS,
+  );
+});

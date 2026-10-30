@@ -13,6 +13,7 @@ import {
   DREAM_DONE_MAX_HANDOFF_CHARS,
   dream_done,
 } from "@/tools/impl/dream-done";
+import { TOOL_DEFINITIONS } from "@/tools/tool-definitions";
 import type { DreamRunMetadata } from "@/types/dream-run-metadata";
 
 afterEach(() => {
@@ -96,6 +97,18 @@ describe("dream_done", () => {
     expect(result.content).toContain("status: handoff");
     expect(result.content).toContain("Stop calling tools");
     expect(result.content).toContain("MemoryCommit");
+    expect(result.content).toContain("maintenance/dream-report.md");
+    expect(result.content).not.toContain("next run will read");
+  });
+
+  test("the description scopes the tool to the whole run and points at the report", () => {
+    const description = TOOL_DEFINITIONS.DreamDone.description;
+    expect(description).toContain("whole dream run");
+    expect(description).toContain("maintenance/dream-report.md");
+    expect(description).toContain(
+      "Do **not** call it at the end of a single tier's turn",
+    );
+    expect(description).not.toContain("next run read it");
   });
 
   test("defaults to done", async () => {

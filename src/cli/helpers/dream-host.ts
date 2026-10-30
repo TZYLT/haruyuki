@@ -27,6 +27,7 @@
  */
 
 import { readDreamActivity } from "@/agent/dream/dream-activity";
+import { isDreamRunLive } from "@/agent/dream/dream-liveness";
 import { readDreamPressure } from "@/agent/dream/dream-pressure";
 import { recoverDreamRuns } from "@/agent/dream/dream-recovery";
 import { runDreamTask } from "@/agent/dream/dream-run";
@@ -49,6 +50,7 @@ import {
   validateDreamTaskForRun,
 } from "@/cron/dream-signal";
 import {
+  isScheduledTaskPreflightError,
   runScheduledTaskWithHost,
   type ScheduledTaskHostPort,
   ScheduledTaskPreflightError,
@@ -72,6 +74,8 @@ export interface DreamHostDeps {
     runId: string;
     occurrence: string;
     signal: AbortSignal;
+    /** T2's S1 input gained this optional flag (manual /dream run). */
+    manual?: boolean;
   }) => Promise<DreamRunTaskResultLike>;
   readSettings?: (agentId: string) => ResolvedDreamSettings;
   readPressure?: (agentId: string) => number;
@@ -101,11 +105,25 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Apply a one-run budget override to the persisted payload (temporarily). */
+interface AppliedBudgetOverride {
+  /** Payload this run wrote; the CAS restore only acts while it is still current. */
+  appliedPayload: string;
+  /** Payload that was there before (may be `undefined` = no payload field). */
+  previousPayload: string | undefined;
+}
+
+/**
+ * Apply a one-run budget override to the persisted payload (temporarily).
+ *
+ * The payload is the only channel S1 has for a per-run budget (frozen input
+ * shape), so the override is written before the run and removed after it. Kept
+ * separate from the restore so the restore can be compare-and-set: a crash
+ * between the two used to leave the override behind forever.
+ */
 function applyBudgetOverride(
   taskId: string,
   budgetOverrideTokens: number | undefined,
-): string | undefined | null {
+): AppliedBudgetOverride | null {
   if (
     budgetOverrideTokens === undefined ||
     !Number.isFinite(budgetOverrideTokens) ||
@@ -115,28 +133,35 @@ function applyBudgetOverride(
   }
   const record = getTask(taskId);
   if (!record) return null;
-  const previous = record.payload;
-  updateTask(taskId, (task) => {
-    task.payload = serializeDreamTaskPayload({
-      version: 1,
-      budgetOverrideTokens: Math.trunc(budgetOverrideTokens),
-    });
+  const appliedPayload = serializeDreamTaskPayload({
+    version: 1,
+    budgetOverrideTokens: Math.trunc(budgetOverrideTokens),
   });
-  return previous;
+  updateTask(taskId, (task) => {
+    task.payload = appliedPayload;
+  });
+  return { appliedPayload, previousPayload: record.payload };
 }
 
+/**
+ * Compare-and-set restore (Lead fix): only put the old payload back if the
+ * record still holds the override this run wrote. A user or another command
+ * that edited the task during the run keeps its edit instead of being silently
+ * overwritten; a leftover override is cleaned by T2's stale-state recovery.
+ */
 function restoreBudgetOverride(
   taskId: string,
-  previous: string | undefined | null,
+  override: AppliedBudgetOverride | null,
 ): void {
-  if (previous === null) return;
+  if (!override) return;
   try {
     updateTask(taskId, (task) => {
-      task.payload = previous;
+      if (task.payload !== override.appliedPayload) return;
+      task.payload = override.previousPayload;
     });
   } catch {
-    // The run's outcome must not be replaced by a cleanup failure; the next
-    // explicit `/dream run --budget` overwrites the stale override.
+    // The run's outcome must not be replaced by a cleanup failure; the stale
+    // override is cleared by the dream recovery pass.
   }
 }
 
@@ -200,8 +225,10 @@ export async function runDreamHost(
   if (!input.manual) {
     // Route §2.2: the long-lived host already judged the trigger due, and this
     // is the second, authoritative check in the process that owns the run.
-    // `isRunning` is false here by construction (this process is starting the
-    // run); the state's marker is checked so a concurrent child exits too.
+    // Liveness is T2's `isDreamRunLive` (marker + lease + owner + age bound), not
+    // a bare marker: this process has not created its own lease yet, so a live
+    // answer means another child for this agent is genuinely running (F3 skip),
+    // and a crash remnant no longer counts as one.
     const state = readDreamSignalState(task.agentId);
     const eligibility = evaluateDreamEligibility({
       task,
@@ -210,7 +237,7 @@ export async function runDreamHost(
       now,
       pressure: (deps.readPressure ?? readDreamPressure)(task.agentId),
       lastActiveAt: (deps.readLastActiveAt ?? readDreamActivity)(task.agentId),
-      isRunning: state.running !== null,
+      isRunning: isDreamRunLive(task.agentId, now),
     });
     if (!eligibility.eligible) {
       deferDreamSignal({
@@ -226,12 +253,12 @@ export async function runDreamHost(
     }
   }
 
-  const previousPayload = applyBudgetOverride(
+  const budgetOverride = applyBudgetOverride(
     input.taskId,
     input.budgetOverrideTokens,
   );
   const effectiveTask =
-    previousPayload === null ? task : (getScheduleTask(input.taskId) ?? task);
+    budgetOverride === null ? task : (getScheduleTask(input.taskId) ?? task);
 
   markDreamAttempt({
     agentId: effectiveTask.agentId,
@@ -242,17 +269,27 @@ export async function runDreamHost(
 
   let result: DreamRunTaskResultLike;
   try {
-    const controller = deps.runDreamTask ?? runDreamTask;
+    // T2's S1 input gained an optional `manual` flag; the seam's type carries it
+    // so the two tracks can change at the same time without a signature break.
+    const controller: NonNullable<DreamHostDeps["runDreamTask"]> =
+      deps.runDreamTask ?? ((controllerInput) => runDreamTask(controllerInput));
     result = await controller({
       task: effectiveTask,
       runId: input.runId,
       occurrence: input.occurrence,
       signal: input.signal,
+      manual: input.manual,
     });
   } catch (error) {
+    // F1 must stay F1: `ScheduledTaskPreflightError` is how the scheduler core
+    // tells "nothing this run could start" (no streak-pausing F2) from a real
+    // mid-run failure. Flattening it into a plain `failed` result downgraded an
+    // F1 to F2 and counted it toward auto-pause (Lead fix).
+    if (error instanceof ScheduledTaskPreflightError) throw error;
+    if (isScheduledTaskPreflightError(error)) throw error;
     result = { outcome: "failed", error: errorMessage(error) };
   } finally {
-    restoreBudgetOverride(input.taskId, previousPayload);
+    restoreBudgetOverride(input.taskId, budgetOverride);
   }
 
   if (input.signal.aborted && result.outcome !== "success") {

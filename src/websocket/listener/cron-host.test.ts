@@ -173,6 +173,10 @@ function makeRunner(
     },
     // F10: the target lookup is a backend read; tests answer it explicitly.
     resolveExistingTarget: async () => "ok" as const,
+    // The default seam runs the real crash recovery at host startup. These
+    // tests do not isolate `HARUYUKI_HOME`, so a real recovery would read the
+    // machine's harness home (docs/31 B rules); the seam is a no-op here.
+    recoverStaleRuns: async () => ({ recovered: 0 }),
     now: () => Date.parse("2026-10-28T03:00:00.000Z"),
     pollIntervalMs: 5,
     ...overrides,

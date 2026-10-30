@@ -5,10 +5,13 @@
  * A dream run is a headless child process, so "the model is done" cannot be
  * inferred from the conversation: the model may end a turn because it finished,
  * because it ran out of budget, or because it was interrupted mid-work. This
- * tool is the explicit signal. It records **where to continue next time** in the
- * run record's `handoff` field, which the finishing step turns into the report
- * and the next run reads, and tells the model to stop calling tools and write
- * the report body as its final message.
+ * tool is the explicit signal. It records **what is left** in the run record's
+ * `handoff` field, which the finishing step includes in the report
+ * (`maintenance/dream-report.md`) — a later run may read that report for
+ * context, but no handoff message is delivered to it automatically — and tells
+ * the model to stop calling tools and write the report body as its final
+ * message. Calling it ends the whole run, so the per-tier turns must not call it
+ * just because one tier's work is done.
  *
  * It deliberately does not commit memory and does not change the run status:
  * the agent's own `MemoryCommit` calls are the durable writes, and the run
@@ -142,8 +145,8 @@ export async function dream_done(
       `${TOOL_NAME}: handoff recorded (status: ${statusWord}).`,
       "Stop calling tools now. Your next and final message is the report body — write what you changed, why, and what is left.",
       statusWord === "handoff"
-        ? "The next run will read the handoff you just recorded and continue from there."
-        : "Nothing is left for the next run; the handoff says so.",
+        ? "The handoff is written to the run record and included in maintenance/dream-report.md; a later run can read that report if it needs the context (no message is delivered automatically)."
+        : "Nothing is left; the handoff says so. It is included in maintenance/dream-report.md.",
       "This tool did not commit anything. If you still have uncommitted memory changes, commit them with MemoryCommit first — after this call there is no further turn.",
     ].join("\n"),
     status: "success",

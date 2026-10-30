@@ -8,6 +8,12 @@ down and authorized.
 user said earlier; if no entry covers the work, skip it and say so in the
 report.
 
+**Do not write or edit an authorization entry to cover your own work.** That
+violates the task-tier discipline. An entry must quote the user's own words and
+name the conversation it came from; the tool does not verify the quote against
+that conversation, and "not verified" does not mean "fair to invent". If you
+cannot point at a real user quote, there is no authorization.
+
 Entries live in the agent's memory repository, in `authorization.md` (or
 `system/authorization.md` on legacy layouts). One entry starts at a `## ` heading
 and has four required fields:
@@ -28,8 +34,8 @@ and has four required fields:
 
 The tool reports each matching entry's title, scope, source conversation and
 quote, and whether it is active. Expired entries are hidden unless
-`include_expired` is true. Malformed entries are reported and ignored — they
-authorize nothing.
+`include_expired` is true. Malformed or empty entries are reported and ignored —
+they authorize nothing.
 
 This tool is read-only. It cannot create an authorization entry: the user (or
 the main session recording the user's words) does that.

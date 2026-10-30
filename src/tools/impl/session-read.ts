@@ -22,7 +22,7 @@
  * Read-only: the only backend calls are `retrieveConversation` and
  * `listConversationMessages`.
  */
-import { getConversationId } from "@/agent/context";
+import { getConversationId, getCurrentAgentId } from "@/agent/context";
 import {
   projectVisibleMessages,
   type VisibleMessageText,
@@ -51,8 +51,18 @@ export const SESSION_READ_MAX_SCAN_MESSAGES = 5_000;
  * below still holds the hard `max_chars` promise.
  */
 const FOOTER_RESERVE_CHARS = 200;
-/** Smallest partial first block worth returning when the budget is tiny. */
-const MIN_PARTIAL_BLOCK_CHARS = 120;
+/**
+ * Longest keyword echo in the header. The query itself has no length limit, so
+ * an unclamped echo can consume the whole character budget before a message is
+ * printed — a page that then shows nothing and reports the same offset forever.
+ */
+const QUERY_ECHO_MAX_CHARS = 80;
+/**
+ * Smallest truncated first block worth returning when the budget is tiny. Below
+ * this the page still shows a cut block rather than reporting zero messages:
+ * a page with no progress and `next offset=<current offset>` would loop.
+ */
+const MIN_PARTIAL_BLOCK_CHARS = 40;
 
 export interface SessionReadArgs {
   conversation_id?: unknown;
@@ -183,6 +193,43 @@ function resolveConversationId(
   }
 }
 
+/**
+ * The agent making the call, or `null` when this execution context has none.
+ *
+ * The ownership check needs it: a conversation record names its agent, and a
+ * different agent must not read it through this tool (the local store keys
+ * conversations by id, not by agent, so `retrieveConversation` alone cannot
+ * enforce that).
+ */
+function resolveCallerAgentId(): string | null {
+  const runtimeAgentId = getRuntimeContext()?.agentId;
+  if (typeof runtimeAgentId === "string" && runtimeAgentId.length > 0) {
+    return runtimeAgentId;
+  }
+  try {
+    return getCurrentAgentId();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The conversation owner named on the record, or `null` when the record does
+ * not name one (agent-free / older records). `null` means "cannot check".
+ */
+function conversationOwnerAgentId(
+  record: Record<string, unknown>,
+): string | null {
+  const value = record.agent_id;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function queryEcho(query: string): string {
+  return query.length <= QUERY_ECHO_MAX_CHARS
+    ? query
+    : `${query.slice(0, QUERY_ECHO_MAX_CHARS - 1)}…`;
+}
+
 function filterMessages(
   messages: readonly IndexedVisibleMessage[],
   rangeStart: number,
@@ -218,13 +265,16 @@ export function renderSessionReadPage(input: {
   offset: number;
   maxChars: number;
   query?: string;
+  /** Notice that the backend scan hit its cap; rendered under the header. */
+  scanNotice?: string;
 }): SessionReadPage {
   const { conversationId, visible, selected, offset, maxChars, query } = input;
   const header = [
     `Conversation ${conversationId} · ${visible.length} visible message${visible.length === 1 ? "" : "s"}`,
     query === undefined
       ? null
-      : `keyword: "${query}" (${selected.length} matching)`,
+      : `keyword: "${queryEcho(query)}" (${selected.length} matching)`,
+    input.scanNotice ?? null,
   ]
     .filter((line): line is string => line !== null)
     .join("\n");
@@ -244,8 +294,14 @@ export function renderSessionReadPage(input: {
       index += 1;
       continue;
     }
-    if (emitted === 0 && remaining >= MIN_PARTIAL_BLOCK_CHARS) {
-      content += `\n\n${block.slice(0, Math.max(1, remaining - 1))}…`;
+    if (emitted === 0) {
+      // Guarantee progress. A page that prints nothing yet reports the offset
+      // it was called with would repeat forever, so even a nearly exhausted
+      // budget gets a cut first block. `MIN_PARTIAL_BLOCK_CHARS` is the point
+      // below which the cut is obviously unhelpful, not a reason to stop.
+      const room = Math.max(1, remaining - 1);
+      const cut = Math.max(1, Math.min(room, MIN_PARTIAL_BLOCK_CHARS));
+      content += `\n\n${block.slice(0, cut)}…`;
       emitted = 1;
       truncatedMidMessage = true;
       index += 1;
@@ -254,10 +310,12 @@ export function renderSessionReadPage(input: {
   }
 
   const more = index < selected.length;
+  // Defensive: never report the offset the caller already has.
+  const nextOffset = more ? Math.max(index, offset + 1) : null;
   const footerLines = [
-    more
-      ? `(showing ${emitted} of ${selected.length} matching messages; next offset=${index})`
-      : `(${emitted} of ${selected.length} matching messages shown)`,
+    nextOffset === null
+      ? `(${emitted} of ${selected.length} matching messages shown)`
+      : `(showing ${emitted} of ${selected.length} matching messages; next offset=${nextOffset})`,
   ];
   if (truncatedMidMessage) {
     footerLines.push(
@@ -273,7 +331,7 @@ export function renderSessionReadPage(input: {
     conversationId,
     totalVisibleMessages: visible.length,
     matchingMessages: selected.length,
-    nextOffset: more ? index : null,
+    nextOffset,
     content,
   };
 }
@@ -358,6 +416,20 @@ export async function session_read(
       `${TOOL_NAME}: conversation "${conversationId}" was not found.`,
     );
   }
+  // Ownership first: the local store keys conversations by id, not by agent,
+  // so without this check one agent can read another agent's ordinary
+  // conversation by naming its id (F-06 review, user ruling: refuse by owner).
+  const ownerAgentId = conversationOwnerAgentId(conversationRecord);
+  const callerAgentId = resolveCallerAgentId();
+  if (
+    ownerAgentId !== null &&
+    callerAgentId !== null &&
+    ownerAgentId !== callerAgentId
+  ) {
+    return error(
+      `${TOOL_NAME}: conversation "${conversationId}" belongs to another agent ("${ownerAgentId}") and cannot be read with this tool.`,
+    );
+  }
   if (isHiddenConversationRecord(conversationRecord)) {
     return error(
       `${TOOL_NAME}: conversation "${conversationId}" is hidden. Hidden sessions — reflection, dream and subagent runs — are read-only maintenance surfaces and cannot be read with this tool; only ordinary conversations can be read.`,
@@ -366,9 +438,11 @@ export async function session_read(
 
   let page: unknown;
   try {
+    // One extra row detects the cap: a page holding `MAX + 1` rows means the
+    // conversation continues past the scan window.
     page = await backend.listConversationMessages(conversationId, {
       order: "asc",
-      limit: SESSION_READ_MAX_SCAN_MESSAGES,
+      limit: SESSION_READ_MAX_SCAN_MESSAGES + 1,
     });
   } catch {
     return error(
@@ -376,13 +450,25 @@ export async function session_read(
     );
   }
 
+  const storedItems = extractPageItems(page);
+  const scanTruncated = storedItems.length > SESSION_READ_MAX_SCAN_MESSAGES;
+  const scannedItems = scanTruncated
+    ? storedItems.slice(0, SESSION_READ_MAX_SCAN_MESSAGES)
+    : storedItems;
+  const scanNotice = scanTruncated
+    ? `Only the first ${SESSION_READ_MAX_SCAN_MESSAGES} stored messages are scanned; continue with message_start=${SESSION_READ_MAX_SCAN_MESSAGES + 1}.`
+    : undefined;
+
   const visible: IndexedVisibleMessage[] = projectVisibleMessages(
-    extractPageItems(page),
+    scannedItems,
   ).map((message, position) => ({ ...message, index: position + 1 }));
 
   if (visible.length === 0) {
     return {
-      content: `Conversation ${conversationId} has no visible text messages.`,
+      content: [
+        `Conversation ${conversationId} has no visible text messages.`,
+        ...(scanNotice === undefined ? [] : [scanNotice]),
+      ].join("\n"),
       status: "success",
     };
   }
@@ -390,7 +476,9 @@ export async function session_read(
   const rangeStart = start?.value ?? 1;
   if (rangeStart > visible.length) {
     return error(
-      `${TOOL_NAME}: \`message_start\` is ${rangeStart}, but conversation "${conversationId}" has only ${visible.length} visible message${visible.length === 1 ? "" : "s"}.`,
+      scanTruncated
+        ? `${TOOL_NAME}: only the first ${SESSION_READ_MAX_SCAN_MESSAGES} stored messages are scanned, so \`message_start\` ${rangeStart} is past the scanned window (visible messages in it: ${visible.length}). This tool cannot page beyond the scan cap.`
+        : `${TOOL_NAME}: \`message_start\` is ${rangeStart}, but conversation "${conversationId}" has only ${visible.length} visible message${visible.length === 1 ? "" : "s"}.`,
     );
   }
   const rangeEnd = Math.min(end?.value ?? visible.length, visible.length);
@@ -417,6 +505,7 @@ export async function session_read(
     offset,
     maxChars,
     ...(query !== undefined ? { query } : {}),
+    ...(scanNotice !== undefined ? { scanNotice } : {}),
   });
   return { content: rendered.content, status: "success" };
 }

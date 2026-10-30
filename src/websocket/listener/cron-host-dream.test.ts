@@ -158,3 +158,24 @@ describe("listener dream delegation", () => {
     expect(spawned).toHaveLength(2);
   });
 });
+
+// ── Lead fix: listener startup crash recovery (R-5.8.4) ─────────────
+
+describe("listener startup recovery", () => {
+  test("runs exactly once when the runner (host) is constructed", async () => {
+    const recoveries: string[] = [];
+    const runner = createListenerCronRunner({
+      transport: new LocalListenerTransport(),
+      opts,
+      processQueuedTurn: async () => {},
+      activeRuntime: () => null,
+      recoverStaleRuns: async () => {
+        recoveries.push("recover");
+        return {};
+      },
+    });
+    expect(runner.host).toBe("long-lived");
+    await Bun.sleep(20);
+    expect(recoveries).toEqual(["recover"]);
+  });
+});

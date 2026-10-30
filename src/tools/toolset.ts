@@ -16,7 +16,10 @@ import { readConversationProvenance } from "@/types/conversation-provenance";
 import { OPENAI_COMPATIBLE_PROXY_UPDATE_ARG } from "@/utils/openai-endpoint";
 import { isRecord } from "@/utils/type-guards";
 import { getStoredClientPreferences } from "./client-preferences";
-import { DREAM_TOOL_NAMES } from "./dream-tool-names";
+import {
+  DREAM_REQUIRED_TOOL_NAMES,
+  DREAM_TOOL_NAMES,
+} from "./dream-tool-names";
 import { INTERACTIVE_USER_INPUT_TOOL_NAMES } from "./interactive-policy";
 import {
   getInternalToolName,
@@ -419,10 +422,13 @@ export async function prepareToolExecutionContextForScope(params: {
 
   const scopedConversationId = conversationId ?? "default";
 
-  // Only the dream tools that exist today: `include` rejects unknown names, and
-  // the rest of the family arrives with M3.
+  // The dream family plus the ordinary tools the prompts require (R-5.4.3):
+  // a model-derived preset may not carry file tools, and `include` rejects
+  // unknown names, so every name is filtered against the definitions.
   const dreamToolIncludes = dreamRun
-    ? DREAM_TOOL_NAMES.filter((name) => Object.hasOwn(TOOL_DEFINITIONS, name))
+    ? [...DREAM_TOOL_NAMES, ...DREAM_REQUIRED_TOOL_NAMES].filter((name) =>
+        Object.hasOwn(TOOL_DEFINITIONS, name),
+      )
     : [];
   const effectiveClientToolset =
     dreamToolIncludes.length > 0

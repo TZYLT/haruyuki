@@ -19,6 +19,13 @@ export interface DreamRunTaskInput {
   runId: string;
   /** Claimed scheduled occurrence; empty string for a manual run. */
   occurrence: string;
+  /**
+   * `/dream run` (user asked for it now) vs the idle signal. A manual run is
+   * allowed to run on a conservative pressure floor instead of the measured
+   * pressure, which is zero on a fresh ledger — otherwise the manual entry
+   * resolves a zero budget and can do nothing (R-5.9.3 / Q-16).
+   */
+  manual?: boolean;
   signal: AbortSignal;
 }
 

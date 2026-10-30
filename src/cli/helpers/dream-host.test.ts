@@ -15,6 +15,7 @@ import {
   serializeDreamTaskPayload,
   updateTask,
 } from "@/cron";
+import { ScheduledTaskPreflightError } from "@/cron/task-run";
 import {
   DREAM_SETTINGS_DEFAULTS,
   type ResolvedDreamSettings,
@@ -184,14 +185,17 @@ describe("dream host gating", () => {
 
   test("a controller failure is surfaced, never swallowed", async () => {
     const taskId = addDreamTask();
-    // No injected controller: whatever S1 currently is (L0 throws; M2's real
-    // controller is running in the same tree), its failure must reach the run
-    // outcome instead of being reported as a success.
-    const result = await call(taskId, {
-      deps: deps({ runDreamTask: undefined }),
-    });
-    expect(result.outcome).toBe("failed");
-    expect(result.error).toBeTruthy();
+    // No injected controller: S1 runs for real. In this test home the settings
+    // singleton is not initialised, so S1's own explicit-configuration gate
+    // throws a typed pre-start failure — which must propagate as F1 instead of
+    // being flattened into a `{outcome:"failed"}` result (Lead fix).
+    let caught: unknown;
+    try {
+      await call(taskId, { deps: deps({ runDreamTask: undefined }) });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ScheduledTaskPreflightError);
   });
 
   test("a manual run bypasses the trigger but not the configuration gate", async () => {
@@ -333,5 +337,84 @@ describe("dream task runner (short-lived host)", () => {
       signal: controller.signal,
     });
     expect(result.outcome).toBe("cancelled");
+  });
+});
+
+// ── Lead fixes: CAS restore, F1 passthrough, manual flag ────────────
+
+describe("budget override CAS restore", () => {
+  test("a concurrent user edit during the run is not clobbered", async () => {
+    const taskId = addDreamTask();
+    const userPayload = serializeDreamTaskPayload({
+      version: 1,
+      budgetOverrideTokens: 777,
+    });
+    const result = await call(taskId, {
+      budgetOverrideTokens: 12_345,
+      deps: deps({
+        runDreamTask: async ({ task }) => {
+          expect(
+            parseDreamTaskPayload(task.payload)?.budgetOverrideTokens,
+          ).toBe(12_345);
+          // The user (or another command) edits the record while the run owns it.
+          updateTask(taskId, (record) => {
+            record.payload = userPayload;
+          });
+          return { outcome: "success" };
+        },
+      }),
+    });
+    expect(result.outcome).toBe("success");
+    expect(getScheduleTask(taskId)?.payload).toBe(userPayload);
+  });
+});
+
+describe("F1 classification passthrough", () => {
+  test("a typed pre-start failure is rethrown, not flattened into F2", async () => {
+    const taskId = addDreamTask();
+    let caught: unknown;
+    try {
+      await call(taskId, {
+        deps: deps({
+          runDreamTask: async () => {
+            throw new ScheduledTaskPreflightError("cannot start at all");
+          },
+        }),
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ScheduledTaskPreflightError);
+    expect((caught as Error).name).toBe("ScheduledTaskPreflightError");
+  });
+
+  test("a plain mid-run error stays a failed result (F2)", async () => {
+    const taskId = addDreamTask();
+    const result = await call(taskId, {
+      deps: deps({
+        runDreamTask: async () => {
+          throw new Error("model exploded");
+        },
+      }),
+    });
+    expect(result.outcome).toBe("failed");
+    expect(result.error).toContain("model exploded");
+  });
+});
+
+describe("manual flag reaches S1", () => {
+  test("manual and automatic calls are distinguishable by S1", async () => {
+    const taskId = addDreamTask();
+    const seen: Array<boolean | undefined> = [];
+    const controller: DreamHostDeps["runDreamTask"] = async ({ manual }) => {
+      seen.push(manual);
+      return { outcome: "success" };
+    };
+    await call(taskId, {
+      manual: true,
+      deps: deps({ runDreamTask: controller }),
+    });
+    await call(taskId, { deps: deps({ runDreamTask: controller }) });
+    expect(seen).toEqual([true, false]);
   });
 });

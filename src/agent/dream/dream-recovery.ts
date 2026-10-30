@@ -34,6 +34,7 @@ import { recordAutomatedRunMarker } from "@/usage/automated";
 import { debugWarn } from "@/utils/debug";
 import { getErrorMessage } from "@/utils/error";
 import { rollbackDreamBaseline } from "./dream-baseline";
+import { clearDreamBudgetOverride } from "./dream-budget-override";
 import {
   type DreamRunLease,
   deleteDreamLease,
@@ -71,6 +72,12 @@ export interface DreamRecoveryDeps {
     sessionId: string;
   }): Promise<void>;
   markRunFinished(agentId: string, outcome: string, at: Date): void;
+  /**
+   * Clear a stale `/dream run --budget` override left on the task record by the
+   * crashed run. Optional so the repair loop is testable without the schedule
+   * store; production wires it to `clearDreamBudgetOverride`.
+   */
+  clearBudgetOverride?(taskId: string): void;
   now(): Date;
 }
 
@@ -129,6 +136,49 @@ export async function recoverStaleDreamRuns(
       // the baseline commit and (possibly) a half-written record. Nothing to
       // roll back to a conversation; a baseline with no session has no record
       // the user can see, so drop the lease.
+      if (lease.taskId) {
+        try {
+          deps.clearBudgetOverride?.(lease.taskId);
+        } catch (error) {
+          debugWarn(
+            "memory",
+            `dream recovery: could not clear the budget override for ${lease.taskId}: ${getErrorMessage(error)}`,
+          );
+        }
+      }
+      deps.deleteLease(lease.agentId);
+      result.recovered += 1;
+      continue;
+    }
+
+    // ── Already terminal? Just clean up ───────────────────────────────
+    // The run may have finished (or been cancelled) and died between the
+    // terminal record write and the lease delete. Rolling back then would
+    // discard committed work and rewrite a correct record (R-5.8.2 / R-5.8.3).
+    let existing: DreamRunMetadata | undefined;
+    try {
+      existing = await deps.readRunMetadata(lease.conversationId);
+    } catch (error) {
+      result.deferred += 1;
+      debugWarn(
+        "memory",
+        `dream recovery: could not read the record for ${lease.runId}: ${getErrorMessage(error)}`,
+      );
+      continue;
+    }
+    if (existing && existing.status !== "running") {
+      const now = deps.now();
+      deps.markRunFinished(lease.agentId, existing.status, now);
+      if (lease.taskId) {
+        try {
+          deps.clearBudgetOverride?.(lease.taskId);
+        } catch (error) {
+          debugWarn(
+            "memory",
+            `dream recovery: could not clear the budget override for ${lease.taskId}: ${getErrorMessage(error)}`,
+          );
+        }
+      }
       deps.deleteLease(lease.agentId);
       result.recovered += 1;
       continue;
@@ -161,7 +211,6 @@ export async function recoverStaleDreamRuns(
       }
 
       const now = deps.now();
-      const existing = await deps.readRunMetadata(lease.conversationId);
       const metadata: DreamRunMetadata = existing
         ? {
             ...existing,
@@ -191,12 +240,16 @@ export async function recoverStaleDreamRuns(
           };
 
       try {
-        await deps.writeReport({
+        const report = await deps.writeReport({
           agentId: lease.agentId,
           conversationId: lease.conversationId,
           metadata,
           body: reportBodyFor(lease, rolledBack),
         });
+        // The viewer and `/dream status` find the report through the record.
+        if (report.reportPath !== null) {
+          metadata.reportPath = report.reportPath;
+        }
       } catch (error) {
         debugWarn(
           "memory",
@@ -234,6 +287,16 @@ export async function recoverStaleDreamRuns(
       }
 
       deps.markRunFinished(lease.agentId, "unfinished", now);
+      if (lease.taskId) {
+        try {
+          deps.clearBudgetOverride?.(lease.taskId);
+        } catch (error) {
+          debugWarn(
+            "memory",
+            `dream recovery: could not clear the budget override for ${lease.taskId}: ${getErrorMessage(error)}`,
+          );
+        }
+      }
       deps.deleteLease(lease.agentId);
       result.recovered += 1;
       if (rollbackError) {
@@ -302,6 +365,9 @@ export function createDefaultDreamRecoveryDeps(): DreamRecoveryDeps {
     },
     markRunFinished: (agentId, outcome, at) =>
       markDreamRunFinished(agentId, outcome, at),
+    clearBudgetOverride: (taskId) => {
+      clearDreamBudgetOverride(taskId);
+    },
     now: () => new Date(),
   };
 }

@@ -79,6 +79,16 @@ const DETAIL_WHEEL_ROWS = 3;
 /** How many lines one expanded row may add before it is cut with a notice. */
 const HIDDEN_SESSION_DETAIL_MAX_LINES = 200;
 
+/**
+ * Hard ceiling on the *physical* rows one expanded row may add.
+ *
+ * `HIDDEN_SESSION_DETAIL_MAX_LINES` bounds the stored lines, but wrapping turns
+ * one 5 KB line into dozens of frame rows: 200 such lines would be tens of
+ * thousands of `DetailLine` objects built on every layout. This is the ceiling
+ * that actually bounds the work.
+ */
+export const HIDDEN_SESSION_DETAIL_MAX_ROWS = 400;
+
 type DetailLineKind = "meta" | "row" | "detail" | "separator" | "note";
 
 /** How one line of a message body is coloured (R-5.7.4's "row-level md"). */
@@ -171,7 +181,7 @@ function keyedRows(
  * width systems, C-32), and every physical row is exactly one frame row, so the
  * window arithmetic below still counts lines.
  */
-function rowLines(
+export function rowLines(
   key: string,
   row: HiddenSessionRow,
   expanded: boolean,
@@ -186,9 +196,14 @@ function rowLines(
   }));
   if (!expanded) return lines;
 
-  const detail = row.detail.split("\n").filter((line) => line.length > 0);
+  // A tool payload split on LF; CRLF was already normalised by the row
+  // projection, but a remaining CR would be painted into the frame and move the
+  // terminal's cursor, so the split accepts it too.
+  const detail = row.detail.split(/\r?\n/).filter((line) => line.length > 0);
   const shown = detail.slice(0, HIDDEN_SESSION_DETAIL_MAX_LINES);
   let inCodeBlock = false;
+  let detailRows = 0;
+  let rowsTruncated = false;
   for (const [index, line] of shown.entries()) {
     const classified = classifyDetailTone(line, inCodeBlock);
     inCodeBlock = classified.inCodeBlock;
@@ -197,6 +212,10 @@ function rowLines(
       line,
       width,
     ).entries()) {
+      if (detailRows >= HIDDEN_SESSION_DETAIL_MAX_ROWS) {
+        rowsTruncated = true;
+        break;
+      }
       lines.push({
         key: `${key}:detail:${index}:${wrapIndex}`,
         text,
@@ -204,7 +223,20 @@ function rowLines(
         kind: "detail",
         tone: classified.tone,
       });
+      detailRows += 1;
     }
+    if (rowsTruncated) break;
+  }
+  if (rowsTruncated) {
+    lines.push({
+      key: `${key}:row-cap`,
+      text: truncateText(
+        `    ... detail truncated at ${HIDDEN_SESSION_DETAIL_MAX_ROWS} rows`,
+        width,
+      ),
+      rowKey: key,
+      kind: "note",
+    });
   }
   const withheld = detail.length - shown.length;
   if (withheld > 0) {
@@ -631,12 +663,25 @@ export function HiddenSessionDetail({
   // shell without needing to branch on which shell mounted it. Registered once
   // and reading the fresh scroll through a ref, so a live gesture never sees a
   // reordered handler chain (`mouse-router.ts`).
+  //
+  // The delete confirmation is modal for the pointer too: the same "the
+  // confirmation owns every input" rule that empties the key table applies to
+  // the wheel. While it is up the handler claims the notch and scrolls nothing
+  // — declining would hand the report to the shell's content layer, which would
+  // scroll the transcript behind the dialog.
+  const confirmRef = useRef(confirmDelete);
+  confirmRef.current = confirmDelete;
   const scrollRef = useRef<(delta: number) => void>(scrollBy);
   scrollRef.current = scrollBy;
   useEffect(() => {
     return registerMouseHandler(
       (report) => {
         if (!report.wheel) return false;
+        // The confirmation is modal for the pointer too: claim the notch and do
+        // nothing with it. Claiming (not declining) matters because the shell's
+        // `content` layer would otherwise receive the report and scroll the
+        // transcript *behind* the dialog.
+        if (confirmRef.current) return true;
         scrollRef.current(
           report.wheel === "up" ? -DETAIL_WHEEL_ROWS : DETAIL_WHEEL_ROWS,
         );

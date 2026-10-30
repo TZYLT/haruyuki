@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   runScheduleSubcommand,
@@ -155,5 +155,91 @@ describe("schedule subcommand still dispatches", () => {
   test("status is read-only and exits 0", async () => {
     addDreamTask();
     expect(await runScheduleSubcommand(["status"])).toBe(0);
+  });
+});
+
+// ── Lead fixes: settings init before the dream probe + startup recovery ──
+
+describe("autostart host sees dream configuration", () => {
+  function enabledSettings(): string {
+    return JSON.stringify({
+      dreamEnabled: true,
+      dreamIdleWindows: [{ start: "00:00", end: "23:59" }],
+      dreamPressureThreshold: 1,
+      dreamSilenceMinutes: 0,
+    });
+  }
+
+  test("a configured dream loads the runtime even though the subcommand process never initialised settings", async () => {
+    // What a real `haruyuki schedule tick` process looks like: settings are NOT
+    // initialised before the subcommand runs (src/index.ts initialises them
+    // only after routing; standalone-entry exits straight into the subcommand).
+    writeFileSync(path.join(TEST_DIR, "settings.json"), enabledSettings());
+    addDreamTask();
+
+    let starts = 0;
+    const code = await runScheduleTick({
+      now: () => new Date(),
+      startRuntime: async () => {
+        starts += 1;
+        return {
+          runner: {
+            host: "short-lived",
+            async run() {
+              return { outcome: "success" };
+            },
+            cancel() {},
+          },
+          stop: () => {},
+        };
+      },
+      runTick: async () => ({ started: null, deferredTaskIds: [] }),
+      recoverStaleRuns: async () => ({}),
+    });
+    expect(code).toBe(0);
+    // The bug was starts === 0: the probe read the default (disabled) settings.
+    expect(starts).toBe(1);
+  });
+
+  test("startup recovery runs once when the runtime starts, and not at all when nothing is due", async () => {
+    writeFileSync(path.join(TEST_DIR, "settings.json"), enabledSettings());
+    addDreamTask();
+    const recoveries: string[] = [];
+    const startRuntime = async () => ({
+      runner: {
+        host: "short-lived" as const,
+        async run() {
+          return { outcome: "success" as const };
+        },
+        cancel() {},
+      },
+      stop: () => {},
+    });
+
+    await runScheduleTick({
+      now: () => new Date(),
+      startRuntime,
+      runTick: async () => ({ started: null, deferredTaskIds: [] }),
+      recoverStaleRuns: async () => {
+        recoveries.push("recover");
+        return {};
+      },
+    });
+    expect(recoveries).toEqual(["recover"]);
+
+    // Nothing configured: the light path exits before the runtime and recovery.
+    await settingsManager.reset();
+    rmSync(path.join(TEST_DIR, "schedules.json"), { force: true });
+    const code = await runScheduleTick({
+      now: () => new Date(),
+      startRuntime,
+      runTick: async () => ({ started: null, deferredTaskIds: [] }),
+      recoverStaleRuns: async () => {
+        recoveries.push("unexpected");
+        return {};
+      },
+    });
+    expect(code).toBe(0);
+    expect(recoveries).toEqual(["recover"]);
   });
 });
