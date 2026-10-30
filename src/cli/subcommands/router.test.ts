@@ -134,8 +134,21 @@ describe("subcommand router", () => {
     }
   });
 
-  test("does not register the removed dream subcommand", async () => {
-    expect(await runSubcommand(["dream", "--help"])).toBeNull();
+  test("routes the dream subcommand", async () => {
+    // F-06 M1 revived `dream` as the short-lived host entry (`dream run
+    // --task`). It is not backend-aware, so the router must not resolve the
+    // backend before dispatching it.
+    const messages: string[] = [];
+    const originalLog = console.log;
+    console.log = (message?: unknown) => {
+      messages.push(String(message));
+    };
+    try {
+      expect(await runSubcommand(["dream", "--help"])).toBe(0);
+      expect(messages.join("\n")).toContain("haruyuki dream");
+    } finally {
+      console.log = originalLog;
+    }
   });
 
   test("does not register the removed computer and teleport subcommands", async () => {
