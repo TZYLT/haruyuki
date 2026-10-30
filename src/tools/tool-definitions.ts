@@ -9,6 +9,7 @@ import ExitWorktreeDescription from "./descriptions/ExitWorktree.md";
 import GlobDescription from "./descriptions/Glob.md";
 import GrepDescription from "./descriptions/Grep.md";
 import LSDescription from "./descriptions/LS.md";
+import MemoryCommitDescription from "./descriptions/MemoryCommit.md";
 import MonitorDescription from "./descriptions/Monitor.md";
 import ReadDescription from "./descriptions/Read.md";
 import ReadArtifactFileDescription from "./descriptions/ReadArtifactFile.md";
@@ -42,6 +43,7 @@ import { exit_worktree } from "./impl/exit-worktree";
 import { glob } from "./impl/glob";
 import { grep } from "./impl/grep";
 import { ls } from "./impl/ls";
+import { memory_commit } from "./impl/memory-commit";
 import { monitor } from "./impl/monitor";
 import { read } from "./impl/read";
 import { read_lsp } from "./impl/read-lsp";
@@ -72,6 +74,7 @@ import ExitWorktreeSchema from "./schemas/ExitWorktree.json";
 import GlobSchema from "./schemas/Glob.json";
 import GrepSchema from "./schemas/Grep.json";
 import LSSchema from "./schemas/LS.json";
+import MemoryCommitSchema from "./schemas/MemoryCommit.json";
 import MonitorSchema from "./schemas/Monitor.json";
 import ReadSchema from "./schemas/Read.json";
 import ReadArtifactFileSchema from "./schemas/ReadArtifactFile.json";
@@ -284,6 +287,11 @@ const toolDefinitions = {
     schema: TopicQuerySchema,
     description: TopicQueryDescription.trim(),
     impl: topic_query,
+  }),
+  MemoryCommit: defineTool({
+    schema: MemoryCommitSchema,
+    description: MemoryCommitDescription.trim(),
+    impl: memory_commit,
   }),
 } as const satisfies Record<string, ToolAssets>;
 

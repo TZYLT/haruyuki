@@ -25,6 +25,7 @@ import {
 } from "./canonical";
 import { cliPermissions } from "./cli-permissions-instance";
 import { evaluateCrossAgentGuard, extractFilePath } from "./cross-agent-guard";
+import { DREAM_AUTO_ALLOW_TOOL_NAMES, isDreamRun } from "./dream-run-guard";
 import {
   type MatcherOptions,
   matchesBashPattern,
@@ -480,6 +481,28 @@ function checkPermissionForEngine(
   // Strict mode skips all auto-allow paths; every tool goes through the
   // approval callback (or defaults to "ask" if no callback is registered).
   const isStrictMode = effectiveMode === "strict";
+
+  // A dream run is unattended: an "ask" is a denial, so the tools its run
+  // conversation declared are allowed by that same run context (F-06 Q-53).
+  // Deny rules, CLI disallows and alwaysAsk rules were applied above, so an
+  // explicit rule still wins over this allowance; strict mode skips it too.
+  // `dreamRun` comes from the conversation's `origin: "dream"` record
+  // (`tools/toolset.ts`), not from a global setting.
+  if (
+    !isStrictMode &&
+    isDreamRun() &&
+    DREAM_AUTO_ALLOW_TOOL_NAMES.has(permissionToolName)
+  ) {
+    traceEvent(trace, "dream-run-auto-allow", "Dream run tool");
+    return {
+      result: {
+        decision: "allow",
+        matchedRule: "dream run",
+        reason: "Dream run tool",
+      },
+      trace,
+    };
+  }
 
   if (toolName === "Skill" && !isStrictMode) {
     traceEvent(trace, "skill-auto-allow", "Skill tool is always allowed");

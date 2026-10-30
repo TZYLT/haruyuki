@@ -12,9 +12,12 @@ import type { ModToolDefinition } from "@/mods/tool-registry";
 import type { ModContext } from "@/mods/types";
 import type { RuntimeContextSnapshot } from "@/runtime-context";
 import { settingsManager } from "@/settings-manager";
+import { readConversationProvenance } from "@/types/conversation-provenance";
 import { OPENAI_COMPATIBLE_PROXY_UPDATE_ARG } from "@/utils/openai-endpoint";
 import { isRecord } from "@/utils/type-guards";
 import { getStoredClientPreferences } from "./client-preferences";
+import { DREAM_TOOL_NAMES } from "./dream-tool-names";
+import { INTERACTIVE_USER_INPUT_TOOL_NAMES } from "./interactive-policy";
 import {
   getInternalToolName,
   isOpenAIModel,
@@ -343,14 +346,27 @@ export async function prepareToolExecutionContextForScope(params: {
         (await backend.retrieveAgent(agentId))) as ScopeModelCarrier)
     : null;
   const agentTarget = modelTargetFromCarrier(agent);
-  const conversationTarget =
+  // One read of the conversation record: the model target needs it, and the
+  // dream declaration gate below needs its provenance. On the local backend
+  // this call creates an unknown conversation, which is already this path's
+  // existing behaviour (see `Backend.retrieveConversation`).
+  const conversationRecord =
     conversationId && conversationId !== "default"
-      ? modelTargetFromCarrier(
-          (await backend.retrieveConversation(
-            conversationId,
-          )) as ScopeModelCarrier,
-        )
-      : { model: null, providerType: null, openAICompatibleProxy: false };
+      ? await backend.retrieveConversation(conversationId)
+      : null;
+  const conversationTarget = conversationRecord
+    ? modelTargetFromCarrier(conversationRecord as ScopeModelCarrier)
+    : { model: null, providerType: null, openAICompatibleProxy: false };
+  /**
+   * F-06: a dream run's hidden conversation is the only place the dream tool
+   * family belongs. Passing the names as `include` loads them into the
+   * execution registry *and* puts them in the declared payload together, so a
+   * frozen `client_tools` can never advertise a tool this process cannot
+   * resolve (the failure mode `declaration-gates.ts` warns about).
+   */
+  const dreamRun =
+    conversationRecord !== null &&
+    readConversationProvenance(conversationRecord).origin === "dream";
 
   const explicitModel = normalizeModelHandle(overrideModel);
   const cachedModel = normalizeModelHandle(cachedEffectiveModel);
@@ -403,14 +419,31 @@ export async function prepareToolExecutionContextForScope(params: {
 
   const scopedConversationId = conversationId ?? "default";
 
+  // Only the dream tools that exist today: `include` rejects unknown names, and
+  // the rest of the family arrives with M3.
+  const dreamToolIncludes = dreamRun
+    ? DREAM_TOOL_NAMES.filter((name) => Object.hasOwn(TOOL_DEFINITIONS, name))
+    : [];
+  const effectiveClientToolset =
+    dreamToolIncludes.length > 0
+      ? {
+          ...(clientToolset ?? {}),
+          include: [...(clientToolset?.include ?? []), ...dreamToolIncludes],
+        }
+      : clientToolset;
+  // A dream run has nobody to answer an interactive question (F-06 Q-53 / §2.5).
+  const effectiveExclude = dreamRun
+    ? [...(exclude ?? []), ...INTERACTIVE_USER_INPUT_TOOL_NAMES]
+    : exclude;
+
   const result = await prepareToolExecutionContextForResolvedTarget({
     modelIdentifier: effectiveModel,
     providerType: effectiveProviderType,
     openAICompatibleProxy: effectiveOpenAICompatibleProxy,
     conversationId: conversationId ?? undefined,
     toolsetPreference,
-    clientToolset,
-    exclude,
+    clientToolset: effectiveClientToolset,
+    exclude: effectiveExclude,
     clientToolAllowlist,
     externalToolScopeIds,
     workingDirectory,
@@ -430,6 +463,7 @@ export async function prepareToolExecutionContextForScope(params: {
       ...(skillSources !== undefined ? { skillSources } : {}),
       ...(workspaceSandbox !== undefined ? { workspaceSandbox } : {}),
       executionSettings,
+      ...(dreamRun ? { dreamRun } : {}),
     },
   });
   return { ...result, agent: agent as AgentState | null };

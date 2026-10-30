@@ -46,6 +46,16 @@ export interface RuntimeContextSnapshot {
   subagentPermissionMode?: RuntimePermissionMode;
   workspaceSandbox?: RuntimeWorkspaceSandbox;
   executionSettings?: RuntimeExecutionSettings;
+  /**
+   * True when this turn belongs to a dream-run conversation (F-06).
+   *
+   * Set by the toolset scope resolver from the conversation record's
+   * `origin: "dream"`, and read by the permission checker to auto-allow the
+   * dream tool family. An unattended dream child has no approval surface, so
+   * an `ask` would be a denial; the flag is what makes those tools usable
+   * without widening the allowance for ordinary sessions.
+   */
+  dreamRun?: boolean;
 }
 
 const runtimeContextStorage = new AsyncLocalStorage<RuntimeContextSnapshot>();

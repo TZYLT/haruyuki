@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "reason": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "One-line commit message explaining what this change does and why, e.g. `Merge duplicate project notes` or `Rebuild the deployment timeline`."
+    },
+    "paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "maxItems": 100,
+      "description": "Memory-repository-relative paths to commit (files or directories), e.g. `MEMORY.md` or `projects/acme`. Commit exactly what you changed; `.git` and paths outside the memory repository are rejected."
+    }
+  },
+  "required": ["reason", "paths"],
+  "additionalProperties": false,
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
