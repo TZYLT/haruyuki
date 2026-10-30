@@ -309,6 +309,25 @@ export interface TaskRunnerPort {
     error?: string;
   }>;
   cancel(runId: string): void;
+  /**
+   * Dream runs (F-06 Q-47): the scheduler core knows a task is due but not what
+   * a dream is. A host that supports dreams implements this seam by handing the
+   * run to a short-lived `haruyuki dream run --task <id>` child and returning
+   * immediately, so a 45-minute run cannot block the tick or mark other tasks
+   * `missed`. Scheduling is otherwise unchanged — this method is optional, and
+   * a host without it makes the dream task fail F1 rather than fall through to
+   * the prompt runner.
+   *
+   * Frozen at M0 (route §2.3). The route calls this `ScheduledTaskHostPort`;
+   * the source name is `TaskRunnerPort` and the source is authoritative
+   * (route appendix B).
+   */
+  runDream?(input: {
+    task: ScheduleTaskV2;
+    runId: string;
+    occurrence: string;
+    signal: AbortSignal;
+  }): Promise<{ outcome: RunOutcome; error?: string }>;
 }
 
 export interface AutostartStatus {

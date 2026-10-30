@@ -8,6 +8,10 @@
  */
 import type { Conversation } from "@letta-ai/letta-client/resources/conversations/conversations";
 import {
+  type DreamRunMetadata,
+  readDreamRunMetadata,
+} from "@/types/dream-run-metadata";
+import {
   type ReflectionRunMetadata,
   readReflectionRunMetadata,
 } from "@/types/reflection-run-metadata";
@@ -42,6 +46,12 @@ export interface ConversationProvenance {
    * reflection run", never "unknown status".
    */
   reflection?: ReflectionRunMetadata;
+  /**
+   * Optional dream-run record on the conversation itself (F-06). Present only
+   * on a conversation a dream run created; absent means "not a dream run",
+   * never "unknown status". Kept separate from `reflection` on purpose.
+   */
+  dream?: DreamRunMetadata;
 }
 
 /**
@@ -170,6 +180,7 @@ export function readConversationProvenance(
     record.inherited_through_message_id,
   );
   const reflection = readReflectionRunMetadata(record.reflection);
+  const dream = readDreamRunMetadata(record.dream);
   return {
     origin,
     ...(parentConversationId !== undefined
@@ -183,6 +194,7 @@ export function readConversationProvenance(
       ? { inherited_through_message_id: inheritedThrough }
       : {}),
     ...(reflection !== undefined ? { reflection } : {}),
+    ...(dream !== undefined ? { dream } : {}),
   };
 }
 

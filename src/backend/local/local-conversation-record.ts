@@ -1,5 +1,6 @@
 import type { ConversationCreateBody, ConversationUpdateBody } from "@/backend";
 import { readConversationProvenance } from "@/types/conversation-provenance";
+import { readDreamRunMetadata } from "@/types/dream-run-metadata";
 import { readReflectionRunMetadata } from "@/types/reflection-run-metadata";
 import { isRecord } from "@/utils/type-guards";
 import {
@@ -34,6 +35,9 @@ export function createLocalConversationRecord(
   // before it), but creation accepts it too so a caller that already has the
   // metadata never needs a second write.
   const reflection = readReflectionRunMetadata(bodyRecord.reflection);
+  // The dream run record is normally written after the conversation exists, but
+  // creation accepts it too for the same reason `reflection` does.
+  const dream = readDreamRunMetadata(bodyRecord.dream);
   return {
     id: conversationId,
     agent_id: agentId,
@@ -67,6 +71,7 @@ export function createLocalConversationRecord(
       ? { context_mode: provenance.context_mode }
       : {}),
     ...(reflection !== undefined ? { reflection } : {}),
+    ...(dream !== undefined ? { dream } : {}),
     ...(isStringArray(bodyRecord.tags) ? { tags: bodyRecord.tags } : {}),
     ...(typeof bodyRecord.system === "string"
       ? { system: bodyRecord.system }
@@ -198,6 +203,17 @@ export function updateLocalConversationRecord(
       next.reflection = reflection;
     } else if (bodyRecord.reflection === null) {
       delete next.reflection;
+    }
+  }
+  // Same additive-local-field rule for the dream run record (F-06): an explicit
+  // `null` clears it, a malformed object is ignored so a bad status write
+  // cannot erase a good one.
+  if (bodyRecord.dream !== undefined) {
+    const dream = readDreamRunMetadata(bodyRecord.dream);
+    if (dream !== undefined) {
+      next.dream = dream;
+    } else if (bodyRecord.dream === null) {
+      delete next.dream;
     }
   }
   return next;
