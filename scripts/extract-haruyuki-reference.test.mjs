@@ -23,12 +23,12 @@ function synthetic(body) {
   return `export async function runSubcommand(argv) {\n  const [command, ...rest] = argv;\n  switch (command) {\n${body}\n  }\n}\n`;
 }
 
-test("the real router yields all 23 subcommands", () => {
+test("the real router yields all 24 subcommands", () => {
   const source = readFileSync(path.join(REPOSITORY_ROOT, ROUTER_PATH), "utf8");
   const cases = parseSubcommandCases(source);
 
-  expect(cases).toHaveLength(23);
-  expect(new Set(cases.map((entry) => entry.command)).size).toBe(23);
+  expect(cases).toHaveLength(24);
+  expect(new Set(cases.map((entry) => entry.command)).size).toBe(24);
 });
 
 test("aliases and their router notes stay grouped", () => {
