@@ -117,6 +117,7 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
       cwd,
       maxBuffer: GIT_MAX_BUFFER,
       timeout: GIT_TIMEOUT_MS,
+      windowsHide: true,
     });
     return stdout?.toString() ?? "";
   } catch (error) {

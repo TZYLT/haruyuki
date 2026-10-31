@@ -106,16 +106,26 @@ export function delegatedTickCommand(taskId: string): {
   };
 }
 
-/** Spawn one delegated tick, detached, so the TUI exit cannot kill it. */
-function spawnDelegatedScheduleTick(
+/**
+ * Spawn one delegated tick, detached, so the TUI exit cannot kill it.
+ *
+ * Exported for the spawn-option test; the host is the only production caller.
+ * `spawnImpl` is a test-only seam.
+ */
+export function spawnDelegatedScheduleTick(
   taskId: string,
   onExit: () => void,
+  spawnImpl: typeof spawn = spawn,
 ): { pid?: number } | null {
   const { command, args } = delegatedTickCommand(taskId);
-  const child = spawn(command, args, {
+  const child = spawnImpl(command, args, {
     detached: true,
     stdio: "ignore",
     env: process.env,
+    // F-06: same Windows issue as the dream host. `detached` is
+    // DETACHED_PROCESS, so the child has no console to give its own git/node
+    // children, and each of those would open a visible console window.
+    windowsHide: true,
   } satisfies SpawnOptions);
   let settled = false;
   const settle = (): void => {

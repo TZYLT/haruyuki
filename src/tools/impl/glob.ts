@@ -88,6 +88,7 @@ export async function glob(args: GlobArgs): Promise<GlobResult> {
       maxBuffer: 50 * 1024 * 1024, // 50MB buffer for large file lists
       cwd: userCwd,
       signal,
+      windowsHide: true,
     });
 
     const files = stdout.trim().split("\n").filter(Boolean).sort();

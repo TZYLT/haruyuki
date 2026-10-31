@@ -506,6 +506,7 @@ export function handleMemoryProtocolCommand(
       const { stdout } = await execFileAsync("git", gitArgs, {
         cwd: memoryRoot,
         timeout: 10000,
+        windowsHide: true,
       });
 
       const commits = stdout
@@ -554,7 +555,7 @@ export function handleMemoryProtocolCommand(
         const { stdout } = await execFileAsync(
           "git",
           ["show", `${parsed.ref}:${parsed.file_path}`],
-          { cwd: memoryRoot, timeout: 10000 },
+          { cwd: memoryRoot, timeout: 10000, windowsHide: true },
         );
 
         safeSocketSend(
@@ -607,7 +608,7 @@ export function handleMemoryProtocolCommand(
         const { stdout } = await execFileAsync(
           "git",
           ["show", parsed.sha, "--format=", "--no-color"],
-          { cwd: memoryRoot, timeout: 10000 },
+          { cwd: memoryRoot, timeout: 10000, windowsHide: true },
         );
 
         safeSocketSend(

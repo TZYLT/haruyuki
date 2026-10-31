@@ -84,7 +84,11 @@ function commandWorks(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   try {
-    const result = spawnSync(command, ["--version"], { env, stdio: "pipe" });
+    const result = spawnSync(command, ["--version"], {
+      env,
+      stdio: "pipe",
+      windowsHide: true,
+    });
     return !result.error && result.status === 0;
   } catch {
     return false;
@@ -210,7 +214,10 @@ function formatSpawnFailure(result: SpawnSyncReturns<Buffer>): string {
 }
 
 function runExtractionCommand(command: string, args: string[]): string | null {
-  const result = spawnSync(command, args, { stdio: "pipe" });
+  const result = spawnSync(command, args, {
+    stdio: "pipe",
+    windowsHide: true,
+  });
   if (!result.error && result.status === 0) {
     return null;
   }

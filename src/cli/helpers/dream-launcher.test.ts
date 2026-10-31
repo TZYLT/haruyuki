@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { ChildProcess, SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { createDreamLease, deleteDreamLease } from "@/agent/dream/dream-lease";
@@ -7,6 +9,7 @@ import {
   dreamRunCommand,
   ensureDreamTask,
   findDreamTask,
+  spawnDreamRunProcess,
   startDreamRun,
 } from "@/cli/helpers/dream-launcher";
 import {
@@ -164,6 +167,47 @@ describe("dreamRunCommand", () => {
     // The budget is only passed when it is a positive integer.
     const zero = dreamRunCommand("abc123", { budgetOverrideTokens: 0 });
     expect(zero.args).not.toContain("--budget");
+  });
+});
+
+describe("spawnDreamRunProcess (F-06: no console windows)", () => {
+  test("spawns detached and hidden", () => {
+    // `detached` on Windows is DETACHED_PROCESS: the dream host has no console,
+    // and every git/node it runs would open a visible console window unless it
+    // is created with CREATE_NO_WINDOW (`windowsHide`). Capture the options
+    // rather than starting a real 45-minute run.
+    const calls: Array<{
+      command: string;
+      args: readonly string[];
+      options: SpawnOptions;
+    }> = [];
+    const child = new EventEmitter() as EventEmitter & {
+      pid?: number;
+      unref: () => void;
+    };
+    child.pid = 4242;
+    child.unref = () => {};
+    const spawnImpl = ((
+      command: string,
+      args: readonly string[],
+      options: SpawnOptions,
+    ) => {
+      calls.push({ command, args, options });
+      return child as unknown as ChildProcess;
+    }) as unknown as Parameters<typeof spawnDreamRunProcess>[3];
+
+    const result = spawnDreamRunProcess(
+      "task-1",
+      { manual: true },
+      undefined,
+      spawnImpl,
+    );
+
+    expect(result).toEqual({ pid: 4242 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.options.detached).toBe(true);
+    expect(calls[0]?.options.stdio).toBe("ignore");
+    expect(calls[0]?.options.windowsHide).toBe(true);
   });
 });
 

@@ -49,11 +49,12 @@ function runGit(args, encoding = "utf8") {
   return execFileSync("git", args, {
     encoding,
     stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
   });
 }
 
 function gitSucceeds(args) {
-  return spawnSync("git", args, { stdio: "ignore" }).status === 0;
+  return spawnSync("git", args, { stdio: "ignore", windowsHide: true }).status === 0;
 }
 
 function stagedFile(path) {
@@ -167,7 +168,7 @@ async function main() {
   errors.push(...await validateMemoryTreeConstraints({
     async countCharacters(path) {
       return new Promise((resolveCount, reject) => {
-        const child = spawn("git", ["show", ":" + path], { stdio: ["ignore", "pipe", "pipe"] });
+        const child = spawn("git", ["show", ":" + path], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
         let characters = 0;
         let stderr = "";
         child.stdout.setEncoding("utf8");
@@ -185,7 +186,7 @@ async function main() {
     },
     async readFile(path) {
       return new Promise((resolveBytes, reject) => {
-        const child = spawn("git", ["show", ":" + path], { stdio: ["ignore", "pipe", "pipe"] });
+        const child = spawn("git", ["show", ":" + path], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
         const chunks = [];
         let stderr = "";
         child.stdout.on("data", (chunk) => chunks.push(chunk));

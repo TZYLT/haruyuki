@@ -123,6 +123,9 @@ export function spawnSubagentProcess(
     cwd: options.cwd,
     env: options.env,
     detached: process.platform !== "win32",
+    // F-06: a subagent started by a console-less host (dream/reflection) must
+    // not open a console window for the node process it launches.
+    windowsHide: true,
   });
   let aborted = false;
   let termination: Promise<void> = Promise.resolve();

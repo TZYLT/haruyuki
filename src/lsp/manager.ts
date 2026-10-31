@@ -104,6 +104,7 @@ export class LSPManager {
           ...process.env,
           ...serverDef.env,
         },
+        windowsHide: true,
       });
 
       const client = new LSPClient({

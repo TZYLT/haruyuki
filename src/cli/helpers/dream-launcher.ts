@@ -121,14 +121,25 @@ export function spawnDreamRunProcess(
   taskId: string,
   options: DreamRunCommandOptions = {},
   onExit?: DreamChildExitHandler,
+  /**
+   * Test seam: captures the spawn options without starting a real run. The
+   * production callers pass three arguments.
+   */
+  spawnImpl: typeof spawn = spawn,
 ): { pid?: number } | null {
   const { command, args } = dreamRunCommand(taskId, options);
   let child: ReturnType<typeof spawn>;
   try {
-    child = spawn(command, args, {
+    child = spawnImpl(command, args, {
       detached: true,
       stdio: "ignore",
       env: process.env,
+      // F-06: `detached` on Windows means DETACHED_PROCESS — the child has no
+      // console, so every git/node it runs would allocate a new *visible*
+      // console window (the reported ~50 flashing windows during /dream run).
+      // `CREATE_NO_WINDOW` gives it a console-less child instead. No-op on
+      // POSIX.
+      windowsHide: true,
     } satisfies SpawnOptions);
   } catch (error) {
     debugWarn(

@@ -94,7 +94,7 @@ try {
   // paths from Git inside the child instead of passing them through argv: Git
   // Bash on Windows cannot launch Node with a sufficiently large path list.
   const paths = format === "memfs-v2"
-    ? execFileSync("git", ["ls-files", "-z", "*.md"], { encoding: "utf8", maxBuffer: Infinity, stdio: ["ignore", "pipe", "pipe"] }).split("\\0").filter(Boolean)
+    ? execFileSync("git", ["ls-files", "-z", "*.md"], { encoding: "utf8", maxBuffer: Infinity, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).split("\\0").filter(Boolean)
     : stagedPaths;
   for (const path of paths) {
     if (format === "memfs-v2") {
@@ -104,7 +104,7 @@ try {
         let projected = true;
         while (slash >= 0) {
           const index = ":" + path.slice(0, slash) + "/MEMORY.md";
-          if (spawnSync("git", ["cat-file", "-e", index], { stdio: "ignore" }).status !== 0) {
+          if (spawnSync("git", ["cat-file", "-e", index], { stdio: "ignore", windowsHide: true }).status !== 0) {
             projected = false;
             break;
           }
@@ -113,10 +113,10 @@ try {
         if (!projected) continue;
       }
     }
-    const content = execFileSync("git", ["show", ":" + path], { encoding: "utf8", maxBuffer: Infinity, stdio: ["ignore", "pipe", "pipe"] });
+    const content = execFileSync("git", ["show", ":" + path], { encoding: "utf8", maxBuffer: Infinity, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let previousContent = null;
     if (format === "legacy") {
-      const previous = spawnSync("git", ["show", "HEAD:" + path], { encoding: "utf8", maxBuffer: Infinity, stdio: ["ignore", "pipe", "pipe"] });
+      const previous = spawnSync("git", ["show", "HEAD:" + path], { encoding: "utf8", maxBuffer: Infinity, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
       if (previous.error) throw previous.error;
       if (previous.status === 0) previousContent = previous.stdout;
     }
@@ -227,6 +227,7 @@ export function installLocalMemoryPreCommitHook(dir: string): void {
     spawnSync("git", ["cat-file", "-e", "HEAD:MEMORY.md"], {
       cwd: dir,
       stdio: "ignore",
+      windowsHide: true,
     }).status === 0;
   installPreCommitHookWithPolicy(
     dir,

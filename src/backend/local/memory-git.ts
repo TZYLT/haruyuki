@@ -17,5 +17,6 @@ export function gitOutput(memoryDir: string, args: string[]): string {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     maxBuffer: GIT_MAX_BUFFER,
+    windowsHide: true,
   });
 }

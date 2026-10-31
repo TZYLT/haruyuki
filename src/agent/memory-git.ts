@@ -583,6 +583,9 @@ export async function runGit(
       env: buildNonInteractiveGitEnv(),
       maxBuffer: 10 * 1024 * 1024, // 10MB
       timeout: timeoutMs,
+      // F-06: the dream/reflection hosts run without a console; every console
+      // program they spawn would otherwise open a visible window.
+      windowsHide: true,
     });
   } catch (error) {
     throw redactGitAuthError(error);

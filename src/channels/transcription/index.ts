@@ -83,7 +83,11 @@ function prepareOpenAiTranscriptionFile(localPath: string): {
         "aac",
         convertedPath,
       ],
-      { stdio: "ignore", timeout: TRANSCRIPTION_TIMEOUT_MS },
+      {
+        stdio: "ignore",
+        timeout: TRANSCRIPTION_TIMEOUT_MS,
+        windowsHide: true,
+      },
     );
   } catch (error) {
     rmSync(tempDir, { recursive: true, force: true });

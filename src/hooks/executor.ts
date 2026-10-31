@@ -107,6 +107,9 @@ function trySpawnWithLauncher(
       }),
     },
     stdio: ["pipe", "pipe", "pipe"],
+    // F-06: hooks are shelled out from console-less hosts too (dream,
+    // reflection), where each console program would open a window.
+    windowsHide: true,
   });
 }
 

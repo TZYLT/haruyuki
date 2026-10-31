@@ -195,7 +195,10 @@ export async function runMemorySubcommand(
       const { promisify } = await import("node:util");
       const execFile = promisify(execFileCb);
       const dir = getScopedMemoryFilesystemRoot(agentId);
-      const { stdout } = await execFile("git", ["diff"], { cwd: dir });
+      const { stdout } = await execFile("git", ["diff"], {
+        cwd: dir,
+        windowsHide: true,
+      });
       if (stdout.trim()) {
         console.log(stdout);
         return 2;

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { ChildProcess, SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path, { dirname, resolve } from "node:path";
 import { Text } from "ink";
@@ -7,6 +9,7 @@ import {
   currentTuiScheduleHost,
   delegatedTickCommand,
   type SpawnDelegatedTick,
+  spawnDelegatedScheduleTick,
   startTuiScheduleHost,
   type TuiScheduleHost,
   useTuiScheduleHost,
@@ -262,6 +265,39 @@ describe("delegated short-lived ticks", () => {
     // The dev entry is resolved next to the invoked one, so a TUI started from
     // a directory other than the repository root still finds it.
     expect(args[0]).toContain("standalone-entry.ts");
+  });
+
+  test("the detached tick is spawned hidden (F-06: no console windows)", () => {
+    // Same Windows rule as the dream host: `detached` means DETACHED_PROCESS,
+    // so without CREATE_NO_WINDOW every git/node the tick spawns opens a
+    // visible console window. Capture the options instead of spawning.
+    const calls: Array<{
+      command: string;
+      args: readonly string[];
+      options: SpawnOptions;
+    }> = [];
+    const child = new EventEmitter() as EventEmitter & {
+      pid?: number;
+      unref: () => void;
+    };
+    child.pid = 4242;
+    child.unref = () => {};
+    const spawnImpl = ((
+      command: string,
+      args: readonly string[],
+      options: SpawnOptions,
+    ) => {
+      calls.push({ command, args, options });
+      return child as unknown as ChildProcess;
+    }) as unknown as Parameters<typeof spawnDelegatedScheduleTick>[2];
+
+    const result = spawnDelegatedScheduleTick("task-1", () => {}, spawnImpl);
+
+    expect(result).toEqual({ pid: 4242 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.options.detached).toBe(true);
+    expect(calls[0]?.options.stdio).toBe("ignore");
+    expect(calls[0]?.options.windowsHide).toBe(true);
   });
 
   test("a task this host can run runs in-process and delegates nothing", async () => {

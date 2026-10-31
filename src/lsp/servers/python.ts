@@ -29,6 +29,7 @@ export const PythonServer: LSPServerInfo = {
         const { execSync } = await import("node:child_process");
         execSync("pyright-langserver --version", {
           stdio: "ignore",
+          windowsHide: true,
         });
         return true;
       } catch {

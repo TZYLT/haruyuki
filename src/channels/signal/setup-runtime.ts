@@ -19,7 +19,11 @@ export function getSignalDockerRunCommand(): string {
 
 export function commandExists(command: string): boolean {
   try {
-    execFileSync(command, ["--version"], { stdio: "ignore", timeout: 5_000 });
+    execFileSync(command, ["--version"], {
+      stdio: "ignore",
+      timeout: 5_000,
+      windowsHide: true,
+    });
     return true;
   } catch {
     return false;
@@ -67,6 +71,7 @@ export function runNativeSignalCli(
       stdio: "pipe",
       encoding: "utf8",
       timeout: 120_000,
+      windowsHide: true,
     });
     return { ok: true };
   } catch (error) {
@@ -95,6 +100,7 @@ export function runNativeSignalCliInteractive(
   return new Promise((resolve) => {
     const child = spawn("signal-cli", args, {
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
     let output = "";
     child.stdout.on("data", (chunk: Buffer) => {
@@ -255,7 +261,11 @@ export async function openUrl(url: string): Promise<boolean> {
         : "xdg-open";
   const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
   try {
-    execFileSync(command, args, { stdio: "ignore", timeout: 5_000 });
+    execFileSync(command, args, {
+      stdio: "ignore",
+      timeout: 5_000,
+      windowsHide: true,
+    });
     return true;
   } catch {
     return false;
@@ -277,10 +287,12 @@ export async function startSignalDockerDaemon(): Promise<void> {
   execFileSync("docker", ["volume", "create", SIGNAL_DOCKER_VOLUME], {
     stdio: "ignore",
     timeout: 30_000,
+    windowsHide: true,
   });
   execFileSync("docker", ["rm", "-f", SIGNAL_DOCKER_CONTAINER], {
     stdio: "ignore",
     timeout: 30_000,
+    windowsHide: true,
   });
   execFileSync(
     "docker",

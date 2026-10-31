@@ -46,6 +46,7 @@ function readGlobalGitConfig(key: string): string | null {
       // is exactly what the cache key below exists to support. Node inherits the
       // live `process.env` by default, so this closes a Bun/Node divergence.
       env: { ...process.env },
+      windowsHide: true,
     }).trim();
     return value.length > 0 ? value : null;
   } catch {

@@ -31,7 +31,13 @@ export function copyToClipboard(text: string): boolean {
       execFileSync("pbcopy", [], { input: text, encoding: "utf8" });
       return true;
     } else if (process.platform === "win32") {
-      execFileSync("clip", [], { input: text, encoding: "utf8" });
+      // `clip` is a console program: hide its window when the caller has no
+      // console of its own (headless/listener paths).
+      execFileSync("clip", [], {
+        input: text,
+        encoding: "utf8",
+        windowsHide: true,
+      });
       return true;
     } else {
       // Linux - try xclip first, then xsel

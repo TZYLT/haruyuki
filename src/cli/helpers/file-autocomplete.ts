@@ -195,6 +195,7 @@ async function walkDirectoryWithFd(
 
     const child = spawn(fdPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
     let stdout = "";
     let resolved = false;
@@ -286,7 +287,10 @@ let pendingFdPath: Promise<string | null> | null = null;
 
 function commandExists(command: string): boolean {
   try {
-    const result = spawnSync(command, ["--version"], { stdio: "pipe" });
+    const result = spawnSync(command, ["--version"], {
+      stdio: "pipe",
+      windowsHide: true,
+    });
     return result.error === undefined || result.error === null;
   } catch {
     return false;
@@ -361,7 +365,10 @@ function formatSpawnFailure(result: ReturnType<typeof spawnSync>): string {
 }
 
 function runExtractionCommand(command: string, args: string[]): string | null {
-  const result = spawnSync(command, args, { stdio: "pipe" });
+  const result = spawnSync(command, args, {
+    stdio: "pipe",
+    windowsHide: true,
+  });
   if (!result.error && result.status === 0) {
     return null;
   }

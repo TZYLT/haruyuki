@@ -9,11 +9,10 @@ import { promisify } from "node:util";
  * of the worktrees that share the repository.
  */
 export async function getMemoryGitDir(memoryDir: string): Promise<string> {
-  const { stdout } = await promisify(execFile)("git", [
-    "-C",
-    memoryDir,
-    "rev-parse",
-    "--git-dir",
-  ]);
+  const { stdout } = await promisify(execFile)(
+    "git",
+    ["-C", memoryDir, "rev-parse", "--git-dir"],
+    { windowsHide: true },
+  );
   return realpath(resolve(memoryDir, stdout.trim() || ".git"));
 }

@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 function execFileAsync(file: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    execFile(file, args, (error) => {
+    execFile(file, args, { windowsHide: true }, (error) => {
       if (error) {
         reject(error);
         return;

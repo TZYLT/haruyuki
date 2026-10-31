@@ -578,6 +578,7 @@ function runProcess(params: {
     const child = params.spawnImpl(params.command, params.args, {
       cwd: params.cwd,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
     const stdout: string[] = [];
     const stderr: string[] = [];

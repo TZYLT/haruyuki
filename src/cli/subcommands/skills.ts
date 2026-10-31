@@ -434,7 +434,7 @@ function resolveSkillSourceSpecifier(
 async function execFile(
   command: string,
   args: string[],
-  options: { cwd?: string; timeout?: number } = {},
+  options: { cwd?: string; timeout?: number; windowsHide?: boolean } = {},
 ) {
   const { execFile: execFileCb } = await import("node:child_process");
   const { promisify } = await import("node:util");
@@ -451,6 +451,7 @@ async function resolveBranchAndSubdir(
     ["ls-remote", "--heads", location.repoUrl],
     {
       timeout: 60_000,
+      windowsHide: true,
     },
   );
   const branches = stdout
@@ -485,7 +486,7 @@ async function cloneSkillSource(
     args.push("--branch", resolvedLocation.branch);
   }
   args.push(resolvedLocation.repoUrl, tmpDir);
-  await execFile("git", args, { timeout: 120_000 });
+  await execFile("git", args, { timeout: 120_000, windowsHide: true });
 
   const sourceDir = resolvedLocation.subdir
     ? join(tmpDir, resolvedLocation.subdir)
@@ -658,6 +659,7 @@ async function downloadClawHubSkillSource(
 
   const { stdout } = await execFile("unzip", ["-Z1", zipPath], {
     timeout: 30_000,
+    windowsHide: true,
   });
   const members = stdout.split("\n").filter(Boolean);
   if (members.length === 0) {
@@ -669,6 +671,7 @@ async function downloadClawHubSkillSource(
 
   await execFile("unzip", ["-q", zipPath, "-d", sourceDir], {
     timeout: 30_000,
+    windowsHide: true,
   });
 
   return { tmpDir, sourceDir };

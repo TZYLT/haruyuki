@@ -125,6 +125,7 @@ async function runGit(cwd: string, args: string[]): Promise<GitResult> {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       maxBuffer: 10 * 1024 * 1024,
       timeout: GIT_TIMEOUT_MS,
+      windowsHide: true,
     },
   );
   return { stdout: result.stdout ?? "", stderr: result.stderr ?? "" };

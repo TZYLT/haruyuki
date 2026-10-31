@@ -99,6 +99,7 @@ export async function grep(args: GrepArgs): Promise<GrepResult> {
       maxBuffer: 10 * 1024 * 1024,
       cwd: userCwd,
       signal,
+      windowsHide: true,
     });
     if (output_mode === "files_with_matches") {
       const allFiles = stdout.trim().split("\n").filter(Boolean);

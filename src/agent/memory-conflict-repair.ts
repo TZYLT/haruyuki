@@ -60,13 +60,11 @@ async function describeMemoryConflict(
 ): Promise<string> {
   let head = "";
   try {
-    const { stdout } = await promisify(execFile)("git", [
-      "-C",
-      memoryDir,
-      "rev-parse",
-      "--verify",
-      "HEAD",
-    ]);
+    const { stdout } = await promisify(execFile)(
+      "git",
+      ["-C", memoryDir, "rev-parse", "--verify", "HEAD"],
+      { windowsHide: true },
+    );
     head = stdout.trim();
   } catch {
     /* Unborn branch. */
@@ -82,13 +80,11 @@ async function describeInvalidMemoryHistory(
   memoryDir: string,
 ): Promise<string> {
   try {
-    const { stdout } = await promisify(execFile)("git", [
-      "-C",
-      memoryDir,
-      "rev-parse",
-      "--verify",
-      "@{u}",
-    ]);
+    const { stdout } = await promisify(execFile)(
+      "git",
+      ["-C", memoryDir, "rev-parse", "--verify", "@{u}"],
+      { windowsHide: true },
+    );
     return `invalid\n${stdout.trim()}`;
   } catch {
     return "invalid";

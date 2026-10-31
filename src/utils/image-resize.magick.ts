@@ -32,6 +32,7 @@ async function getImageDimensions(
       `magick identify -format "%w %h %m" "${tempInput}"`,
       {
         encoding: "utf-8",
+        windowsHide: true,
       },
     );
     const [width, height, format] = output.trim().split(" ");
@@ -100,6 +101,7 @@ async function compressToFitByteLimit(
       try {
         execSync(`magick "${tempInput}" -quality ${quality} "${tempOutput}"`, {
           stdio: "ignore",
+          windowsHide: true,
         });
         const compressed = readFileSync(tempOutput);
         if (compressed.length <= MAX_IMAGE_BYTES) {
@@ -131,6 +133,7 @@ async function compressToFitByteLimit(
           `magick "${tempInput}" -resize ${scaledWidth}x${scaledHeight} -quality 70 "${tempOutput}"`,
           {
             stdio: "ignore",
+            windowsHide: true,
           },
         );
         const reduced = readFileSync(tempOutput);
@@ -214,6 +217,7 @@ export async function resizeImageIfNeeded(
           `magick "${tempInput}" -resize ${MAX_IMAGE_WIDTH}x${MAX_IMAGE_HEIGHT}> -quality 85 "${tempOutput}.jpg"`,
           {
             stdio: "ignore",
+            windowsHide: true,
           },
         );
         outputBuffer = readFileSync(`${tempOutput}.jpg`);
@@ -225,6 +229,7 @@ export async function resizeImageIfNeeded(
           `magick "${tempInput}" -resize ${MAX_IMAGE_WIDTH}x${MAX_IMAGE_HEIGHT}> "${tempOutput}.png"`,
           {
             stdio: "ignore",
+            windowsHide: true,
           },
         );
         outputBuffer = readFileSync(`${tempOutput}.png`);
@@ -260,6 +265,7 @@ export async function resizeImageIfNeeded(
     );
     execSync(`magick "${tempInput}" "${tempOutput}"`, {
       stdio: "ignore",
+      windowsHide: true,
     });
     const outputBuffer = readFileSync(tempOutput);
     unlinkSync(tempOutput);

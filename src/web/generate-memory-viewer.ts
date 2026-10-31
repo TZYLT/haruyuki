@@ -127,6 +127,7 @@ async function runGitSafe(cwd: string, args: string[]): Promise<string> {
       cwd,
       maxBuffer: 10 * 1024 * 1024,
       timeout: 60_000,
+      windowsHide: true,
     });
     return stdout?.toString() ?? "";
   } catch {
