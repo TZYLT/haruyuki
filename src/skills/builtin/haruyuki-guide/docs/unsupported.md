@@ -34,10 +34,14 @@ localhost". A route can exist in the code without a hosted service behind it.
 ## Subcommands that were removed
 
 These are not registered, and a regression test asserts each returns no
-subcommand — `src/cli/subcommands/router.test.ts:130-151`:
+subcommand — `src/cli/subcommands/router.test.ts:154-175`:
 
-`dream` (as a subcommand) · `computers` · `environments` · `envs` · `teleport` ·
+`computers` · `environments` · `envs` · `teleport` ·
 `usage` · `permissions` · `shared-memory` · `feedback` · `remote` · `sandbox`
+
+`dream` is **not** in that list: `haruyuki dream run --task <id>` is an internal
+subcommand (hidden from `--help`) that hosts one dream run, and the router
+routes it — `src/cli/subcommands/router.ts`, `src/cli/subcommands/dream.ts`.
 
 ## Hosted capabilities with no local counterpart
 

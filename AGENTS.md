@@ -767,6 +767,52 @@ Relay forwarding and desktop passthrough are maintained outside this repo. Do
 not eyeball the gap: diff the command types in `protocol_v2.ts` against the
 helpers on `AppServerClient`.
 
+### Command families (0.5.0 shape)
+
+`protocol_v2.ts` is a pinned 2.6k-line contract file. A new family now lives in
+its own module and only *reaches* the contract:
+
+1. **Types:** `src/types/<family>-protocol.ts` defines the command/response
+   interfaces; `protocol_v2.ts` adds an `import type { ... }`, the union entries,
+   and one `export type * from "./<family>-protocol"`. Do not grow
+   `protocol_v2.ts` with shapes.
+2. **Validation:** `src/websocket/listener/<family>-protocol-inbound.ts` exports
+   the `is*Command` guards; `protocol-inbound.ts` adds them to the
+   `parseServerMessage` OR-chain (it is a pinned file: wire only).
+3. **Handler:** `src/websocket/listener/commands/<family>.ts` owns the bodies and
+   is dispatched from `message-router.ts` after the cron family. The handler
+   module receives a narrow context (`socket`, `safeSocketSend`,
+   `runDetachedListenerTask`), so a family can be tested without a real socket.
+4. **Client:** thin helper methods on `AppServerClient` delegating to
+   `requestCommand(command, expectedType, options)`; its type surface and socket
+   plumbing live in `src/app-server-client-shared.ts` and the entry re-exports
+   them whole.
+
+Existing families: `schedule-protocol.ts` (the ten `cron_*` commands, F-05 task
+fields), `dream-protocol.ts` (`dream_status`, `dream_run`, the settings pair),
+`compaction-protocol.ts` (`compaction_prepare` / `commit` / `cancel`; the pending
+preview is listener memory only, `commit` answers `prepare_expired`), and
+`usage-protocol.ts` (`usage_aggregate`, read-only ledger).
+
+**Compatibility discipline.** Request fields that extend an existing command are
+optional and additive. When a command already uses `type` as its discriminant,
+the new task-kind field is named `task_type` (same choice as
+`background-process-protocol.ts`). The one wire semantics change in 0.5.0 is
+`execute_command "dream"`: it means the dream feature (`status` / `run`) and
+reflection stays on `reflect` / `reflection`. A `not_implemented` stub may exist
+only while its family is being built; never release a build where one is still
+reachable (grep before shipping).
+
+### Hidden conversations are read-only over the protocol
+
+`runtime_start` refuses a `hidden === true` conversation, and `input` to a
+hidden conversation's runtime is rejected before the ack (the direct path and the
+queued path both guard it). Protocol commands may *read* hidden conversations
+(list them, retrieve them, read their messages); no command may create a write
+path into one. Use `isHiddenConversation` from
+`src/websocket/listener/hidden-conversation-guard.ts` — it lists without
+creating, because the local backend creates a conversation on `retrieve`.
+
 ### Protocol v1 vs v2
 
 - v1 = session/headless: one running session, raw streaming chunks,

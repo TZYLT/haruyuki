@@ -656,8 +656,8 @@ and `/exit` stay top-level. Agent identity and presentation moved into
 
 ### Reflection
 
-`/dream` and `/reflect` take `[--instruction TEXT]` and require an active agent:
-without one they throw `Reflection requires an active agent.` —
+`/reflect` takes `[--instruction TEXT]` and requires an active agent: without one
+it throws `Reflection requires an active agent.` —
 `src/cli/commands/registry.ts`. There is no `/reflection` alias any more, and the
 old cross-conversation flags (`--recent`, `--conversation`, `--auto`) are gone:
 passing one is an error that prints the current usage. Reflection only ever
@@ -674,6 +674,33 @@ memory repository directly, so there is no worktree or merge step any more —
 `src/cli/helpers/reflection-launcher.ts`. See the `memory-filesystem` and
 `settings-and-paths` documents, and the `unsupported` document for the retired
 cloud reflection path.
+
+`/dream` is **not** a reflection alias (0.5.0): it belongs to the dream feature,
+which has its own section below.
+
+### Dream
+
+`/dream` is the dream (梦游) surface — an autonomous memory-maintenance run that
+starts on its own while the agent is idle:
+`/dream`, `/dream status`, `/dream run [--budget <tokens>]`, `/dream config`,
+`/dream on`, `/dream off` — `src/cli/commands/dream.ts`. A run executes inside a
+**hidden conversation**: clients can list and read it, but writing to it is
+refused (`input` is rejected and `runtime_start` will not open a runtime for
+it). Each run walks the enabled tiers in order (`tidy` → `think` → `task` →
+`wander`) and leaves its report at `maintenance/dream-report.md`. Enabling the
+master switch (`/dream on`, or the settings page) is the hard gate: nothing runs
+without it. The trigger evaluates an idle window (default 22:00–07:00), at least
+30 minutes of user silence and a memory-pressure threshold (default 75,000
+tokens), at most 6 attempts per day. The budget is `pressure × budgetFactor`
+(default 0.8) capped by `maxPerRun` (default 100,000 tokens); one over-budget
+extension may be auto-approved, then the run ends with `budget_exhausted` and a
+handoff. Misfires are bounded by the dream lock, the run lease and a per-agent
+scheduler task (`src/cron/dream-signal.ts`, `src/agent/dream/dream-run.ts`,
+`src/cli/helpers/dream-launcher.ts`).
+
+App-server clients reach the same state through `dream_status`, `dream_run`,
+`get_dream_settings` and `set_dream_settings`; `device_status` carries a small
+dream summary so a client does not need an extra round-trip.
 
 ### Settings and maintenance
 

@@ -545,11 +545,25 @@ haruyuki import --from ./work.hryk                   # 正式恢复（手敲 ove
 | 命令 | 参数 | 说明 |
 |---|---|---|
 | `/reflect` | `[--instruction TEXT]` | 对**当前会话**触发一次反思（与自动触发同路径、同限时） |
-| `/dream` | 同上 | `/reflect` 的别名 |
 
 > 自动触发由两个独立开关控制，在 `/memory config`（或 `/settings`）里改：**压缩时**（`reflectionOnCompaction`，默认开）与**每 N 条用户消息**（`reflectionEveryUserMessages`，默认 0 = 关，开启建议 25）。
 > 时限 `reflectionTimeoutMinutes`（默认 3，范围 1–60）；成功后按 `reflectionDeleteSessionOnSuccess`（默认开）删除反思会话。
 > 旧参数 `--recent`、`--conversation`、`--auto` 已删除：输入会报错并给出现用写法；反思不再跨会话。
+> **`/dream` 自 0.5.0 起指梦游，不再是反思的别名**（见下一节）；`/reflection` 仍映射到 `/reflect`。
+
+### 顶层命令：梦游
+
+| 命令 | 参数 | 说明 |
+|---|---|---|
+| `/dream` | — | 梦游状态：开关、当前 run（层级／已花预算）、下次预计可触发时间、最近一次结果 |
+| `/dream run` | `[--budget <tokens>]` | 立刻手动跑一次（不受闲置窗口／静默／压力条件限制，仍受开关与单实例锁约束）；`--budget` 只覆盖本次预算 |
+| `/dream on` | — | 打开梦游开关；首次使用会进配置向导（层级、权限、窗口、预算） |
+| `/dream off` | — | 关闭自动触发（正在跑的 run 不打断） |
+| `/dream config` | — | 打开设置页的梦游分组 |
+
+> 一次 run 写在一个**隐藏会话**里：客户端能列出与查看，但**不能写入**（`input` 会被拒绝，`runtime_start` 也不会为一个隐藏会话起 runtime）。
+> 自动触发需要显式配置（`/dream on` 是硬门）：闲置窗口（默认 22:00–07:00）内、用户静默 ≥30 分钟、记忆压力 ≥75,000 tokens 才评估；每天最多 6 次，触发之间有冷却。
+> 预算＝「当前压力 × 系数（默认 0.8）」，单次上限默认 100,000 tokens；超出后先请求一次自动批准，仍超则以 `budget_exhausted` 收尾并把 handoff 写进运行报告（`maintenance/dream-report.md`）。
 
 ### 顶层命令：模型
 

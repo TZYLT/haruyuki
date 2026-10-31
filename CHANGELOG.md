@@ -8,6 +8,86 @@
 > **版本号谱系说明**：本 fork 早期使用 `0.35.0-better` … `0.36.2-better` 命名；分家后**重起为 `0.1.0`**（见 `0.1.0` 条目）。
 > 因此语义化排序上 `0.36.x-better` 早于 `0.1.0`，这是**刻意的重编号**，不是版本回退。
 
+## [0.5.0] - 待发布（2026-10-31 收口；发布日由 bump/tag 时填）
+
+> 0.5.0 是**梦游（dream）**的首个版本：agent 在闲置窗口里自己醒一次，按四个层级
+> （`tidy` → `think` → `task` → `wander`）整理记忆、写运行报告；预算、权限、可触发条件
+> 与层级全部可配，一次 run 落在一个**隐藏会话**里，事后可回看。
+> 同一版本把 **app-server 协议一次性补齐**到 F-01–F-06 的完整面（梦游、用量、压缩多步、
+> 调度全字段、反思设置），并收紧了**隐藏会话的只读边界**。
+
+### 新增
+
+- **梦游（F-06）**：四层级的自主记忆整理。一次 run 由调度信号触发（闲置窗口 + 静默 +
+  记忆压力），在隐藏会话里按层级推进，预算按「压力 × 系数（默认 0.8）」计算并有单次上限
+  （默认 100,000 tokens）；超出预算先请求一次自动批准，仍超则 `budget_exhausted` 收尾并
+  留下 handoff。**显式配置是硬门**：没在 `/dream on`（或设置页）配置过就不跑。
+- **梦游的权限与无人值守**：三档权限（`standard` / `acceptEdits`（默认）/ `unrestricted`）；
+  无人值守下的审批请求一律拒绝（reason `unattended`），梦游不得静默提权。
+- **梦游的工具与产出**：`MemoryCommit`（唯一记忆写入口，带 `acceptEdits` 门）、`SessionRead`
+  （只读、拒隐藏）；运行报告固定写 `maintenance/dream-report.md` 并自建记忆索引；
+  授权条目落在记忆根的 `authorization.md`（`scope` / `expires` / `source` / `quote`，坏条目
+  整条忽略）。run 的 lease、baseline 与回滚保证崩溃后不写坏记忆。
+- **调度接入**：`dream` 成为第三种任务类型（`prompt` / `command` / `dream`），由信号源评估、
+  短命宿主执行，与既有调度共用任务级租约、补跑与自动暂停；`/dream on` 懒建 carrier 任务。
+- **TUI 用户面**：`/dream status|run|on|off|config` 四个入口、设置页的梦游分组与首次配置
+  向导（4 步）、隐藏会话在会话列表/详情里的浏览、侧栏与状态行的梦游摘要。
+- **app-server 协议补齐（M5-A）**：新增 `dream_status` / `dream_run` /
+  `get_dream_settings` / `set_dream_settings`；`usage_aggregate`（只读账本聚合，按 agent，
+  可按 `run_id` / `session_id` / 时间窗收窄）；`compaction_prepare` / `compaction_commit` /
+  `compaction_cancel`（多步压缩，桌面可展示选块表并自选切点）；`cron_*` 十条命令补齐 F-05
+  全字段（任务类型、目标、权限、补跑、超时/等待）；`get/set_reflection_settings` 补
+  `onCompaction` / `everyUserMessages` / `deleteSessionOnSuccess` / `timeoutMinutes`。
+- **`AppServerClient` 全家族 helper**：cron 十条、dream 四条、compaction 三条、`usage_aggregate`，
+  以及 `conversation_retrieve` / `conversation_messages_list`；每个命令都有客户端方法与
+  请求/响应关联测试。
+
+### 变更（破坏性请先读）
+
+- **`execute_command "dream"` 语义变更（breaking）**：`dream` 现在只指梦游，不再是反思的
+  别名。文本入口只接受 `status`（默认）与 `run`；`/dream on`、`/dream off`、
+  `/dream config` 已迁到结构化的 `get_dream_settings` / `set_dream_settings`，文本入口会给
+  明确用法错误。**反思走 `/reflect`（`reflect` / `reflection` 两个 wire id 不变）**。
+  仍按旧语义发送 `dream` 的客户端必须改。
+- **隐藏会话只读（breaking）**：`runtime_start` 拒绝 `hidden === true` 的会话；向隐藏会话的
+  runtime 发 `input` 会在 ack 前被拒绝（`accepted:false` + 只读文案），直连与排队两条路径
+  都兜底。以前能写隐藏会话的客户端会看到明确的拒绝。
+- **`cron_add` / `cron_update` 的任务字段**：请求侧新字段名是 **`task_type`**
+  （`type` 二义性太强，沿用 `background-process-protocol` 的口径）；响应侧 `CronTask.type`
+  取值扩为 `prompt|command|dream`，并新增 `payload` / `target` / `permission` / `catch_up` /
+  `timeout_minutes` / `wait_minutes` / `paused_reason` / `last_outcome_v2` /
+  `last_run_reason_v2`。只发 `prompt` 的旧客户端行为不变（`prompt` 仍必填，command/dream 传空串）。
+- **`CompactionTopicReport.applied` 变为可选**：`compaction_prepare` 尚未写回上下文，响应只带
+  预览（块表/概览/用量）；`compaction_commit` 与旧的 `conversation_compact` 才带 `applied`。
+  自己构造该类型的消费者需要处理缺省。
+- **`conversation_compact` 语义不变**：仍是一次 prepare→默认 commit 的快捷路径（响应形状
+  与旧版一致，`body.topic_block` 依旧被忽略）；要选切点请用
+  `compaction_prepare`/`compaction_commit`（`block_index`）或 `execute_command compact <n>`。
+- **`set_dream_settings.scope`**：梦游只有 **global** 与 **agent** 两层，没有 project 层；
+  缺省写 global（与 TUI `/dream on`、设置页一致）。
+- **隐藏会话的 run 记录**：梦游 run 的元数据写在会话 provenance 的 `dream` 字段上（只经
+  `writeDreamRunMetadata` 一个写入口），不影响既有 `reflection` 记录。
+
+### 已知限制
+
+- **预算硬门在轮边界**：子进程拿不到逐次模型调用的 token 预算，父进程按轮累计 + result
+  envelope 四桶兜底；因此「每次模型调用后立刻停」不承诺。
+- **跨进程写会话没有受支持 API**：run 中途的 40%/80% 提醒只能在轮间传递；预算 100% 触顶时
+  若没有下一轮，直接硬 abort 并把 handoff 写进报告，而不是打断正在进行的回合（需求 G-3 弱化）。
+- **compaction 的 prepare 预览只在进程内存**：进程重启、重连落到别的进程，`commit` 会回
+  `prepare_expired`，客户端需重新 prepare（不做持久化）。
+- **`usage_aggregate` 只读**：读账本自身保留窗与本地小时粒度；`from`/`to` 按小时边界生效，
+  没有写入/清理入口。
+- **`dream_status` 的 live 数据**：`running` 的进度（spentTokens/budgetTokens/tier）来自
+  parent 每轮写盘的隐藏会话 run 记录；记录还读不到时降级为 lease 的起点与 0/0/null（不伪造
+  预算），而不是报错。
+- **`device_status` 的梦游摘要**是 5 秒 TTL 的缓存值（enabled + 当前 running run id）；
+  `set_dream_settings` 成功不主动推送设备状态，客户端以响应与下一次广播为准。
+- **压缩的 pending 幂等**：同一会话再次 prepare 会作废旧预览（旧 id 立即失效，花费记为
+  `cancelled`），`block_index` 非法时保留预览可重试。
+- `/dream config` 只能打开设置页（无法直达梦游分组）；真实 provider 下的 L2 对话与 L3 终端
+  实机验收留给用户。
+
 ## [0.4.5] - 2026-10-29
 
 > 后台任务有了通用的信号入口：调度不再是「进程里一个 60 秒计时器」，而是

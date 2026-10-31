@@ -140,7 +140,35 @@ ignored on load and stripped on the next persist —
 `src/settings-manager.ts:187-196`; the legacy counting state restarts at zero
 under the v4 user-message counter. The user-facing entry point is
 `/memory config` (also reachable as `/sleeptime`) and the settings page;
-`/reflect` and `/dream` take `--instruction` only.
+`/reflect` takes `--instruction` only.
+
+## Dream settings
+
+Dream is configured by a global layer plus a per-agent override map
+(`dreamSettingsByAgent`), resolved by `src/dream-settings.ts`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `dreamEnabled` | `false` | Master switch; the hard gate — nothing runs until the user configures dream |
+| `dreamTiers` | all four on | Per-tier switches: `tidy`, `think`, `task`, `wander` |
+| `dreamPermissionMode` | `acceptEdits` | Unattended permission tier for a run (`standard` / `acceptEdits` / `unrestricted`) |
+| `dreamIdleWindows` | `22:00–07:00` | Windows in which an automatic run may start |
+| `dreamSilenceMinutes` | `30` | Required user silence before an automatic run |
+| `dreamPressureThreshold` | `75000` | Memory pressure (tokens) that must be reached |
+| `dreamBudgetFactor` | `0.8` | Budget = pressure × factor |
+| `dreamMaxPerRun` | `100000` | Hard per-run cap in tokens |
+| `dreamMaxPerDay` | `null` (no cap) | Optional daily token cap |
+| `dreamTimeLimitMinutes` | `null` | Optional wall-clock cap for a run |
+| `dreamAutoTrigger` | `true` | Second opt-in: enable the automatic trigger without turning the feature off |
+| `dreamOverBudgetApprovals` | `1` | How many over-budget extensions may be auto-approved |
+
+Settings are written by `/dream on|off|config` and the settings page, or by the
+app-server's `set_dream_settings` (scope `global` or `agent` — there is no
+project-local dream layer). A run's state lives outside settings: the per-agent
+lease and heartbeat under the harness home's `dream/` directory, the signal
+state file (window/cooldown/daily counters), and the `dream` field on the run
+conversation's provenance — `src/agent/dream/dream-lease.ts`,
+`src/cron/dream-signal.ts`.
 
 ## `Settings.env` is not the secret store
 

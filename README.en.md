@@ -108,8 +108,8 @@ bun run build        # produces haruyuki.js at the repo root (gitignored)
 node ./haruyuki.js   # start the interactive UI
 ```
 
-> The build output is a **single-file bundle** (~14.5 MiB) with production dependencies inlined;
-> `--version` should print `0.4.5 (Haruyuki)`. The number comes from `package.json`'s `version`
+> The build output is a **single-file bundle** (~14.8 MiB) with production dependencies inlined;
+> `--version` should print `0.5.0 (Haruyuki)`. The number comes from `package.json`'s `version`
 > and is **inlined at build time**, so changing it requires a rebuild.
 
 ### Option 2 — the npm package (recommended)
@@ -222,6 +222,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
+| `0.5.0` | - | **Dreaming**: the agent wakes itself during idle windows to maintain memory (four tiers; budget, permissions and trigger conditions configurable; one run lives in a hidden conversation and can be reviewed afterwards). The same release fills the app-server protocol surface (dream, usage, multi-step compaction, the full scheduling field set) and repoints `/dream` at the dream feature (reflection is `/reflect`) — the **breaking change** of this version. |
 | `0.4.5` | + | **Resident scheduling**: The entire scheduling task system has been rewritten to automatically launch scheduled tasks when the software is not running, ensuring that timed tasks can truly execute on schedule, provided the computer remains powered on. |
 | `0.4.4` | + | **Compaction rework**: Enable automatic processing of abstracts and topic tags before compression, making topic-inspired compression truly practical and providing queries for topics and corresponding original texts. |
 | `0.4.3` | + | **Reflection rewritten**: reflection now runs as a hidden session that writes memory directly, so it no longer produces conflicting commits; The TUI display section will undergo beautification in the future. |
