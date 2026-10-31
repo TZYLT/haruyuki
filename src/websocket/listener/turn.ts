@@ -294,6 +294,7 @@ async function handleIncomingMessageInner(
       preparedToolContext: setup.preparedToolContext.preparedToolContext,
       overrideModel,
       responseFormat: msg.responseFormat,
+      automatedTurn: msg.automatedTurn === true,
       getInput: () => turnInput,
       getInterruptedToolCallIds: () =>
         pendingNormalizationInterruptedToolCallIds,

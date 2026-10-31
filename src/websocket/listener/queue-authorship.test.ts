@@ -6,6 +6,35 @@ import { enqueueInboundUserMessage } from "./inbound-queue";
 import { createRuntime } from "./lifecycle";
 import { consumeQueuedTurn } from "./queue";
 
+test("a queue batch with no user submission is an automated turn", () => {
+  const runtime = getOrCreateScopedRuntime(
+    createRuntime(),
+    "agent-a",
+    "conv-a",
+  );
+  runtime.queueRuntime.enqueue({
+    kind: "cron_prompt",
+    source: "cron",
+    text: "scheduled prompt",
+    cronTaskId: "task-1",
+    agentId: "agent-a",
+    conversationId: "conv-a",
+    runId: "run-1",
+  } as Parameters<typeof runtime.queueRuntime.enqueue>[0]);
+  const scheduled = consumeQueuedTurn(runtime);
+  // F-06: the listener must not count a scheduler turn as dream activity.
+  expect(scheduled?.queuedTurn.automatedTurn).toBe(true);
+
+  enqueueInboundUserMessage(runtime, {
+    type: "message",
+    agentId: "agent-a",
+    conversationId: "conv-a",
+    messages: [{ role: "user", content: "hello" }],
+  });
+  const userTurn = consumeQueuedTurn(runtime);
+  expect(userTurn?.queuedTurn.automatedTurn).toBe(false);
+});
+
 test("preserves every input message and author across queue entries", () => {
   const runtime = getOrCreateScopedRuntime(
     createRuntime(),

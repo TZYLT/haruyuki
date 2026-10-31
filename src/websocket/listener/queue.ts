@@ -176,6 +176,9 @@ function buildQueuedTurnMessage(
     agentId: scopeItem?.agentId ?? runtime.agentId ?? undefined,
     conversationId: scopeItem?.conversationId ?? runtime.conversationId,
     ...template,
+    // F-06: a batch with no user submission (`message` item) is a scheduler /
+    // task-notification / mod-continue turn. It must not stamp the dream clock.
+    automatedTurn: !batch.items.some((item) => item.kind === "message"),
     messages,
   };
 }

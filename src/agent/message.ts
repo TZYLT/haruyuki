@@ -10,9 +10,16 @@ import type {
   LettaStreamingResponse,
 } from "@letta-ai/letta-client/resources/agents/messages";
 import type { MessageCreateParams as ConversationMessageCreateParams } from "@letta-ai/letta-client/resources/conversations/messages";
+import {
+  finishDreamTurn,
+  markDreamTurnInFlight,
+  shouldRecordDreamActivity,
+} from "@/agent/dream/dream-activity";
 import type { SkillSource } from "@/agent/skill-sources";
 import { type Backend, getBackend } from "@/backend";
+import { isDreamRun } from "@/permissions/dream-run-guard";
 import { takePendingDiskSpaceReminder } from "@/reminders/disk-space";
+import type { RuntimeContextSnapshot } from "@/runtime-context";
 import { trackBoundaryError } from "@/telemetry/error-reporting";
 import {
   type ClientTool,
@@ -31,6 +38,7 @@ import {
   normalizeMessageImageParts,
 } from "@/utils/message-image-normalization";
 import { createStreamAbortRelay } from "@/utils/stream-abort-relay";
+import { USAGE_SOURCE_ENV } from "@/utils/subagent-launch-marker";
 import { isTimingsEnabled } from "@/utils/timing";
 import {
   type ApprovalNormalizationOptions,
@@ -236,6 +244,12 @@ export type SendMessageStreamOptions = {
   streamTokens?: boolean;
   background?: boolean;
   agentId?: string; // Required when conversationId is "default"
+  /**
+   * Set for a turn the caller already classified as automated (scheduler,
+   * task notification, mod continue). Such a turn never counts as dream
+   * activity even though it runs in the interactive process (F-06).
+   */
+  automatedTurn?: boolean;
   approvalNormalization?: ApprovalNormalizationOptions;
   workingDirectory?: string;
   /** Per-conversation permission mode state. When provided, tool execution uses
@@ -317,6 +331,99 @@ function buildRequestBodyFromPreparedMessages(
     ...(opts.responseFormat ? { response_format: opts.responseFormat } : {}),
     ...(isDefaultConversation ? { agent_id: opts.agentId } : {}),
   };
+}
+
+// ── Dream activity (F-06 idle semantics) ───────────────────────────
+//
+// Activity means "an interactive user turn dispatched a model request". This
+// dispatch seam is shared by the TUI, headless and the listener, so the marker
+// is written here instead of at submit/turn-end. Background turns are excluded
+// by their source; the rule itself lives in `agent/dream/dream-activity.ts`.
+// The marker stays "in flight" while the stream runs so a long turn cannot be
+// mistaken for silence, and is settled when the stream ends.
+
+/** The agent whose dream clock this request advances, or null when automated. */
+function resolveDreamActivityAgentId(input: {
+  agentId: string | null;
+  executionRuntimeContext: RuntimeContextSnapshot | undefined;
+  automatedTurn: boolean | undefined;
+}): string | null {
+  if (!input.agentId) return null;
+  const interactive = shouldRecordDreamActivity({
+    dreamRun: isDreamRun(input.executionRuntimeContext) || isDreamRun(),
+    agentRole: process.env.HARUYUKI_CODE_AGENT_ROLE ?? null,
+    automatedUsageSource: process.env[USAGE_SOURCE_ENV] ?? null,
+    automatedTurn: input.automatedTurn === true,
+  });
+  return interactive ? input.agentId : null;
+}
+
+/**
+ * Keep the turn marked as in flight until its stream ends. The wrapper settles
+ * on normal completion, error, early `return()` (the caller broke out of the
+ * loop) and on the request's abort signal, so an abandoned stream cannot pin
+ * the silence window.
+ */
+function attachDreamActivityTracking(
+  stream: Stream<LettaStreamingResponse>,
+  agentId: string,
+  signal: AbortSignal | undefined,
+): Stream<LettaStreamingResponse> {
+  markDreamTurnInFlight(agentId);
+  let settled = false;
+  const settle = (): void => {
+    if (settled) return;
+    settled = true;
+    signal?.removeEventListener("abort", settle);
+    finishDreamTurn(agentId);
+  };
+  if (signal) {
+    if (signal.aborted) {
+      // The request was cancelled before the stream reached us: the dispatch
+      // still happened, but the turn is not in flight any more.
+      settle();
+      return stream;
+    }
+    signal.addEventListener("abort", settle, { once: true });
+  }
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  const streamWithIterator = stream as Stream<LettaStreamingResponse> & {
+    [Symbol.asyncIterator]: () => AsyncIterator<LettaStreamingResponse>;
+  };
+  streamWithIterator[Symbol.asyncIterator] = () => {
+    const iterator = originalAsyncIterator();
+    return {
+      next() {
+        return iterator.next().then(
+          (result) => {
+            if (result.done) settle();
+            return result;
+          },
+          (error) => {
+            settle();
+            throw error;
+          },
+        );
+      },
+      return(value?: unknown) {
+        const result = iterator.return
+          ? iterator.return(value)
+          : Promise.resolve({
+              done: true as const,
+              value: value as LettaStreamingResponse,
+            });
+        return result.finally(settle);
+      },
+      throw(error?: unknown) {
+        const result = iterator.throw
+          ? iterator.throw(error)
+          : Promise.reject(error);
+        return result.finally(settle);
+      },
+    };
+  };
+  return stream;
 }
 
 /**
@@ -616,6 +723,22 @@ export async function sendMessageStreamWithBackend(
     resolvedConversationId,
     firstOtid ?? "none",
   );
+
+  // F-06: the request was accepted, so this is a real dispatch. Only an
+  // interactive user turn stamps the agent's dream clock; a dream/reflection
+  // child, a scheduled turn or an automated process is excluded by source.
+  const dreamActivityAgentId = resolveDreamActivityAgentId({
+    agentId: opts.agentId ?? executionRuntimeContext?.agentId ?? null,
+    executionRuntimeContext,
+    automatedTurn: opts.automatedTurn,
+  });
+  if (dreamActivityAgentId) {
+    stream = attachDreamActivityTracking(
+      stream,
+      dreamActivityAgentId,
+      requestOptions.signal,
+    );
+  }
 
   abortRelay?.attach(stream as object);
 

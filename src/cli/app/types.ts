@@ -163,6 +163,11 @@ export type ProcessConversationOptions = {
   allowReentry?: boolean;
   submissionGeneration?: number;
   transcriptStartLineIndex?: number | null;
+  /**
+   * Scheduler/task-notification/mod-continue turn: it sends requests but is not
+   * a user turn, so it must not count as dream activity (F-06).
+   */
+  automatedTurn?: boolean;
 };
 
 export type ProcessConversation = (

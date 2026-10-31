@@ -8,6 +8,13 @@
  * is exercised by the offline probe recorded in the 46-6 handoff.
  */
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  markDreamTurnInFlight,
+  readDreamActivity,
+} from "@/agent/dream/dream-activity";
 import {
   type DreamRunDeps,
   type DreamTurnInput,
@@ -443,6 +450,28 @@ describe("executeDreamRun · user comes back", () => {
     expect(harness.finished).toEqual(["agent-a:cancelled"]);
     // Pressure baseline only moves for completed runs.
     expect(harness.pressureBaselines).toHaveLength(0);
+  });
+
+  test("a live in-flight interactive turn cancels the run (real marker)", async () => {
+    const previousHome = process.env.HARUYUKI_HOME;
+    const home = mkdtempSync(join(tmpdir(), "hryk-dream-run-activity-"));
+    process.env.HARUYUKI_HOME = home;
+    try {
+      // The user's turn dispatched a request and is still streaming: the
+      // silence window must not be treated as expired.
+      markDreamTurnInFlight("agent-a");
+      const harness = makeHarness({
+        overrides: { readActivity: (agentId) => readDreamActivity(agentId) },
+      });
+      const result = await executeDreamRun(RUN_INPUT, harness.deps);
+      expect(result.outcome).toBe("cancelled");
+      expect(harness.turns).toHaveLength(0);
+      expect(harness.metadata.at(-1)?.status).toBe("cancelled");
+    } finally {
+      if (previousHome === undefined) delete process.env.HARUYUKI_HOME;
+      else process.env.HARUYUKI_HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 

@@ -99,6 +99,12 @@ export interface IncomingMessage {
   externalToolScopeIds?: string[];
   /** Exclude interactive user-input tools (AskUserQuestion) from this turn's toolset. */
   excludeInteractiveTools?: boolean;
+  /**
+   * The turn came from the scheduler / a task notification / a mod continue,
+   * not from a user submission. It runs in this process but must never count
+   * as dream activity (F-06).
+   */
+  automatedTurn?: boolean;
   responseFormat?: Record<string, unknown>;
   messages: Array<
     (AttributedMessageCreate & { client_message_id?: string }) | ApprovalCreate

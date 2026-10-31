@@ -13,7 +13,6 @@ import {
   STALE_APPROVAL_RECOVERY_DENIAL_REASON,
 } from "@/agent/approval-recovery";
 import { getResumeDataFromBackend } from "@/agent/check-approval";
-import { markDreamActivity } from "@/agent/dream/dream-activity";
 import {
   ensureMemoryFilesystemDirs,
   getScopedMemoryFilesystemRoot,
@@ -331,17 +330,6 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
         userCancelledRef.current = false;
         setDequeueEpoch((e: number) => e + 1);
         return { submitted: true };
-      }
-
-      // F-06 S2: the user is back, so a running dream run aborts on its next
-      // check (R-5.8.2). Synchronous and failure-isolated on purpose: a marker
-      // that cannot be written must never make the send fail.
-      if (!isSystemOnly) {
-        try {
-          markDreamActivity(agentIdRef.current);
-        } catch {
-          // Best effort: the run controller treats a missing marker as "idle".
-        }
       }
 
       // If the user just cycled reasoning tiers, flush the final choice before
@@ -2840,6 +2828,10 @@ ${SYSTEM_REMINDER_CLOSE}
           clientPreferences,
           submissionGeneration,
           transcriptStartLineIndex,
+          // F-06: only a turn the user initiated may stamp the dream clock.
+          ...(submitOptions?.userInitiated === false
+            ? { automatedTurn: true }
+            : {}),
         });
 
         await runPostTurnMemorySync({

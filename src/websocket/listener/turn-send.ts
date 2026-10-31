@@ -46,6 +46,11 @@ export async function startTurnInput(
     preparedToolContext: SendOptions["preparedToolContext"];
     overrideModel: SendOptions["overrideModel"];
     responseFormat?: SendOptions["responseFormat"];
+    /**
+     * Scheduler/task-notification/mod-continue turn: its requests must not
+     * count as dream activity (F-06).
+     */
+    automatedTurn?: boolean;
     actingUserId?: string;
     getInput: () => TurnInputState;
     getInterruptedToolCallIds: () => string[];
@@ -57,6 +62,7 @@ export async function startTurnInput(
       ...(params.agentId ? { agentId: params.agentId } : {}),
       streamTokens: true,
       background: true,
+      ...(params.automatedTurn ? { automatedTurn: true } : {}),
       workingDirectory: params.workingDirectory,
       permissionModeState: params.permissionModeState,
       ...(params.runtime.skillSources !== undefined

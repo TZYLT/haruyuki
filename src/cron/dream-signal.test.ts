@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import {
+  finishDreamTurn,
+  markDreamActivity,
+  markDreamTurnInFlight,
+} from "@/agent/dream/dream-activity";
 import type { ScheduleTaskV2 } from "@/cron/cron-types";
 import {
   createDreamSignalSource,
@@ -665,5 +670,30 @@ describe("dream run marker liveness", () => {
 
     markDreamRunActive("agent-1", "fresh-run", new Date(now - 5 * 60_000));
     expect(signalDeps.isRunning("agent-1")).toBe(true);
+  });
+});
+
+// ── user_active reads the dispatch marker (F-06 idle semantics) ─────
+
+describe("production user_active read", () => {
+  test("an in-flight interactive turn reads as activity", () => {
+    const now = Date.now();
+    markDreamActivity("agent-1", now - 90 * 60_000);
+    markDreamTurnInFlight("agent-1", now);
+    const signalDeps = createDefaultDreamSignalDeps();
+    expect(signalDeps.readLastActiveAt("agent-1")).toBeGreaterThanOrEqual(now);
+  });
+
+  test("a settled turn reads the last request stamp", () => {
+    const stamp = Date.now() - 45 * 60_000;
+    markDreamActivity("agent-1", stamp);
+    finishDreamTurn("agent-1", stamp);
+    const signalDeps = createDefaultDreamSignalDeps();
+    expect(signalDeps.readLastActiveAt("agent-1")).toBe(stamp);
+  });
+
+  test("with no user turn at all the gate has nothing to suppress", () => {
+    const signalDeps = createDefaultDreamSignalDeps();
+    expect(signalDeps.readLastActiveAt("agent-1")).toBeNull();
   });
 });

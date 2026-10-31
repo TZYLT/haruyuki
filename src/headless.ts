@@ -9,7 +9,6 @@ import type {
   Run,
 } from "@letta-ai/letta-client/resources/agents/messages";
 import type { StopReasonType } from "@letta-ai/letta-client/resources/runs/runs";
-import { markDreamActivity } from "@/agent/dream/dream-activity";
 import { loadPreloadedSkills } from "@/agent/preloaded-skills";
 import { subscribeReflectionRunFinished } from "@/agent/reflection-run";
 import { formatReflectionRunFinishedNotification } from "@/agent/reflection-run-notification";
@@ -24,7 +23,6 @@ import {
 import { extractTelemetryInputText } from "@/telemetry/input";
 import {
   automatedUsageOutcomeOf,
-  readAutomatedUsageTag,
   recordAutomatedTurnUsage,
 } from "@/usage/automated";
 import { installHeadlessStdoutGuard } from "@/utils/headless-stdout-guard";
@@ -1621,13 +1619,6 @@ export async function handleHeadlessCommand(
         } catch {
           // Mod lifecycle events should not block headless shutdown.
         }
-      }
-      // F-06 C-26: headless has no scheduler, so it only records "the agent was
-      // active" for the dream pressure/silence signal. An automated child (a
-      // dream/reflection launch) must not mark: its own work is not the user
-      // coming back.
-      if (!isSubagent && !readAutomatedUsageTag()) {
-        markDreamActivity(agent.id);
       }
       telemetry.trackSessionEnd(sessionStats.getSnapshot(), exitReason);
       await telemetry.flush();
