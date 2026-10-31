@@ -17,7 +17,9 @@ import {
   mock,
   test,
 } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import type { Stream } from "@letta-ai/letta-client/core/streaming";
 import type { LettaStreamingResponse } from "@letta-ai/letta-client/resources/agents/messages";
@@ -42,6 +44,7 @@ import {
   type HeadlessTurnExecutorInput,
 } from "@/backend/dev/headless-turn-executor";
 import { resetTabsForTests } from "@/cli/app/tabs";
+import { getReflectionSettings } from "@/cli/helpers/memory-reminder";
 import { resetReflectionRetries } from "@/cli/helpers/reflection-retry";
 import { getReflectionTranscriptState } from "@/cli/helpers/reflection-transcript";
 import { settingsManager } from "@/settings-manager";
@@ -142,6 +145,8 @@ function createInputStream(): NodeJS.ReadStream {
 
 const renderedInstances = new Set<Instance>();
 const memoryDirectories: string[] = [];
+const originalWorkingDirectory = process.cwd();
+let projectDirectory: string;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -254,6 +259,13 @@ beforeEach(async () => {
   childResolvers.length = 0;
   clearPendingMessages();
   await settingsManager.reset();
+  // The TUI resolves reflection settings against the process working
+  // directory. Point it at a throwaway project: the 3-level settings chain
+  // then reads that project's (empty) `.haruyuki/` layers instead of a
+  // gitignored checkout-local one, which would otherwise override the global
+  // threshold below for the lifetime of the process.
+  projectDirectory = mkdtempSync(join(tmpdir(), "hryk-tui-reflection-"));
+  process.chdir(projectDirectory);
   await settingsManager.initialize();
   // The counter is off by default; turn it on with a threshold of one message.
   settingsManager.updateSettings({ reflectionEveryUserMessages: 1 });
@@ -265,6 +277,10 @@ afterEach(async () => {
     instance.cleanup();
   }
   renderedInstances.clear();
+  // Leave the throwaway project before removing it; the next file in the
+  // process must see the checkout as its working directory again.
+  process.chdir(originalWorkingDirectory);
+  rmSync(projectDirectory, { recursive: true, force: true });
   clearPendingMessages();
   resetReflectionRuns();
   resetReflectionRetries();
@@ -289,6 +305,11 @@ describe("TUI post-turn reflection", () => {
   test("a submitted prompt launches exactly one reflection after end_turn", async () => {
     const { agentId, conversationId, stdin, inputs } =
       await renderReflectionApp();
+
+    // Fixture guard: the effective policy must be the global threshold set
+    // above, not a project-local override from the checkout that an unrelated
+    // lazy project-settings load would have supplied.
+    expect(getReflectionSettings(agentId).everyUserMessages).toBe(1);
 
     await typePrompt(stdin, "first user turn");
     await waitFor(

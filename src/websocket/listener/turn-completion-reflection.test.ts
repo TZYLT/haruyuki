@@ -17,7 +17,9 @@ import {
   mock,
   test,
 } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getScopedMemoryFilesystemRoot } from "@/agent/memory-filesystem";
 import {
   getActiveReflectionRun,
@@ -29,6 +31,7 @@ import type { SubagentResult } from "@/agent/subagents";
 import type { spawnSubagent } from "@/agent/subagents/manager";
 import { __testSetBackend } from "@/backend";
 import { FakeHeadlessBackend } from "@/backend/dev/fake-headless-backend";
+import { getReflectionSettings } from "@/cli/helpers/memory-reminder";
 import { resetReflectionRetries } from "@/cli/helpers/reflection-retry";
 import {
   getReflectionTranscriptState,
@@ -107,6 +110,7 @@ const openTransport: ListenerTransport = {
 };
 
 const memoryDirectories: string[] = [];
+const turnWorkingDirectories: string[] = [];
 
 async function waitFor(
   predicate: () => boolean,
@@ -136,6 +140,16 @@ async function setupTurn() {
   initGitRepo(memoryDir);
   memoryDirectories.push(memoryDir);
 
+  // The post-turn evaluator resolves reflection settings against the
+  // conversation's working directory. Pin it to a throwaway project: the
+  // 3-level settings chain reads that project's (empty) `.haruyuki/` layers, so
+  // a gitignored `.haruyuki/settings.local.json` in the checkout cannot
+  // override the global threshold this test sets. Project-local settings are
+  // loaded lazily by unrelated paths (subagent stop hooks) and would otherwise
+  // win for the lifetime of the process.
+  const workingDirectory = mkdtempSync(join(tmpdir(), "hryk-reflection-turn-"));
+  turnWorkingDirectories.push(workingDirectory);
+
   const runtime = getOrCreateScopedRuntime(
     createRuntime(),
     agentId,
@@ -148,7 +162,7 @@ async function setupTurn() {
       socket: openTransport,
       agentId,
       conversationId: conversation.id,
-      workingDirectory: process.cwd(),
+      workingDirectory,
       permissionMode: "standard",
       transcriptLines: [],
       getCachedAgent: () => null,
@@ -159,6 +173,7 @@ async function setupTurn() {
     agentId,
     backend,
     conversationId: conversation.id,
+    workingDirectory,
     runtime,
     completeTurn,
   };
@@ -181,6 +196,9 @@ afterEach(async () => {
   __testSetBackend(null);
   await settingsManager.reset();
   for (const directory of memoryDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  for (const directory of turnWorkingDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -246,6 +264,13 @@ describe("listener post-turn reflection", () => {
 
   test("a turn with no new user message launches nothing once the previous run finished", async () => {
     const turn = await setupTurn();
+    // Fixture guard: the effective policy must be the global threshold above,
+    // not a project-local override the checkout's `.haruyuki/` layers would
+    // supply once any unrelated path loads them.
+    expect(
+      getReflectionSettings(turn.agentId, turn.workingDirectory)
+        .everyUserMessages,
+    ).toBe(1);
     await recordReflectionUserMessage(turn.agentId, turn.conversationId);
     await turn.completeTurn();
     await waitFor(
