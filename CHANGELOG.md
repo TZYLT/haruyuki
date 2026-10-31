@@ -8,7 +8,7 @@
 > **版本号谱系说明**：本 fork 早期使用 `0.35.0-better` … `0.36.2-better` 命名；分家后**重起为 `0.1.0`**（见 `0.1.0` 条目）。
 > 因此语义化排序上 `0.36.x-better` 早于 `0.1.0`，这是**刻意的重编号**，不是版本回退。
 
-## [0.5.0] - 待发布（2026-10-31 收口；发布日由 bump/tag 时填）
+## [0.5.0] - 2026-10-31
 
 > 0.5.0 是**梦游（dream）**的首个版本：agent 在闲置窗口里自己醒一次，按四个层级
 > （`tidy` → `think` → `task` → `wander`）整理记忆、写运行报告；预算、权限、可触发条件
@@ -67,6 +67,25 @@
   缺省写 global（与 TUI `/dream on`、设置页一致）。
 - **隐藏会话的 run 记录**：梦游 run 的元数据写在会话 provenance 的 `dream` 字段上（只经
   `writeDreamRunMetadata` 一个写入口），不影响既有 `reflection` 记录。
+
+### 修复
+
+- **梦游启动时的 Windows 控制台闪窗**：梦游/委托 tick 宿主以 detached 方式启动，Windows
+  上它没有可继承的控制台，运行期间执行的几十次 `git`（记忆 baseline、提交、校验钩子）每次
+  都会新开一个可见控制台窗口。现在两个 detached 宿主与非交互子进程（git、fd/rg、npm/unzip、
+  signal-cli/ffmpeg、剪贴板、LSP 探测等）统一带 `windowsHide`；交互式/pty/继承终端的路径
+  保持原样。（Bun 1.3.14 与 Node 22.19 实机验证过 `detached` 子进程的行为。）
+- **梦游的 idle/中断判定改为按「是否发送 LLM 请求」**：以前每次非 system 提交（包括
+  `/status` 这类不发请求的命令）都会重置静默计时并打断正在运行的梦游；现在只有交互式用户
+  回合真正派发模型请求才算活跃，长回合用 in-flight 标记持续抑制触发，dream/reflection/
+  subagent/cron 等后台来源永不写标记。
+- **侧栏计划任务的 Dream 行显示实时状态**：dream 是信号触发、没有 cron 下一跑时间，以前
+  显示 `• Dream —`；现在显示 `running` / `ready` / 下一个空闲窗口时刻 / cooldown 时刻，
+  梦游关闭或自动触发关闭时整行隐藏，不再出现 `—`。
+- **梦游提示词按权限档如实描述**：删除写死的「没有 shell」，改为按 `standard` /
+  `acceptEdits` / `unrestricted` 生成权威的权限说明（含 harness 仍会拒绝的 shell guard、
+  只读档的 own-memory 放行说明与「拒绝即最终、不要绕过」），并在 `unrestricted` 下明确
+  「默认只做记忆仓库内工作，只在确实需要且有授权时使用更高权限，不得滥用」。
 
 ### 已知限制
 
