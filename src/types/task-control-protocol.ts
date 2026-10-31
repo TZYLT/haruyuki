@@ -72,8 +72,14 @@ export interface CompactionTopicReport {
     completion_tokens: number;
     wall_ms: number;
   };
-  /** What the write-back did with the chosen cut. */
-  applied: {
+  /**
+   * What the write-back did with the chosen cut.
+   *
+   * Omitted by `compaction_prepare`: nothing has been applied when the preview
+   * is handed to the picker, so only `compaction_commit` (and the legacy
+   * one-shot `conversation_compact`) carry it.
+   */
+  applied?: {
     executed: boolean;
     /** The topic the kept region starts in; `null` = the current topic. */
     kept_topic: string | null;

@@ -567,7 +567,7 @@ describe("headless /compact self-rescue", () => {
 
     expect(result.success).toBe(true);
     expect(result.output).toContain("Compaction complete.");
-    expect(result.topic_report?.applied.executed).toBe(true);
+    expect(result.topic_report?.applied?.executed).toBe(true);
     expect(fixture.inContextCount()).toBeLessThan(before);
 
     // The point of the entry point: the conversation is usable afterwards.

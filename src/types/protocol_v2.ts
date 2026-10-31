@@ -58,6 +58,7 @@ import type { ConversationForkBody } from "./conversation-fork-protocol";
 import type { ConversationListRow } from "./conversation-provenance";
 import type * as CwdProtocol from "./cwd-protocol";
 import type {
+  DreamDeviceSummary,
   DreamRunCommand,
   DreamRunResponseMessage,
   DreamStatusCommand,
@@ -452,6 +453,8 @@ export interface DeviceStatus {
   boot_working_directory?: string | null;
   should_doctor?: boolean;
   reflection_settings: ReflectionSettingsSnapshot | null;
+  /** F-06 dream summary; omitted by builds that have no dream subsystem. */
+  dream?: DreamDeviceSummary | null;
   /** Remote slash command IDs this letta-code version can handle via `execute_command`. */
   supported_commands: string[];
   /**

@@ -155,8 +155,7 @@ export function isSetDreamSettingsCommand(
   }
   return (
     value.scope === undefined ||
-    value.scope === "local_project" ||
     value.scope === "global" ||
-    value.scope === "both"
+    value.scope === "agent"
   );
 }

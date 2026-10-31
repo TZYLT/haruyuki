@@ -42,6 +42,7 @@ import type {
 } from "@/types/protocol_v2";
 import type { CompactionTopicReport } from "@/types/task-control-protocol";
 import { debugLog } from "@/utils/debug";
+import { handleDreamTextCommand } from "./commands/dream";
 import { markSecretsReminderRefreshPending } from "./commands/secrets";
 import { getConversationWorkingDirectory } from "./cwd";
 import { runListenerLocalCompaction } from "./local-compaction";
@@ -191,10 +192,16 @@ export async function handleExecuteCommand(
         break;
 
       case "dream":
+        // F-06 / user ruling 3 (breaking): `dream` means the dream feature now.
+        // It is a text entry for `status` / `run` only; `config`/`on`/`off`
+        // moved to the dream settings commands, and reflection is `/reflect`.
+        output = await handleDreamTextCommand(conversationRuntime, trimmedArgs);
+        break;
+
       case "reflect":
       // `reflection` is a retained wire id as well: the current TUI form is
-      // `/reflect` (`/dream` kept its own name). Both dispatch here, so an old
-      // client sending `reflection` gets the same behaviour as `/reflect`.
+      // `/reflect` (`/dream` is now the dream command). Both dispatch here, so
+      // an old client sending `reflection` gets the same behaviour as `/reflect`.
       case "reflection":
         output = await handleReflectCommand(
           socket,

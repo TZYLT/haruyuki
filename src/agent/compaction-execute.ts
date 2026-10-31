@@ -332,15 +332,16 @@ export function formatLocalCompactionReceipt(
 }
 
 /**
- * The overview and cut-point table, as a client without a picker reads them.
+ * The overview and cut-point table a preview describes, before any write-back.
  *
- * Purely derived from the preview and the apply result: it names the default the
- * rate took (`suggestion_index`) and what the write-back actually did, so a
- * desktop client can show the same story the TUI's receipt tells.
+ * This is what `compaction_prepare` hands the picker: the table the client's
+ * `block_index` is numbered against, so `commit` must read the same table. It is
+ * the single builder for those fields — `buildCompactionTopicReport` adds only
+ * what the write-back did — so a new report field cannot land in one half of the
+ * prepare/commit pair and not the other.
  */
-export function buildCompactionTopicReport(
+export function buildCompactionPreviewTopicReport(
   preview: CompactionPreview,
-  result: CompactionApplyResult,
 ): CompactionTopicReport {
   return {
     model: preview.model,
@@ -365,6 +366,22 @@ export function buildCompactionTopicReport(
       completion_tokens: preview.usage.completionTokens,
       wall_ms: preview.usage.wallMs,
     },
+  };
+}
+
+/**
+ * The overview and cut-point table, as a client without a picker reads them.
+ *
+ * Purely derived from the preview and the apply result: it names the default the
+ * rate took (`suggestion_index`) and what the write-back actually did, so a
+ * desktop client can show the same story the TUI's receipt tells.
+ */
+export function buildCompactionTopicReport(
+  preview: CompactionPreview,
+  result: CompactionApplyResult,
+): CompactionTopicReport {
+  return {
+    ...buildCompactionPreviewTopicReport(preview),
     applied: {
       executed: result.executed,
       kept_topic: result.topicTitle,

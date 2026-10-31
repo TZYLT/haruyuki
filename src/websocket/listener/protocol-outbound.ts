@@ -38,6 +38,7 @@ import { SYSTEM_REMINDER_RE } from "./constants";
 import { getConversationWorkingDirectory, getExportedCwdMap } from "./cwd";
 import { deviceGitContextCache } from "./device-git-context";
 import {
+  getDreamDeviceSummary,
   recordDeviceStatus,
   shouldEmitDeviceStatus,
 } from "./device-status-cache";
@@ -198,6 +199,7 @@ export function buildDeviceStatus(
       boot_working_directory: fallbackCwd,
       should_doctor: false,
       reflection_settings: null,
+      dream: null,
       supported_commands: FROZEN_SUPPORTED_COMMANDS,
     };
   }
@@ -272,6 +274,10 @@ export function buildDeviceStatus(
           merge_instructions: reflectionSettings?.mergeInstructions ?? "",
         }
       : null,
+    // F-06: the dream summary rides the status broadcast so a client renders
+    // the switch and a live run without a second `dream_status` round-trip.
+    // Cached per agent in `device-status-cache` — this path runs on every turn.
+    dream: getDreamDeviceSummary(agentId),
   };
 }
 export function buildLoopStatus(

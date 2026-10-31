@@ -14,6 +14,16 @@ import type { AgentRuntimeScope } from "./runtime-scope";
  * subsystem has no hosted counterpart).
  */
 
+/**
+ * The dream summary `device_status` carries, so a client that renders the
+ * status bar does not need a second round-trip for `dream_status`.
+ */
+export interface DreamDeviceSummary {
+  enabled: boolean;
+  /** The live run's id, or `null` when nothing is running for this agent. */
+  runningRunId: string | null;
+}
+
 /** One running run, as the hidden-session header and `/dream status` show it. */
 export interface DreamRunningRunSnapshot {
   runId: string;
@@ -135,7 +145,14 @@ export interface SetDreamSettingsCommand {
   request_id: string;
   runtime: AgentRuntimeScope;
   settings: DreamSettingsPatch;
-  scope?: "local_project" | "global" | "both";
+  /**
+   * Which storage layer the patch writes. Dream has exactly two — the global
+   * defaults (`dreamEnabled` / `dreamTiers` / ...) and this agent's override
+   * map (`dreamSettingsByAgent`) — so the vocabulary is `global | agent`;
+   * there is no project-local dream layer to name. Omitted = `global`, which
+   * is what the TUI's `/dream on` and settings page write.
+   */
+  scope?: "global" | "agent";
 }
 export interface SetDreamSettingsResponseMessage {
   type: "set_dream_settings_response";

@@ -7,78 +7,81 @@ import { handleDreamProtocolCommand } from "./dream";
 import { handleUsageProtocolCommand } from "./usage";
 
 /**
- * Stage-1 scaffold: every new M5-A command is recognized by the parser-facing
- * validators and reaches its handler. The bodies answer `not_implemented` until
- * stage 2 fills them; that sentinel is asserted so the stub cannot ship
- * silently (the plan's gate).
+ * M5-A wire-contract acceptance: the parser-facing validators recognize every
+ * command in the three new families, and each family handler claims exactly its
+ * own commands.
+ *
+ * The bodies are covered by the families' own tests (`commands/dream.test.ts`,
+ * `commands/usage.test.ts`, `compaction-protocol.test.ts`); this file never runs
+ * a detached task, so it needs no backend or settings fixture.
  */
 
-type Sent = { payload: unknown; errorType: string };
+type QueuedTask = { name: string; task: () => Promise<void> };
 
 function harness() {
-  const sent: Sent[] = [];
+  const queued: QueuedTask[] = [];
   return {
-    sent,
+    queued,
     context: {
       socket: {} as WebSocket,
-      safeSocketSend: (
-        _socket: WebSocket,
-        payload: unknown,
-        errorType: string,
-      ) => {
-        sent.push({ payload, errorType });
-        return true;
-      },
-      runDetachedListenerTask: (_name: string, task: () => Promise<void>) => {
-        void task();
+      safeSocketSend: () => true,
+      runDetachedListenerTask: (name: string, task: () => Promise<void>) => {
+        queued.push({ name, task });
       },
     },
   };
 }
 
-async function flush(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
 const runtime = { agent_id: "agent-1", conversation_id: "conv-1" };
 
-describe("M5-A stage 1 scaffold", () => {
+const dreamCommands: WsProtocolCommand[] = [
+  { type: "dream_status", request_id: "r1", runtime },
+  { type: "dream_run", request_id: "r2", runtime },
+  { type: "get_dream_settings", request_id: "r3", runtime },
+  {
+    type: "set_dream_settings",
+    request_id: "r4",
+    runtime,
+    settings: { enabled: true, tiers: { tidy: false } },
+  },
+];
+
+const compactionCommands: WsProtocolCommand[] = [
+  { type: "compaction_prepare", request_id: "c1", conversation_id: "conv-1" },
+  {
+    type: "compaction_commit",
+    request_id: "c2",
+    conversation_id: "conv-1",
+    prepare_id: "p1",
+    block_index: 2,
+  },
+  {
+    type: "compaction_cancel",
+    request_id: "c3",
+    conversation_id: "conv-1",
+    prepare_id: "p1",
+  },
+];
+
+const usageCommands: WsProtocolCommand[] = [
+  {
+    type: "usage_aggregate",
+    request_id: "u1",
+    agent_id: "agent-1",
+    run_id: "run-1",
+  },
+];
+
+describe("M5-A protocol wire contract", () => {
   test("parser accepts the new commands and rejects malformed payloads", () => {
-    const valid = [
-      { type: "dream_status", request_id: "r1", runtime },
-      { type: "dream_run", request_id: "r2", runtime },
-      { type: "get_dream_settings", request_id: "r3", runtime },
-      {
-        type: "set_dream_settings",
-        request_id: "r4",
-        runtime,
-        settings: { enabled: true, tiers: { tidy: false } },
-      },
-      { type: "compaction_prepare", request_id: "r5", conversation_id: "c1" },
-      {
-        type: "compaction_commit",
-        request_id: "r6",
-        conversation_id: "c1",
-        prepare_id: "p1",
-        block_index: 2,
-      },
-      {
-        type: "compaction_cancel",
-        request_id: "r7",
-        conversation_id: "c1",
-        prepare_id: "p1",
-      },
-      {
-        type: "usage_aggregate",
-        request_id: "r8",
-        agent_id: "agent-1",
-        run_id: "run-1",
-      },
-    ];
-    for (const command of valid) {
+    for (const command of [
+      ...dreamCommands,
+      ...compactionCommands,
+      ...usageCommands,
+    ]) {
       expect(
         parseServerMessage(Buffer.from(JSON.stringify(command)))?.type,
-      ).toBe(command.type as WsProtocolCommand["type"]);
+      ).toBe(command.type);
     }
 
     const invalid = [
@@ -90,15 +93,22 @@ describe("M5-A stage 1 scaffold", () => {
         settings: { enabled: "yes" },
       },
       {
-        type: "compaction_commit",
+        type: "set_dream_settings",
         request_id: "r3",
+        runtime,
+        settings: { enabled: true },
+        scope: "local_project",
+      },
+      {
+        type: "compaction_commit",
+        request_id: "r4",
         conversation_id: "c1",
         prepare_id: "",
       },
-      { type: "usage_aggregate", request_id: "r4" },
+      { type: "usage_aggregate", request_id: "r5" },
       {
         type: "usage_aggregate",
-        request_id: "r5",
+        request_id: "r6",
         agent_id: "a",
         from: "not-a-time",
       },
@@ -110,122 +120,48 @@ describe("M5-A stage 1 scaffold", () => {
     }
   });
 
-  test("dream commands are recognized and answer not_implemented", async () => {
-    const cases: Array<[WsProtocolCommand, string]> = [
-      [
-        {
-          type: "dream_status",
-          request_id: "r1",
-          runtime,
-        } as WsProtocolCommand,
-        "dream_status_response",
-      ],
-      [
-        { type: "dream_run", request_id: "r2", runtime } as WsProtocolCommand,
-        "dream_run_response",
-      ],
-      [
-        {
-          type: "get_dream_settings",
-          request_id: "r3",
-          runtime,
-        } as WsProtocolCommand,
-        "get_dream_settings_response",
-      ],
-      [
-        {
-          type: "set_dream_settings",
-          request_id: "r4",
-          runtime,
-          settings: { enabled: true },
-        } as WsProtocolCommand,
-        "set_dream_settings_response",
-      ],
-    ];
-    for (const [command, responseType] of cases) {
-      const { sent, context } = harness();
+  test("the dream handler claims the dream commands only", () => {
+    const { queued, context } = harness();
+    for (const command of dreamCommands) {
       expect(handleDreamProtocolCommand(command, context)).toBe(true);
-      await flush();
-      const payload = sent[0]?.payload as {
-        type?: string;
-        success?: boolean;
-        error?: string;
-      };
-      expect(payload.type).toBe(responseType);
-      expect(payload.success).toBe(false);
-      expect(payload.error).toBe("not_implemented");
     }
+    expect(queued.map((task) => task.name)).toEqual([
+      "dream_protocol_command",
+      "dream_protocol_command",
+      "dream_protocol_command",
+      "dream_protocol_command",
+    ]);
+    for (const command of [...compactionCommands, ...usageCommands]) {
+      expect(handleDreamProtocolCommand(command, context)).toBe(false);
+    }
+    expect(queued).toHaveLength(dreamCommands.length);
   });
 
-  test("dream handler ignores other commands", () => {
-    const { context } = harness();
-    expect(
-      handleDreamProtocolCommand(
-        { type: "cron_list", request_id: "r" } as WsProtocolCommand,
-        context,
-      ),
-    ).toBe(false);
-  });
-
-  test("compaction commands are recognized and answer not_implemented", async () => {
-    const cases: Array<[WsProtocolCommand, string]> = [
-      [
-        {
-          type: "compaction_prepare",
-          request_id: "c1",
-          conversation_id: "conv-1",
-        } as WsProtocolCommand,
-        "compaction_prepare_response",
-      ],
-      [
-        {
-          type: "compaction_commit",
-          request_id: "c2",
-          conversation_id: "conv-1",
-          prepare_id: "p1",
-        } as WsProtocolCommand,
-        "compaction_commit_response",
-      ],
-      [
-        {
-          type: "compaction_cancel",
-          request_id: "c3",
-          conversation_id: "conv-1",
-          prepare_id: "p1",
-        } as WsProtocolCommand,
-        "compaction_cancel_response",
-      ],
-    ];
-    for (const [command, responseType] of cases) {
-      const { sent, context } = harness();
+  test("the compaction handler claims the compaction commands only", () => {
+    const { queued, context } = harness();
+    for (const command of compactionCommands) {
       expect(handleCompactionProtocolCommand(command, context)).toBe(true);
-      await flush();
-      expect((sent[0]?.payload as { type?: string }).type).toBe(responseType);
-      expect((sent[0]?.payload as { error?: string }).error).toBe(
-        "not_implemented",
-      );
     }
+    expect(queued.map((task) => task.name)).toEqual([
+      "compaction_protocol_command",
+      "compaction_protocol_command",
+      "compaction_protocol_command",
+    ]);
+    for (const command of [...dreamCommands, ...usageCommands]) {
+      expect(handleCompactionProtocolCommand(command, context)).toBe(false);
+    }
+    expect(queued).toHaveLength(compactionCommands.length);
   });
 
-  test("usage aggregate is recognized and answers not_implemented", async () => {
-    const { sent, context } = harness();
-    expect(
-      handleUsageProtocolCommand(
-        {
-          type: "usage_aggregate",
-          request_id: "u1",
-          agent_id: "agent-1",
-          run_id: "run-1",
-        } as WsProtocolCommand,
-        context,
-      ),
-    ).toBe(true);
-    await flush();
-    expect((sent[0]?.payload as { type?: string }).type).toBe(
-      "usage_aggregate_response",
-    );
-    expect((sent[0]?.payload as { error?: string }).error).toBe(
-      "not_implemented",
-    );
+  test("the usage handler claims usage_aggregate only", () => {
+    const { queued, context } = harness();
+    for (const command of usageCommands) {
+      expect(handleUsageProtocolCommand(command, context)).toBe(true);
+    }
+    expect(queued.map((task) => task.name)).toEqual(["usage_protocol_command"]);
+    for (const command of [...dreamCommands, ...compactionCommands]) {
+      expect(handleUsageProtocolCommand(command, context)).toBe(false);
+    }
+    expect(queued).toHaveLength(usageCommands.length);
   });
 });

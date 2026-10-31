@@ -675,6 +675,9 @@ export async function handleAgentConversationManagementCommand(
         try {
           // The listener's run guard: refuses a second run on the same
           // conversation, and writes exactly one ledger row per attempt (§5.14).
+          // The wrapper is the one-shot form of the same prepare→commit pair
+          // `compaction_prepare`/`compaction_commit` expose (R7): one request,
+          // one response, the legacy shape below.
           const outcome = await runListenerLocalCompaction({
             backend: local,
             conversationId: parsed.conversation_id,
