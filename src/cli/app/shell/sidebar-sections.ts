@@ -314,7 +314,11 @@ export type SidebarProjection = {
 export type SidebarScheduleRow = {
   id: string;
   name: string;
-  /** `09:00` today, `10-30` later, `—` when it cannot fire. */
+  /**
+   * `09:00` today, `10-30` later. A signal-triggered dream has no due instant:
+   * its row carries `running`, `ready`, or its next idle-window start instead,
+   * and a disabled dream is filtered out before this list is built (F-06).
+   */
   when: string;
   /** Empty for an ordinary active task; `paused`/`auto-paused`/`finished` otherwise. */
   status: string;

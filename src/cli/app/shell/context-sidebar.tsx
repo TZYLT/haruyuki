@@ -8,6 +8,10 @@ import {
   subscribeToSubagentLifecycle,
 } from "@/agent/subagent-state";
 import type { AppViewProps } from "@/cli/app/AppView";
+import {
+  type DreamScheduleRow,
+  useDreamScheduleRow,
+} from "@/cli/helpers/dream-sidebar";
 import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
 import { type MemfsStats, readMemfsStats } from "@/cli/helpers/memfs-stats";
 import { useScheduleTasks } from "@/cli/helpers/schedule-store";
@@ -174,6 +178,63 @@ export function sidebarProjectionFrom(
   };
 }
 
+/** The fields of a store row the rail's section actually reads. */
+export type SidebarScheduleSourceRow = {
+  id: string;
+  name: string;
+  agentId: string;
+  type: string;
+  /** The store's terse due label: a signal-triggered dream has none (`—`). */
+  nextShort: string;
+  statusLabel: string;
+};
+
+/**
+ * The rail's scheduled rows for one agent, dream rows described live (F-06).
+ *
+ * A dream row carries no `nextDueAt` — its trigger is the signal source, not a
+ * cron — so `nextShort` is `—`; the rail must never paint that. Its row instead
+ * comes from {@link DreamScheduleRow} (`running` / `ready` / a window time), and
+ * when that is `null` (dream disabled, auto-trigger off, every tier off) the row
+ * is dropped **before** the three-row cap, so a hidden row never spends one of
+ * the rail's three slots.
+ *
+ * Pure and exported because the mapping is the seam the frame tests cannot see:
+ * the row is still painted, only with the store's dash.
+ */
+export function mapSidebarScheduleRows(
+  rows: readonly SidebarScheduleSourceRow[],
+  agentId: string,
+  dreamRow: DreamScheduleRow | null,
+): SidebarScheduleRow[] {
+  const mapped = rows
+    .filter((row) => row.agentId === agentId)
+    .flatMap((row): SidebarScheduleRow[] => {
+      if (row.type !== "dream") {
+        return [
+          {
+            id: row.id,
+            name: row.name,
+            when: row.nextShort,
+            status: row.statusLabel,
+          },
+        ];
+      }
+      if (!dreamRow) return [];
+      return [
+        {
+          id: row.id,
+          name: row.name,
+          when: dreamRow.when,
+          // The helper describes the schedule, not the task's own state: a
+          // paused carrier still says so (the store's word wins when present).
+          status: dreamRow.status || row.statusLabel,
+        },
+      ];
+    });
+  return mapped.slice(0, 3);
+}
+
 /**
  * The rail wired to the app's own projections.
  *
@@ -244,24 +305,23 @@ export function ContextSidebarSlot({
   const stats = view.sessionStatsRef.current.getSnapshot();
   const now = Date.now();
 
-  // F-05: the planned runs of *this* agent, from the schedule store. The hook
-  // gives the rail three things for free — the read, the 30 s low-frequency
+  // F-05/F-06: the planned runs of *this* agent, from the schedule store. The
+  // hook gives the rail three things for free — the read, the 30 s low-frequency
   // refresh and the event subscription — and, because the snapshot object is
   // stable when nothing changed, a tick that reads the same data does not
   // re-render this subtree (`《38》§6.6`, C-27).
   const scheduleSnapshot = useScheduleTasks();
+  const agentScheduleRows = scheduleSnapshot.loaded
+    ? scheduleSnapshot.rows.filter((row) => row.agentId === view.agentId)
+    : [];
+  // F-06: a dream row has no `nextShort` to paint (`—`). Its live description
+  // costs a settings/state/liveness read, so the hook only starts when this
+  // agent actually owns a dream row, and it reads on a 30 s timer — never in
+  // this render body, which runs on every streaming chunk.
+  const hasDreamRow = agentScheduleRows.some((row) => row.type === "dream");
+  const dreamRow = useDreamScheduleRow(view.agentId, hasDreamRow);
   const schedules = scheduleSnapshot.loaded
-    ? scheduleSnapshot.rows
-        .filter((row) => row.agentId === view.agentId)
-        .slice(0, 3)
-        .map(
-          (row): SidebarScheduleRow => ({
-            id: row.id,
-            name: row.name,
-            when: row.nextShort,
-            status: row.statusLabel,
-          }),
-        )
+    ? mapSidebarScheduleRows(agentScheduleRows, view.agentId, dreamRow)
     : null;
 
   const projection = sidebarProjectionFrom({

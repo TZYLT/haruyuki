@@ -6,7 +6,12 @@ import { visibleWidth } from "@/cli/display/statusline/formatting";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
 import type { UsageSummary } from "@/usage/summary";
 import { emptyUsageCost } from "@/utils/usage-cost";
-import { ContextSidebar, sidebarProjectionFrom } from "./context-sidebar";
+import {
+  ContextSidebar,
+  mapSidebarScheduleRows,
+  type SidebarScheduleSourceRow,
+  sidebarProjectionFrom,
+} from "./context-sidebar";
 import type { SidebarProjection } from "./sidebar-sections";
 
 /**
@@ -111,6 +116,23 @@ describe("ContextSidebar", () => {
     const frame = mount(20);
     try {
       expect(await frame.text()).not.toContain("Agents");
+    } finally {
+      frame.stop();
+    }
+  });
+
+  test("a dream row paints its live state, not the store's dash (F-06)", async () => {
+    const frame = mount(30, 30, {
+      schedules: [
+        { id: "d1", name: "dream", when: "running", status: "active" },
+        { id: "d2", name: "dream", when: "22:00", status: "active" },
+      ],
+    });
+    try {
+      const text = (await frame.rows()).join("\\n");
+      expect(text).toContain("• dream running");
+      expect(text).toContain("• dream 22:00");
+      expect(text).not.toContain("• dream —");
     } finally {
       frame.stop();
     }
@@ -251,5 +273,90 @@ describe("sidebarProjectionFrom", () => {
     expect(view.schedulesError).toBe("版本 99");
     // No error means the rail sees the empty list, not a stale message.
     expect(sidebarProjectionFrom(inputs()).schedulesError).toBeNull();
+  });
+});
+
+describe("mapSidebarScheduleRows (F-06 dream rows)", () => {
+  function row(
+    overrides: Partial<SidebarScheduleSourceRow> = {},
+  ): SidebarScheduleSourceRow {
+    return {
+      id: "task",
+      name: "task",
+      agentId: "agent-a",
+      type: "prompt",
+      nextShort: "09:00",
+      statusLabel: "active",
+      ...overrides,
+    };
+  }
+
+  test("a dream row shows its live state, never the store's dash", () => {
+    const rows = mapSidebarScheduleRows(
+      [
+        row({
+          id: "dream",
+          name: "dream",
+          type: "dream",
+          // The store has nothing to say about a signal-triggered task.
+          nextShort: "—",
+        }),
+      ],
+      "agent-a",
+      { when: "running", status: "" },
+    );
+    expect(rows).toEqual([
+      { id: "dream", name: "dream", when: "running", status: "active" },
+    ]);
+    expect(rows[0]?.when).not.toBe("—");
+  });
+
+  test("a hidden dream is filtered before the three-row cap", () => {
+    const rows = mapSidebarScheduleRows(
+      [
+        row({ id: "dream", name: "dream", type: "dream" }),
+        row({ id: "a", name: "a" }),
+        row({ id: "b", name: "b" }),
+        row({ id: "c", name: "c" }),
+      ],
+      "agent-a",
+      null,
+    );
+    // The hidden dream does not spend one of the rail's three slots.
+    expect(rows.map((item) => item.id)).toEqual(["a", "b", "c"]);
+  });
+
+  test("another agent's rows (dream included) never reach this rail", () => {
+    const rows = mapSidebarScheduleRows(
+      [
+        row({ id: "dream", type: "dream", agentId: "agent-b" }),
+        row({ id: "other", agentId: "agent-b" }),
+      ],
+      "agent-a",
+      { when: "ready", status: "" },
+    );
+    expect(rows).toEqual([]);
+  });
+
+  test("an ordinary task keeps the store's own due label", () => {
+    const rows = mapSidebarScheduleRows(
+      [row({ id: "weekly", nextShort: "10-30" })],
+      "agent-a",
+      null,
+    );
+    expect(rows).toEqual([
+      { id: "weekly", name: "task", when: "10-30", status: "active" },
+    ]);
+  });
+
+  test("a paused dream still says so beside its live schedule state", () => {
+    const rows = mapSidebarScheduleRows(
+      [row({ id: "dream", type: "dream", statusLabel: "paused" })],
+      "agent-a",
+      { when: "22:00", status: "" },
+    );
+    expect(rows).toEqual([
+      { id: "dream", name: "task", when: "22:00", status: "paused" },
+    ]);
   });
 });

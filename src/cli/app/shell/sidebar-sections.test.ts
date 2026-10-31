@@ -535,6 +535,20 @@ describe("the scheduled tasks section (M-16)", () => {
     expect(fitSidebarSections(specs, 4).length).toBeLessThan(fitted.length);
   });
 
+  test("a dream row carries its live state, never a dash (F-06)", () => {
+    const spec = schedulesSection([
+      { id: "d1", name: "dream", when: "running", status: "active" },
+      { id: "d2", name: "dream", when: "22:00", status: "active" },
+      { id: "d3", name: "dream", when: "ready", status: "active" },
+    ]);
+    expect(spec?.detail).toEqual([
+      "• dream running",
+      "• dream 22:00",
+      "• dream ready",
+    ]);
+    expect(spec?.detail.join("\\n")).not.toContain("—");
+  });
+
   test("a long task name is trimmed to the rail, never wrapped", () => {
     const spec = schedulesSection(
       [
