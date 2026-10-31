@@ -40,4 +40,27 @@ describe("dream prompt contract", () => {
     );
     expect(dreamTiersTemplate).not.toContain("next run should do first");
   });
+
+  test("permission claims are generated, not hardcoded in the templates", () => {
+    // F-06: the same template serves a read-only and an `unrestricted` run, so
+    // no template may claim a tool surface of its own.
+    expect(dreamTaskTemplate).toContain("{{permissions_section}}");
+    expect(dreamTaskTemplate).not.toContain("no shell");
+    expect(dreamTaskTemplate).not.toContain("No shell");
+    expect(dreamTiersTemplate).not.toContain("No shell");
+    expect(dreamTiersTemplate).not.toContain("Bash / exec_command are not");
+    expect(dreamTiersTemplate).not.toContain("**Permissions:**");
+  });
+
+  test("the common unattended rules survive the permission rework", () => {
+    for (const template of [dreamTaskTemplate, dreamTiersTemplate]) {
+      expect(template).toContain("No user is present");
+      expect(template).toContain("memory repository");
+    }
+    expect(dreamTiersTemplate).toContain("Do not ask questions");
+    expect(dreamTiersTemplate).toContain("Commit as you go");
+    expect(dreamTiersTemplate).toContain(
+      "Do not commit `maintenance/dream-report.md`",
+    );
+  });
 });

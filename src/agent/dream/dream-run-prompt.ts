@@ -4,11 +4,14 @@
  * The wording lives in `src/agent/prompts/dream-task.md` and
  * `src/agent/prompts/dream-tiers.md` (T3). This module only fills the
  * `{{placeholder}}` slots, drops lines whose placeholder has no value (the
- * templates say so explicitly), and adds the two things the run controller
+ * templates say so explicitly), and adds the three things the run controller
  * knows and the templates cannot:
  *
  * - **which tier this turn is** — the controller runs one tier per child turn
  *   so the budget gate and the 40/80/100 reminders have a boundary to act on;
+ * - **the run's permission tier** — the same templates serve a read-only run
+ *   and an `unrestricted` one, so what the run can actually use is generated
+ *   from `permissionMode` instead of being hardcoded;
  * - **the current budget state and the newly crossed reminder text**.
  *
  * Splitting it out of `dream-run.ts` keeps the controller under the 1,000-line
@@ -17,6 +20,7 @@
 
 import dreamTaskTemplate from "@/agent/prompts/dream-task.md";
 import dreamTiersTemplate from "@/agent/prompts/dream-tiers.md";
+import type { PermissionTier } from "@/cron/cron-types";
 import type { DreamUsageParts } from "@/dream-budget-math";
 import type { DreamRunStatus, DreamTier } from "@/types/dream-run-metadata";
 import type { DreamBudgetTracker } from "./dream-budget";
@@ -62,7 +66,77 @@ export interface DreamPromptRunInfo {
   tier: DreamTier;
   tierIndex: number;
   tierCount: number;
+  /**
+   * The run's permission tier, from `ResolvedDreamSettings.permissionMode`. The
+   * prompt has to describe this tier honestly: the same template is used for a
+   * read-only run and for an `unrestricted` one.
+   */
+  permissionMode: PermissionTier;
   handoffFromPrevious?: string | null;
+}
+
+const DREAM_PERMISSION_TIER_LABELS: Record<PermissionTier, string> = {
+  standard: "read-only",
+  acceptEdits: "memory writes",
+  unrestricted: "full permission",
+};
+
+/**
+ * The one generated permission section shared by every tier turn.
+ *
+ * The templates deliberately say nothing about shell/network/write access:
+ * whether those exist is a property of the run's permission tier, not of the
+ * dream workflow, so it is generated here from `permissionMode`. The
+ * `unrestricted` text states what the permission layer allows, and also that
+ * the harness's own run guard may still refuse a call — a refusal is final.
+ * That keeps the prompt true without inviting the agent to retry a guarded
+ * path.
+ */
+export function buildDreamPermissionSection(mode: PermissionTier): string {
+  const lines = [
+    "## Permissions in this run",
+    "",
+    `Permission tier: \`${mode}\` (${DREAM_PERMISSION_TIER_LABELS[mode]}). This run is unattended: every approval request is a denial, and there is no one to answer a question. Do not ask, do not request approval, and never retry a refused call.`,
+    "",
+  ];
+  if (mode === "standard") {
+    lines.push(
+      "- Available: `Read`, `Glob`, `Grep`, `TopicQuery`, `SessionRead`, `DreamStatus`, `DreamAuthorization` and `DreamDone`.",
+      "- Read-only contract: only read and retrieve. Do not call `Write`, `Edit` or `MemoryCommit` in this tier. `Write` and `Edit` are rejected outside the memory repository; shell (`Bash` / `exec_command`) and network tools are not available.",
+      "- Inside your own memory repository the permission checker's own-memory allowance may auto-allow a `Write`, `Edit` or `MemoryCommit` even in this tier. That allowance is a checker detail, not permission for this run: treat `Write`, `Edit` and `MemoryCommit` as rejected in this tier — do not use it, do not test it, and do not treat a successful write or commit as authorization.",
+      "- A tier that needs a write or any other denied action is blocked: say in the report that the permission tier blocked it, record the work as unfinished, and end that tier. Do not attempt a workaround, a different tool, or the same call again.",
+    );
+  } else if (mode === "acceptEdits") {
+    lines.push(
+      "- Available: `Read`, `Glob`, `Grep`, `TopicQuery`, `SessionRead`, `Write`, `Edit`, `MemoryCommit`, and the run's own `DreamStatus` / `DreamAuthorization` / `DreamDone` tools.",
+      "- Not available: shell (`Bash` / `exec_command`) and network tools. This tier has no approval path, so an `ask` is a denial; do not try to work around it.",
+      "- Write only inside the memory repository and only to paths the current tier covers. Writes outside it are out of scope for this run and may be refused. `MemoryCommit` is the only way to make a change durable: commit small, coherent changes as you go.",
+    );
+  } else {
+    // `unrestricted` is a statement about the permission layer. The dream host
+    // still starts the child with the harness shell guard
+    // (`disallowed_tools: ["Bash"]`, C-20), so the prompt must not promise a
+    // working shell; it says a refusal is final instead.
+    lines.push(
+      "- The permission layer allows shell (`Bash` / `exec_command`), network tools, and writes outside the memory repository. The harness may still refuse a shell call or a path through its own run guard (a dream child is normally started with shell disallowed); a refusal is final, so do not retry it or look for another route.",
+      "- Default scope stays the memory repository. Use the wider permissions only when the tier genuinely needs them and, in the task tier, an authorization entry covers that exact work. Do not use them for convenience, speed, or idle exploration, and do not widen the scope beyond what the work requires.",
+      "- Any irreversible external side effect (publishing, sending, deleting files outside memory, rewriting git history) must not happen without an explicit authorization entry. No entry means no action.",
+      "- The memory-repository boundary and the cross-agent guard still apply: never read or write another agent's memory, credentials, or export files.",
+    );
+  }
+  return lines.join("\n");
+}
+
+/** A short permission restatement for the later (deliberately short) turns. */
+function permissionReminder(mode: PermissionTier): string {
+  switch (mode) {
+    case "standard":
+      return "Permission tier `standard` (read-only): `Read` / `Glob` / `Grep` / `TopicQuery` / `SessionRead` only. `Write` and `Edit` are rejected outside the memory repository; the checker's own-memory allowance is not permission to write. Shell and network are unavailable. A tier that needs a write is blocked: report it and end the tier.";
+    case "acceptEdits":
+      return "Permission tier `acceptEdits`: read/write/edit inside the memory repository plus `MemoryCommit`; shell and network are unavailable (no approver).";
+    case "unrestricted":
+      return "Permission tier `unrestricted`: the permission layer allows shell, network and writes outside the memory repository, but the run's own guard may still refuse a call (a refusal is final), and the default scope is still the memory repository; use wider permissions only when the tier needs them and is authorized, never for convenience, and no irreversible external side effect without an authorization entry.";
+  }
 }
 
 function timeLimitLabel(minutes: number | null): string {
@@ -94,6 +168,7 @@ export function buildFirstDreamTurnPrompt(
     time_limit: timeLimitLabel(input.timeLimitMinutes),
     tier_plan: tierPlan,
     handoff_from_previous: input.handoffFromPrevious ?? null,
+    permissions_section: buildDreamPermissionSection(input.permissionMode),
   });
   return [
     filledTask,
@@ -129,6 +204,7 @@ export function buildNextDreamTurnPrompt(
     `<dream_run>`,
     `Dream run ${input.runId}, continuing. This turn handles one tier only: **${input.tier}** (tier ${input.tierIndex + 1} of ${input.tierCount}).`,
     `Follow the rules from the first message of this run. Do not start the next tier; the harness checks the budget between tiers.`,
+    permissionReminder(input.permissionMode),
     "",
     DREAM_TIER_FOCUS[input.tier],
     "",

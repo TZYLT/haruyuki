@@ -620,6 +620,7 @@ async function runTierLoop(input: {
       tier,
       tierIndex: index,
       tierCount: progress.tierPlan.length,
+      permissionMode: input.settings.permissionMode,
     };
     const prompt =
       index === 0

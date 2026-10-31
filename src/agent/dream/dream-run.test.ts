@@ -278,6 +278,42 @@ describe("executeDreamRun · happy path", () => {
   });
 });
 
+describe("executeDreamRun · permission tier", () => {
+  for (const mode of ["standard", "acceptEdits", "unrestricted"] as const) {
+    test(`carries ${mode} into every turn and describes it in the prompt`, async () => {
+      const harness = makeHarness({
+        settings: makeSettings({ permissionMode: mode }),
+      });
+      await executeDreamRun(RUN_INPUT, harness.deps);
+
+      expect(harness.turns.map((turn) => turn.permissionMode)).toEqual([
+        mode,
+        mode,
+      ]);
+      expect(harness.turns[0]?.prompt).toContain(
+        `Permission tier: \`${mode}\``,
+      );
+      // Later turns are short but still restate the tier.
+      expect(harness.turns[1]?.prompt).toContain(`Permission tier \`${mode}\``);
+      if (mode === "standard") {
+        expect(harness.turns[0]?.prompt).toContain(
+          "`Write` and `Edit` are rejected",
+        );
+      }
+      if (mode === "acceptEdits") {
+        expect(harness.turns[0]?.prompt).toContain(
+          "Not available: shell (`Bash` / `exec_command`)",
+        );
+      }
+      if (mode === "unrestricted") {
+        expect(harness.turns[0]?.prompt).toContain(
+          "Do not use them for convenience",
+        );
+      }
+    });
+  }
+});
+
 describe("executeDreamRun · DreamDone", () => {
   test("a handoff written by the agent ends the plan after that turn", async () => {
     const harness = makeHarness({
