@@ -4,12 +4,16 @@ import {
   persistReflectionSettingsForAgent,
 } from "@/cli/helpers/memory-reminder";
 import { experimentManager } from "@/experiments/manager";
-import { legacyTriggerToReflectionSwitches } from "@/reflection-settings";
+import {
+  legacyTriggerToReflectionSwitches,
+  type ReflectionSettings,
+} from "@/reflection-settings";
 import type {
   GetExperimentsCommand,
   GetExperimentsResponseMessage,
   GetReflectionSettingsCommand,
   ReflectionSettingsScope,
+  ReflectionSettingsSnapshot,
   SetExperimentCommand,
   SetExperimentResponseMessage,
   SetReflectionSettingsCommand,
@@ -41,20 +45,42 @@ type SettingsCommandContext = {
 function toReflectionSettingsResponse(
   agentId: string,
   workingDirectory: string,
-): {
-  agent_id: string;
-  trigger: "off" | "step-count" | "compaction-event";
-  step_count: number;
-  merge: "auto" | "explicit";
-  merge_instructions: string;
-} {
+): ReflectionSettingsSnapshot {
   const settings = getReflectionSettings(agentId, workingDirectory);
   return {
     agent_id: agentId,
     trigger: settings.trigger,
     step_count: settings.stepCount,
+    onCompaction: settings.onCompaction,
+    everyUserMessages: settings.everyUserMessages,
+    deleteSessionOnSuccess: settings.deleteSessionOnSuccess,
+    timeoutMinutes: settings.timeoutMinutes,
     merge: settings.merge,
     merge_instructions: settings.mergeInstructions,
+  };
+}
+
+/**
+ * F-03/B3: the fields the pre-F-03 wire could not express, mapped onto
+ * `ReflectionSettings`. Omitted fields are left untouched, so an old client
+ * that sends only `trigger`/`step_count` keeps the existing behaviour.
+ */
+function explicitReflectionSettingsOverrides(
+  settings: SetReflectionSettingsCommand["settings"],
+): Partial<ReflectionSettings> {
+  return {
+    ...(settings.on_compaction !== undefined
+      ? { onCompaction: settings.on_compaction }
+      : {}),
+    ...(settings.every_user_messages !== undefined
+      ? { everyUserMessages: settings.every_user_messages }
+      : {}),
+    ...(settings.delete_session_on_success !== undefined
+      ? { deleteSessionOnSuccess: settings.delete_session_on_success }
+      : {}),
+    ...(settings.timeout_minutes !== undefined
+      ? { timeoutMinutes: settings.timeout_minutes }
+      : {}),
   };
 }
 
@@ -204,11 +230,18 @@ export async function handleReflectionSettingsCommand(
       parsed.settings.trigger,
       parsed.settings.step_count,
     );
+    // B3 additive fields: an explicit new field always wins over the legacy
+    // selector's migration, so a client that sends both is not silently
+    // downgraded to the mapped value.
+    const explicitOverrides = explicitReflectionSettingsOverrides(
+      parsed.settings,
+    );
     await persistReflectionSettingsForAgent(
       agentId,
       {
         ...currentSettings,
         ...migratedSwitches,
+        ...explicitOverrides,
       },
       {
         workingDirectory,

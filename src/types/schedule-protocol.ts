@@ -1,3 +1,10 @@
+import type {
+  PermissionTier,
+  RunOutcome,
+  TaskTarget,
+  TaskType,
+} from "@/cron/cron-types";
+
 export type CronTaskStatus =
   | "active"
   | "paused"
@@ -36,6 +43,24 @@ export interface CronAddCommand {
   recurring: boolean;
   prompt: string;
   scheduled_for?: string | null;
+  /**
+   * Task body kind (F-05 R-5.5.1). Spelled `task_type` on the wire because the
+   * command's own `type` is the protocol discriminant; the response's `CronTask`
+   * keeps the F-05 field name `type`.
+   */
+  task_type?: TaskType;
+  /** Command string for `command` tasks; mirrors `prompt` for `prompt` tasks. */
+  payload?: string;
+  /** Explicit target (R-5.5.5); derived from `conversation_id` when omitted. */
+  target?: TaskTarget;
+  /** Execution permission tier (Q-50). Default `unrestricted` (Q-53). */
+  permission?: PermissionTier;
+  /** Retry the most recent missed occurrence (Q-11). Default false. */
+  catch_up?: boolean;
+  /** Per-run timeout in minutes; `0` means unlimited (Q-26). Default 30. */
+  timeout_minutes?: number;
+  /** How long to wait for a busy target conversation (Q-25). Default 10. */
+  wait_minutes?: number;
 }
 
 export interface CronGetCommand {
@@ -85,6 +110,20 @@ export interface CronUpdateCommand {
   recurring?: boolean;
   prompt?: string;
   scheduled_for?: string | null;
+  /** Task body kind; see `CronAddCommand.task_type` for the wire name. */
+  task_type?: TaskType;
+  /** Command string for `command` tasks; mirrors `prompt` for `prompt` tasks. */
+  payload?: string;
+  /** Explicit target; kept coherent with `conversation_id` by the handler. */
+  target?: TaskTarget;
+  /** Execution permission tier (Q-50). */
+  permission?: PermissionTier;
+  /** Retry the most recent missed occurrence (Q-11). */
+  catch_up?: boolean;
+  /** Per-run timeout in minutes; `0` means unlimited (Q-26). */
+  timeout_minutes?: number;
+  /** How long to wait for a busy target conversation (Q-25). */
+  wait_minutes?: number;
 }
 
 export interface CronDeleteCommand {
@@ -138,6 +177,27 @@ export interface CronTask {
   scheduled_for: string | null;
   fired_at: string | null;
   missed_at: string | null;
+  // ── F-05 fields (optional on the wire; shapes mirror `cron-types.CronTask`) ──
+  /** `prompt` (default), `command`, or `dream` (F-06). */
+  type?: TaskType;
+  /** Command string for `command` tasks; mirrors `prompt` for `prompt` tasks. */
+  payload?: string;
+  /** Resolved target; derived from `conversation_id` when absent. */
+  target?: TaskTarget;
+  /** Execution permission tier (Q-50). Default `unrestricted` (Q-53). */
+  permission?: PermissionTier;
+  /** Retry the most recent missed occurrence (Q-11). Default false. */
+  catch_up?: boolean;
+  /** Per-run timeout in minutes; `0` means unlimited (Q-26). Default 30. */
+  timeout_minutes?: number;
+  /** How long to wait for a busy target conversation (Q-25). Default 10. */
+  wait_minutes?: number;
+  /** Why the task is paused; null while it is not (R-5.5.2). */
+  paused_reason?: "manual" | "auto_failures" | null;
+  /** F-05 terminal outcome beside the legacy enum (F-18). */
+  last_outcome_v2?: RunOutcome | null;
+  /** F-05 terminal reason for `last_outcome_v2`; free-form by design. */
+  last_run_reason_v2?: string | null;
 }
 
 export interface CronListResponseMessage {

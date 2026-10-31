@@ -27,6 +27,10 @@ import { getBootWorkingDirectory } from "@/websocket/listener/cwd";
 import { switchConversationWorkingDirectory } from "@/websocket/listener/cwd-change";
 import { registerRuntimeExternalTools } from "@/websocket/listener/external-tools";
 import {
+  HIDDEN_CONVERSATION_READ_ONLY,
+  isHiddenConversationAnnotation,
+} from "@/websocket/listener/hidden-conversation-guard";
+import {
   getOrCreateConversationPermissionModeStateRef,
   persistPermissionModeMapForRuntime,
 } from "@/websocket/listener/permission-mode";
@@ -258,6 +262,12 @@ async function resolveRuntimeStartConversation(
       return buildDefaultConversation(agent);
     }
     const conversation = await retrieveConversation(parsed.conversation_id);
+    // F-01/D-9: hidden conversations are viewable but read-only. Nothing in the
+    // scope resolution below writes to the conversation, but returning it would
+    // let the client resume a runtime and start turns on it, so refuse here.
+    if (isHiddenConversationAnnotation(conversation)) {
+      throw new Error(HIDDEN_CONVERSATION_READ_ONLY);
+    }
     const conversationAgentId = conversation.agent_id ?? null;
     if (conversationAgentId !== (agent?.id ?? null)) {
       throw new Error(

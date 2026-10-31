@@ -6,6 +6,7 @@ import {
   isAppServerInfoResponseMessage,
   resolveAppServerChannelUrl,
 } from "./app-server-client";
+import type { DreamStatusResponseMessage } from "./types/app-server-protocol";
 
 type Listener = (event: unknown) => void;
 
@@ -577,6 +578,79 @@ describe("app-server client", () => {
     const response = await responsePromise;
     expect(response.success).toBe(true);
     expect(response.conversation_id).toBe("conv-hidden-1");
+  });
+
+  test("wraps conversation retrieve and message-list requests", async () => {
+    const { client, control } = createFakeClient();
+    control.open();
+    await client.connect();
+
+    const retrievePromise = client.conversationRetrieve({
+      conversation_id: "conv-hidden-1",
+    });
+    const retrieveSent = JSON.parse(control.sent[0] ?? "{}");
+    expect(retrieveSent).toMatchObject({
+      type: "conversation_retrieve",
+      conversation_id: "conv-hidden-1",
+    });
+    control.receive({
+      type: "conversation_retrieve_response",
+      request_id: retrieveSent.request_id,
+      success: true,
+      conversation: { id: "conv-hidden-1", hidden: true },
+    });
+    expect((await retrievePromise).conversation).toMatchObject({
+      id: "conv-hidden-1",
+      hidden: true,
+    });
+
+    const messagesPromise = client.conversationMessagesList({
+      conversation_id: "conv-hidden-1",
+      query: { limit: 5 },
+    });
+    const messagesSent = JSON.parse(control.sent[1] ?? "{}");
+    expect(messagesSent).toMatchObject({
+      type: "conversation_messages_list",
+      conversation_id: "conv-hidden-1",
+      query: { limit: 5 },
+    });
+    control.receive({
+      type: "conversation_messages_list_response",
+      request_id: messagesSent.request_id,
+      success: true,
+      messages: [],
+      next_before: null,
+      has_more: false,
+    });
+    const messages = await messagesPromise;
+    expect(messages.success).toBe(true);
+    expect(messages.messages).toEqual([]);
+  });
+
+  test("requestCommand correlates an additive command family response", async () => {
+    const { client, control } = createFakeClient();
+    control.open();
+    await client.connect();
+
+    const promise = client.requestCommand<DreamStatusResponseMessage>(
+      {
+        type: "dream_status",
+        runtime: { agent_id: "agent-1", conversation_id: "conv-1" },
+      },
+      "dream_status_response",
+    );
+    const sent = JSON.parse(control.sent[0] ?? "{}");
+    expect(sent).toMatchObject({
+      type: "dream_status",
+      request_id: "dream_status-1",
+    });
+    control.receive({
+      type: "dream_status_response",
+      request_id: "dream_status-1",
+      success: true,
+      status: null,
+    });
+    expect((await promise).success).toBe(true);
   });
 
   test("starts runtimes with external tools and responds to external tool calls", async () => {

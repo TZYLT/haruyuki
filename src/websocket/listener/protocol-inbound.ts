@@ -111,19 +111,35 @@ function isExperimentId(value: unknown): value is ExperimentId {
 
 import { isValidApprovalResponseBody } from "./approval";
 import {
+  isCompactionCancelCommand,
+  isCompactionCommitCommand,
+  isCompactionPrepareCommand,
+} from "./compaction-protocol-inbound";
+import {
   isCronPauseCommand,
+  isCronPermissionTier,
   isCronResumeCommand,
+  isCronTarget,
+  isCronTaskType,
   isCronTriggerCommand,
+  isNonNegativeIntegerField,
 } from "./cron-protocol-inbound";
 import {
   isGetCwdMapCommand,
   isSetBootWorkingDirectoryCommand,
 } from "./cwd-protocol-inbound";
 import {
+  isDreamRunCommand,
+  isDreamStatusCommand,
+  isGetDreamSettingsCommand,
+  isSetDreamSettingsCommand,
+} from "./dream-protocol-inbound";
+import {
   getInputToolSelectionError,
   isClientToolsetConfig,
 } from "./input-tool-selection";
 import { isResumeQueueCommand } from "./queue-pause-protocol-inbound";
+import { isUsageAggregateCommand } from "./usage-protocol-inbound";
 
 export { isConnectProviderCommand } from "./connect-provider-protocol-inbound";
 
@@ -929,6 +945,13 @@ export function isCronAddCommand(value: unknown): value is CronAddCommand {
     recurring?: unknown;
     prompt?: unknown;
     scheduled_for?: unknown;
+    task_type?: unknown;
+    payload?: unknown;
+    target?: unknown;
+    permission?: unknown;
+    catch_up?: unknown;
+    timeout_minutes?: unknown;
+    wait_minutes?: unknown;
   };
   return (
     c.type === "cron_add" &&
@@ -944,7 +967,14 @@ export function isCronAddCommand(value: unknown): value is CronAddCommand {
     typeof c.prompt === "string" &&
     (c.scheduled_for === undefined ||
       c.scheduled_for === null ||
-      typeof c.scheduled_for === "string")
+      typeof c.scheduled_for === "string") &&
+    isCronTaskType(c.task_type) &&
+    (c.payload === undefined || typeof c.payload === "string") &&
+    isCronTarget(c.target) &&
+    isCronPermissionTier(c.permission) &&
+    (c.catch_up === undefined || typeof c.catch_up === "boolean") &&
+    isNonNegativeIntegerField(c.timeout_minutes) &&
+    isNonNegativeIntegerField(c.wait_minutes)
   );
 }
 
@@ -998,6 +1028,13 @@ export function isCronUpdateCommand(
     recurring?: unknown;
     prompt?: unknown;
     scheduled_for?: unknown;
+    task_type?: unknown;
+    payload?: unknown;
+    target?: unknown;
+    permission?: unknown;
+    catch_up?: unknown;
+    timeout_minutes?: unknown;
+    wait_minutes?: unknown;
   };
   return (
     c.type === "cron_update" &&
@@ -1013,7 +1050,14 @@ export function isCronUpdateCommand(
     (c.prompt === undefined || typeof c.prompt === "string") &&
     (c.scheduled_for === undefined ||
       c.scheduled_for === null ||
-      typeof c.scheduled_for === "string")
+      typeof c.scheduled_for === "string") &&
+    isCronTaskType(c.task_type) &&
+    (c.payload === undefined || typeof c.payload === "string") &&
+    isCronTarget(c.target) &&
+    isCronPermissionTier(c.permission) &&
+    (c.catch_up === undefined || typeof c.catch_up === "boolean") &&
+    isNonNegativeIntegerField(c.timeout_minutes) &&
+    isNonNegativeIntegerField(c.wait_minutes)
   );
 }
 
@@ -1365,6 +1409,10 @@ export function isSetReflectionSettingsCommand(
   const settings = c.settings as {
     trigger?: unknown;
     step_count?: unknown;
+    on_compaction?: unknown;
+    every_user_messages?: unknown;
+    delete_session_on_success?: unknown;
+    timeout_minutes?: unknown;
     merge?: unknown;
     merge_instructions?: unknown;
   };
@@ -1375,6 +1423,18 @@ export function isSetReflectionSettingsCommand(
     typeof settings.step_count === "number" &&
     Number.isInteger(settings.step_count) &&
     settings.step_count > 0 &&
+    (settings.on_compaction === undefined ||
+      typeof settings.on_compaction === "boolean") &&
+    (settings.every_user_messages === undefined ||
+      (typeof settings.every_user_messages === "number" &&
+        Number.isInteger(settings.every_user_messages) &&
+        settings.every_user_messages >= 0)) &&
+    (settings.delete_session_on_success === undefined ||
+      typeof settings.delete_session_on_success === "boolean") &&
+    (settings.timeout_minutes === undefined ||
+      (typeof settings.timeout_minutes === "number" &&
+        Number.isInteger(settings.timeout_minutes) &&
+        settings.timeout_minutes > 0)) &&
     (settings.merge === undefined ||
       settings.merge === "auto" ||
       settings.merge === "explicit") &&
@@ -2046,7 +2106,15 @@ export function parseServerMessage(
       isSearchBranchesCommand(parsed) ||
       isCheckoutBranchCommand(parsed) ||
       isSecretListCommand(parsed) ||
-      isSecretApplyCommand(parsed)
+      isSecretApplyCommand(parsed) ||
+      isDreamStatusCommand(parsed) ||
+      isDreamRunCommand(parsed) ||
+      isGetDreamSettingsCommand(parsed) ||
+      isSetDreamSettingsCommand(parsed) ||
+      isCompactionPrepareCommand(parsed) ||
+      isCompactionCommitCommand(parsed) ||
+      isCompactionCancelCommand(parsed) ||
+      isUsageAggregateCommand(parsed)
     ) {
       return parsed as WsProtocolCommand;
     }

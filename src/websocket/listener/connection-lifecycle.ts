@@ -8,7 +8,15 @@ import {
 } from "./connection";
 import { getOrCreateScopedRuntime } from "./conversation-runtime";
 import { rejectPendingExternalToolCallsForConnection } from "./external-tools";
-import { evictConversationRuntimeIfIdle } from "./runtime";
+import {
+  HIDDEN_CONVERSATION_READ_ONLY,
+  isHiddenConversation,
+} from "./hidden-conversation-guard";
+import { emitLoopErrorNotice } from "./recoverable-notices";
+import {
+  evictConversationRuntimeIfIdle,
+  getConversationRuntime,
+} from "./runtime";
 import { getListenerTransportKind, type ListenerTransport } from "./transport";
 import { handleIncomingMessage } from "./turn";
 import type {
@@ -21,6 +29,27 @@ export function createConnectionTurnProcessor(
   runtime: ListenerRuntime,
 ): ProcessQueuedTurn {
   return async (queuedTurn, dequeuedBatch) => {
+    // F-01/D-9: hidden conversations are read-only. Queued input for one is
+    // dropped before the turn owner can start; the router already acknowledged
+    // the submission, so project the read-only reason on its scope instead.
+    if (
+      queuedTurn.conversationId &&
+      (await isHiddenConversation(queuedTurn.conversationId))
+    ) {
+      getConversationRuntime(
+        runtime,
+        queuedTurn.agentId,
+        queuedTurn.conversationId,
+      )?.dequeuedClientMessageIdsByBatchId.delete(dequeuedBatch.batchId);
+      emitLoopErrorNotice(getOrCreateProcessTransport(runtime), runtime, {
+        message: HIDDEN_CONVERSATION_READ_ONLY,
+        stopReason: "error",
+        isTerminal: false,
+        ...(queuedTurn.agentId ? { agentId: queuedTurn.agentId } : {}),
+        conversationId: queuedTurn.conversationId,
+      });
+      return;
+    }
     const scopedRuntime = getOrCreateScopedRuntime(
       runtime,
       queuedTurn.agentId,

@@ -2,6 +2,10 @@ import type { InputCreateMessagePayload } from "@/types/protocol_v2";
 import type { ConversationRuntimeScope } from "@/types/runtime-scope";
 import { getOrCreateProcessTransport } from "./connection";
 import {
+  HIDDEN_CONVERSATION_READ_ONLY,
+  isHiddenConversation,
+} from "./hidden-conversation-guard";
+import {
   enqueueInboundUserMessage,
   getInboundClientMessageId,
 } from "./inbound-queue";
@@ -11,6 +15,7 @@ import {
   shouldProcessInboundMessageDirectly,
   shouldQueueInboundMessage,
 } from "./queue";
+import { emitLoopErrorNotice } from "./recoverable-notices";
 import {
   emitListenerStatus,
   evictConversationRuntimeIfIdle,
@@ -125,6 +130,24 @@ export function dispatchInboundMessageWhenReady(params: {
   runtime.messageQueue = runtime.messageQueue
     .then(async () => {
       if (listener !== getActiveRuntime() || listener.intentionallyClosed) {
+        acknowledgeInput({ accepted: false });
+        return;
+      }
+      // F-01/D-9: a hidden conversation is read-only. Refuse before the input
+      // is acknowledged, queued, or handed to a turn — the router's own guard
+      // covers the protocol entry; this one covers callers that reach the
+      // dispatch directly.
+      if (
+        incoming.conversationId &&
+        (await isHiddenConversation(incoming.conversationId))
+      ) {
+        emitLoopErrorNotice(socket, listener, {
+          message: HIDDEN_CONVERSATION_READ_ONLY,
+          stopReason: "error",
+          isTerminal: false,
+          ...(incoming.agentId ? { agentId: incoming.agentId } : {}),
+          conversationId: incoming.conversationId,
+        });
         acknowledgeInput({ accepted: false });
         return;
       }

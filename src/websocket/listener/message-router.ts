@@ -24,8 +24,10 @@ import { handleAgentConversationManagementProtocolCommand } from "./commands/age
 import { handleAppServerInfoCommand } from "./commands/app-server-info";
 import { handleCwdProtocolCommand } from "./commands/boot-working-directory";
 import { handleChatGPTUsageCommand } from "./commands/chatgpt-usage";
+import { handleCompactionProtocolCommand } from "./commands/compaction";
 import { handleConnectProvidersCommand } from "./commands/connect-providers";
 import { handleCronProtocolCommand } from "./commands/cron";
+import { handleDreamProtocolCommand } from "./commands/dream";
 import { handleGitBranchCommand } from "./commands/git-branches";
 import { handleMemfsSyncedMemoryProtocolCommand } from "./commands/memory-command-sync";
 import { handleModelToolsetCommand } from "./commands/model-toolset";
@@ -34,12 +36,17 @@ import { handleRuntimeStartProtocolCommand } from "./commands/runtime-start";
 import { handleSecretsCommand } from "./commands/secrets";
 import { handleSettingsProtocolCommand } from "./commands/settings";
 import { handleSkillAgentProtocolCommand } from "./commands/skills-agents";
+import { handleUsageProtocolCommand } from "./commands/usage";
 import { subscribeListenerConnection } from "./connection";
 import { getBootWorkingDirectory } from "./cwd";
 import {
   handleExternalToolCallResponseCommand,
   updateRuntimeExternalTools,
 } from "./external-tools";
+import {
+  HIDDEN_CONVERSATION_READ_ONLY,
+  isHiddenConversation,
+} from "./hidden-conversation-guard";
 import {
   createIncomingMessage,
   dispatchInboundMessageWhenReady,
@@ -450,6 +457,13 @@ export function createListenerMessageHandler(
           acknowledgeInput(false, error);
           return;
         }
+        // F-01/D-9: a hidden conversation is read-only over the protocol; the
+        // guard reads the runtime `hidden` annotation without creating the
+        // conversation (never `retrieveConversation` for an unknown id).
+        if (await isHiddenConversation(parsed.runtime.conversation_id)) {
+          acknowledgeInput(false, HIDDEN_CONVERSATION_READ_ONLY);
+          return;
+        }
         const incoming = createIncomingMessage(
           parsed.runtime,
           inputPayload,
@@ -688,6 +702,36 @@ export function createListenerMessageHandler(
 
       if (
         handleCronProtocolCommand(parsed, {
+          socket,
+          safeSocketSend,
+          runDetachedListenerTask,
+        })
+      ) {
+        return;
+      }
+
+      if (
+        handleDreamProtocolCommand(parsed, {
+          socket,
+          safeSocketSend,
+          runDetachedListenerTask,
+        })
+      ) {
+        return;
+      }
+
+      if (
+        handleCompactionProtocolCommand(parsed, {
+          socket,
+          safeSocketSend,
+          runDetachedListenerTask,
+        })
+      ) {
+        return;
+      }
+
+      if (
+        handleUsageProtocolCommand(parsed, {
           socket,
           safeSocketSend,
           runDetachedListenerTask,

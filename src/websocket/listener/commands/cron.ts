@@ -135,6 +135,15 @@ export async function handleCronCommand(
         recurring: parsed.recurring,
         prompt: parsed.prompt,
         scheduled_for: scheduledFor,
+        // F-05 additive fields: `undefined` keeps the store defaults, so a
+        // prompt-only client still creates exactly the task it did before.
+        type: parsed.task_type,
+        payload: parsed.payload,
+        target: parsed.target,
+        permission: parsed.permission,
+        catch_up: parsed.catch_up,
+        timeout_minutes: parsed.timeout_minutes,
+        wait_minutes: parsed.wait_minutes,
       });
       safeSocketSend(
         socket,
@@ -355,7 +364,110 @@ export async function handleCronCommand(
         if (parsed.timezone !== undefined) current.timezone = parsed.timezone;
         if (parsed.recurring !== undefined)
           current.recurring = parsed.recurring;
-        if (parsed.prompt !== undefined) current.prompt = parsed.prompt;
+        // F-06: a dream schedule is the scheduler's signal carrier, not a
+        // conversation task. The update path has none of `addTask`'s dream
+        // constraints, so it refuses to change the body kind or target of an
+        // existing carrier, and refuses to convert a task *into* a carrier
+        // (which would skip those constraints). Create carriers through the
+        // dream settings path instead.
+        if ((current.type ?? "prompt") === "dream") {
+          if (
+            parsed.task_type !== undefined ||
+            parsed.payload !== undefined ||
+            parsed.target !== undefined
+          ) {
+            throw new Error(
+              "Dream schedule carriers cannot change task_type, payload, or target (F-06).",
+            );
+          }
+        } else if (parsed.task_type === "dream") {
+          throw new Error(
+            "A schedule cannot be converted into a dream carrier by cron_update; create it through the dream settings path (F-06).",
+          );
+        }
+        // F-05 additive fields. The wire name is `task_type` because the
+        // command's own `type` is the protocol discriminant; the record keeps
+        // the F-05 name `type` and every other field maps 1:1 onto `CronTask`.
+        if (parsed.task_type !== undefined) current.type = parsed.task_type;
+        if (parsed.permission !== undefined) {
+          current.permission = parsed.permission;
+        }
+        if (parsed.catch_up !== undefined) current.catch_up = parsed.catch_up;
+        if (parsed.timeout_minutes !== undefined) {
+          current.timeout_minutes = parsed.timeout_minutes;
+        }
+        if (parsed.wait_minutes !== undefined) {
+          current.wait_minutes = parsed.wait_minutes;
+        }
+        // `target` is the F-05 authority, so the legacy `conversation_id` has to
+        // follow it or the v2 view and the list filters disagree. An explicit
+        // `conversation_id` may not contradict the target (same rule `addTask`
+        // applies on creation).
+        if (parsed.target !== undefined) {
+          const derivedConversationId =
+            parsed.target.kind === "new"
+              ? "new"
+              : parsed.target.conversation_id;
+          if (
+            parsed.conversation_id !== undefined &&
+            parsed.conversation_id !== derivedConversationId
+          ) {
+            throw new Error(
+              `target and conversation_id disagree: target resolves to "${derivedConversationId}", conversation_id is "${parsed.conversation_id}".`,
+            );
+          }
+          current.target = parsed.target;
+          current.conversation_id = derivedConversationId;
+        } else if (parsed.conversation_id !== undefined) {
+          // Legacy clients only send `conversation_id`; derive the target so
+          // the F-05 host runners retarget instead of running the old target.
+          current.target =
+            parsed.conversation_id === "new"
+              ? {
+                  kind: "new",
+                  hidden:
+                    current.target?.kind === "new"
+                      ? current.target.hidden
+                      : false,
+                }
+              : { kind: "existing", conversation_id: parsed.conversation_id };
+        }
+        // Merged-state constraint from `addTask` (R-5.5.1): a command task
+        // cannot create a conversation, so retyping to `command` or retargeting
+        // a command task to a fresh conversation is refused. `prompt` may
+        // target a new conversation; converting to `dream` was refused above.
+        const resolvedType = current.type ?? "prompt";
+        const resolvedTarget =
+          current.target ??
+          (current.conversation_id === "new"
+            ? ({ kind: "new", hidden: false } as const)
+            : ({
+                kind: "existing",
+                conversation_id: current.conversation_id,
+              } as const));
+        if (resolvedType === "command" && resolvedTarget.kind !== "existing") {
+          throw new Error(
+            "Command schedules must target an existing conversation: they cannot create a new one (R-5.5.1).",
+          );
+        }
+        // A prompt task's body lives in both `prompt` (legacy readers) and
+        // `payload` (the F-05 host runner); keep the pair coherent whichever
+        // side the client updated.
+        if (parsed.payload !== undefined) {
+          current.payload = parsed.payload;
+          if ((current.type ?? "prompt") === "prompt") {
+            current.prompt = parsed.payload;
+          }
+        }
+        if (parsed.prompt !== undefined) {
+          current.prompt = parsed.prompt;
+          if (
+            parsed.payload === undefined &&
+            (current.type ?? "prompt") === "prompt"
+          ) {
+            current.payload = parsed.prompt;
+          }
+        }
         if (parsed.scheduled_for !== undefined) {
           current.scheduled_for = scheduledForIso ?? null;
         }

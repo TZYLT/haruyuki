@@ -13,6 +13,10 @@ import type {
   ConversationDeleteResponseMessage,
   ConversationListCommand,
   ConversationListResponseMessage,
+  ConversationMessagesListCommand,
+  ConversationMessagesListResponseMessage,
+  ConversationRetrieveCommand,
+  ConversationRetrieveResponseMessage,
   ExternalToolCallRequestMessage,
   ExternalToolCallResult,
   InputAcceptedResponseMessage,
@@ -115,6 +119,20 @@ export type AppServerRequestCommand = Extract<
   WsProtocolCommand,
   { request_id?: string }
 >;
+
+/**
+ * Distributive form of a protocol command with an optional request id.
+ *
+ * `Omit<Union, "request_id">` is not distributive (it keeps only keys common to
+ * every member), so the additive command families spell this type once and the
+ * per-domain wrappers stay terse.
+ */
+export type AppServerCommandBody = {
+  [TType in WsProtocolCommand["type"]]: Omit<
+    Extract<WsProtocolCommand, { type: TType }>,
+    "request_id"
+  > & { request_id?: string };
+}[WsProtocolCommand["type"]];
 
 export type AppServerRequestCommandWithId = AppServerRequestCommand & {
   request_id: string;
@@ -459,6 +477,61 @@ export class AppServerClient {
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
+  }
+
+  /**
+   * Typed request for the additive command families (dream, compaction, usage,
+   * cron). Derives the request id and the response predicate from the command
+   * type, so each wrapper stays a few lines and this file stays under the
+   * 1,000-line ceiling while the family grows.
+   */
+  requestCommand<TMessage extends WsProtocolMessage>(
+    command: AppServerCommandBody,
+    expectedType: TMessage["type"],
+    options: Omit<AppServerRequestOptions<TMessage>, "predicate"> = {},
+  ): Promise<TMessage> {
+    const requestId = command.request_id ?? this.nextRequestId(command.type);
+    return this.request<TMessage>(
+      { ...command, request_id: requestId } as AppServerRequestCommandWithId,
+      {
+        ...options,
+        predicate: (message): message is TMessage =>
+          message.type === expectedType &&
+          (message as { request_id?: string }).request_id === requestId,
+      },
+    );
+  }
+
+  conversationRetrieve(
+    command: Omit<ConversationRetrieveCommand, "type" | "request_id"> & {
+      request_id?: string;
+    },
+    options: Omit<
+      AppServerRequestOptions<ConversationRetrieveResponseMessage>,
+      "predicate"
+    > = {},
+  ): Promise<ConversationRetrieveResponseMessage> {
+    return this.requestCommand<ConversationRetrieveResponseMessage>(
+      { type: "conversation_retrieve", ...command },
+      "conversation_retrieve_response",
+      options,
+    );
+  }
+
+  conversationMessagesList(
+    command: Omit<ConversationMessagesListCommand, "type" | "request_id"> & {
+      request_id?: string;
+    },
+    options: Omit<
+      AppServerRequestOptions<ConversationMessagesListResponseMessage>,
+      "predicate"
+    > = {},
+  ): Promise<ConversationMessagesListResponseMessage> {
+    return this.requestCommand<ConversationMessagesListResponseMessage>(
+      { type: "conversation_messages_list", ...command },
+      "conversation_messages_list_response",
+      options,
+    );
   }
 
   info(

@@ -46,9 +46,27 @@ import type {
   ChannelReplyMode,
   DmPolicy,
 } from "./channel-account-protocol";
+import type {
+  CompactionCancelCommand,
+  CompactionCancelResponseMessage,
+  CompactionCommitCommand,
+  CompactionCommitResponseMessage,
+  CompactionPrepareCommand,
+  CompactionPrepareResponseMessage,
+} from "./compaction-protocol";
 import type { ConversationForkBody } from "./conversation-fork-protocol";
 import type { ConversationListRow } from "./conversation-provenance";
 import type * as CwdProtocol from "./cwd-protocol";
+import type {
+  DreamRunCommand,
+  DreamRunResponseMessage,
+  DreamStatusCommand,
+  DreamStatusResponseMessage,
+  GetDreamSettingsCommand,
+  GetDreamSettingsResponseMessage,
+  SetDreamSettingsCommand,
+  SetDreamSettingsResponseMessage,
+} from "./dream-protocol";
 import type {
   ExternalToolCallRequestMessage,
   ExternalToolCallResponseCommand,
@@ -84,6 +102,10 @@ import type {
   RemoveQueueItemCommand,
   RemoveQueueItemResponse,
 } from "./task-control-protocol";
+import type {
+  UsageAggregateCommand,
+  UsageAggregateResponseMessage,
+} from "./usage-protocol";
 
 export type * from "./subagent-protocol";
 
@@ -96,7 +118,9 @@ import type {
 export type * from "./approval-classification-protocol";
 export type * from "./background-process-protocol";
 export type * from "./channel-account-protocol";
+export type * from "./compaction-protocol";
 export type * from "./cwd-protocol";
+export type * from "./dream-protocol";
 export type * from "./external-tool-protocol";
 export type * from "./loop-status-protocol";
 export type * from "./runtime-scope";
@@ -104,6 +128,7 @@ export type * from "./runtime-start-protocol";
 export type * from "./schedule-protocol";
 export type * from "./task-control-protocol";
 export type * from "./toolset-protocol";
+export type * from "./usage-protocol";
 
 export type ExperimentId =
   | "artifacts"
@@ -208,6 +233,18 @@ export interface ReflectionSettingsSnapshot {
   /** Derived view of the two switches; kept for older app-server clients. */
   trigger: ReflectionTriggerMode;
   step_count: number;
+  /**
+   * F-03 switch: run a reflection after a compaction. The two switches can be
+   * on at the same time, which `trigger` cannot express; clients that render
+   * both read these fields instead.
+   */
+  onCompaction?: boolean;
+  /** F-03 switch: run a reflection every N user messages (`0` = off). */
+  everyUserMessages?: number;
+  /** Delete the reflection session once it succeeds (F-01 §5.6.4). */
+  deleteSessionOnSuccess?: boolean;
+  /** Wall-clock cap for one reflection run, in minutes. */
+  timeoutMinutes?: number;
   /** @deprecated Retired by F-03 (§7.7): retained for wire compatibility. */
   merge: ReflectionMergeMode;
   /** @deprecated Retired by F-03 (§7.7): retained for wire compatibility. */
@@ -1722,6 +1759,14 @@ export interface SetReflectionSettingsCommand {
   settings: {
     trigger: ReflectionTriggerMode;
     step_count: number;
+    /** F-03 switch; omitted keeps the current value. */
+    on_compaction?: boolean;
+    /** F-03 switch; omitted keeps the current value. */
+    every_user_messages?: number;
+    /** F-01/F-03: delete the reflection session once it succeeds. */
+    delete_session_on_success?: boolean;
+    /** Wall-clock cap for one reflection run, in minutes. */
+    timeout_minutes?: number;
     /** @deprecated Retired by F-03 (§7.7): accepted and ignored. */
     merge?: ReflectionMergeMode;
     /** @deprecated Retired by F-03 (§7.7): accepted and ignored. */
@@ -2484,7 +2529,15 @@ export type WsProtocolCommand =
   | SearchBranchesCommand
   | CheckoutBranchCommand
   | SecretListCommand
-  | SecretApplyCommand;
+  | SecretApplyCommand
+  | DreamStatusCommand
+  | DreamRunCommand
+  | GetDreamSettingsCommand
+  | SetDreamSettingsCommand
+  | CompactionPrepareCommand
+  | CompactionCommitCommand
+  | CompactionCancelCommand
+  | UsageAggregateCommand;
 
 export type WsProtocolCommandType = WsProtocolCommand["type"];
 
@@ -2590,6 +2643,14 @@ export type WsProtocolMessage =
   | SecretApplyResponse
   | RemoveQueueItemResponse
   | MonitorStopResponse
+  | DreamStatusResponseMessage
+  | DreamRunResponseMessage
+  | GetDreamSettingsResponseMessage
+  | SetDreamSettingsResponseMessage
+  | CompactionPrepareResponseMessage
+  | CompactionCommitResponseMessage
+  | CompactionCancelResponseMessage
+  | UsageAggregateResponseMessage
   | SubagentProtocol.LaunchSubagentResponse;
 
 export type WsProtocolMessageType = WsProtocolMessage["type"];
