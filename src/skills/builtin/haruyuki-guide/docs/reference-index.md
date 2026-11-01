@@ -904,7 +904,7 @@ Commands marked hidden still work but are kept out of autocomplete.
 | `/maintenance` | `<feedback\|bg\|workflows\|install-github-app\|sessions>` | Maintenance: feedback, background shells, workflows, GitHub app, hidden sessions | `src/cli/commands/registry.ts:125` |
 | `/model` | — | Switch model | `src/cli/commands/registry.ts:142` |
 | `/doctor` | `[symptom]` | Investigate an agent issue in this conversation | `src/cli/commands/registry.ts:159` |
-| `/dream` | `[status] \| run [--budget <tokens>] \| config \| on \| off` | Dream: run, status, configure (permission, windows, budget) | `src/cli/commands/registry.ts:168` |
+| `/dream` | `[status] \| run [--budget <tokens>] \| config \| on \| off \| note <text> \| notes [clear] \| note remove <id>` | Dream: run, status, configure (permission, windows, budget), notes | `src/cli/commands/registry.ts:168` |
 | `/reflect` | `[--instruction TEXT]` | Launch reflection on this conversation (/reflect [--instruction TEXT]) | `src/cli/commands/registry.ts:174` |
 | `/memory` | `<recall\|init\|memfs\|remote\|palace\|config>` | Memory: view, init, filesystem backend, remote, palace, recall | `src/cli/commands/registry.ts:197` |
 | `/search` | — | Search messages across all agents (/search [query]) | `src/cli/commands/registry.ts:248` |
