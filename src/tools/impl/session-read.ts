@@ -37,6 +37,9 @@ import { isRecord } from "@/utils/type-guards";
 
 const TOOL_NAME = "SessionRead";
 
+/** Milliseconds in a UTC day; a date-only `until` covers the whole day. */
+const MS_PER_UTC_DAY = 86_400_000;
+
 /** Roles a caller may keep with `roles`; the same set the projection emits. */
 export const SESSION_READ_ROLES: readonly SessionReadRole[] = [
   "user",
@@ -218,13 +221,19 @@ function parseTimeBound(
     const ms = Number(trimmed);
     if (Number.isFinite(ms)) return { ms };
   }
+  // A date-only bound is a UTC day boundary. `Date.parse` gives that day's
+  // 00:00Z; for `until`, "inclusive" means the whole day, so the bound becomes
+  // the last millisecond of that day (23:59:59.999Z). `since` keeps 00:00Z.
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/u.test(trimmed);
   const parsed = Date.parse(trimmed);
   if (!Number.isFinite(parsed)) {
     return {
       error: `\`${name}\` is not a parseable time; use an ISO date/time such as 2026-11-01 or epoch milliseconds.`,
     };
   }
-  return { ms: parsed };
+  return {
+    ms: dateOnly && name === "until" ? parsed + MS_PER_UTC_DAY - 1 : parsed,
+  };
 }
 
 /** Stored creation time: `created_at` when present, else the row's `date`. */

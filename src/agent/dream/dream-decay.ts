@@ -40,6 +40,7 @@ import type { DreamLayout } from "@/agent/dream/dream-layout";
 import {
   DEFECT_WEIGHTS,
   defectWeights,
+  isValidGitRevision,
   type MemoryDefectScan,
   type MemoryFileChange,
   type MemoryFileFact,
@@ -474,7 +475,11 @@ export function computeDecayView(input: ComputeDecayViewInput): DreamDecayView {
     totalLines += file.lines;
     totalChars += file.chars;
   }
-  const defectsByPath = defectWeights(defects);
+  // Missing indexes are the only defect category that belongs to a directory
+  // rather than a single path: the weights are distributed over that
+  // directory's own files, so the category reaches the ranking instead of
+  // landing on an index path that does not exist.
+  const defectsByPath = defectWeights(defects, manifest);
   const entries: DreamDecayEntry[] = included.map((file) => {
     const state = index.files[file.path];
     const dirModifier = dreamDirectoryCoefficient(file.path, layout);
@@ -532,7 +537,10 @@ export async function collectIntervalChanges(
   sinceSha: string | null,
 ): Promise<Map<string, number>> {
   const changes = new Map<string, number>();
-  if (sinceSha === null || sinceSha.length === 0) return changes;
+  // The ledger's `lastRunHead` is user-editable state, and an option-shaped
+  // value must never reach git's argv. A non-revision means "no interval" —
+  // the same shape as a first run, so the caller still gets a view.
+  if (!isValidGitRevision(sinceSha)) return changes;
   const result = await runGit(memoryDir, [
     "-c",
     "core.quotePath=false",

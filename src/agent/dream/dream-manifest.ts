@@ -24,7 +24,10 @@ import {
   DREAM_V2_INDEX_FILENAME,
   type DreamLayout,
 } from "@/agent/dream/dream-layout";
-import { DREAM_REPORT_PATH } from "@/agent/dream/dream-report";
+import {
+  DREAM_REPORT_INDEX_PATH,
+  DREAM_REPORT_PATH,
+} from "@/agent/dream/dream-report";
 import {
   detectMemoryFormat,
   isProjectedMemoryPath,
@@ -171,6 +174,21 @@ export interface MemoryIndexCoverage {
 
 const INDEX_FILENAMES = new Set(["MEMORY.md", "INDEX.md"]);
 
+/**
+ * A revision the ledger is allowed to hand to git: 7–40 hex characters (the
+ * short and full SHA-1 widths). The ledger is a hand-editable file under the
+ * harness home, and anything else could reach `git log`/`git diff` as an
+ * option (`--output=…`) instead of a revision, so a non-matching value is
+ * treated as "no previous head" — the first-run semantics — rather than
+ * refused at read time.
+ */
+const GIT_REVISION_PATTERN = /^[0-9a-f]{7,40}$/i;
+
+/** True when `value` is a plain 7–40 character hexadecimal git revision. */
+export function isValidGitRevision(value: unknown): value is string {
+  return typeof value === "string" && GIT_REVISION_PATTERN.test(value);
+}
+
 function countCharacters(text: string): number {
   let characters = 0;
   for (const _character of text) characters += 1;
@@ -295,7 +313,10 @@ export async function recentChanges(
   } catch {
     headSha = null;
   }
-  if (sinceSha === null || sinceSha.length === 0) {
+  // The ledger's `lastRunHead` is user-editable state; only a real revision may
+  // reach git's argv. Anything else means "no previous head" (first track).
+  const previousHead = isValidGitRevision(sinceSha) ? sinceSha : null;
+  if (previousHead === null) {
     return {
       sinceSha: null,
       headSha,
@@ -304,7 +325,7 @@ export async function recentChanges(
       paths: [],
     };
   }
-  const range = `${sinceSha}..HEAD`;
+  const range = `${previousHead}..HEAD`;
   const baseArgs = [
     "-c",
     "core.quotePath=false",
@@ -343,16 +364,33 @@ export async function recentChanges(
   const changedPaths = new Set<string>();
   for (const commit of splitCommitBlocks(statusOutput.stdout)) {
     const numbers = numbersBySha.get(commit.sha);
-    const files: MemoryFileChange[] = [];
+    const parsed: Array<{ path: string; status: MemoryFileChangeStatus }> = [];
     for (const line of commit.lines) {
       const parts = line.split("\t");
       if (parts.length < 2) continue;
-      const path = normalizeGitPath(parts.slice(1).join("\t"));
-      if (path === DREAM_REPORT_PATH) continue;
-      const counts = numbers?.get(path);
-      files.push({
-        path,
+      parsed.push({
+        path: normalizeGitPath(parts.slice(1).join("\t")),
         status: statusOf(parts[0] ?? ""),
+      });
+    }
+    // The harness commits the report and its directory index together
+    // (`dream-report.ts`). When a commit carries the report, its index change
+    // is harness churn too: drop the pair, and drop the commit entirely when
+    // nothing else was touched. Commits that never mention the report keep the
+    // index visible — an agent editing it by hand is a real change.
+    const harnessReportCommit = parsed.some(
+      (file) => file.path === DREAM_REPORT_PATH,
+    );
+    const files: MemoryFileChange[] = [];
+    for (const file of parsed) {
+      if (file.path === DREAM_REPORT_PATH) continue;
+      if (harnessReportCommit && file.path === DREAM_REPORT_INDEX_PATH) {
+        continue;
+      }
+      const counts = numbers?.get(file.path);
+      files.push({
+        path: file.path,
+        status: file.status,
         added: counts?.added ?? 0,
         deleted: counts?.deleted ?? 0,
       });
@@ -362,7 +400,7 @@ export async function recentChanges(
     commits.push({ sha: commit.sha, subject: commit.subject, files });
   }
   return {
-    sinceSha,
+    sinceSha: previousHead,
     headSha,
     firstTracked: false,
     commits,
@@ -614,17 +652,36 @@ export function scanDefects(
 
 /**
  * Per-file defect score: each category is normalized so its shares sum to 1,
- * then multiplied by {@link DEFECT_WEIGHTS}. A missing index is attributed to
- * the index file that should exist; a dangling link to the file containing it.
+ * then multiplied by {@link DEFECT_WEIGHTS}. A dangling link is attributed to
+ * the file containing it, an oversized file to itself, and a **missing index**
+ * to the non-index files directly inside the directory that should carry it.
+ *
+ * The missing-index attribution needs the file list (`files`); without it the
+ * weight has no owner, which is the bug the old "attribute to the index path
+ * that does not exist" behavior had: the score landed on a path the decay
+ * ledger never ranks, so a whole defect category silently vanished from the
+ * recurrence. Index files themselves are never recipients (an index is
+ * infrastructure, and a stale `INDEX.md` next to a missing `MEMORY.md` must not
+ * absorb the score); a directory with no direct files contributes nothing.
  */
 export function defectWeights(
   defects: MemoryDefectScan,
+  files: readonly Pick<MemoryFileFact, "path">[] = [],
 ): Record<string, number> {
   const scores = new Map<string, number>();
   const add = (path: string, weight: number, share: number): void => {
     if (path.length === 0 || share === 0) return;
     scores.set(path, (scores.get(path) ?? 0) + weight * share);
   };
+  const directoryFiles = new Map<string, string[]>();
+  for (const file of files) {
+    if (isIndexPath(file.path)) continue;
+    const slash = file.path.lastIndexOf("/");
+    const directory = slash === -1 ? "" : file.path.slice(0, slash);
+    const siblings = directoryFiles.get(directory);
+    if (siblings) siblings.push(file.path);
+    else directoryFiles.set(directory, [file.path]);
+  }
   const linkCounts = new Map<string, number>();
   for (const link of defects.brokenLinks) {
     linkCounts.set(link.path, (linkCounts.get(link.path) ?? 0) + 1);
@@ -636,11 +693,12 @@ export function defectWeights(
     add(file.path, DEFECT_WEIGHTS.oversized, 1 / defects.oversizedFiles.length);
   }
   for (const missing of defects.missingIndexes) {
-    add(
-      missing.index,
-      DEFECT_WEIGHTS.missingIndex,
-      1 / defects.missingIndexes.length,
-    );
+    const recipients = directoryFiles.get(missing.directory);
+    if (recipients === undefined || recipients.length === 0) continue;
+    const share = (1 / defects.missingIndexes.length) * (1 / recipients.length);
+    for (const path of recipients) {
+      add(path, DEFECT_WEIGHTS.missingIndex, share);
+    }
   }
   return Object.fromEntries(
     [...scores.entries()].sort(([left], [right]) => left.localeCompare(right)),

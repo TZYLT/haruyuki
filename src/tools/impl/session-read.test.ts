@@ -539,6 +539,24 @@ describe("session_read since/until filter", () => {
     expect(result.content).not.toContain("second user question");
   });
 
+  test("a date-only until covers that whole UTC day", async () => {
+    // `until: "2026-10-10"` must include the messages written later that day
+    // (18:00Z); the old behavior stopped at 00:00Z despite "inclusive".
+    const result = await read({ until: "2026-10-10" }, timed());
+    expect(result.status).toBe("success");
+    expect(result.content).toContain("second user question");
+    expect(result.content).toContain("second answer");
+    expect(result.content).toContain("filters: until=2026-10-10T23:59:59.999Z");
+  });
+
+  test("a date-only since still starts at 00:00 UTC", async () => {
+    const result = await read({ since: "2026-10-10" }, timed());
+    expect(result.status).toBe("success");
+    expect(result.content).toContain("second user question");
+    expect(result.content).not.toContain("compacted so far");
+    expect(result.content).toContain("filters: since=2026-10-10T00:00:00.000Z");
+  });
+
   test("accepts epoch milliseconds", async () => {
     const since = Date.UTC(2026, 9, 10);
     const result = await read({ since }, timed());

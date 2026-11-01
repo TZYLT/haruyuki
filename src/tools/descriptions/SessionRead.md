@@ -27,9 +27,10 @@ Usage:
   25000/2.5 for the character budget) instead of reading the whole conversation.
 - `since` / `until` keep messages by their stored creation time, both inclusive.
   Pass an ISO date/time (`2026-11-01`, `2026-11-01T12:00:00Z`) or epoch
-  milliseconds. A message with no readable timestamp is excluded while a bound
-  is active. An unparseable bound is a parameter error, not a silently ignored
-  filter.
+  milliseconds. A date-only `since` starts at 00:00 UTC; a date-only `until`
+  covers that whole UTC day (through 23:59:59.999 UTC). A message with no
+  readable timestamp is excluded while a bound is active. An unparseable bound
+  is a parameter error, not a silently ignored filter.
 - Role and time filters are applied after the text is cleaned and before
   `message_start` / `query` / `offset`, so message numbers still refer to the
   cleaned conversation and paging continues the same way.

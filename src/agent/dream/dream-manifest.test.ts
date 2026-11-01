@@ -1,16 +1,20 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveDreamLayout } from "@/agent/dream/dream-layout";
 import {
   DEFECT_WEIGHTS,
   defectWeights,
   indexCoverage,
+  isValidGitRevision,
   listMemoryFiles,
   recentChanges,
   scanDefects,
 } from "@/agent/dream/dream-manifest";
-import { DREAM_REPORT_PATH } from "@/agent/dream/dream-report";
+import {
+  DREAM_REPORT_INDEX_PATH,
+  DREAM_REPORT_PATH,
+} from "@/agent/dream/dream-report";
 import {
   createTempGitRepo,
   type TempGitRepo,
@@ -187,6 +191,47 @@ describe("recentChanges", () => {
     expect(changes.headSha).toBe(repo.git("rev-parse", "HEAD"));
   });
 
+  test("drops the report directory index the harness commits with the report", async () => {
+    // `writeDreamReport` commits `[report, maintenance/MEMORY.md]` as one
+    // commit; both halves are harness churn, so the run's change list must not
+    // present the index as an agent change (and a pair-only commit disappears).
+    const repo = newRepo("dream-manifest-report-index-");
+    writePolicy(repo, "legacy-only");
+    const base = commitFile(repo, "system/a.md", "# A\n", "first");
+    write(repo.dir, DREAM_REPORT_PATH, "report v1\n");
+    write(repo.dir, DREAM_REPORT_INDEX_PATH, "# Maintenance\n");
+    write(repo.dir, "system/a.md", "# A\nmore\n");
+    commitAll(repo, "dream(report): run-1");
+    write(repo.dir, DREAM_REPORT_PATH, "report v2\n");
+    write(repo.dir, DREAM_REPORT_INDEX_PATH, "# Maintenance\n- report\n");
+    commitAll(repo, "dream(report): run-2");
+
+    const changes = await recentChanges(repo.dir, base);
+
+    expect(changes.commits.map((commit) => commit.subject)).toEqual([
+      "dream(report): run-1",
+    ]);
+    expect(changes.commits[0]?.files.map((file) => file.path)).toEqual([
+      "system/a.md",
+    ]);
+    expect(changes.paths).toEqual(["system/a.md"]);
+  });
+
+  test("a non-revision previous head is treated as no previous head", async () => {
+    // The ledger is hand-editable. An option-shaped value must never reach
+    // git's argv (e.g. `--output=leak.txt`), so it is read as the first run.
+    const repo = newRepo("dream-manifest-bad-head-");
+    writePolicy(repo, "legacy-only");
+    commitFile(repo, "system/a.md", "# A\n", "first");
+
+    const changes = await recentChanges(repo.dir, "--output=leak.txt");
+
+    expect(changes.firstTracked).toBe(true);
+    expect(changes.sinceSha).toBeNull();
+    expect(changes.commits).toEqual([]);
+    expect(existsSync(join(repo.dir, "leak.txt"))).toBe(false);
+  });
+
   test("keeps non-ASCII paths readable in both the manifest and changes", async () => {
     const repo = newRepo("dream-manifest-unicode-");
     writePolicy(repo, "legacy-only");
@@ -342,14 +387,67 @@ describe("defectWeights", () => {
       totalFiles: 2,
     };
 
-    const weights = defectWeights(defects);
+    // A missing index is a directory defect: the weight goes to the files that
+    // directory actually holds (never to the index path, which does not exist).
+    const files = [
+      { path: "a.md" },
+      { path: "b.md" },
+      { path: "d/entry.md" },
+      { path: "d/INDEX.md" },
+      { path: "d/deep/nested.md" },
+    ];
+    const weights = defectWeights(defects, files);
 
     expect(weights["a.md"]).toBeCloseTo(
       (2 / 3) * DEFECT_WEIGHTS.brokenLink + DEFECT_WEIGHTS.oversized,
       6,
     );
     expect(weights["b.md"]).toBeCloseTo((1 / 3) * DEFECT_WEIGHTS.brokenLink, 6);
-    expect(weights["d/MEMORY.md"]).toBeCloseTo(DEFECT_WEIGHTS.missingIndex, 6);
+    expect(weights["d/entry.md"]).toBeCloseTo(DEFECT_WEIGHTS.missingIndex, 6);
+    expect(weights["d/MEMORY.md"]).toBeUndefined();
+    // Index files are not recipients, and a subdirectory is not the directory
+    // the missing root index describes.
+    expect(weights["d/INDEX.md"]).toBeUndefined();
+    expect(weights["d/deep/nested.md"]).toBeUndefined();
+  });
+
+  test("a directory with no direct files contributes no missing-index score", () => {
+    const defects = {
+      brokenLinks: [],
+      missingIndexes: [{ directory: "empty", index: "empty/MEMORY.md" }],
+      oversizedFiles: [],
+      largeFiles: [],
+      frontmatter: {
+        total: 0,
+        withDescription: 0,
+        missingDescription: [],
+        nameRequired: [],
+        withName: 0,
+        missingName: [],
+      },
+      largeFileRatio: 0,
+      totalFiles: 0,
+    };
+    expect(defectWeights(defects, [])).toEqual({});
+  });
+});
+
+describe("isValidGitRevision", () => {
+  test("accepts short and full hex revisions only", () => {
+    expect(isValidGitRevision("abc1234")).toBe(true);
+    expect(isValidGitRevision("A".repeat(40))).toBe(true);
+    for (const value of [
+      null,
+      "",
+      "abc",
+      "abcdefg",
+      "deadbeef".repeat(10),
+      "--output=leak.txt",
+      "HEAD~2",
+      "abc1234..HEAD",
+    ]) {
+      expect(isValidGitRevision(value)).toBe(false);
+    }
   });
 });
 

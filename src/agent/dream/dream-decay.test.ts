@@ -10,7 +10,7 @@
  * use throwaway repositories.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -31,10 +31,11 @@ import {
   writeDecayIndex,
 } from "@/agent/dream/dream-decay";
 import type { DreamLayout } from "@/agent/dream/dream-layout";
-import type {
-  MemoryDefectScan,
-  MemoryFileChange,
-  MemoryFileFact,
+import {
+  DEFECT_WEIGHTS,
+  type MemoryDefectScan,
+  type MemoryFileChange,
+  type MemoryFileFact,
 } from "@/agent/dream/dream-manifest";
 import type { DreamReviewMark } from "@/agent/dream/dream-review-marks";
 import {
@@ -375,6 +376,51 @@ describe("computeDecayView", () => {
         (1 + (view.byPath["a.md"]?.defect ?? 0)),
       8,
     );
+  });
+
+  test("a missing directory index raises that directory's files", () => {
+    // v2 requires MEMORY.md in every directory. The defect is directory-level,
+    // so the files the directory actually holds carry the (1+defect) term —
+    // previously the weight landed on the nonexistent index path and vanished.
+    const layout = layoutOf("memfs-v2");
+    const manifest = [
+      fact("MEMORY.md", 20),
+      fact("notes/a.md", 100),
+      fact("notes/b.md", 100),
+      fact("notes/deep/c.md", 100),
+    ];
+    const defects = emptyScan();
+    defects.missingIndexes = [{ directory: "notes", index: "notes/MEMORY.md" }];
+    const withoutIndex = computeDecayView({
+      index: createEmptyDecayIndex(),
+      layout,
+      manifest,
+      defects: emptyScan(),
+      now: NOW,
+      intervalChangedLines: new Map(),
+    });
+    const withDefect = computeDecayView({
+      index: createEmptyDecayIndex(),
+      layout,
+      manifest,
+      defects,
+      now: NOW,
+      intervalChangedLines: new Map(),
+    });
+    for (const path of ["notes/a.md", "notes/b.md"]) {
+      expect(withDefect.byPath[path]?.defect).toBeCloseTo(
+        DEFECT_WEIGHTS.missingIndex / 2,
+        10,
+      );
+      expect(withDefect.byPath[path]?.decay ?? 0).toBeGreaterThan(
+        withoutIndex.byPath[path]?.decay ?? 0,
+      );
+    }
+    // The missing index path does not exist, so it must not appear in the view;
+    // the root index and nested files are not in that directory's own scope.
+    expect(withDefect.byPath["notes/MEMORY.md"]).toBeUndefined();
+    expect(withDefect.byPath["MEMORY.md"]?.defect).toBe(0);
+    expect(withDefect.byPath["notes/deep/c.md"]?.defect).toBe(0);
   });
 });
 
@@ -733,6 +779,20 @@ describe("git interval helpers", () => {
     expect(changes.get("a.md")).toBe(2);
     expect(changes.get("b.md")).toBe(1);
     expect((await collectIntervalChanges(repo.dir, null)).size).toBe(0);
+  });
+
+  test("a non-revision previous head never reaches git's argv", async () => {
+    // The ledger is hand-editable. `--output=leak.txt..HEAD` would be an option
+    // to `git diff`, so the guard must read it as "no interval" first.
+    const repo = newRepo();
+    write(repo.dir, "a.md", "# A\n");
+    repo.git("add", ".");
+    repo.git("commit", "-qm", "first");
+
+    expect(
+      (await collectIntervalChanges(repo.dir, "--output=leak.txt")).size,
+    ).toBe(0);
+    expect(existsSync(join(repo.dir, "leak.txt"))).toBe(false);
   });
 
   test("collectTrackedBlobShas matches the object hashes of the tree", async () => {
