@@ -116,11 +116,11 @@ related content into one home (≤5 files per move), leave pointers elsewhere. T
 
 ### next / deferred / blocked
 
-- `next` is per file and lives beside `note` in the decay entry (shown in the table's `note` column). It records where the
-  next run should resume for that file; `DreamReviewMark` clears it.
-- `maintenance/dream-plan.md` holds the deferred plan (≤20 entries): **continue items** (referencing a per-file `next`),
-  **blocked** items (three failed attempts → report and ask the user to decide), and **mechanical items** (do them when
-  budget is spare).
+- `next` is a per-file field beside `note` in the decay entry (the table's `note` column), cleared by a `DreamReviewMark`;
+  this build has no write path for it yet, so record the resume point in the report's next-plan/handoff text instead.
+- `maintenance/dream-plan.md` holds the deferred plan (≤20 entries): **continue items** (referencing the report's resume
+  point), **blocked** items (three failed attempts → report and ask the user to decide), and **mechanical items** (do them
+  when budget is spare).
 - Every unconsumed entry gets `attempts + 1` each run. The report's three lists — `consumed` / `still-deferred` /
   `blocked` — are the only acceptance record.
 
