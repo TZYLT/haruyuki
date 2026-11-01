@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Memory-repository-relative path of the file that was reviewed, using forward slashes (for example \"system/human.md\"). The file must exist. Absolute paths, \"..\", \".\" and \".git\" are refused."
+    },
+    "coverage": {
+      "type": "string",
+      "enum": ["skim", "structure", "content"],
+      "description": "How deeply this turn reviewed the file: \"skim\" for purpose/pointers/index row, \"structure\" for frontmatter/headings/links/index placement, \"content\" for reading the content and checking it against the current facts. Calling this tool is the claim that the review actually happened."
+    },
+    "evidence": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "One line (at most 200 characters) naming what was actually checked: the links, index entries, sections or contradictions. Required — it goes into the decay index and the run report, and a mark without evidence is not a review."
+    }
+  },
+  "required": ["path", "coverage", "evidence"],
+  "additionalProperties": false,
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

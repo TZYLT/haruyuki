@@ -38,6 +38,10 @@ export const DREAM_AUTO_ALLOW_TOOL_NAMES: ReadonlySet<string> = new Set([
   // (no conversation, no memory write), so an unattended run can leave its next
   // self a note. Ordinary sessions allow it too, through the checker.
   "DreamNote",
+  // `DreamReviewMark` writes one line to this run's marks file under the
+  // harness home. It is dream-only: an `ask` in the unattended child would be a
+  // denial, and an ordinary session has no run to file a mark for.
+  "DreamReviewMark",
 ]);
 
 /** True when this turn belongs to a dream-run conversation. */

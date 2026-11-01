@@ -101,6 +101,7 @@ describe("dream tool declaration", () => {
       "DreamDone",
       "DreamAuthorization",
       "DreamNote",
+      "DreamReviewMark",
     ]);
     for (const toolName of DREAM_TOOL_NAMES) {
       expect(declared.names).toContain(toolName);
