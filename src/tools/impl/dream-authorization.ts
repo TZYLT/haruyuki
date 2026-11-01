@@ -6,19 +6,26 @@
  * requirement is blunt about the failure mode: "no entry" means "not
  * authorized", and a run may **never** infer authorization from something the
  * user said earlier in a conversation. This tool is the only read path, so the
- * answer is either an entry (with its scope, expiry, source conversation and the
- * user's own words) or an explicit "no authorization".
+ * answer is either an entry (with the user's own words, its expiry and whatever
+ * optional context the user added) or an explicit "no authorization".
  *
- * ## The entry carrier (minimal, reviewable convention)
+ * ## The entry carrier (one file per layout)
  *
- * Entries live in one Markdown file in the agent's memory repository:
+ * Authorizations live in the core set, which is already in the model's context,
+ * so there is nothing to search for: the task tier either sees the file or has
+ * no authorization. `detectMemoryFormat` picks the single carrier:
  *
- * - `<memory>/authorization.md`, or
- * - `<memory>/system/authorization.md` for legacy layouts (`system/` is the
- *   only projected directory there).
+ * - MemFS v1 (legacy layout): `<memory>/system/authorization.md`;
+ * - MemFS v2 (root marker): `<memory>/authorization.md`.
  *
- * The first existing file wins; the two are not merged. The file is ordinary
- * memory Markdown, so the normal pre-commit validation applies. Structure:
+ * Exactly one file is read. The tool does **not** fall back to the other
+ * location — "root first, then system, first one that exists" let entries from
+ * a layout the run was not reading authorize work, and it is gone (design §八).
+ * A missing carrier is reported as "no authorization", together with the path
+ * the run expected.
+ *
+ * The file is ordinary memory Markdown, so the normal pre-commit validation
+ * applies. Structure:
  *
  * ```markdown
  * ---
@@ -27,22 +34,23 @@
  * ---
  *
  * ## Tidy the projects folder
- * - scope: memory:projects/**
- * - expires: 2026-11-30
- * - source: local-conv-abc123
  * - quote: "整理一下 projects 下重复的笔记"
+ * - expires: 2026-11-30
+ * - scope: memory:projects/**        (optional)
+ * - source: local-conv-abc123        (optional)
  * ```
  *
  * One entry starts at a `## ` heading and runs to the next heading. The heading
  * is the entry's title. Fields are `- key: value` lines (continuation lines are
  * appended to the previous field):
  *
- * - `scope` (required): what the entry covers, free text — e.g.
- *   `memory:projects/**`, `workspace:docs/notes.md`, or a short description.
- * - `expires` (required): `YYYY-MM-DD` (UTC, inclusive) or `never`.
- * - `source` (required): the conversation id the authorization came from.
  * - `quote` (required): the user's original words. Authorization is only
  *   believable when the run can quote it.
+ * - `expires` (required): `YYYY-MM-DD` (UTC, inclusive) or `never`.
+ * - `scope` (optional): free-text context for the entry. It is **not** a gate
+ *   and the tool never matches work against it — an entry authorizes only what
+ *   its quote says.
+ * - `source` (optional): the conversation id the authorization came from.
  *
  * A malformed entry is ignored and reported as malformed — never half-read,
  * because half an entry is not an authorization. The tool is read-only.
@@ -51,6 +59,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCurrentAgentId } from "@/agent/context";
 import { getScopedMemoryFilesystemRoot } from "@/agent/memory-filesystem";
+import {
+  detectMemoryFormat,
+  type LocalMemoryFormat,
+} from "@/agent/memory-format";
 import { getBackend } from "@/backend";
 import { getRuntimeContext } from "@/runtime-context";
 
@@ -65,31 +77,50 @@ const TOOL_NAME = "DreamAuthorization";
 const AUTHORIZATION_DISCIPLINE =
   "Entries must quote the user's own words. Writing or editing an authorization entry to cover your own work violates the task-tier discipline, and an unverified quote is not permission: do not manufacture or amend entries.";
 
-/** The preferred carrier, relative to the memory repository root. */
+/** The MemFS v2 carrier, relative to the memory repository root. */
 export const DREAM_AUTHORIZATION_PATH = "authorization.md";
-/** The legacy-layout carrier, read when the preferred file does not exist. */
+/** The MemFS v1 carrier: legacy layouts keep their core under `system/`. */
 export const DREAM_AUTHORIZATION_LEGACY_PATH = "system/authorization.md";
 
-/** Required labels on every entry. */
+/** Fields every entry must carry; without them there is no authorization. */
 export const DREAM_AUTHORIZATION_REQUIRED_FIELDS = [
-  "scope",
-  "expires",
-  "source",
   "quote",
+  "expires",
 ] as const;
+/** Context fields an entry may carry; they are reported, never gated on. */
+export const DREAM_AUTHORIZATION_OPTIONAL_FIELDS = ["scope", "source"] as const;
 
 export type DreamAuthorizationField =
-  (typeof DREAM_AUTHORIZATION_REQUIRED_FIELDS)[number];
+  | (typeof DREAM_AUTHORIZATION_REQUIRED_FIELDS)[number]
+  | (typeof DREAM_AUTHORIZATION_OPTIONAL_FIELDS)[number];
+
+function isAuthorizationField(key: string): key is DreamAuthorizationField {
+  return (
+    (DREAM_AUTHORIZATION_REQUIRED_FIELDS as readonly string[]).includes(key) ||
+    (DREAM_AUTHORIZATION_OPTIONAL_FIELDS as readonly string[]).includes(key)
+  );
+}
+
+/** The one carrier a layout reads; the other layout's file is never consulted. */
+export function resolveAuthorizationCarrierPath(
+  format: LocalMemoryFormat,
+): string {
+  return format === "memfs-v2"
+    ? DREAM_AUTHORIZATION_PATH
+    : DREAM_AUTHORIZATION_LEGACY_PATH;
+}
 
 export interface DreamAuthorizationEntry {
   /** Heading text; the human name of the authorization. */
   title: string;
   /** 1-based line of the heading, for pointing at the file. */
   line: number;
-  scope: string;
+  /** Optional free-text context; never matched against the work. */
+  scope: string | null;
   /** `YYYY-MM-DD` (UTC, inclusive) or `null` for "never". */
   expires: string | null;
-  source: string;
+  /** Optional conversation the authorization came from. */
+  source: string | null;
   quote: string;
 }
 
@@ -211,12 +242,7 @@ export function parseDreamAuthorizationEntries(
     const field = FIELD_PATTERN.exec(raw);
     if (field !== null) {
       const key = (field[1] ?? "").toLowerCase();
-      if (
-        key === "scope" ||
-        key === "expires" ||
-        key === "source" ||
-        key === "quote"
-      ) {
+      if (isAuthorizationField(key)) {
         const previous = current.fields[key];
         current.fields[key] = previous
           ? `${previous}\n${(field[2] ?? "").trim()}`
@@ -240,18 +266,18 @@ export function parseDreamAuthorizationEntries(
   const entries: DreamAuthorizationEntry[] = [];
   const problems: string[] = [];
   for (const draft of drafts) {
-    // Normalize first, then judge: `- scope: ""` has two characters but says
+    // Normalize first, then judge: `- quote: ""` has two characters but says
     // nothing, and treating it as present would turn an empty entry into an
     // ACTIVE authorization (F-06 review finding).
-    const scope = stripOuterQuotes(draft.fields.scope ?? "");
-    const source = stripOuterQuotes(draft.fields.source ?? "");
     const quote = stripOuterQuotes(draft.fields.quote ?? "");
     const rawExpires = stripOuterQuotes(draft.fields.expires ?? "");
+    const rawScope = stripOuterQuotes(draft.fields.scope ?? "");
+    const rawSource = stripOuterQuotes(draft.fields.source ?? "");
+    const scope = rawScope.length > 0 ? rawScope : null;
+    const source = rawSource.length > 0 ? rawSource : null;
     const missing: string[] = [];
-    if (scope.length === 0) missing.push("scope");
-    if (rawExpires.length === 0) missing.push("expires");
-    if (source.length === 0) missing.push("source");
     if (quote.length === 0) missing.push("quote");
+    if (rawExpires.length === 0) missing.push("expires");
     if (missing.length > 0) {
       problems.push(
         `line ${draft.line}: "${draft.title || "(untitled entry)"}" is missing required field${missing.length === 1 ? "" : "s"} ${missing.join(", ")} — ignored, so it authorizes nothing.`,
@@ -320,27 +346,17 @@ function resolveMemoryDir(
   return { memoryDir: getScopedMemoryFilesystemRoot(agentId) };
 }
 
-function findAuthorizationFile(memoryDir: string): string | null {
-  for (const relative of [
-    DREAM_AUTHORIZATION_PATH,
-    DREAM_AUTHORIZATION_LEGACY_PATH,
-  ]) {
-    const absolute = join(memoryDir, ...relative.split("/"));
-    if (existsSync(absolute)) return relative;
-  }
-  return null;
-}
-
 function formatEntry(entry: ResolvedAuthorizationEntry, index: number): string {
   const state = entry.active
     ? `ACTIVE${entry.expires === null ? " (never expires)" : ` (expires ${entry.expires})`}`
     : `EXPIRED on ${entry.expires}`;
-  return [
+  const lines = [
     `${index + 1}. ${entry.title || "(untitled entry)"} — ${state}`,
-    `   scope: ${entry.scope}`,
-    `   source: ${entry.source}`,
-    `   quote: ${entry.quote}`,
-  ].join("\n");
+  ];
+  if (entry.scope !== null) lines.push(`   scope: ${entry.scope}`);
+  if (entry.source !== null) lines.push(`   source: ${entry.source}`);
+  lines.push(`   quote: ${entry.quote}`);
+  return lines.join("\n");
 }
 
 /**
@@ -375,12 +391,18 @@ export async function dream_authorization(
   const resolved = resolveMemoryDir(agentId, deps);
   if ("error" in resolved) return error(resolved.error);
 
-  const relativePath = findAuthorizationFile(resolved.memoryDir);
-  if (relativePath === null) {
+  // One carrier per layout (design §八.1). Core is already in the model's
+  // context, so there is nothing to search: either the expected file exists or
+  // there is no authorization. Falling back to the other layout's file would
+  // let an entry the run was not reading authorize work.
+  const format = detectMemoryFormat(resolved.memoryDir, true);
+  const relativePath = resolveAuthorizationCarrierPath(format);
+  const absolutePath = join(resolved.memoryDir, ...relativePath.split("/"));
+  if (!existsSync(absolutePath)) {
     return {
       content: [
         `${TOOL_NAME}: no authorization entries exist.`,
-        `Looked for ${DREAM_AUTHORIZATION_PATH} and ${DREAM_AUTHORIZATION_LEGACY_PATH} in the memory repository; neither exists.`,
+        `Expected the ${format} carrier at ${relativePath} in the memory repository; that file does not exist, and no other location is searched.`,
         "No authorization: do not infer one from earlier conversation, and skip anything that would need it.",
       ].join("\n"),
       status: "success",
@@ -389,10 +411,7 @@ export async function dream_authorization(
 
   let markdown: string;
   try {
-    markdown = readFileSync(
-      join(resolved.memoryDir, ...relativePath.split("/")),
-      "utf8",
-    );
+    markdown = readFileSync(absolutePath, "utf8");
   } catch {
     return error(
       `${TOOL_NAME}: could not read ${relativePath} from the memory repository.`,
@@ -423,7 +442,7 @@ export async function dream_authorization(
         : `${TOOL_NAME}: no authorization entry in ${relativePath} matches "${query}".`,
     );
     lines.push(
-      "No authorization: do not infer one from earlier conversation, and skip anything that would need it.",
+      "No authorization: an empty carrier authorizes nothing. Do not infer one from earlier conversation, do not search other locations, and skip anything that would need it.",
     );
     lines.push(AUTHORIZATION_DISCIPLINE);
   } else {
@@ -434,7 +453,7 @@ export async function dream_authorization(
       lines.push(formatEntry(entry, index));
     });
     lines.push(
-      "An entry authorizes only what its scope and quote say, and only until it expires. A task not covered by one of these entries is not authorized.",
+      "An entry authorizes only what its quote says, and only until it expires. `scope` and `source`, when present, are context — the tool does not match work against them and does not infer a wider scope. A task not covered by one of these entries is not authorized.",
     );
     lines.push(AUTHORIZATION_DISCIPLINE);
   }
