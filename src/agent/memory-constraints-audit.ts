@@ -16,9 +16,22 @@ export interface InvalidPendingMemory {
   localOnly: boolean;
 }
 
-type MemoryLayoutPolicy = "legacy-only" | "root-marker" | "shared-memory";
+/** Persistent MemFS layout policy recorded beside the memory repository. */
+export type MemoryLayoutPolicy =
+  | "legacy-only"
+  | "root-marker"
+  | "shared-memory";
 
-function memoryLayoutPolicy(memoryDir: string): MemoryLayoutPolicy {
+/**
+ * Read the layout policy the harness recorded in the repository's common Git
+ * directory. Repositories created outside the harness carry no policy file, so
+ * the committed root `MEMORY.md` history is the fallback signal; an unknown or
+ * missing value means `legacy-only`.
+ *
+ * Kept as the single implementation: the dream layout facts (W1) read the same
+ * policy and must not drift from the commit-time audit.
+ */
+export function readMemoryLayoutPolicy(memoryDir: string): MemoryLayoutPolicy {
   try {
     const commonDir = execFileSync("git", ["rev-parse", "--git-common-dir"], {
       cwd: memoryDir,
@@ -66,7 +79,7 @@ export function validateMemoryConstraintsHead(
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
-    const layoutPolicy = memoryLayoutPolicy(memoryDir);
+    const layoutPolicy = readMemoryLayoutPolicy(memoryDir);
     writeFileSync(validatorPath, MEMORY_CONSTRAINTS_VALIDATOR_SCRIPT, "utf8");
     const result = spawnSync(
       "node",
