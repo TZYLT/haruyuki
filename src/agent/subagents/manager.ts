@@ -407,12 +407,7 @@ async function executeSubagent(
       inheritedBaseUrl,
       transcriptPath,
       subagentId,
-      ...(automatedRun
-        ? {
-            usageSource: automatedRun.usageSource,
-            usageRunId: automatedRun.usageRunId,
-          }
-        : {}),
+      ...(automatedRun ?? {}),
       subagentName:
         existingAgentId || existingConversationId
           ? undefined

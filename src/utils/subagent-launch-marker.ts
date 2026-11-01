@@ -23,6 +23,19 @@ export const PARENT_CONVERSATION_ENV = "HARUYUKI_PARENT_CONVERSATION_ID";
 export const USAGE_SOURCE_ENV = "HARUYUKI_USAGE_SOURCE";
 export const USAGE_RUN_ID_ENV = "HARUYUKI_USAGE_RUN_ID";
 
+/**
+ * Dream-run context for the child of a dream tier turn (F-06 W7).
+ *
+ * A dream tier turn runs in its own short-lived process, so the tier the parent
+ * controller holds and the run id it minted would otherwise be lost: the child
+ * only rebuilds `dreamRun` from the hidden conversation's origin. These markers
+ * carry the values into the child's tool runtime context — the launcher sets
+ * them for a `dream` automated run only, and the child's toolset reads them
+ * back. They are cleared for nested launches, like the usage tag above.
+ */
+export const DREAM_TIER_ENV = "HARUYUKI_DREAM_TIER";
+export const DREAM_RUN_ID_ENV = "HARUYUKI_DREAM_RUN_ID";
+
 export function consumeSubagentLaunch(env: NodeJS.ProcessEnv): boolean {
   const isLaunch = env[SUBAGENT_LAUNCH_ENV] === "1";
   delete env[SUBAGENT_LAUNCH_ENV];

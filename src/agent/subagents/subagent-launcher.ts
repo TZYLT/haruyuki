@@ -22,6 +22,8 @@ import {
 } from "@/tools/impl/shell-env";
 import { APP_DIR_NAME, APP_SUBDIRS } from "@/utils/app-paths";
 import {
+  DREAM_RUN_ID_ENV,
+  DREAM_TIER_ENV,
   PARENT_CONVERSATION_ENV,
   SUBAGENT_LAUNCH_ENV,
   SUBAGENT_LAUNCH_PROFILE_ENV,
@@ -182,6 +184,15 @@ export interface ComposeSubagentChildEnvOptions {
   usageSource?: string;
   /** The run the spend belongs to; written next to the source tag. */
   usageRunId?: string;
+  /**
+   * Tier of the dream turn being launched (F-06 W7).
+   *
+   * Set only for a `dream` automated run; together with `usageRunId` it becomes
+   * the child's dream run context so `MemoryCommit` can prefix `dream(<tier>):`
+   * and the review-mark tool can address this run. Cleared for nested launches
+   * like the usage tag below.
+   */
+  dreamTier?: string;
 }
 
 function resolveMemorySubagentScratchpad(
@@ -272,6 +283,18 @@ export function composeSubagentChildEnv(
   if (usageSource) childEnv[USAGE_SOURCE_ENV] = usageSource;
   const usageRunId = options.usageRunId?.trim();
   if (usageRunId) childEnv[USAGE_RUN_ID_ENV] = usageRunId;
+
+  // Dream context travels with the child for the same reason: the parent owns
+  // the tier and the run id, but the child is a separate process. Cleared
+  // unconditionally so a nested launch starts without one, then set only for a
+  // dream automated run.
+  delete childEnv[DREAM_TIER_ENV];
+  delete childEnv[DREAM_RUN_ID_ENV];
+  if (usageSource === "dream" && usageRunId) {
+    childEnv[DREAM_RUN_ID_ENV] = usageRunId;
+    const dreamTier = options.dreamTier?.trim();
+    if (dreamTier) childEnv[DREAM_TIER_ENV] = dreamTier;
+  }
 
   if (backendMode === "local") {
     childEnv.HARUYUKI_LOCAL_BACKEND_EXPERIMENTAL = "1";

@@ -13,7 +13,12 @@ import type { ModContext } from "@/mods/types";
 import type { RuntimeContextSnapshot } from "@/runtime-context";
 import { settingsManager } from "@/settings-manager";
 import { readConversationProvenance } from "@/types/conversation-provenance";
+import type { DreamTier } from "@/types/dream-run-metadata";
 import { OPENAI_COMPATIBLE_PROXY_UPDATE_ARG } from "@/utils/openai-endpoint";
+import {
+  DREAM_RUN_ID_ENV,
+  DREAM_TIER_ENV,
+} from "@/utils/subagent-launch-marker";
 import { isRecord } from "@/utils/type-guards";
 import { getStoredClientPreferences } from "./client-preferences";
 import {
@@ -40,6 +45,31 @@ export interface ClientToolsetConfig {
   base?: ToolsetPreference;
   /** Additional bundled client tools to load before applying the allowlist. */
   include?: string[];
+}
+
+const DREAM_TIERS: readonly DreamTier[] = ["tidy", "think", "task", "wander"];
+
+/**
+ * The dream run context a dream child inherited from its launcher (F-06 W7).
+ *
+ * A tier turn is a separate process: the parent sets `HARUYUKI_DREAM_TIER` /
+ * `HARUYUKI_DREAM_RUN_ID` when it spawns the child, and this reads them back so
+ * `MemoryCommit` can prefix the commit (`dream(<tier>):`) and the review-mark
+ * tool can address the run. An unknown tier or empty id is ignored rather than
+ * trusted; a non-dream process never calls this.
+ */
+export function readDreamRunContext(env: NodeJS.ProcessEnv): {
+  dreamTier?: DreamTier;
+  dreamRunId?: string;
+} {
+  const tier = env[DREAM_TIER_ENV]?.trim() as DreamTier | undefined;
+  const dreamTier =
+    tier !== undefined && DREAM_TIERS.includes(tier) ? tier : undefined;
+  const dreamRunId = env[DREAM_RUN_ID_ENV]?.trim();
+  return {
+    ...(dreamTier !== undefined ? { dreamTier } : {}),
+    ...(dreamRunId ? { dreamRunId } : {}),
+  };
 }
 
 function resolveIncludedToolNames(toolNames: string[] | undefined): ToolName[] {
@@ -470,6 +500,7 @@ export async function prepareToolExecutionContextForScope(params: {
       ...(workspaceSandbox !== undefined ? { workspaceSandbox } : {}),
       executionSettings,
       ...(dreamRun ? { dreamRun } : {}),
+      ...(dreamRun ? readDreamRunContext(process.env) : {}),
     },
   });
   return { ...result, agent: agent as AgentState | null };

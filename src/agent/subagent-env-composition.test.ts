@@ -14,7 +14,11 @@ import {
   PROVIDERS_ONLY_MOD_CAPABILITY_PROFILE,
 } from "@/mods/capabilities";
 import { HARUYUKI_DISABLE_MODS_ENV } from "@/mods/disable";
-import { SUBAGENT_NAME_ENV } from "@/utils/subagent-launch-marker";
+import {
+  DREAM_RUN_ID_ENV,
+  DREAM_TIER_ENV,
+  SUBAGENT_NAME_ENV,
+} from "@/utils/subagent-launch-marker";
 import { TRANSCRIPT_ROOT_ENV } from "@/utils/transcript-paths";
 
 const PARENT_ID = "agent-226cd814-09bf-4436-940e-aea9d91d14cb";
@@ -385,6 +389,57 @@ describe("composeSubagentChildEnv", () => {
     expect(env.HOME).toBe("/home/user");
     expect(env.PATH).toBe("/usr/bin:/bin");
     expect(env.CUSTOM_VAR).toBe("preserved");
+  });
+
+  test("a dream launch carries the run id and tier into the child", () => {
+    const env = composeSubagentChildEnv({
+      parentProcessEnv: {},
+      parentAgentId: PARENT_ID,
+      subagentType: "dream",
+      launchProfile: "memory-subagent",
+      inheritedPrimaryRoot: PARENT_MEMORY_DIR,
+      usageSource: "dream",
+      usageRunId: "run-123",
+      dreamTier: "tidy",
+    });
+
+    expect(env[DREAM_RUN_ID_ENV]).toBe("run-123");
+    expect(env[DREAM_TIER_ENV]).toBe("tidy");
+    expect(env.HARUYUKI_USAGE_SOURCE).toBe("dream");
+  });
+
+  test("a non-dream or nested launch never inherits the dream context", () => {
+    const reflection = composeSubagentChildEnv({
+      parentProcessEnv: {},
+      parentAgentId: PARENT_ID,
+      subagentType: "reflection",
+      launchProfile: "memory-subagent",
+      inheritedPrimaryRoot: PARENT_MEMORY_DIR,
+      usageSource: "reflection",
+      usageRunId: "reflection-123",
+      dreamTier: "tidy",
+    });
+    expect(reflection[DREAM_RUN_ID_ENV]).toBeUndefined();
+    expect(reflection[DREAM_TIER_ENV]).toBeUndefined();
+
+    const dream = composeSubagentChildEnv({
+      parentProcessEnv: {},
+      parentAgentId: PARENT_ID,
+      subagentType: "dream",
+      launchProfile: "memory-subagent",
+      inheritedPrimaryRoot: PARENT_MEMORY_DIR,
+      usageSource: "dream",
+      usageRunId: "run-123",
+      dreamTier: "think",
+    });
+    const nested = composeSubagentChildEnv({
+      parentProcessEnv: dream,
+      parentAgentId: PARENT_ID,
+      launchProfile: "default",
+      inheritedPrimaryRoot: PARENT_MEMORY_DIR,
+    });
+    expect(nested[DREAM_RUN_ID_ENV]).toBeUndefined();
+    expect(nested[DREAM_TIER_ENV]).toBeUndefined();
   });
 });
 

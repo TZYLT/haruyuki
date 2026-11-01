@@ -18,10 +18,21 @@
 
 import { getActiveReflectionRun } from "@/agent/reflection-run";
 import { readDreamSignalState } from "@/cron/dream-signal";
+import { getRuntimeContext } from "@/runtime-context";
+import type { DreamTier } from "@/types/dream-run-metadata";
 
 export interface AutomatedRunUsageTag {
   usageSource: "reflection" | "dream";
   usageRunId: string;
+  /**
+   * The tier of the dream turn being launched (dream only).
+   *
+   * A tier turn runs in a separate process, so the tier has to travel with it
+   * (F-06 W7): `subagent-launcher` turns this into `HARUYUKI_DREAM_TIER` and the
+   * child's toolset reads it back into its runtime context. Reflection has no
+   * tier and never sets it.
+   */
+  dreamTier?: DreamTier;
 }
 
 /**
@@ -47,7 +58,12 @@ export function resolveAutomatedRunUsageTag(
   if (subagentType === "dream") {
     const runId = readDreamSignalState(parentAgentId).running?.runId;
     if (!runId) return undefined;
-    return { usageSource: "dream", usageRunId: runId };
+    const dreamTier = getRuntimeContext()?.dreamTier;
+    return {
+      usageSource: "dream",
+      usageRunId: runId,
+      ...(dreamTier !== undefined ? { dreamTier } : {}),
+    };
   }
 
   return undefined;
