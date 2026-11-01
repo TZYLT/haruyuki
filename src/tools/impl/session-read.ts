@@ -24,8 +24,8 @@
  */
 import { getConversationId, getCurrentAgentId } from "@/agent/context";
 import {
-  projectVisibleMessages,
   type VisibleMessageText,
+  visibleMessageText,
 } from "@/agent/message-text";
 import { getBackend } from "@/backend";
 import { getRuntimeContext } from "@/runtime-context";
@@ -36,6 +36,14 @@ import {
 import { isRecord } from "@/utils/type-guards";
 
 const TOOL_NAME = "SessionRead";
+
+/** Roles a caller may keep with `roles`; the same set the projection emits. */
+export const SESSION_READ_ROLES: readonly SessionReadRole[] = [
+  "user",
+  "assistant",
+  "summary",
+];
+export type SessionReadRole = VisibleMessageText["role"];
 
 /** Character budget when the caller does not name one. */
 export const SESSION_READ_DEFAULT_MAX_CHARS = 8_000;
@@ -69,6 +77,9 @@ export interface SessionReadArgs {
   message_start?: unknown;
   message_end?: unknown;
   query?: unknown;
+  roles?: unknown;
+  since?: unknown;
+  until?: unknown;
   max_chars?: unknown;
   offset?: unknown;
 }
@@ -99,9 +110,11 @@ export interface SessionReadResult {
   status: "success" | "error";
 }
 
-/** One visible message plus its 1-based position in the cleaned list. */
+/** One visible message plus its position in the cleaned list and its time. */
 interface IndexedVisibleMessage extends VisibleMessageText {
   index: number;
+  /** Stored creation time in epoch ms, or `null` when the row carries none. */
+  createdAt: number | null;
 }
 
 /** What a page renders, after range/query/offset are applied. */
@@ -137,6 +150,120 @@ function nonNegativeInteger(
     return { error: "must be a whole number of 0 or more" };
   }
   return { value };
+}
+
+function isSessionReadRole(value: unknown): value is SessionReadRole {
+  return (
+    typeof value === "string" &&
+    (SESSION_READ_ROLES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Validate `roles`. Absent means every role; an empty array is refused rather
+ * than silently returning nothing, because "I filtered everything out" and
+ * "this conversation has no such messages" would look the same to the caller.
+ */
+function parseRoles(
+  value: unknown,
+): { roles: ReadonlySet<SessionReadRole> } | { error: string } | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    return {
+      error: `must be an array of roles (${SESSION_READ_ROLES.join(", ")})`,
+    };
+  }
+  const roles = new Set<SessionReadRole>();
+  for (const raw of value) {
+    if (!isSessionReadRole(raw)) {
+      return {
+        error: `contains ${JSON.stringify(raw)}; the roles are ${SESSION_READ_ROLES.join(", ")}`,
+      };
+    }
+    roles.add(raw);
+  }
+  if (roles.size === 0) {
+    return { error: "must name at least one role" };
+  }
+  return { roles };
+}
+
+/**
+ * Validate a `since`/`until` bound: an ISO date/time string or epoch
+ * milliseconds. `undefined` means "no bound"; anything unparseable is a
+ * parameter error, never a silently ignored filter.
+ */
+function parseTimeBound(
+  value: unknown,
+  name: "since" | "until",
+): { ms: number } | { error: string } | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      return { error: `\`${name}\` must be a finite number of milliseconds.` };
+    }
+    return { ms: value };
+  }
+  if (typeof value !== "string") {
+    return {
+      error: `\`${name}\` must be an ISO date/time string or epoch milliseconds.`,
+    };
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return { error: `\`${name}\` must not be empty.` };
+  }
+  // All-digit strings are epoch milliseconds, matching the numeric form.
+  if (/^\d+$/.test(trimmed)) {
+    const ms = Number(trimmed);
+    if (Number.isFinite(ms)) return { ms };
+  }
+  const parsed = Date.parse(trimmed);
+  if (!Number.isFinite(parsed)) {
+    return {
+      error: `\`${name}\` is not a parseable time; use an ISO date/time such as 2026-11-01 or epoch milliseconds.`,
+    };
+  }
+  return { ms: parsed };
+}
+
+/** Stored creation time: `created_at` when present, else the row's `date`. */
+function messageCreatedAt(message: unknown): number | null {
+  if (!isRecord(message)) return null;
+  for (const key of ["created_at", "date"]) {
+    const raw = message[key];
+    if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+    if (typeof raw === "string" && raw.trim().length > 0) {
+      const parsed = Date.parse(raw);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+/**
+ * Project stored rows to visible messages, carrying the stored timestamp.
+ *
+ * Same projection as `projectVisibleMessages` (`visibleMessageText` is its
+ * per-row function); the timestamp is attached here because `VisibleMessageText`
+ * has no time and the projection module is not this tool's to change. The
+ * filters below run on the projected list, so a row that projects to nothing
+ * (reasoning, tool traffic, empty text) can never match them.
+ */
+function projectIndexedMessages(
+  messages: readonly unknown[],
+): IndexedVisibleMessage[] {
+  const projected: IndexedVisibleMessage[] = [];
+  for (const message of messages) {
+    const visible = visibleMessageText(message);
+    if (visible === null) continue;
+    projected.push({
+      ...visible,
+      index: projected.length + 1,
+      createdAt: messageCreatedAt(message),
+    });
+  }
+  return projected;
 }
 
 function extractPageItems(page: unknown): unknown[] {
@@ -230,6 +357,55 @@ function queryEcho(query: string): string {
     : `${query.slice(0, QUERY_ECHO_MAX_CHARS - 1)}…`;
 }
 
+/** Role filter: absent means every role. */
+function filterByRole(
+  messages: readonly IndexedVisibleMessage[],
+  roles: ReadonlySet<SessionReadRole> | undefined,
+): IndexedVisibleMessage[] {
+  if (roles === undefined) return [...messages];
+  return messages.filter((message) => roles.has(message.role));
+}
+
+/**
+ * Time-window filter, inclusive at both ends (`since <= created_at <= until`).
+ *
+ * A message whose stored row has no readable timestamp is kept out while a
+ * window is active: the tool cannot prove it belongs to the window, and the
+ * user-only channel exists to narrow material, not to guess at it.
+ */
+function filterByTimeWindow(
+  messages: readonly IndexedVisibleMessage[],
+  since: number | undefined,
+  until: number | undefined,
+): IndexedVisibleMessage[] {
+  if (since === undefined && until === undefined) return [...messages];
+  return messages.filter((message) => {
+    if (message.createdAt === null) return false;
+    if (since !== undefined && message.createdAt < since) return false;
+    if (until !== undefined && message.createdAt > until) return false;
+    return true;
+  });
+}
+
+/** Header/footer echo of the active filters, or `null` when there are none. */
+function describeFilters(input: {
+  roles: ReadonlySet<SessionReadRole> | undefined;
+  since: number | undefined;
+  until: number | undefined;
+}): string | null {
+  const parts: string[] = [];
+  if (input.roles !== undefined) {
+    parts.push(`roles=${[...input.roles].join(",")}`);
+  }
+  if (input.since !== undefined) {
+    parts.push(`since=${new Date(input.since).toISOString()}`);
+  }
+  if (input.until !== undefined) {
+    parts.push(`until=${new Date(input.until).toISOString()}`);
+  }
+  return parts.length === 0 ? null : parts.join(" · ");
+}
+
 function filterMessages(
   messages: readonly IndexedVisibleMessage[],
   rangeStart: number,
@@ -265,6 +441,8 @@ export function renderSessionReadPage(input: {
   offset: number;
   maxChars: number;
   query?: string;
+  /** Echo of the role/time filters; rendered under the header. */
+  filterNotice?: string;
   /** Notice that the backend scan hit its cap; rendered under the header. */
   scanNotice?: string;
 }): SessionReadPage {
@@ -274,6 +452,7 @@ export function renderSessionReadPage(input: {
     query === undefined
       ? null
       : `keyword: "${queryEcho(query)}" (${selected.length} matching)`,
+    input.filterNotice === undefined ? null : `filters: ${input.filterNotice}`,
     input.scanNotice ?? null,
   ]
     .filter((line): line is string => line !== null)
@@ -401,6 +580,28 @@ export async function session_read(
     maxChars = args.max_chars;
   }
 
+  const roleSelection = parseRoles(args.roles);
+  if (roleSelection !== undefined && "error" in roleSelection) {
+    return error(`${TOOL_NAME}: \`roles\` ${roleSelection.error}.`);
+  }
+  const sinceBound = parseTimeBound(args.since, "since");
+  if (sinceBound !== undefined && "error" in sinceBound) {
+    return error(`${TOOL_NAME}: ${sinceBound.error}`);
+  }
+  const untilBound = parseTimeBound(args.until, "until");
+  if (untilBound !== undefined && "error" in untilBound) {
+    return error(`${TOOL_NAME}: ${untilBound.error}`);
+  }
+  if (
+    sinceBound !== undefined &&
+    untilBound !== undefined &&
+    sinceBound.ms > untilBound.ms
+  ) {
+    return error(
+      `${TOOL_NAME}: \`since\` (${new Date(sinceBound.ms).toISOString()}) is after \`until\` (${new Date(untilBound.ms).toISOString()}); the window is inclusive and must not be inverted.`,
+    );
+  }
+
   const backend: SessionReadBackend = deps.backend ?? getBackend();
 
   let conversationRecord: unknown;
@@ -459,9 +660,7 @@ export async function session_read(
     ? `Only the first ${SESSION_READ_MAX_SCAN_MESSAGES} stored messages are scanned; continue with message_start=${SESSION_READ_MAX_SCAN_MESSAGES + 1}.`
     : undefined;
 
-  const visible: IndexedVisibleMessage[] = projectVisibleMessages(
-    scannedItems,
-  ).map((message, position) => ({ ...message, index: position + 1 }));
+  const visible: IndexedVisibleMessage[] = projectIndexedMessages(scannedItems);
 
   if (visible.length === 0) {
     return {
@@ -473,6 +672,20 @@ export async function session_read(
     };
   }
 
+  // Role and time filters run on the projected list and before the range,
+  // keyword and paging filters, so they narrow the same numbered messages the
+  // caller already knows from `message_start` / `offset` (checklist W9).
+  const filtered = filterByTimeWindow(
+    filterByRole(visible, roleSelection?.roles),
+    sinceBound?.ms,
+    untilBound?.ms,
+  );
+  const filterNotice = describeFilters({
+    roles: roleSelection?.roles,
+    since: sinceBound?.ms,
+    until: untilBound?.ms,
+  });
+
   const rangeStart = start?.value ?? 1;
   if (rangeStart > visible.length) {
     return error(
@@ -482,9 +695,15 @@ export async function session_read(
     );
   }
   const rangeEnd = Math.min(end?.value ?? visible.length, visible.length);
-  const selected = filterMessages(visible, rangeStart, rangeEnd, query);
+  const selected = filterMessages(filtered, rangeStart, rangeEnd, query);
 
   if (selected.length === 0) {
+    if (filterNotice !== null) {
+      return {
+        content: `SessionRead: no message in ${conversationId} between ${rangeStart} and ${rangeEnd} matches the requested filters (${filterNotice})${query === undefined ? "" : ` and the keyword "${query}"`}.`,
+        status: "success",
+      };
+    }
     return {
       content: query
         ? `SessionRead: no message in ${conversationId} between ${rangeStart} and ${rangeEnd} contains "${query}".`
@@ -505,6 +724,7 @@ export async function session_read(
     offset,
     maxChars,
     ...(query !== undefined ? { query } : {}),
+    ...(filterNotice !== null ? { filterNotice } : {}),
     ...(scanNotice !== undefined ? { scanNotice } : {}),
   });
   return { content: rendered.content, status: "success" };

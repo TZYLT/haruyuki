@@ -19,6 +19,20 @@
       "type": "string",
       "description": "Keep only messages whose visible text contains this substring, case-insensitively. Useful for finding where a decision or a piece of work appeared without paging through everything."
     },
+    "roles": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["user", "assistant", "summary"] },
+      "minItems": 1,
+      "description": "Keep only these message roles, in any combination. Omit it to read every role. Use [\"user\"] for a user-only channel: it drops assistant replies and compaction summaries while keeping the user's own words."
+    },
+    "since": {
+      "anyOf": [{ "type": "string" }, { "type": "number" }],
+      "description": "Keep only messages created at or after this time, compared against the stored creation timestamp. An ISO date/time (\"2026-11-01\" or \"2026-11-01T12:00:00Z\") or epoch milliseconds. Omit for no lower bound."
+    },
+    "until": {
+      "anyOf": [{ "type": "string" }, { "type": "number" }],
+      "description": "Keep only messages created at or before this time, inclusive, in the same formats as `since`. Omit for no upper bound."
+    },
     "max_chars": {
       "type": "number",
       "minimum": 400,

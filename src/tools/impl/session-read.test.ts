@@ -434,6 +434,194 @@ describe("session_read page progress", () => {
   });
 });
 
+const TIMED_MESSAGES: unknown[] = [
+  {
+    message_type: "user_message",
+    content: [{ type: "text", text: "first user question" }],
+    created_at: "2026-10-01T10:00:00.000Z",
+  },
+  {
+    message_type: "assistant_message",
+    content: [{ type: "text", text: "first answer" }],
+    created_at: "2026-10-01T10:01:00.000Z",
+  },
+  {
+    message_type: "summary_message",
+    summary: "compacted so far",
+    created_at: "2026-10-05T09:00:00.000Z",
+  },
+  {
+    message_type: "user_message",
+    content: [{ type: "text", text: "second user question" }],
+    created_at: "2026-10-10T18:00:00.000Z",
+  },
+  {
+    message_type: "assistant_message",
+    content: [{ type: "text", text: "second answer" }],
+    created_at: "2026-10-10T18:02:00.000Z",
+  },
+];
+
+function timed(extra: Record<string, unknown> = {}): SessionReadBackend {
+  return fakeBackend({
+    record: { id: "conv-1", hidden: false, ...extra },
+    messages: TIMED_MESSAGES,
+  });
+}
+
+describe("session_read roles filter", () => {
+  test("keeps only the requested roles and preserves message numbers", async () => {
+    const result = await read({ roles: ["user"] }, timed());
+    expect(result.status).toBe("success");
+    expect(result.content).toContain("first user question");
+    expect(result.content).toContain("second user question");
+    expect(result.content).not.toContain("first answer");
+    expect(result.content).not.toContain("second answer");
+    // Summaries are excluded by the user-only channel too.
+    expect(result.content).not.toContain("compacted so far");
+    // Numbers still refer to the cleaned conversation, not to the filtered list.
+    expect(result.content).toContain("[1] user:");
+    expect(result.content).toContain("[4] user:");
+    expect(result.content).toContain("filters: roles=user");
+  });
+
+  test("can select summaries alone", async () => {
+    const result = await read({ roles: ["summary"] }, timed());
+    expect(result.status).toBe("success");
+    expect(result.content).toContain("compacted so far");
+    expect(result.content).not.toContain("user question");
+    expect(result.content).toContain("[3] summary:");
+  });
+
+  test("combines with message_start/message_end and query", async () => {
+    const ranged = await read({ roles: ["user"], message_start: 2 }, timed());
+    expect(ranged.content).toContain("second user question");
+    expect(ranged.content).not.toContain("first user question");
+
+    const queried = await read({ roles: ["user"], query: "second" }, timed());
+    expect(queried.content).toContain("second user question");
+    expect(queried.content).not.toContain("first user question");
+  });
+
+  test("refuses malformed roles instead of ignoring them", async () => {
+    for (const roles of ["user", [], ["system"], ["user", 42]]) {
+      const result = await read({ roles }, timed());
+      expect(result.status).toBe("error");
+      expect(result.content).toContain("roles");
+    }
+  });
+
+  test("default behavior is unchanged: no filters and every role", async () => {
+    const result = await read({}, timed());
+    expect(result.content).toContain("first user question");
+    expect(result.content).toContain("first answer");
+    expect(result.content).toContain("compacted so far");
+    expect(result.content).not.toContain("filters:");
+  });
+});
+
+describe("session_read since/until filter", () => {
+  test("since keeps later messages, at or after the bound", async () => {
+    const result = await read({ since: "2026-10-05" }, timed());
+    expect(result.status).toBe("success");
+    expect(result.content).toContain("compacted so far");
+    expect(result.content).toContain("second user question");
+    expect(result.content).not.toContain("first user question");
+    expect(result.content).toContain("filters: since=2026-10-05T00:00:00.000Z");
+  });
+
+  test("until is inclusive and keeps earlier messages", async () => {
+    const result = await read({ until: "2026-10-01T10:01:00.000Z" }, timed());
+    expect(result.status).toBe("success");
+    expect(result.content).toContain("first user question");
+    expect(result.content).toContain("first answer");
+    expect(result.content).not.toContain("compacted so far");
+    expect(result.content).not.toContain("second user question");
+  });
+
+  test("accepts epoch milliseconds", async () => {
+    const since = Date.UTC(2026, 9, 10);
+    const result = await read({ since }, timed());
+    expect(result.status).toBe("success");
+    expect(result.content).toContain("second user question");
+    expect(result.content).not.toContain("first user question");
+    expect(result.content).toContain("second answer");
+  });
+
+  test("filters on the stored `date` field when created_at is absent", async () => {
+    const backend = fakeBackend({
+      messages: [
+        {
+          message_type: "user_message",
+          content: [{ type: "text", text: "old row" }],
+          date: "2026-09-01T00:00:00.000Z",
+        },
+        {
+          message_type: "user_message",
+          content: [{ type: "text", text: "new row" }],
+          date: "2026-10-20T00:00:00.000Z",
+        },
+      ],
+    });
+    const result = await read({ since: "2026-10-01" }, backend);
+    expect(result.content).toContain("new row");
+    expect(result.content).not.toContain("old row");
+  });
+
+  test("combines a window with roles and a keyword", async () => {
+    const result = await read(
+      {
+        roles: ["assistant"],
+        since: "2026-10-10T00:00:00.000Z",
+        until: "2026-10-10T23:59:59.999Z",
+        query: "answer",
+      },
+      timed(),
+    );
+    expect(result.status).toBe("success");
+    expect(result.content).toContain("second answer");
+    expect(result.content).not.toContain("first answer");
+    expect(result.content).not.toContain("second user question");
+  });
+
+  test("says so when the filters match nothing", async () => {
+    const result = await read({ since: "2027-01-01" }, timed());
+    expect(result.status).toBe("success");
+    expect(result.content).toContain("no message");
+    expect(result.content).toContain("matches the requested filters");
+  });
+
+  test("refuses an inverted window", async () => {
+    const result = await read(
+      { since: "2026-10-10", until: "2026-10-01" },
+      timed(),
+    );
+    expect(result.status).toBe("error");
+    expect(result.content).toContain("must not be inverted");
+  });
+
+  test("refuses unparseable or wrongly-typed bounds", async () => {
+    for (const args of [
+      { since: "not-a-date" },
+      { until: "not-a-date" },
+      { since: "" },
+      { until: 1 / 0 },
+      { since: { at: "2026-10-01" } },
+      { until: ["2026-10-01"] },
+    ]) {
+      const result = await read(args as SessionReadArgs, timed());
+      expect(result.status).toBe("error");
+    }
+  });
+
+  test("a message with no readable time cannot pass a time filter", async () => {
+    const result = await read({ since: "2026-01-01" });
+    expect(result.status).toBe("success");
+    expect(result.content).toContain("matches the requested filters");
+    expect(result.content).not.toContain("hello  there");
+  });
+});
+
 describe("SessionRead declaration", () => {
   test("is registered and its description is distinct from Read's", () => {
     const description = TOOL_DEFINITIONS.SessionRead.description;
