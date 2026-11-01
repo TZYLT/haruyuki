@@ -69,6 +69,18 @@ test("TopicMark ships in every non-empty preset", () => {
   expect(TOOLSET_CATALOG.none.tools).not.toContain("TopicMark");
 });
 
+test("DreamNote ships in every non-empty preset", () => {
+  // W15: the main agent's note entry point. A preset that does not advertise it
+  // makes the normal-session auto-allow pointless, and the slash/app-server
+  // entrances would be the only way to leave a note for the next dream run.
+  expect(Object.hasOwn(TOOL_DEFINITIONS, "DreamNote")).toBe(true);
+  expect(TOOLSET_CATALOG.letta.tools).toContain("DreamNote");
+  expect(TOOLSET_CATALOG.default.tools).toContain("DreamNote");
+  expect(TOOLSET_CATALOG.codex.tools).toContain("DreamNote");
+  // `none` is the explicit "no built-in tools" preset.
+  expect(TOOLSET_CATALOG.none.tools).not.toContain("DreamNote");
+});
+
 // The cross-agent send tool used to be asserted here. It required a Cloud
 // backend to send to another agent, so it was removed rather than shipped as a
 // tool that always returned an error. The presets are covered by the assertions

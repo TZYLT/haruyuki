@@ -505,6 +505,20 @@ function checkPermissionForEngine(
     };
   }
 
+  // `DreamNote` only appends a line to the agent's own note queue under the
+  // harness home, so an ordinary session may leave a note without a prompt
+  // (F-06 §2.4, same class as `Skill` below). Rules and guards above win.
+  if (permissionToolName === "DreamNote" && !isStrictMode) {
+    traceEvent(trace, "dream-note-auto-allow", "DreamNote queue write");
+    return {
+      result: {
+        decision: "allow",
+        reason: "DreamNote only writes the agent's dream-note queue",
+      },
+      trace,
+    };
+  }
+
   if (toolName === "Skill" && !isStrictMode) {
     traceEvent(trace, "skill-auto-allow", "Skill tool is always allowed");
     return {

@@ -10,13 +10,15 @@ export type DreamToolName =
   | "MemoryCommit"
   | "DreamStatus"
   | "DreamDone"
-  | "DreamAuthorization";
+  | "DreamAuthorization"
+  | "DreamNote";
 
 export const DREAM_TOOL_NAMES: readonly DreamToolName[] = [
   "MemoryCommit",
   "DreamStatus",
   "DreamDone",
   "DreamAuthorization",
+  "DreamNote",
 ];
 
 /**

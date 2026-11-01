@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "description": "The note for the next dream run: a short priority, reminder or constraint it should read before ordinary tidy work. Trimmed; 1–2000 characters. This is not a memory write and does not authorize anything — the run still needs a real authorization entry to act."
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "Agent to leave the note for. Omit for the current agent. A note for another agent is only read by that agent's next dream run."
+    }
+  },
+  "required": ["text"],
+  "additionalProperties": false,
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

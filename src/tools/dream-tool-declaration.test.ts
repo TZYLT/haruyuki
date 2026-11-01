@@ -4,12 +4,16 @@
  * The declared payload is what the model sees and what the prefix freeze
  * captures on the conversation's first turn, so the gate has to be right at
  * that layer: a dream conversation carries the whole family, an ordinary one
- * never does, and the runtime context that the permission checker will read is
- * set from the same record.
+ * carries none of the run-only tools, and the runtime context that the
+ * permission checker will read is set from the same record.
  *
  * `SessionRead` is deliberately *not* dream-only (R-5.4.2): it is in the regular
  * presets so any agent can read an ordinary conversation back, and it appears in
  * a dream conversation because that conversation uses the same preset.
+ *
+ * `DreamNote` is the one dream-family name that is *also* ordinary (W15, design
+ * §2.4): the run-unattended child and a normal session both leave notes for the
+ * next run, so the tool is in both the family declaration and the presets.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -96,6 +100,7 @@ describe("dream tool declaration", () => {
       "DreamStatus",
       "DreamDone",
       "DreamAuthorization",
+      "DreamNote",
     ]);
     for (const toolName of DREAM_TOOL_NAMES) {
       expect(declared.names).toContain(toolName);
@@ -103,16 +108,33 @@ describe("dream tool declaration", () => {
     expect(declared.dreamRun).toBe(true);
   });
 
-  test("an ordinary conversation never declares the dream family", async () => {
+  test("an ordinary conversation declares no run-only dream tool", async () => {
     const agent = await backend.createAgent({ name: "Ordinary" });
     const conversation = await backend.createConversation({
       agent_id: agent.id,
     });
 
     const declared = await clientToolNames(agent.id, conversation.id);
-    for (const toolName of DREAM_TOOL_NAMES) {
+    const runOnly = DREAM_TOOL_NAMES.filter(
+      (toolName) => toolName !== "DreamNote",
+    );
+    for (const toolName of runOnly) {
       expect(declared.names).not.toContain(toolName);
     }
+    expect(declared.dreamRun).toBe(false);
+  });
+
+  test("DreamNote is declared in ordinary sessions too, as the note entry point", async () => {
+    // W15: the main agent leaves a note for the next dream run. If a normal
+    // conversation never advertises the tool, the permission auto-allow and the
+    // presets' own listing would both be unreachable in practice.
+    const agent = await backend.createAgent({ name: "DreamNote everywhere" });
+    const conversation = await backend.createConversation({
+      agent_id: agent.id,
+    });
+
+    const declared = await clientToolNames(agent.id, conversation.id);
+    expect(declared.names).toContain("DreamNote");
     expect(declared.dreamRun).toBe(false);
   });
 

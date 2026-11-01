@@ -4,6 +4,7 @@ import AskUserQuestionDescription from "./descriptions/AskUserQuestion.md";
 import BashDescription from "./descriptions/Bash.md";
 import DreamAuthorizationDescription from "./descriptions/DreamAuthorization.md";
 import DreamDoneDescription from "./descriptions/DreamDone.md";
+import DreamNoteDescription from "./descriptions/DreamNote.md";
 import DreamStatusDescription from "./descriptions/DreamStatus.md";
 import EditDescription from "./descriptions/Edit.md";
 import EnterWorktreeDescription from "./descriptions/EnterWorktree.md";
@@ -42,6 +43,7 @@ import { ask_user_question_async } from "./impl/ask-user-question";
 import { bash } from "./impl/bash";
 import { dream_authorization } from "./impl/dream-authorization";
 import { dream_done } from "./impl/dream-done";
+import { dream_note } from "./impl/dream-note";
 import { dream_status } from "./impl/dream-status";
 import { edit } from "./impl/edit";
 import { enter_worktree } from "./impl/enter-worktree";
@@ -77,6 +79,7 @@ import AskUserQuestionSchema from "./schemas/AskUserQuestion.json";
 import BashSchema from "./schemas/Bash.json";
 import DreamAuthorizationSchema from "./schemas/DreamAuthorization.json";
 import DreamDoneSchema from "./schemas/DreamDone.json";
+import DreamNoteSchema from "./schemas/DreamNote.json";
 import DreamStatusSchema from "./schemas/DreamStatus.json";
 import EditSchema from "./schemas/Edit.json";
 import EnterWorktreeSchema from "./schemas/EnterWorktree.json";
@@ -157,6 +160,11 @@ const toolDefinitions = {
     schema: DreamDoneSchema,
     description: DreamDoneDescription.trim(),
     impl: dream_done,
+  }),
+  DreamNote: defineTool({
+    schema: DreamNoteSchema,
+    description: DreamNoteDescription.trim(),
+    impl: dream_note,
   }),
   DreamStatus: defineTool({
     schema: DreamStatusSchema,

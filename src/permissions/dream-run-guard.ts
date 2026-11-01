@@ -23,7 +23,7 @@ import {
  *
  * `MemoryCommit` is the reason this list exists: `acceptEdits` has no shell, so
  * a commit has to come from a harness tool, and without the explicit allowance
- * the unattended child would deny its own commit. The other three are the
+ * the unattended child would deny its own commit. The three after it are the
  * run's own self-reporting tools (M3): an `ask` would be a denial, and the run
  * has nobody to ask (Q-53 / §2.5). Declaring them here is safe before they are
  * implemented — `tools/toolset.ts` only declares the dream tools that exist in
@@ -34,6 +34,10 @@ export const DREAM_AUTO_ALLOW_TOOL_NAMES: ReadonlySet<string> = new Set([
   "DreamStatus",
   "DreamDone",
   "DreamAuthorization",
+  // `DreamNote` writes one line to the agent's queue under the harness home
+  // (no conversation, no memory write), so an unattended run can leave its next
+  // self a note. Ordinary sessions allow it too, through the checker.
+  "DreamNote",
 ]);
 
 /** True when this turn belongs to a dream-run conversation. */

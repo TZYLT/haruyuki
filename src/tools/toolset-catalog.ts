@@ -27,6 +27,12 @@ export const WORKTREE_TOOL_NAMES = new Set<ToolName>([
  * `TopicQuery` rides with it: a marker the model cannot look up is a write with no
  * reader. It needs no setting gate of its own — reading the index is harmless — so
  * it is listed wherever markers are.
+ *
+ * `DreamNote` is listed in every non-empty preset for the same "advertise the
+ * entry point" reason: the slash command and the app-server family write the same
+ * per-agent note queue, and a session that cannot see the tool cannot leave a
+ * note for the next dream run. It is not gated by the dream switch — a note is a
+ * hint for a future run, and writing one does not start anything.
  */
 export const TOOLSET_CATALOG: Readonly<Record<ToolsetName, ToolsetDefinition>> =
   {
@@ -61,6 +67,7 @@ export const TOOLSET_CATALOG: Readonly<Record<ToolsetName, ToolsetDefinition>> =
         "TopicMark",
         "TopicQuery",
         "SessionRead",
+        "DreamNote",
       ],
     },
     none: {
@@ -98,6 +105,7 @@ export const TOOLSET_CATALOG: Readonly<Record<ToolsetName, ToolsetDefinition>> =
         "TopicMark",
         "TopicQuery",
         "SessionRead",
+        "DreamNote",
       ],
     },
     codex: {
@@ -124,6 +132,7 @@ export const TOOLSET_CATALOG: Readonly<Record<ToolsetName, ToolsetDefinition>> =
         "TopicMark",
         "TopicQuery",
         "SessionRead",
+        "DreamNote",
       ],
     },
   };
