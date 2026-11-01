@@ -129,17 +129,18 @@ function isReadOnlyTopicForm(trimmed: string): boolean {
 }
 
 /**
- * `/dream` is four commands wearing one name (F-06 R-5.9.2): the status face and
- * `config` are views, while `run`, `on` and `off` change state (a delegated run,
- * the master switch). Only the views may pass a busy turn — a run must not start
- * behind the agent's own back, and a settings write waits like the rest.
+ * `/dream` is one command group wearing several names (F-06 R-5.9.2): the status
+ * face, `config` and the note list are views, while `run`, `on`, `off` and the
+ * note writes change state (a delegated run, the master switch, the note queue).
+ * Only the views may pass a busy turn — a run must not start behind the agent's
+ * own back, and a write waits like the rest.
  *
  * The match is exact down to the word boundary: a typo without the space
  * (`/dreamstatus`, `/dreamconfig`) is **not** a dream command at all. Treating
  * it as one would let an unknown command skip the busy guard and fall through
  * to the "send as a message" path while a turn is running.
  */
-const READ_ONLY_DREAM_FORM = /^\/dream(?:\s+(?:status|config))?$/;
+const READ_ONLY_DREAM_FORM = /^\/dream(?:\s+(?:status|config|notes))?$/;
 
 function isReadOnlyDreamForm(trimmed: string): boolean {
   return READ_ONLY_DREAM_FORM.test(trimmed);

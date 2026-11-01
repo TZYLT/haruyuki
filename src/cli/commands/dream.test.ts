@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { DreamNote } from "@/agent/dream/dream-notes";
 import {
   type DreamCommandDeps,
   type DreamRunCost,
@@ -149,6 +150,49 @@ describe("parseDreamAction", () => {
   test("an unknown subcommand reports the usage line", () => {
     expect(parseDreamAction(["wander"])).toMatchObject({
       error: expect.stringContaining("Usage: /dream"),
+    });
+  });
+
+  test("the note entrances parse without touching the existing ones", () => {
+    expect(parseDreamAction(["note", "tidy", "the", "projects"])).toEqual({
+      action: { kind: "note-add", text: "tidy the projects" },
+    });
+    expect(parseDreamAction(["note", "  spaced  "])).toEqual({
+      action: { kind: "note-add", text: "spaced" },
+    });
+    expect(parseDreamAction(["notes"])).toEqual({
+      action: { kind: "note-list" },
+    });
+    expect(parseDreamAction(["notes", "clear"])).toEqual({
+      action: { kind: "notes-clear" },
+    });
+    expect(parseDreamAction(["note", "remove", "note-1234abcd"])).toEqual({
+      action: { kind: "note-remove", id: "note-1234abcd" },
+    });
+    // `remove` is only reserved in front: a note may mention it.
+    expect(parseDreamAction(["note", "do", "not", "remove", "this"])).toEqual({
+      action: { kind: "note-add", text: "do not remove this" },
+    });
+  });
+
+  test("malformed note forms report the usage line", () => {
+    for (const bad of [
+      ["note"],
+      ["note", "   "],
+      ["note", "remove"],
+      ["notes", "clear", "now"],
+      ["notes", "everything"],
+    ]) {
+      expect(parseDreamAction(bad)).toMatchObject({
+        error: expect.stringContaining("Usage: /dream"),
+      });
+    }
+  });
+
+  test("an over-limit note is refused with the limit, not truncated", () => {
+    const parsed = parseDreamAction(["note", "x".repeat(2001)]);
+    expect(parsed).toMatchObject({
+      error: expect.stringContaining("2000"),
     });
   });
 });
@@ -559,6 +603,158 @@ describe("isDreamConfigured", () => {
     // The singleton is not initialized in this test file; the reader must
     // degrade to false rather than throw.
     expect(isDreamConfigured(AGENT_ID)).toBe(false);
+  });
+});
+
+describe("the note entrances (F-06 §2.3)", () => {
+  function note(overrides: Partial<DreamNote> = {}): DreamNote {
+    return {
+      version: 1,
+      id: "note-1234abcd",
+      createdAt: Date.parse("2026-10-30T18:00:00.000Z"),
+      author: "user",
+      text: "tidy the projects folder",
+      source: {},
+      ...overrides,
+    };
+  }
+
+  test("note add appends author=user with the conversation as source", async () => {
+    const appended: unknown[] = [];
+    const output = await handleDreamCommand(
+      ["note", "tidy", "the", "projects"],
+      { agentId: AGENT_ID, conversationId: "conv-9" },
+      deps({
+        appendNote: async (agentId, input) => {
+          appended.push({ agentId, input });
+          return {
+            ok: true,
+            note: note({ id: "note-1234abcd", text: input.text }),
+          };
+        },
+      }),
+    );
+    expect(appended).toEqual([
+      {
+        agentId: AGENT_ID,
+        input: {
+          text: "tidy the projects",
+          author: "user",
+          source: { conversationId: "conv-9" },
+        },
+      },
+    ]);
+    expect(output).toContain("note-1234abcd");
+    expect(output).toContain("next dream run");
+  });
+
+  test("a refused append shows the queue's own reason", async () => {
+    const output = await handleDreamCommand(
+      ["note", "one too many"],
+      { agentId: AGENT_ID },
+      deps({
+        appendNote: async () => ({
+          ok: false,
+          error:
+            "The dream note queue is full (50 notes), so nothing was added.",
+        }),
+      }),
+    );
+    expect(output).toContain("queue is full");
+  });
+
+  test("notes lists id, author, age and a summary", async () => {
+    const output = await handleDreamCommand(
+      ["notes"],
+      { agentId: AGENT_ID },
+      deps({
+        readNotes: async () => [
+          note(),
+          note({
+            id: "note-9999abcd",
+            author: "dream",
+            createdAt: Date.parse("2026-10-30T19:00:00.000Z"),
+            text: `long note ${"x".repeat(200)}`,
+          }),
+        ],
+      }),
+    );
+    expect(output).toContain("Dream notes: 2 pending (max 50)");
+    expect(output).toContain(
+      "note-1234abcd · user · 2h ago · tidy the projects folder",
+    );
+    expect(output).toContain("note-9999abcd · dream · 1h ago · long note");
+    expect(output).toContain("…");
+  });
+
+  test("an empty queue says so and names the way to add one", async () => {
+    const output = await handleDreamCommand(
+      ["notes"],
+      { agentId: AGENT_ID },
+      deps({ readNotes: async () => [] }),
+    );
+    expect(output).toBe(
+      "No pending dream notes. Add one with /dream note <text>.",
+    );
+  });
+
+  test("note remove reports whether the id existed", async () => {
+    const seen: string[] = [];
+    const removed = await handleDreamCommand(
+      ["note", "remove", "note-1234abcd"],
+      { agentId: AGENT_ID },
+      deps({
+        removeNote: async (_agentId, id) => {
+          seen.push(id);
+          return true;
+        },
+      }),
+    );
+    expect(seen).toEqual(["note-1234abcd"]);
+    expect(removed).toBe("Removed dream note note-1234abcd.");
+
+    const missing = await handleDreamCommand(
+      ["note", "remove", "note-ffffffff"],
+      { agentId: AGENT_ID },
+      deps({ removeNote: async () => false }),
+    );
+    expect(missing).toContain("No dream note matches");
+    expect(missing).toContain("/dream notes");
+  });
+
+  test("notes clear reports the count it removed", async () => {
+    const three = await handleDreamCommand(
+      ["notes", "clear"],
+      { agentId: AGENT_ID },
+      deps({ clearNotes: async () => 3 }),
+    );
+    expect(three).toBe("Cleared 3 dream notes.");
+    const one = await handleDreamCommand(
+      ["notes", "clear"],
+      { agentId: AGENT_ID },
+      deps({ clearNotes: async () => 1 }),
+    );
+    expect(one).toBe("Cleared 1 dream note.");
+    const none = await handleDreamCommand(
+      ["notes", "clear"],
+      { agentId: AGENT_ID },
+      deps({ clearNotes: async () => 0 }),
+    );
+    expect(none).toBe("There were no dream notes to clear.");
+  });
+
+  test("the TUI submit path runs the same note actions", async () => {
+    const runner = fakeRunner();
+    await handleDreamSlashCommand("/dream note remember the archive", {
+      agentId: AGENT_ID,
+      commandRunner: runner,
+      appendNote: async (_agentId, input) => ({
+        ok: true,
+        note: note({ id: "note-aaaa1111", text: input.text }),
+      }),
+    });
+    expect(runner.started.at(-1)?.output).toBe("Saving a dream note...");
+    expect(runner.finished.at(-1)?.output).toContain("note-aaaa1111");
   });
 });
 

@@ -560,8 +560,13 @@ haruyuki import --from ./work.hryk                   # 正式恢复（手敲 ove
 | `/dream on` | — | 打开梦游开关；首次使用会进配置向导（层级、权限、窗口、预算） |
 | `/dream off` | — | 关闭自动触发（正在跑的 run 不打断） |
 | `/dream config` | — | 打开设置页的梦游分组 |
+| `/dream note` | `<文本>` | 给下一次梦游留一条留言（作者＝用户；trim 后 1–2000 字符；每个 agent 队列上限 50 条，超限明确拒绝而不是截断）；成功回显 `note-xxxxxxxx` |
+| `/dream notes` | — | 列出待处理留言（id／时间／作者／摘要；只读，回合进行中也可执行）；空队列明确提示 |
+| `/dream note remove` | `<id>` | 删除一条留言（用户后悔时）；id 用 `/dream notes` 查看 |
+| `/dream notes clear` | — | 直接清空队列并回显清掉的条数（不二次确认） |
 
 > 一次 run 写在一个**隐藏会话**里：客户端能列出与查看，但**不能写入**（`input` 会被拒绝，`runtime_start` 也不会为一个隐藏会话起 runtime）。
+> 留言只存在 harness home（`<harness home>/dream/notes/<agent>.jsonl`），不进记忆库、不进用量台账；主 agent 的 `DreamNote` 工具写同一个队列（普通会话作者＝`agent`，梦游内作者＝`dream`）。梦游在首轮读入留言，逐条在报告的「Notes 回应」里标记 `applied`（删除）/`not-applicable`/`needs-authorization`（保留并记录 `lastAttempt`）；留言优先级高于普通 tidy 项，但**不绕过权限与授权**。
 > 自动触发需要显式配置（`/dream on` 是硬门）：闲置窗口（默认 22:00–07:00）内、用户静默 ≥30 分钟、记忆压力 ≥75,000 tokens 才评估；每天最多 6 次，触发之间有冷却。
 > 预算＝「当前压力 × 系数（默认 0.8）」，单次上限默认 100,000 tokens；超出后先请求一次自动批准，仍超则以 `budget_exhausted` 收尾并把 handoff 写进运行报告（`maintenance/dream-report.md`）。
 

@@ -166,8 +166,8 @@ export const commands: Record<string, Command> = {
     },
   },
   "/dream": {
-    desc: "Dream: run, status, configure (permission, windows, budget)",
-    args: "[status] | run [--budget <tokens>] | config | on | off",
+    desc: "Dream: run, status, configure (permission, windows, budget), notes",
+    args: "[status] | run [--budget <tokens>] | config | on | off | note <text> | notes [clear] | note remove <id>",
     order: 49,
     handler: (args, scope) => handleDreamCommand(args, scope),
   },

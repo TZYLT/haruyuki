@@ -160,11 +160,19 @@ describe("command routing", () => {
     expect(dream?.handler).not.toBe(reflect?.handler);
     expect(dream?.desc ?? "").not.toMatch(/alias/i);
     expect(dream?.args ?? "").toContain("run");
+    // W13: the note entrances are part of the same command group's help.
+    expect(dream?.args ?? "").toContain("note");
   });
 
   test("only the read-only /dream forms pass a busy turn", () => {
-    // The status face and `config` are views; `run`/`on`/`off` change state.
-    for (const input of ["/dream", "/dream status", "/dream config"]) {
+    // The status face, `config` and the note list are views;
+    // `run`/`on`/`off` and the note writes change state.
+    for (const input of [
+      "/dream",
+      "/dream status",
+      "/dream config",
+      "/dream notes",
+    ]) {
       expect({ input, bypass: isNonStateCommand(input) }).toEqual({
         input,
         bypass: true,
@@ -175,6 +183,9 @@ describe("command routing", () => {
       "/dream run --budget 50000",
       "/dream on",
       "/dream off",
+      "/dream note tidy the projects",
+      "/dream note remove note-1234abcd",
+      "/dream notes clear",
     ]) {
       expect({ input, bypass: isNonStateCommand(input) }).toEqual({
         input,
@@ -187,7 +198,14 @@ describe("command routing", () => {
     // F-06 review P1: `slice("/dream".length).trim()` made `/dreamstatus` look
     // exactly like `/dream status`, so a typo skipped the busy guard and fell
     // through to the "send as a message" path. The match now stops at the word.
-    for (const input of ["/dreamstatus", "/dreamconfig", "/dreamon"]) {
+    for (const input of [
+      "/dreamstatus",
+      "/dreamconfig",
+      "/dreamon",
+      "/dreamnotes",
+      // `clear` is a write, and an unknown trailing word is not the list view.
+      "/dream notes extra",
+    ]) {
       expect({ input, bypass: isNonStateCommand(input) }).toEqual({
         input,
         bypass: false,
@@ -202,6 +220,7 @@ describe("command routing", () => {
       "/dream  status",
       "/dream\tconfig",
       "  /dream status  ",
+      "/dream  notes",
     ]) {
       expect({ input, bypass: isNonStateCommand(input) }).toEqual({
         input,

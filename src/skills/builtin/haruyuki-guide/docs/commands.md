@@ -683,7 +683,9 @@ which has its own section below.
 `/dream` is the dream (梦游) surface — an autonomous memory-maintenance run that
 starts on its own while the agent is idle:
 `/dream`, `/dream status`, `/dream run [--budget <tokens>]`, `/dream config`,
-`/dream on`, `/dream off` — `src/cli/commands/dream.ts`. A run executes inside a
+`/dream on`, `/dream off`, plus the note queue — `/dream note <text>`,
+`/dream notes`, `/dream note remove <id>`, `/dream notes clear` —
+`src/cli/commands/dream.ts`. A run executes inside a
 **hidden conversation**: clients can list and read it, but writing to it is
 refused (`input` is rejected and `runtime_start` will not open a runtime for
 it). Each run walks the enabled tiers in order (`tidy` → `think` → `task` →
@@ -697,6 +699,19 @@ extension may be auto-approved, then the run ends with `budget_exhausted` and a
 handoff. Misfires are bounded by the dream lock, the run lease and a per-agent
 scheduler task (`src/cron/dream-signal.ts`, `src/agent/dream/dream-run.ts`,
 `src/cli/helpers/dream-launcher.ts`).
+
+The **note queue** is how a user (or the agent's `DreamNote` tool) leaves a
+priority for the next run: one note per line in
+`<harness home>/dream/notes/<agent>.jsonl`, never in the memory repository,
+capped at 50 notes of 1–2000 characters (refusals, not truncation). A run claims
+the queue before its first turn, renders it as `## Pending notes` in the run
+input, and answers every note in its report as `applied` (the note is deleted),
+`not-applicable` or `needs-authorization` (kept, with `lastAttemptRunId` /
+`lastOutcome` recorded). Notes outrank ordinary tidy plan items but never grant
+permission — a run still needs a real authorization entry — and only the list
+(`/dream notes`) is a view: it runs while a turn is busy, while adding, removing
+and clearing notes queue like any other state change —
+`src/agent/dream/dream-notes.ts`, `src/tools/impl/dream-note.ts`.
 
 App-server clients reach the same state through `dream_status`, `dream_run`,
 `get_dream_settings` and `set_dream_settings`; `device_status` carries a small

@@ -26,6 +26,17 @@
  * (R-5.7.6 / route §2.5): no new protocol command, no scheduler state.
  */
 
+import { getConversationId } from "@/agent/context";
+import {
+  type AppendDreamNoteResult,
+  appendNote,
+  clearNotes,
+  DREAM_NOTE_MAX_QUEUE,
+  DREAM_NOTE_MAX_TEXT_CHARS,
+  type DreamNote,
+  listNotes,
+  removeNote,
+} from "@/agent/dream/dream-notes";
 import { readDreamPressure } from "@/agent/dream/dream-pressure";
 import type { DreamCommandScope } from "@/agent/reflection-runs";
 import { getBackend } from "@/backend";
@@ -96,6 +107,12 @@ export interface DreamCommandRunner {
 /** Everything the action needs; the defaults are the production readers. */
 export interface DreamCommandDeps {
   agentId: string;
+  /**
+   * The conversation the command was typed in, recorded on a note's `source`.
+   * Optional because the registry path can answer before a conversation is
+   * current; the note simply carries no source then.
+   */
+  conversationId?: string | null;
   commandRunner?: DreamCommandRunner;
   /** Raise the Settings page. Returns `false` when the shell has no pages. */
   openSettings?: () => boolean;
@@ -119,11 +136,24 @@ export interface DreamCommandDeps {
    * Injected by tests so no unit test has to write the schedule store.
    */
   ensureTask?: (agentId: string) => unknown;
+  /** Queue readers/writers for `/dream note…`; injected by tests. */
+  readNotes?: (agentId: string) => Promise<readonly DreamNote[]>;
+  appendNote?: (
+    agentId: string,
+    input: {
+      text: string;
+      author: "user";
+      source?: { conversationId?: string };
+    },
+  ) => Promise<AppendDreamNoteResult>;
+  removeNote?: (agentId: string, id: string) => Promise<boolean>;
+  clearNotes?: (agentId: string) => Promise<number>;
   now?: () => Date;
 }
 
 interface ResolvedDeps {
   agentId: string;
+  conversationId: string | null;
   commandRunner: DreamCommandRunner | null;
   openSettings: (() => boolean) | null;
   openWizard: ((commandInput: string) => boolean) | null;
@@ -137,12 +167,27 @@ interface ResolvedDeps {
   ) => Promise<ReadonlyMap<string, DreamRunCost>>;
   startRun: (input: StartDreamRunInput) => Promise<StartDreamRunResult>;
   ensureTask: (agentId: string) => unknown;
+  readNotes: (agentId: string) => Promise<readonly DreamNote[]>;
+  appendNote: (
+    agentId: string,
+    input: {
+      text: string;
+      author: "user";
+      source?: { conversationId?: string };
+    },
+  ) => Promise<AppendDreamNoteResult>;
+  removeNote: (agentId: string, id: string) => Promise<boolean>;
+  clearNotes: (agentId: string) => Promise<number>;
   now: () => Date;
 }
 
 function resolveDeps(deps: DreamCommandDeps): ResolvedDeps {
   return {
     agentId: deps.agentId,
+    conversationId:
+      deps.conversationId !== undefined
+        ? deps.conversationId
+        : getConversationId(),
     commandRunner: deps.commandRunner ?? null,
     openSettings: deps.openSettings ?? null,
     openWizard: deps.openWizard ?? null,
@@ -155,6 +200,10 @@ function resolveDeps(deps: DreamCommandDeps): ResolvedDeps {
     readUsage: deps.readUsage ?? readDreamRunCosts,
     startRun: deps.startRun ?? startDreamRun,
     ensureTask: deps.ensureTask ?? ((agentId) => ensureDreamTask(agentId)),
+    readNotes: deps.readNotes ?? listNotes,
+    appendNote: deps.appendNote ?? appendNote,
+    removeNote: deps.removeNote ?? removeNote,
+    clearNotes: deps.clearNotes ?? clearNotes,
     now: deps.now ?? (() => new Date()),
   };
 }
@@ -348,12 +397,16 @@ type DreamAction =
   | { kind: "on" }
   | { kind: "off" }
   | { kind: "config" }
-  | { kind: "run"; budgetOverrideTokens?: number };
+  | { kind: "run"; budgetOverrideTokens?: number }
+  | { kind: "note-add"; text: string }
+  | { kind: "note-list" }
+  | { kind: "note-remove"; id: string }
+  | { kind: "notes-clear" };
 
 export type DreamActionParse = { action: DreamAction } | { error: string };
 
 const DREAM_USAGE =
-  "Usage: /dream [status] | /dream run [--budget <tokens>] | /dream config | /dream on | /dream off";
+  "Usage: /dream [status] | /dream run [--budget <tokens>] | /dream config | /dream on | /dream off | /dream note <text> | /dream notes [clear] | /dream note remove <id>";
 
 /** `22:00-07:00, 12:00-13:00` — the window editor's canonical form. */
 export function formatDreamWindowsInput(
@@ -445,6 +498,29 @@ export function parseDreamAction(args: readonly string[]): DreamActionParse {
       }
       return { action: { kind: "run", budgetOverrideTokens: budget } };
     }
+    case "note": {
+      // `note remove <id>` is the one reserved spelling; every other text is
+      // the note itself, so a note may contain the word "remove".
+      if (rest[0] === "remove") {
+        const id = rest.slice(1).join(" ").trim();
+        if (id === "") return { error: DREAM_USAGE };
+        return { action: { kind: "note-remove", id } };
+      }
+      const text = rest.join(" ").trim();
+      if (text.length === 0) return { error: DREAM_USAGE };
+      if (text.length > DREAM_NOTE_MAX_TEXT_CHARS) {
+        return {
+          error: `The dream note is ${text.length} characters; the limit is ${DREAM_NOTE_MAX_TEXT_CHARS}. Nothing was saved.`,
+        };
+      }
+      return { action: { kind: "note-add", text } };
+    }
+    case "notes":
+      if (rest.length === 0) return { action: { kind: "note-list" } };
+      if (rest.length === 1 && rest[0] === "clear") {
+        return { action: { kind: "notes-clear" } };
+      }
+      return { error: DREAM_USAGE };
     default:
       return { error: DREAM_USAGE };
   }
@@ -696,6 +772,85 @@ async function runRun(
   };
 }
 
+// ── Notes (F-06 §2.3) ───────────────────────────────────────────────
+
+/** One line of the list: id, author, age and a bounded summary. */
+const NOTE_SUMMARY_CHARS = 80;
+
+function noteSummary(text: string): string {
+  const single = text.replace(/\s+/g, " ").trim();
+  return single.length <= NOTE_SUMMARY_CHARS
+    ? single
+    : `${single.slice(0, NOTE_SUMMARY_CHARS - 1)}…`;
+}
+
+async function runNoteAdd(
+  deps: ResolvedDeps,
+  text: string,
+): Promise<ActionResult> {
+  const appended = await deps.appendNote(deps.agentId, {
+    text,
+    author: "user",
+    ...(deps.conversationId
+      ? { source: { conversationId: deps.conversationId } }
+      : {}),
+  });
+  if (!appended.ok) {
+    // The queue's own refusal text is the honest answer: it says *why* nothing
+    // was saved (full, too long), which a generic failure would hide.
+    return { ok: false, output: appended.error };
+  }
+  return {
+    ok: true,
+    output: `Added dream note ${appended.note.id}. The next dream run reads it before its ordinary tidy work.`,
+  };
+}
+
+async function runNoteList(deps: ResolvedDeps): Promise<ActionResult> {
+  const notes = await deps.readNotes(deps.agentId);
+  if (notes.length === 0) {
+    return {
+      ok: true,
+      output: "No pending dream notes. Add one with /dream note <text>.",
+    };
+  }
+  const now = deps.now().getTime();
+  const lines = [
+    `Dream notes: ${notes.length} pending (max ${DREAM_NOTE_MAX_QUEUE})`,
+  ];
+  for (const note of notes) {
+    lines.push(
+      `  ${note.id} · ${note.author} · ${formatDreamRunTime(note.createdAt, now)} · ${noteSummary(note.text)}`,
+    );
+  }
+  return { ok: true, output: lines.join("\n") };
+}
+
+async function runNoteRemove(
+  deps: ResolvedDeps,
+  id: string,
+): Promise<ActionResult> {
+  const removed = await deps.removeNote(deps.agentId, id);
+  if (!removed) {
+    return {
+      ok: false,
+      output: `No dream note matches "${id}". Run /dream notes to list the queue.`,
+    };
+  }
+  return { ok: true, output: `Removed dream note ${id}.` };
+}
+
+async function runNotesClear(deps: ResolvedDeps): Promise<ActionResult> {
+  const cleared = await deps.clearNotes(deps.agentId);
+  if (cleared === 0) {
+    return { ok: true, output: "There were no dream notes to clear." };
+  }
+  return {
+    ok: true,
+    output: `Cleared ${cleared} dream note${cleared === 1 ? "" : "s"}.`,
+  };
+}
+
 async function runDreamAction(
   action: DreamAction,
   deps: ResolvedDeps,
@@ -711,6 +866,14 @@ async function runDreamAction(
       return runConfig(deps);
     case "run":
       return runRun(deps, action.budgetOverrideTokens);
+    case "note-add":
+      return runNoteAdd(deps, action.text);
+    case "note-list":
+      return runNoteList(deps);
+    case "note-remove":
+      return runNoteRemove(deps, action.id);
+    case "notes-clear":
+      return runNotesClear(deps);
   }
 }
 
@@ -776,6 +939,14 @@ function openingLine(action: DreamAction): string {
       return "Opening dream settings...";
     case "run":
       return "Starting a dream run...";
+    case "note-add":
+      return "Saving a dream note...";
+    case "note-list":
+      return "Reading dream notes...";
+    case "note-remove":
+      return "Removing a dream note...";
+    case "notes-clear":
+      return "Clearing dream notes...";
   }
 }
 
@@ -797,7 +968,11 @@ export async function handleDreamCommand(
   if ("error" in parsed) return parsed.error;
   const result = await runDreamAction(
     parsed.action,
-    resolveDeps({ ...overrides, agentId: scope.agentId }),
+    resolveDeps({
+      ...overrides,
+      agentId: scope.agentId,
+      ...(scope.conversationId ? { conversationId: scope.conversationId } : {}),
+    }),
   );
   return result.output;
 }
