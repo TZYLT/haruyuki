@@ -1,11 +1,16 @@
 /**
- * Dream prompt/permission contract (F-06).
+ * Dream prompt assembly contract (F-06 / 46-6-Fix-A W11).
  *
- * The same templates serve all three dream permission tiers, so the permission
- * text must be generated from `permissionMode` and must match what the
- * permission layer actually does. These cases pin the three tier sections, the
- * abuse constraint on `unrestricted`, and the common unattended rules that must
- * survive every tier.
+ * The manuals are model-facing contract text and the assembler slices them by
+ * fixed `## ` anchors, so these cases pin:
+ *
+ * - the three generated permission sections (the manuals never claim a tool
+ *   surface of their own),
+ * - the first turn: shared manual + run facts + whole tier manual + budget,
+ * - the later turns: only the tier's execution/checklist sections, the previous
+ *   report excerpt, a one-line permission reminder and the budget,
+ * - the seed is injected in the first turn and never repeated,
+ * - a missing anchor degrades to the whole manual instead of failing.
  */
 import { describe, expect, test } from "bun:test";
 import { DreamBudgetTracker } from "@/agent/dream/dream-budget";
@@ -13,15 +18,25 @@ import {
   buildDreamPermissionSection,
   buildFirstDreamTurnPrompt,
   buildNextDreamTurnPrompt,
+  DREAM_FULL_TIER_MANUAL_MAX_LINES,
+  DREAM_PREVIOUS_REPORT_MAX_LINES,
   type DreamPromptRunInfo,
+  extractSections,
+  renderSharedManual,
+  renderTierManual,
+  summarizePreviousReport,
 } from "@/agent/dream/dream-run-prompt";
+import type { DreamSeed } from "@/agent/dream/dream-seed";
 import type { PermissionTier } from "@/cron/cron-types";
+import type { DreamTier } from "@/types/dream-run-metadata";
 
 const MODES: readonly PermissionTier[] = [
   "standard",
   "acceptEdits",
   "unrestricted",
 ];
+
+const TIERS: readonly DreamTier[] = ["tidy", "think", "task", "wander"];
 
 function tracker(): DreamBudgetTracker {
   return new DreamBudgetTracker({
@@ -30,29 +45,73 @@ function tracker(): DreamBudgetTracker {
   });
 }
 
-function runInfo(mode: PermissionTier): DreamPromptRunInfo {
+function runInfo(
+  mode: PermissionTier,
+  tier: DreamTier = "tidy",
+): DreamPromptRunInfo {
   return {
     runId: "run-1",
     baselineSha: "baseline-sha",
     budgetTokens: 10_000,
     timeLimitMinutes: null,
     tierPlan: ["tidy", "think"],
-    tier: "tidy",
-    tierIndex: 0,
+    tier,
+    tierIndex: tier === "tidy" ? 0 : 1,
     tierCount: 2,
     permissionMode: mode,
   };
 }
 
-function firstPrompt(mode: PermissionTier): string {
+/** Minimal seed with one distinctive note, so "the seed rode along" is testable. */
+function seed(marker = "seed-marker"): DreamSeed {
+  return {
+    layout: null,
+    manifest: null,
+    changes: null,
+    decay: null,
+    coreCost: null,
+    deferred: null,
+    notes: [
+      {
+        version: 1,
+        id: `note-${marker}`,
+        createdAt: Date.UTC(2026, 9, 31, 12, 0),
+        author: "user",
+        text: `remember ${marker}`,
+        source: {},
+      },
+    ],
+    degraded: [],
+  };
+}
+
+function firstPrompt(
+  mode: PermissionTier,
+  tier: DreamTier = "tidy",
+  seedValue: DreamSeed | null = seed(),
+): string {
   return buildFirstDreamTurnPrompt({
-    ...runInfo(mode),
+    ...runInfo(mode, tier),
     tracker: tracker(),
+    seed: seedValue,
   });
 }
 
+function nextPrompt(mode: PermissionTier, tier: DreamTier = "think"): string {
+  return buildNextDreamTurnPrompt({
+    ...runInfo(mode, tier),
+    tracker: tracker(),
+    reminders: [],
+    previousReport: "Tidy finished: split system/human.md, index updated.",
+  });
+}
+
+function lineCount(text: string): number {
+  return text.replace(/\n$/, "").split("\n").length;
+}
+
 describe("dream permission section", () => {
-  test("standard is read-only and says writes are rejected", () => {
+  test("standard is read-only and names the run's own mark/note tools", () => {
     const text = buildDreamPermissionSection("standard");
     expect(text).toContain("Permission tier: `standard` (read-only)");
     expect(text).toContain("`Write` and `Edit` are rejected");
@@ -69,12 +128,16 @@ describe("dream permission section", () => {
       "treat `Write`, `Edit` and `MemoryCommit` as rejected",
     );
     expect(text).not.toContain("`MemoryCommit` is permitted");
+    // W6/W15 tools write only the harness home: available at every tier.
+    expect(text).toContain("`DreamReviewMark`, `DreamNote`");
   });
 
   test("acceptEdits grants memory writes and denies shell/network", () => {
     const text = buildDreamPermissionSection("acceptEdits");
     expect(text).toContain("Permission tier: `acceptEdits` (memory writes)");
     expect(text).toContain("`Write`, `Edit`, `MemoryCommit`");
+    expect(text).toContain("`DreamReviewMark`");
+    expect(text).toContain("`DreamNote`");
     expect(text).toContain("Not available: shell (`Bash` / `exec_command`)");
     expect(text).toContain("network tools");
     expect(text).toContain("memory repository");
@@ -97,6 +160,8 @@ describe("dream permission section", () => {
     // The harness guard is stated as final, not as an invitation to retry.
     expect(text).toContain("harness may still refuse a shell call");
     expect(text).toContain("a refusal is final");
+    expect(text).toContain("`DreamReviewMark`");
+    expect(text).toContain("`DreamNote`");
   });
 
   test("all tiers keep the unattended/no-approval rule", () => {
@@ -110,61 +175,180 @@ describe("dream permission section", () => {
   });
 });
 
-describe("dream turn prompts", () => {
-  test("the first message injects exactly one generated permission section", () => {
-    for (const mode of MODES) {
-      const prompt = firstPrompt(mode);
-      expect(prompt).toContain("## Permissions in this run");
-      expect(prompt).toContain(`Permission tier: \`${mode}\``);
-      // Only the injected section is a heading; the templates refer to it by
-      // name inline, so match the heading at the start of a line.
-      expect(prompt.match(/^## Permissions in this run$/gm)).toHaveLength(1);
-      expect(prompt).not.toContain("{{");
+describe("dream shared manual", () => {
+  test("the two placeholders are filled and nothing is left unfilled", () => {
+    const text = renderSharedManual({
+      permissionMode: "acceptEdits",
+      seed: seed("run-seed-x"),
+    });
+    expect(text).not.toContain("{{");
+    expect(text).toContain("## Permissions in this run");
+    expect(text).toContain("note-run-seed-x");
+    expect(text).toContain("## 报告模板");
+  });
+
+  test("a missing seed degrades to one explanatory line, not an empty block", () => {
+    const text = renderSharedManual({ permissionMode: "standard", seed: null });
+    expect(text).toContain("could not prepare this run's seed");
+    expect(text).not.toContain("{{");
+  });
+
+  test("the manual is sent verbatim by renderTierManual", () => {
+    for (const tier of TIERS) {
+      const manual = renderTierManual(tier);
+      expect(manual.startsWith("# ")).toBe(true);
+      expect(manual).toContain(`# ${tier} — dream work manual`);
+      expect(manual).toContain("## 本轮执行");
     }
   });
+});
 
-  test("the first message keeps the run-wide dream rules", () => {
-    const prompt = firstPrompt("acceptEdits");
-    expect(prompt).toContain("You are a **dream run**");
-    expect(prompt).toContain("Each turn handles **exactly one tier**");
-    expect(prompt).toContain(
-      "**Do not call `DreamDone` at the end of a turn unless the whole run must stop",
-    );
-    expect(prompt).toContain(
-      "There is no automatic handoff message between runs",
-    );
-    expect(prompt).toContain("Commit small");
-    expect(prompt).toContain("maintenance/dream-report.md");
-    expect(prompt).toContain("## This turn");
-    expect(prompt).toContain("tidy");
+describe("extractSections", () => {
+  const sample = [
+    "# sample manual",
+    "## 目标与边界",
+    "goals",
+    "## 检查清单",
+    "check one",
+    "## 示例",
+    "example",
+    "## 本轮执行",
+    "do the work",
+    "",
+  ].join("\n");
+
+  test("returns exactly the requested sections, headings included", () => {
+    const text = extractSections(sample, ["本轮执行", "检查清单"]);
+    expect(text).toContain("## 本轮执行");
+    expect(text).toContain("do the work");
+    expect(text).toContain("## 检查清单");
+    expect(text).toContain("check one");
+    expect(text).not.toContain("## 示例");
+    expect(text).not.toContain("## 目标与边界");
   });
 
-  test("later turns restate the tier-specific permission briefly", () => {
-    const standard = buildNextDreamTurnPrompt({
-      ...runInfo("standard"),
-      tracker: tracker(),
-      reminders: [],
-    });
-    expect(standard).toContain("Permission tier `standard` (read-only)");
-    expect(standard).toContain("`Write` and `Edit` are rejected");
+  test("a missing anchor sends the whole text instead of failing", () => {
+    const text = extractSections(sample, ["本轮执行", "不存在的章节"]);
+    expect(text).toBe(sample.trim());
+  });
+});
 
-    const acceptEdits = buildNextDreamTurnPrompt({
-      ...runInfo("acceptEdits"),
-      tracker: tracker(),
-      reminders: [],
-    });
-    expect(acceptEdits).toContain("Permission tier `acceptEdits`");
-    expect(acceptEdits).toContain("shell and network are unavailable");
+describe("first turn", () => {
+  test("is shared manual + run facts + whole tier manual + budget", () => {
+    const prompt = firstPrompt("acceptEdits", "tidy");
+    expect(prompt).toContain("## Permissions in this run");
+    expect(prompt.match(/^## Permissions in this run$/gm)).toHaveLength(1);
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("## This turn");
+    expect(prompt).toContain("run id: `run-1`");
+    expect(prompt).toContain("baseline commit: `baseline-sha`");
+    expect(prompt).toContain("budget: 10000 budget tokens");
+    expect(prompt).toContain("tiers planned, in this order: 1. tidy, 2. think");
+    expect(prompt).toContain("**one tier only**: tidy (tier 1 of 2)");
+    // The whole tier manual, including sections later turns drop.
+    expect(prompt).toContain("## 目标与边界");
+    expect(prompt).toContain("## 示例");
+    expect(prompt).toContain("## 本轮执行");
+    expect(prompt).toContain("budget state: 0 of 10000 budget tokens used");
+  });
 
-    const unrestricted = buildNextDreamTurnPrompt({
-      ...runInfo("unrestricted"),
+  test("the retired templates are no longer part of the first message", () => {
+    const prompt = firstPrompt("acceptEdits");
+    expect(prompt).not.toContain("Dream tiers — discipline and output");
+    expect(prompt).not.toContain("Dream run — first task message template");
+    expect(prompt).not.toContain("no shell");
+  });
+
+  test("fits the design's line budget (250–370 lines) for every tier", () => {
+    for (const tier of TIERS) {
+      const lines = lineCount(firstPrompt("acceptEdits", tier, null));
+      expect(lines).toBeGreaterThanOrEqual(250);
+      expect(lines).toBeLessThanOrEqual(370);
+    }
+  });
+});
+
+describe("later turns", () => {
+  test("carry the tier's execution/checklist sections, not the whole manual", () => {
+    const prompt = nextPrompt("acceptEdits", "think");
+    expect(prompt.startsWith("<dream_run>")).toBe(true);
+    expect(prompt.endsWith("</dream_run>")).toBe(true);
+    expect(prompt).toContain("Dream run run-1, continuing");
+    expect(prompt).toContain("**think** (tier 2 of 2)");
+    expect(prompt).toContain("## 本轮执行");
+    expect(prompt).toContain("## 检查清单");
+    // Sliced out: the manual's examples and goals stay in the first message.
+    expect(prompt).not.toContain("## 示例");
+    expect(prompt).not.toContain("## 目标与边界");
+    // The shared manual is not re-sent.
+    expect(prompt).not.toContain("## 报告模板");
+    expect(prompt).not.toContain("## 无人值守的硬规矩");
+  });
+
+  test("the seed rides in the first turn and is never repeated", () => {
+    const first = firstPrompt("standard", "tidy", seed("only-once"));
+    expect(first).toContain("note-only-once");
+    const later = nextPrompt("standard", "think");
+    expect(later).not.toContain("note-only-once");
+    expect(later).toContain("not re-sent");
+  });
+
+  test("include a short previous-report excerpt, permission reminder and budget", () => {
+    const prompt = nextPrompt("standard", "think");
+    expect(prompt).toContain("## Previous tier's report (excerpt)");
+    expect(prompt).toContain("Tidy finished: split system/human.md");
+    expect(prompt).toContain("Permission tier `standard` (read-only)");
+    expect(prompt).toContain("`DreamReviewMark`");
+    expect(prompt).toContain("budget state: 0 of 10000 budget tokens used");
+    expect(prompt).toContain("finish the turn");
+  });
+
+  test("carry crossed-threshold reminders inside the wrapper", () => {
+    const prompt = buildNextDreamTurnPrompt({
+      ...runInfo("acceptEdits", "think"),
       tracker: tracker(),
-      reminders: [],
+      reminders: [
+        "<system-reminder>Dream run budget reminder: 4,500/10,000 (45%).</system-reminder>",
+      ],
+      previousReport: null,
     });
-    expect(unrestricted).toContain("Permission tier `unrestricted`");
-    expect(unrestricted).toContain("never for convenience");
-    // The short turn keeps the report / DreamDone contract.
-    expect(unrestricted).toContain("Call DreamDone only when the whole run");
-    expect(unrestricted).toContain("what changed, why, what is left");
+    expect(prompt).toContain("Dream run budget reminder");
+    expect(prompt).not.toContain("## Previous tier's report");
+  });
+
+  test("a full short manual is sent whole instead of sliced", () => {
+    // All shipped tier manuals currently exceed the threshold; the rule itself
+    // is pinned by the exported constant and the slice behaviour above.
+    for (const tier of TIERS) {
+      expect(
+        renderTierManual(tier).replace(/\n$/, "").split("\n").length,
+      ).toBeGreaterThan(DREAM_FULL_TIER_MANUAL_MAX_LINES);
+    }
+  });
+});
+
+describe("summarizePreviousReport", () => {
+  test("keeps short reports untouched", () => {
+    const report = "line one\nline two\nline three";
+    expect(summarizePreviousReport(report)).toBe(report);
+  });
+
+  test("cuts long reports to the configured maximum, head and tail", () => {
+    const report = Array.from(
+      { length: 40 },
+      (_value, index) => `line-${index + 1}`,
+    ).join("\n");
+    const summary = summarizePreviousReport(report);
+    expect(summary.replace(/\n$/, "").split("\n")).toHaveLength(
+      DREAM_PREVIOUS_REPORT_MAX_LINES,
+    );
+    expect(summary.startsWith("line-1")).toBe(true);
+    expect(summary.endsWith("line-40")).toBe(true);
+    expect(summary).toContain("...");
+  });
+
+  test("no report means no excerpt", () => {
+    expect(summarizePreviousReport(null)).toBe("");
+    expect(summarizePreviousReport("   ")).toBe("");
   });
 });

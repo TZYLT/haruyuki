@@ -53,6 +53,43 @@ describe("readDreamRunMetadata", () => {
     expect(readDreamRunMetadata(finished)).toEqual(finished);
   });
 
+  test("reads the optional notes block and rejects a malformed one", () => {
+    const withNotes: DreamRunMetadata = {
+      ...VALID,
+      notes: {
+        consumed: ["note-aaaaaaaa"],
+        kept: ["note-bbbbbbbb"],
+        outcomes: {
+          "note-aaaaaaaa": "applied",
+          "note-bbbbbbbb": "needs-authorization",
+        },
+      },
+    };
+    expect(readDreamRunMetadata(withNotes)).toEqual(withNotes);
+    // No notes block stays no notes block (the field is additive).
+    expect(readDreamRunMetadata(VALID)?.notes).toBeUndefined();
+    // A half-read block drops the whole record rather than guessing.
+    expect(
+      readDreamRunMetadata({
+        ...VALID,
+        notes: { consumed: ["note-aaaaaaaa"], kept: [] },
+      }),
+    ).toBeUndefined();
+    expect(
+      readDreamRunMetadata({
+        ...VALID,
+        notes: {
+          consumed: [],
+          kept: [],
+          outcomes: { "note-aaaaaaaa": "maybe" },
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      readDreamRunMetadata({ ...VALID, notes: { consumed: [1], kept: [] } }),
+    ).toBeUndefined();
+  });
+
   test("rejects records that cannot be tied to a run", () => {
     expect(readDreamRunMetadata(null)).toBeUndefined();
     expect(readDreamRunMetadata("dream")).toBeUndefined();

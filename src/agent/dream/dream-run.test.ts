@@ -15,214 +15,15 @@ import {
   markDreamTurnInFlight,
   readDreamActivity,
 } from "@/agent/dream/dream-activity";
+import { type DreamTurnResult, executeDreamRun } from "@/agent/dream/dream-run";
 import {
-  type DreamRunDeps,
-  type DreamTurnInput,
-  type DreamTurnResult,
-  executeDreamRun,
-} from "@/agent/dream/dream-run";
-import type { ScheduleTaskV2 } from "@/cron/cron-types";
+  EMPTY_PARTS,
+  makeHarness,
+  makeSettings,
+  makeTask,
+  RUN_INPUT,
+} from "@/agent/dream/dream-run-test-harness";
 import { ScheduledTaskPreflightError } from "@/cron/task-run";
-import {
-  DREAM_SETTINGS_DEFAULTS,
-  type ResolvedDreamSettings,
-} from "@/dream-settings";
-import type { DreamRunMetadata } from "@/types/dream-run-metadata";
-
-function makeTask(payload = ""): ScheduleTaskV2 {
-  return {
-    id: "task-1",
-    agentId: "agent-a",
-    name: "Dream",
-    description: "",
-    type: "dream",
-    target: { kind: "new", hidden: true },
-    payload,
-    cron: "0 0 0 1 1 *",
-    timezone: "UTC",
-    recurring: true,
-    scheduledFor: null,
-    catchUp: false,
-    permission: "acceptEdits",
-    timeoutMinutes: 0,
-    waitMinutes: 10,
-    status: "active",
-    pausedReason: null,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    lastFiredAt: null,
-    fireCount: 0,
-    lastRunAt: null,
-    lastOutcome: null,
-    lastReason: null,
-    lastError: null,
-    consecutiveFailures: 0,
-    missedCount: 0,
-    failedCount: 0,
-    lastConsumedOccurrence: null,
-    lease: null,
-    jitterOffsetMs: 0,
-    firedAt: null,
-    missedAt: null,
-  };
-}
-
-function makeSettings(
-  overrides: Partial<ResolvedDreamSettings> = {},
-): ResolvedDreamSettings {
-  return {
-    ...DREAM_SETTINGS_DEFAULTS,
-    enabled: true,
-    tiers: { tidy: true, think: true, task: false, wander: false },
-    overBudgetApprovals: 1,
-    ...overrides,
-  };
-}
-
-const EMPTY_PARTS = {
-  outputTokens: 0,
-  uncachedReadTokens: 0,
-  cachedReadTokens: 0,
-};
-
-interface Harness {
-  deps: DreamRunDeps;
-  events: string[];
-  metadata: DreamRunMetadata[];
-  reports: Array<{ body: string; metadata: DreamRunMetadata }>;
-  markers: Array<{ outcome: string; runId: string; model: string }>;
-  rollbacks: Array<{ baselineSha: string; memoryDir: string }>;
-  finished: string[];
-  released: { dream: number; memory: number };
-  deletedLeases: number;
-  pressureBaselines: number[];
-  turns: DreamTurnInput[];
-}
-
-interface HarnessOptions {
-  settings?: ResolvedDreamSettings;
-  spawnedTurn?: (
-    input: DreamTurnInput,
-    index: number,
-  ) => DreamTurnResult | Promise<DreamTurnResult>;
-  overrides?: Partial<DreamRunDeps>;
-  dreamLockBusy?: boolean;
-  memoryLockBusy?: boolean;
-  activityAt?: number | null;
-  now?: () => Date;
-}
-
-function makeHarness(options: HarnessOptions = {}): Harness {
-  const harness: Harness = {
-    deps: {} as DreamRunDeps,
-    events: [],
-    metadata: [],
-    reports: [],
-    markers: [],
-    rollbacks: [],
-    finished: [],
-    released: { dream: 0, memory: 0 },
-    deletedLeases: 0,
-    pressureBaselines: [],
-    turns: [],
-  };
-  const settings = options.settings ?? makeSettings();
-  let turnIndex = 0;
-
-  harness.deps = {
-    now: options.now ?? (() => new Date(1_700_000_000_000)),
-    resolveSettings: () => settings,
-    memoryDir: (agentId) => `/memory/${agentId}`,
-    tryAcquireDreamLock: async () => {
-      if (options.dreamLockBusy) return null;
-      harness.events.push("lock.dream");
-      return async () => {
-        harness.released.dream += 1;
-        harness.events.push("unlock.dream");
-      };
-    },
-    acquireMemoryLock: async () => {
-      if (options.memoryLockBusy) return null;
-      harness.events.push("lock.memory");
-      return async () => {
-        harness.released.memory += 1;
-        harness.events.push("unlock.memory");
-      };
-    },
-    createBaseline: async ({ memoryDir, runId }) => {
-      harness.events.push("baseline");
-      return { sha: `baseline-${runId}-${memoryDir.length}` };
-    },
-    rollbackBaseline: async (input) => {
-      harness.events.push("rollback");
-      harness.rollbacks.push(input);
-      return { changed: true };
-    },
-    createSession: async ({ runId }) => {
-      harness.events.push("session");
-      return { conversationId: `conv-${runId}` };
-    },
-    writeMetadata: async ({ metadata }) => {
-      harness.metadata.push(metadata);
-      harness.events.push(`metadata.${metadata.status}`);
-    },
-    readMetadata: async () => undefined,
-    createLease: () => {
-      harness.events.push("lease.create");
-    },
-    updateLease: ({ patch }) => {
-      harness.events.push(`lease.${Object.keys(patch).join("+")}`);
-    },
-    startLeaseHeartbeat: () => {
-      harness.events.push("lease.heartbeat.start");
-      return () => harness.events.push("lease.heartbeat.stop");
-    },
-    deleteLease: () => {
-      harness.deletedLeases += 1;
-    },
-    markRunActive: () => harness.events.push("signal.active"),
-    markRunFinished: (finishedAgentId, outcome) => {
-      harness.finished.push(`${finishedAgentId}:${outcome}`);
-    },
-    readActivity: () => options.activityAt ?? null,
-    readPressure: () => 100_000,
-    recordPressureBaseline: (_agentId, endedAt) => {
-      harness.events.push("pressure.baseline");
-      harness.pressureBaselines.push(endedAt);
-    },
-    spawnTurn: async (input) => {
-      harness.turns.push(input);
-      const index = turnIndex;
-      turnIndex += 1;
-      if (options.spawnedTurn) return await options.spawnedTurn(input, index);
-      return {
-        success: true,
-        report: `report for ${input.tier}`,
-        aborted: false,
-        usage: { ...EMPTY_PARTS, outputTokens: 100 },
-        model: "local/test-model",
-      };
-    },
-    writeReport: async ({ body, metadata }) => {
-      harness.events.push("report");
-      harness.reports.push({ body, metadata });
-      return { reportPath: "maintenance/dream.md", committed: true };
-    },
-    recordLedgerMarker: async (marker) => {
-      harness.events.push(`ledger.${marker.outcome}`);
-      harness.markers.push(marker);
-    },
-    retrieveAgentName: async () => "Test Agent",
-    ...options.overrides,
-  };
-  return harness;
-}
-
-const RUN_INPUT = {
-  task: makeTask(),
-  runId: "run-1",
-  occurrence: "",
-  signal: new AbortController().signal,
-};
 
 describe("executeDreamRun · happy path", () => {
   test("takes both locks in order, baselines, runs tiers and finishes cleanly", async () => {
@@ -241,10 +42,14 @@ describe("executeDreamRun · happy path", () => {
       harness.events.indexOf("session"),
     );
 
-    // Two enabled tiers -> two child turns, each with its own prompt.
+    // Two enabled tiers -> two child turns, each with its own prompt. The
+    // first turn carries the shared manual and the seed; the second is the
+    // short `<dream_run>` block.
     expect(harness.turns.map((turn) => turn.tier)).toEqual(["tidy", "think"]);
-    expect(harness.turns[0]?.prompt).toContain("You are a **dream run**");
+    expect(harness.turns[0]?.prompt).toContain("# Dream run — shared manual");
+    expect(harness.turns[0]?.prompt).toContain("## This turn");
     expect(harness.turns[0]?.prompt).toContain("one tier only");
+    expect(harness.turns[1]?.prompt.startsWith("<dream_run>")).toBe(true);
     expect(harness.turns[1]?.prompt).toContain("Dream run run-1, continuing");
     expect(harness.turns[1]?.prompt).toContain("tier 2 of 2");
     expect(harness.turns[0]?.permissionMode).toBe("acceptEdits");
@@ -453,7 +258,7 @@ describe("executeDreamRun · last tier overrun", () => {
     expect(result.outcome).toBe("success");
     const final = harness.metadata.at(-1);
     expect(final?.status).toBe("succeeded");
-    // The 40/80/100 reminder text is not dropped when there is no next turn.
+    // The 40/75/90/100 reminder text is not dropped when there is no next turn.
     expect(final?.handoff).toContain("budget reached");
     expect(final?.handoff).toContain("do not ask for approval");
     expect(harness.markers).toHaveLength(0);

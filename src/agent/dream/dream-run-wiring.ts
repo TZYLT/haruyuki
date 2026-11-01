@@ -27,17 +27,21 @@ import {
   updateDreamLease,
 } from "./dream-lease";
 import { tryAcquireDreamLock } from "./dream-lock";
+import { claimNotes, consumeNotes } from "./dream-notes";
 import {
   readDreamPressure,
   recordDreamPressureBaseline,
 } from "./dream-pressure";
 import { writeDreamReport } from "./dream-report";
+import { readReviewMarks } from "./dream-review-marks";
 import { getAgentDisplayName } from "./dream-run-agent";
+import { applyDreamRunDecay } from "./dream-run-decay";
 import type {
   DreamRunDeps,
   DreamTurnInput,
   DreamTurnResult,
 } from "./dream-run-types";
+import { collectDreamSeed } from "./dream-seed";
 import {
   dreamUsagePartsFromBuckets,
   mergeDreamUsageParts,
@@ -272,6 +276,14 @@ export function createDefaultDreamRunDeps(): DreamRunDeps {
       });
     },
     retrieveAgentName: (agentId) => getAgentDisplayName(agentId),
+    // 46-6-Fix-A W11/W12: notes, seed and the decay ledger stay behind seams so
+    // the controller never touches the harness home or git directly.
+    claimNotes: (agentId, runId, now) => claimNotes(agentId, runId, now),
+    collectSeed: (input) => collectDreamSeed(input),
+    consumeNotes: (agentId, runId, outcomes) =>
+      consumeNotes(agentId, runId, outcomes),
+    readMarks: (runId) => readReviewMarks(runId),
+    applyDecay: (input) => applyDreamRunDecay(input),
   };
 }
 

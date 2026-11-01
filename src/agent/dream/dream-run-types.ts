@@ -12,6 +12,13 @@ import type { RunOutcome, ScheduleTaskV2 } from "@/cron/cron-types";
 import type { DreamUsageParts } from "@/dream-budget-math";
 import type { ResolvedDreamSettings } from "@/dream-settings";
 import type { DreamRunMetadata, DreamTier } from "@/types/dream-run-metadata";
+import type {
+  ConsumeDreamNotesResult,
+  DreamNote,
+  DreamNoteOutcomeMap,
+} from "./dream-notes";
+import type { DreamReviewMark } from "./dream-review-marks";
+import type { DreamSeed } from "./dream-seed";
 
 export interface DreamRunTaskInput {
   /** The persisted task, already resolved from `--task <id>`. */
@@ -124,4 +131,36 @@ export interface DreamRunDeps {
     wallMs: number;
   }): Promise<void>;
   retrieveAgentName(agentId: string): Promise<string | null>;
+  // ── 46-6-Fix-A W11/W12 seams ─────────────────────────────────────────
+  // The seed, the note queue and the decay ledger all touch files under the
+  // harness home and the memory repository. Keeping them behind these seams is
+  // what lets the controller run in a unit test with no real home directory.
+  /** Mark the agent's queued notes as read by this run and return them. */
+  claimNotes(agentId: string, runId: string, now: number): Promise<DreamNote[]>;
+  /** Build the one-time run seed; a throwing seam is treated as "no seed". */
+  collectSeed(input: {
+    agentId: string;
+    memoryDir: string;
+    runId: string;
+    now: number;
+    notes: readonly DreamNote[];
+  }): Promise<DreamSeed>;
+  /** Settle the queue: delete `applied`, keep the rest with attempt stamps. */
+  consumeNotes(
+    agentId: string,
+    runId: string,
+    outcomes: DreamNoteOutcomeMap,
+  ): Promise<ConsumeDreamNotesResult>;
+  /** The `DreamReviewMark` marks this run wrote (empty when it wrote none). */
+  readMarks(runId: string): Promise<DreamReviewMark[]>;
+  /** Full run-end decay ledger update; best-effort inside the seam. */
+  applyDecay(input: {
+    agentId: string;
+    memoryDir: string;
+    runId: string;
+    baselineSha: string;
+    seed: DreamSeed;
+    marks: readonly DreamReviewMark[];
+    now: number;
+  }): Promise<void>;
 }

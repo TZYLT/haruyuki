@@ -91,6 +91,46 @@ export interface DreamRunMetadata {
   reportPath: string | null;
   /** "Where to continue next time", written by an early stop or handoff. */
   handoff: string | null;
+  /**
+   * What happened to the notes this run claimed (46-6-Fix-A W12 / §2.6).
+   *
+   * Present only for a run that claimed at least one note. `consumed` are the
+   * ids deleted because the report answered `applied`; `kept` are the ids that
+   * stayed queued with `lastAttemptRunId` / `lastOutcome` recorded; `outcomes`
+   * is every parsed answer, keyed by note id.
+   *
+   * A failed, timed-out or cancelled run settles nothing, so its `consumed` and
+   * `kept` stay empty (the notes were never touched in the queue); it still
+   * records the answers it parsed, so a later run can see what was attempted.
+   */
+  notes?: DreamRunNotesMetadata;
+}
+
+/**
+ * How a run answered a pending note.
+ *
+ * Structurally the same union as `DreamNoteOutcome` in
+ * `agent/dream/dream-notes.ts`; it is declared here so the persisted record
+ * shape does not import the agent module that produces it.
+ */
+export type DreamRunNoteOutcome =
+  | "applied"
+  | "not-applicable"
+  | "needs-authorization";
+
+export const DREAM_RUN_NOTE_OUTCOMES: readonly DreamRunNoteOutcome[] = [
+  "applied",
+  "not-applicable",
+  "needs-authorization",
+];
+
+export interface DreamRunNotesMetadata {
+  /** Note ids deleted at the end of the run (answered `applied`). */
+  consumed: string[];
+  /** Note ids kept in the queue with last-attempt bookkeeping. */
+  kept: string[];
+  /** Every answer parsed from the run's report, keyed by note id. */
+  outcomes: Record<string, DreamRunNoteOutcome>;
 }
 
 export function isDreamTier(value: unknown): value is DreamTier {
@@ -126,6 +166,43 @@ function finiteNumber(value: unknown): number | undefined {
 function nonNegativeTokenCount(value: unknown): number | undefined {
   const numeric = finiteNumber(value);
   return numeric !== undefined && numeric >= 0 ? numeric : undefined;
+}
+
+function isDreamRunNoteOutcome(value: unknown): value is DreamRunNoteOutcome {
+  return (
+    typeof value === "string" &&
+    (DREAM_RUN_NOTE_OUTCOMES as readonly string[]).includes(value)
+  );
+}
+
+function noteIdArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const ids: string[] = [];
+  for (const entry of value) {
+    const id = nonEmptyString(entry);
+    if (id === undefined) return undefined;
+    ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Read the optional `notes` block. Malformed content drops the whole block
+ * (the same rule as the rest of the record: a half-read run record is worse
+ * than no block), which leaves the run's other fields intact.
+ */
+function parseNotesMetadata(value: unknown): DreamRunNotesMetadata | undefined {
+  if (!isRecord(value)) return undefined;
+  const consumed = noteIdArray(value.consumed);
+  const kept = noteIdArray(value.kept);
+  if (consumed === undefined || kept === undefined) return undefined;
+  if (!isRecord(value.outcomes)) return undefined;
+  const outcomes: Record<string, DreamRunNoteOutcome> = {};
+  for (const [id, outcome] of Object.entries(value.outcomes)) {
+    if (!isDreamRunNoteOutcome(outcome)) return undefined;
+    outcomes[id] = outcome;
+  }
+  return { consumed, kept, outcomes };
 }
 
 /**
@@ -197,6 +274,10 @@ export function readDreamRunMetadata(
   const handoff = record.handoff === null ? null : record.handoff;
   if (handoff !== null && typeof handoff !== "string") return undefined;
 
+  const notes =
+    record.notes === undefined ? undefined : parseNotesMetadata(record.notes);
+  if (record.notes !== undefined && notes === undefined) return undefined;
+
   return {
     runId,
     triggerSource,
@@ -213,5 +294,6 @@ export function readDreamRunMetadata(
     status,
     reportPath,
     handoff,
+    ...(notes !== undefined ? { notes } : {}),
   };
 }

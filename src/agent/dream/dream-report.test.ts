@@ -14,11 +14,16 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { DreamNote } from "@/agent/dream/dream-notes";
 import {
+  appendDreamNotesSection,
+  buildDreamNotesSection,
   buildDreamReportFile,
   DREAM_REPORT_INDEX_CONTENT,
   DREAM_REPORT_INDEX_PATH,
+  DREAM_REPORT_NOTE_EXCERPT_CHARS,
   DREAM_REPORT_PATH,
+  parseDreamNoteOutcomes,
   writeDreamReport,
 } from "@/agent/dream/dream-report";
 import { getScopedMemoryFilesystemRoot } from "@/agent/memory-filesystem";
@@ -332,4 +337,135 @@ describe("writeDreamReport under a stricter memory limit", () => {
     },
     TEST_TIMEOUT_MS,
   );
+});
+
+// ── W12: note consumption on the report side ──────────────────────────────
+
+const CLAIMED_IDS = ["note-aaaaaaaa", "note-bbbbbbbb", "note-cccccccc"];
+
+function note(
+  id: string,
+  text = `text for ${id}`,
+  createdAt = Date.UTC(2026, 9, 31, 12, 0),
+): DreamNote {
+  return {
+    version: 1,
+    id,
+    createdAt,
+    author: "user",
+    text,
+    source: {},
+  };
+}
+
+describe("parseDreamNoteOutcomes", () => {
+  test("reads the three answer words from a `## Notes 回应` list", () => {
+    const outcomes = parseDreamNoteOutcomes(
+      [
+        "## Notes 回应",
+        "- note-aaaaaaaa: applied (merged the two notes)",
+        "- note-bbbbbbbb: not-applicable — the file no longer exists",
+        "- note-cccccccc: needs-authorization, the user must confirm",
+      ].join("\n"),
+      CLAIMED_IDS,
+    );
+    expect(outcomes).toEqual({
+      "note-aaaaaaaa": "applied",
+      "note-bbbbbbbb": "not-applicable",
+      "note-cccccccc": "needs-authorization",
+    });
+  });
+
+  test("is tolerant about spacing, case and answer-before-id order", () => {
+    const outcomes = parseDreamNoteOutcomes(
+      [
+        "**note-aaaaaaaa** applied",
+        "note-bbbbbbbb: NOT APPLICABLE",
+        "needs authorization — note-cccccccc",
+      ].join("\n"),
+      CLAIMED_IDS,
+    );
+    expect(outcomes).toEqual({
+      "note-aaaaaaaa": "applied",
+      "note-bbbbbbbb": "not-applicable",
+      "note-cccccccc": "needs-authorization",
+    });
+  });
+
+  test("an unparsed or unknown answer is left out (the caller keeps it)", () => {
+    const outcomes = parseDreamNoteOutcomes(
+      [
+        "- note-aaaaaaaa: looked at it, will see next time",
+        "- note-dddddddd: applied",
+        "- no id on this line: applied",
+      ].join("\n"),
+      CLAIMED_IDS,
+    );
+    expect(outcomes).toEqual({});
+  });
+});
+
+describe("buildDreamNotesSection", () => {
+  test("lists every claimed note with its answer and status", () => {
+    const section = buildDreamNotesSection({
+      notes: CLAIMED_IDS.map((id) => note(id)),
+      outcomes: {
+        "note-aaaaaaaa": "applied",
+        "note-bbbbbbbb": "not-applicable",
+      },
+      settled: true,
+    });
+    expect(section.startsWith("## Notes\n")).toBe(true);
+    expect(section).toContain("settled the queue");
+    expect(section).toContain("- note-aaaaaaaa: applied");
+    expect(section).toContain("- note-bbbbbbbb: not-applicable");
+    // Claimed but unanswered: kept, and the section says so.
+    expect(section).toContain("- note-cccccccc: no answer (kept)");
+  });
+
+  test("an unsettled run says everything stays queued", () => {
+    const section = buildDreamNotesSection({
+      notes: [note("note-aaaaaaaa")],
+      outcomes: {},
+      settled: false,
+    });
+    expect(section).toContain("did not reach a settled state");
+    expect(section).toContain("stays queued");
+  });
+
+  test("keeps each note on one line and caps the excerpt", () => {
+    const long = "x".repeat(DREAM_REPORT_NOTE_EXCERPT_CHARS + 50);
+    const section = buildDreamNotesSection({
+      notes: [note("note-aaaaaaaa", `${long}\nsecond line`)],
+      outcomes: { "note-aaaaaaaa": "applied" },
+      settled: true,
+    });
+    expect(section).not.toContain("second line");
+    expect(section).toContain("…");
+    const noteLine = section
+      .split("\n")
+      .find((line) => line.startsWith("- note-aaaaaaaa"));
+    expect(noteLine).toBeDefined();
+    expect((noteLine ?? "").length).toBeLessThan(
+      DREAM_REPORT_NOTE_EXCERPT_CHARS + 40,
+    );
+  });
+});
+
+describe("appendDreamNotesSection", () => {
+  test("appends the section before the report is committed", () => {
+    const body = "## 概览\n\n- tidied\n";
+    const combined = appendDreamNotesSection(
+      body,
+      buildDreamNotesSection({
+        notes: [note("note-aaaaaaaa")],
+        outcomes: { "note-aaaaaaaa": "applied" },
+        settled: true,
+      }),
+    );
+    expect(combined.startsWith("## 概览")).toBe(true);
+    expect(combined).toContain("## Notes");
+    expect(combined.endsWith("\n")).toBe(true);
+    expect(combined).not.toContain("\n\n\n");
+  });
 });

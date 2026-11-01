@@ -2,7 +2,7 @@
  * F-06 M2 · run-level budget accounting (requirement R-5.3, O-1 numbers).
  *
  * The tests pin the three behaviours the run controller relies on:
- * 40/80/100 reminders fire once each, the hard stop compares weighted spend
+ * 40/75/90/100 reminders fire once each, the hard stop compares weighted spend
  * against the allowance, and the one pre-approved +50 % extension can rescue a
  * run that is between 100 % and 150 % — but never more.
  */
@@ -57,7 +57,7 @@ describe("resolveDreamRunBudgetTokens", () => {
 });
 
 describe("DreamBudgetTracker thresholds", () => {
-  test("40/80/100 each cross exactly once", () => {
+  test("40/75/90/100 each cross exactly once", () => {
     const tracker = new DreamBudgetTracker({
       budgetTokens: 100_000,
       overBudgetApprovals: 0,
@@ -77,21 +77,28 @@ describe("DreamBudgetTracker thresholds", () => {
         .map((entry) => entry.threshold),
     );
     expect(crossed).toEqual([0.4]);
-    // 81 % -> 80 only.
+    // 76 % -> 75 only.
     crossed.push(
       ...tracker
-        .addTurn({ ...EMPTY_PARTS, outputTokens: 40_000 })
+        .addTurn({ ...EMPTY_PARTS, outputTokens: 35_000 })
         .map((entry) => entry.threshold),
     );
-    expect(crossed).toEqual([0.4, 0.8]);
+    expect(crossed).toEqual([0.4, 0.75]);
+    // 91 % -> 90 only.
+    crossed.push(
+      ...tracker
+        .addTurn({ ...EMPTY_PARTS, outputTokens: 15_000 })
+        .map((entry) => entry.threshold),
+    );
+    expect(crossed).toEqual([0.4, 0.75, 0.9]);
     // 101 % -> 100 only.
     crossed.push(
       ...tracker
-        .addTurn({ ...EMPTY_PARTS, outputTokens: 20_000 })
+        .addTurn({ ...EMPTY_PARTS, outputTokens: 10_000 })
         .map((entry) => entry.threshold),
     );
-    expect(crossed).toEqual([0.4, 0.8, 1]);
-    expect(DREAM_BUDGET_THRESHOLDS).toEqual([0.4, 0.8, 1]);
+    expect(crossed).toEqual([0.4, 0.75, 0.9, 1]);
+    expect(DREAM_BUDGET_THRESHOLDS).toEqual([0.4, 0.75, 0.9, 1]);
   });
 
   test("cache reads are weighted, not counted raw", () => {

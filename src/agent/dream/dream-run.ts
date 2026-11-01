@@ -16,8 +16,8 @@
  * - **Lock order is fixed**: dream lock → memory lock, released in reverse in
  *   `finally`. Child completion callbacks are never trusted to release (C-24).
  * - **One child turn per tier.** Finishing a turn is the only moment the parent
- *   can see that turn's usage, carry the 40/80/100 reminder into the next turn
- *   and notice a come-back/time-limit/budget stop. G-2 found no
+ *   can see that turn's usage, carry the 40/75/90/100 reminder into the next
+ *   turn and notice a come-back/time-limit/budget stop. G-2 found no
  *   `--token-budget` equivalent in the child and no per-call channel outside the
  *   stream events, so the hard gate enforces *between* turns — a documented
  *   degradation of R-5.3.2's "per model call" wording.
@@ -38,6 +38,7 @@ import { ScheduledTaskPreflightError } from "@/cron/task-run";
 import type { ResolvedDreamSettings } from "@/dream-settings";
 import type {
   DreamRunMetadata,
+  DreamRunNotesMetadata,
   DreamRunStatus,
   DreamTier,
 } from "@/types/dream-run-metadata";
@@ -51,6 +52,13 @@ import {
   describeDreamBudgetStop,
   resolveDreamRunBudgetTokens,
 } from "./dream-budget";
+import type { ConsumeDreamNotesResult, DreamNote } from "./dream-notes";
+import {
+  appendDreamNotesSection,
+  buildDreamNotesSection,
+  parseDreamNoteOutcomes,
+} from "./dream-report";
+import type { DreamReviewMark } from "./dream-review-marks";
 import {
   buildDreamReportBody,
   buildFirstDreamTurnPrompt,
@@ -63,6 +71,7 @@ import type {
   DreamTurnResult,
 } from "./dream-run-types";
 import { createDefaultDreamRunDeps } from "./dream-run-wiring";
+import type { DreamSeed } from "./dream-seed";
 
 export type {
   DreamRunDeps,
@@ -115,10 +124,22 @@ interface RunProgress {
   tracker: DreamBudgetTracker;
   tierPlan: DreamTier[];
   tierReached: DreamTier | null;
+  /** The last finished tier's report; the next turn gets an excerpt of it. */
   lastReport: string;
+  /** Every finished tier's report, for the end-of-run note-answer parse. */
+  reportLog: string[];
   reminders: string[];
   model: string;
 }
+
+interface RunNotesState {
+  /** Notes this run claimed into its seed (may be empty). */
+  claimed: DreamNote[];
+  /** The run-start seed; `null` when the harness could not build one. */
+  seed: DreamSeed | null;
+}
+
+const EMPTY_NOTES_STATE: RunNotesState = { claimed: [], seed: null };
 
 interface TierLoopState {
   spawnedOnce(): boolean;
@@ -185,6 +206,7 @@ export async function executeDreamRun(
   let memoryDir = "";
   let tracker: DreamBudgetTracker | null = null;
   let progress: RunProgress | null = null;
+  let notesState: RunNotesState = EMPTY_NOTES_STATE;
   let terminalStatus: DreamRunStatus | null = null;
   let terminalError: string | undefined;
   let handoff: string | null = null;
@@ -285,6 +307,7 @@ export async function executeDreamRun(
       tierPlan,
       tierReached: null,
       lastReport: "",
+      reportLog: [],
       reminders: [],
       model: "unknown",
     };
@@ -322,6 +345,17 @@ export async function executeDreamRun(
     }, DREAM_ACTIVITY_POLL_MS);
     activityTimer.unref?.();
 
+    // ── Notes + seed: read once, before the first turn (W11/W12) ─────
+    // The claim is not a consumption: the notes stay queued in case the run
+    // fails, and the seed renders them as the run's highest-priority input.
+    notesState = await prepareNotesAndSeed({
+      agentId,
+      memoryDir,
+      runId,
+      now: startedAt,
+      deps,
+    });
+
     try {
       terminalStatus = await runTierLoop({
         agentId,
@@ -334,6 +368,7 @@ export async function executeDreamRun(
         settings,
         tracker,
         progress,
+        notes: notesState,
         signal: turnAbort.signal,
         deps,
         state: {
@@ -431,13 +466,53 @@ export async function executeDreamRun(
     const finishedAtDate = deps.now();
     const finishedAt = finishedAtDate.getTime();
     const finalStatus: DreamRunStatus = terminalStatus ?? "failed";
-    const reportBody = buildDreamReportBody({
+    let reportBody = buildDreamReportBody({
       status: finalStatus,
       agentReport: progress.lastReport,
       handoff,
       ...(terminalError !== undefined ? { error: terminalError } : {}),
       ...(rollbackError !== undefined ? { rollbackError } : {}),
     });
+
+    // ── Notes settlement (46-6-Fix-A W12 / design §2.6) ─────────────
+    // Only a settled run consumes the queue; a failed, timed-out or cancelled
+    // run keeps every note, because the work that would justify deleting them
+    // may have been rolled back. Answers are parsed from every tier's report,
+    // not just the last one, and an unparsed answer keeps its note.
+    let notesMetadata: DreamRunNotesMetadata | undefined;
+    if (notesState.claimed.length > 0) {
+      const claimedIds = notesState.claimed.map((note) => note.id);
+      const outcomes = parseDreamNoteOutcomes(
+        progress.reportLog.join("\n\n"),
+        claimedIds,
+      );
+      const settles =
+        finalStatus === "succeeded" || finalStatus === "budget_exhausted";
+      let settlement: ConsumeDreamNotesResult = { consumed: [], kept: [] };
+      if (settles) {
+        try {
+          settlement = await deps.consumeNotes(agentId, runId, outcomes);
+        } catch (error) {
+          debugWarn(
+            "memory",
+            `dream note settlement failed (run ${runId}): ${getErrorMessage(error)}`,
+          );
+        }
+      }
+      notesMetadata = {
+        consumed: settlement.consumed,
+        kept: settlement.kept,
+        outcomes,
+      };
+      reportBody = appendDreamNotesSection(
+        reportBody,
+        buildDreamNotesSection({
+          notes: notesState.claimed,
+          outcomes,
+          settled: settles,
+        }),
+      );
+    }
 
     const finishingMetadata: DreamRunMetadata = {
       ...progress.metadata,
@@ -447,6 +522,7 @@ export async function executeDreamRun(
       spentTokens: tracker.spentTokens,
       handoff,
       reportPath: null,
+      ...(notesMetadata !== undefined ? { notes: notesMetadata } : {}),
     };
 
     try {
@@ -476,6 +552,34 @@ export async function executeDreamRun(
         .filter((part): part is string => typeof part === "string")
         .join(" ");
       finishingMetadata.handoff = handoff;
+    }
+
+    // ── Decay ledger: full run-end update, best-effort ───────────────
+    // Never allowed to change the terminal state: the run's outcome was
+    // decided above, and a ranking that cannot be written is not a failure.
+    try {
+      const marks: DreamReviewMark[] = await deps.readMarks(runId);
+      if (notesState.seed === null) {
+        debugWarn(
+          "memory",
+          `dream run ${runId}: no run seed, so the decay ledger was not updated`,
+        );
+      } else {
+        await deps.applyDecay({
+          agentId,
+          memoryDir,
+          runId,
+          baselineSha: baselineSha ?? "",
+          seed: notesState.seed,
+          marks,
+          now: finishedAt,
+        });
+      }
+    } catch (error) {
+      debugWarn(
+        "memory",
+        `dream decay update failed (run ${runId}): ${getErrorMessage(error)}`,
+      );
     }
 
     try {
@@ -569,6 +673,46 @@ export async function executeDreamRun(
   }
 }
 
+async function prepareNotesAndSeed(input: {
+  agentId: string;
+  memoryDir: string;
+  runId: string;
+  now: number;
+  deps: DreamRunDeps;
+}): Promise<RunNotesState> {
+  let claimed: DreamNote[] = [];
+  try {
+    claimed = await input.deps.claimNotes(
+      input.agentId,
+      input.runId,
+      input.now,
+    );
+  } catch (error) {
+    // A queue that cannot be read is not a reason to skip the run; the run just
+    // starts without the notes block.
+    debugWarn(
+      "memory",
+      `dream note claim failed (run ${input.runId}): ${getErrorMessage(error)}`,
+    );
+  }
+  try {
+    const seed = await input.deps.collectSeed({
+      agentId: input.agentId,
+      memoryDir: input.memoryDir,
+      runId: input.runId,
+      now: input.now,
+      notes: claimed,
+    });
+    return { claimed, seed };
+  } catch (error) {
+    debugWarn(
+      "memory",
+      `dream seed collection failed (run ${input.runId}): ${getErrorMessage(error)}`,
+    );
+    return { claimed, seed: null };
+  }
+}
+
 async function runTierLoop(input: {
   agentId: string;
   conversationId: string;
@@ -580,6 +724,8 @@ async function runTierLoop(input: {
   settings: ResolvedDreamSettings;
   tracker: DreamBudgetTracker;
   progress: RunProgress;
+  /** The run-start seed (first turn only) and the claimed notes. */
+  notes: RunNotesState;
   signal: AbortSignal;
   deps: DreamRunDeps;
   state: TierLoopState;
@@ -624,11 +770,16 @@ async function runTierLoop(input: {
     };
     const prompt =
       index === 0
-        ? buildFirstDreamTurnPrompt({ ...promptInfo, tracker })
+        ? buildFirstDreamTurnPrompt({
+            ...promptInfo,
+            tracker,
+            seed: input.notes.seed,
+          })
         : buildNextDreamTurnPrompt({
             ...promptInfo,
             tracker,
             reminders: progress.reminders,
+            previousReport: progress.lastReport,
           });
     progress.reminders = [];
 
@@ -711,7 +862,10 @@ async function runTierLoop(input: {
       state.markTerminalError(turn.error ?? "dream child failed");
       return "failed";
     }
-    if (turn.report) progress.lastReport = turn.report;
+    if (turn.report) {
+      progress.lastReport = turn.report;
+      progress.reportLog.push(turn.report);
+    }
     progress.tierReached = tier;
 
     if (agentHandoff) {

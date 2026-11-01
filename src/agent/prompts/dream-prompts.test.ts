@@ -1,16 +1,15 @@
 /**
- * Dream prompt contract (F-06 M3).
+ * Dream prompt contract (F-06 M3 / 46-6-Fix-A W10).
  *
- * The templates are model-facing contract text, so their promises must match
- * what the controller actually does: one tier per turn, and `DreamDone` ends the
- * **whole run**. The handoff is carried by the run record and the report — there
- * is no automatic handoff message between runs.
+ * The five working manuals are model-facing contract text. Their fixed `## `
+ * headings are a code anchor as much as prose — `dream-run-prompt.ts` slices
+ * later turns on `## 本轮执行` and `## 检查清单` — and their line budgets keep
+ * the first turn of a run at the size the design measured (250–370 lines). The
+ * placeholders are filled by the harness, never by the manual.
  *
- * The five working manuals (46-6-Fix-A W10) carry fixed `## ` headings that the
- * prompt assembler slices on, so the headings are a code anchor as much as
- * prose. Their line budgets keep the first turn of a run at the size the design
- * measured (250–370 lines), and the placeholders are filled by the harness,
- * never by the manual.
+ * The retired run-level templates (`dream-task.md`, `dream-tiers.md`) were
+ * folded into `manual-shared.md` / the tier manuals in W11 and are deleted;
+ * nothing here may reintroduce a second copy of the run-wide rules.
  */
 import { describe, expect, test } from "bun:test";
 import manualShared from "@/agent/prompts/dream/manual-shared.md";
@@ -18,61 +17,46 @@ import manualTask from "@/agent/prompts/dream/manual-task.md";
 import manualThink from "@/agent/prompts/dream/manual-think.md";
 import manualTidy from "@/agent/prompts/dream/manual-tidy.md";
 import manualWander from "@/agent/prompts/dream/manual-wander.md";
-import dreamTaskTemplate from "@/agent/prompts/dream-task.md";
-import dreamTiersTemplate from "@/agent/prompts/dream-tiers.md";
 
-describe("dream prompt contract", () => {
-  test("the first message forbids DreamDone at a tier boundary", () => {
-    expect(dreamTaskTemplate).toContain(
-      "Each turn handles **exactly one tier**",
-    );
-    expect(dreamTaskTemplate).toContain(
-      "**Do not call `DreamDone` at the end of a turn unless the whole run must stop",
-    );
-    expect(dreamTaskTemplate).toContain("skips every remaining tier");
-    expect(dreamTaskTemplate).not.toContain("{{handoff_from_previous}}");
+describe("dream shared manual · run-wide rules", () => {
+  test("the run is one hidden conversation, one tier per turn", () => {
+    expect(manualShared).toContain("each turn handles exactly one tier");
+    expect(manualShared).toContain("unattended maintenance session");
+    expect(manualShared).toContain("The first message carries the run id");
+  });
+
+  test("DreamDone ends the whole run, not a tier", () => {
+    expect(manualShared).toContain("`DreamDone` ends the **whole run**");
+    expect(manualShared).toContain("never at the end of a normal tier");
   });
 
   test("handoff wording promises a report, not a cross-run message", () => {
-    expect(dreamTaskTemplate).toContain(
-      "There is no automatic handoff message between runs",
-    );
-    expect(dreamTaskTemplate).toContain("maintenance/dream-report.md");
-    expect(dreamTaskTemplate).not.toContain("next run will read");
-    expect(dreamTaskTemplate).not.toContain("next run should start");
+    expect(manualShared).toContain("maintenance/dream-report.md");
+    expect(manualShared).not.toContain("next run will read");
   });
 
-  test("the tiers file marks Finishing as whole-run only", () => {
-    expect(dreamTiersTemplate).toContain(
-      "## Finishing the whole run (not each tier)",
-    );
-    expect(dreamTiersTemplate).toContain(
-      "Do not run this procedure at the end of every tier",
-    );
-    expect(dreamTiersTemplate).not.toContain("next run should do first");
-  });
-
-  test("permission claims are generated, not hardcoded in the templates", () => {
-    // F-06: the same template serves a read-only and an `unrestricted` run, so
-    // no template may claim a tool surface of its own.
-    expect(dreamTaskTemplate).toContain("{{permissions_section}}");
-    expect(dreamTaskTemplate).not.toContain("no shell");
-    expect(dreamTaskTemplate).not.toContain("No shell");
-    expect(dreamTiersTemplate).not.toContain("No shell");
-    expect(dreamTiersTemplate).not.toContain("Bash / exec_command are not");
-    expect(dreamTiersTemplate).not.toContain("**Permissions:**");
+  test("permission claims are generated, not hardcoded in the manual", () => {
+    // The same manual serves a read-only and an `unrestricted` run, so it may
+    // not claim a tool surface of its own.
+    expect(manualShared).toContain("{{permissions_section}}");
+    expect(manualShared).toContain("is authoritative about which of these");
+    expect(manualShared).not.toContain("No shell");
+    expect(manualShared).not.toContain("Bash / exec_command are not");
   });
 
   test("the common unattended rules survive the permission rework", () => {
-    for (const template of [dreamTaskTemplate, dreamTiersTemplate]) {
-      expect(template).toContain("No user is present");
-      expect(template).toContain("memory repository");
-    }
-    expect(dreamTiersTemplate).toContain("Do not ask questions");
-    expect(dreamTiersTemplate).toContain("Commit as you go");
-    expect(dreamTiersTemplate).toContain(
+    expect(manualShared).toContain("No user is present");
+    expect(manualShared).toContain("memory repository");
+    expect(manualShared).toContain("Do not ask questions");
+    expect(manualShared).toContain("Commit as you go");
+    expect(manualShared).toContain(
       "Do not commit `maintenance/dream-report.md`",
     );
+  });
+
+  test("the reminder thresholds match DREAM_BUDGET_THRESHOLDS (40/75/90/100)", () => {
+    expect(manualShared).toContain("40 / 75 / 90 / 100 percent");
+    expect(manualShared).not.toContain("40 / 80 / 100");
   });
 });
 

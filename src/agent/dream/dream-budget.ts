@@ -4,7 +4,8 @@
  * The **only** formula lives in `src/dream-budget-math.ts`; this module consumes
  * it. What lives here is everything that is not math:
  *
- * - the 40 % / 80 % / 100 % reminder thresholds and the once-per-run invariant,
+ * - the 40 % / 75 % / 90 % / 100 % reminder thresholds and the once-per-run
+ *   invariant,
  * - the hard stop ("spent ≥ allowance"), including the user's one automatic
  *   +50 % extension (R-5.3.6, O-1),
  * - the reminder text the run controller hands to the next turn.
@@ -22,8 +23,15 @@ import {
 import type { ResolvedDreamSettings } from "@/dream-settings";
 import type { DreamTier } from "@/types/dream-run-metadata";
 
-/** Ratios of the base allowance that earn a reminder (R-5.3.5). */
-export const DREAM_BUDGET_THRESHOLDS: readonly number[] = [0.4, 0.8, 1];
+/**
+ * Ratios of the base allowance that earn a reminder.
+ *
+ * 40 / 75 / 90 / 100 is the design's stopping contract (46-6-Fix-A §4, decision
+ * 7): keep going and reserve room, start wrapping up, only the commits that
+ * must happen, hard stop. The manual repeats the same four values, so the text
+ * the model reads and the reminder it receives agree.
+ */
+export const DREAM_BUDGET_THRESHOLDS: readonly number[] = [0.4, 0.75, 0.9, 1];
 
 /** The user's ruling: one extra 50 % may be auto-approved. */
 export const DREAM_OVER_BUDGET_EXTENSION_RATIO = 0.5;
@@ -46,7 +54,7 @@ export function resolveDreamRunBudgetTokens(input: {
 
 /** Identifies which reminder a threshold produced (for prompt text + tests). */
 export interface DreamBudgetCrossing {
-  /** 0.4 / 0.8 / 1 — the ratio that was crossed. */
+  /** 0.4 / 0.75 / 0.9 / 1 — the ratio that was crossed. */
   threshold: number;
   /** `spent / baseBudget` at the moment it was first observed. */
   ratio: number;
@@ -179,6 +187,15 @@ export interface DreamBudgetReminderInput {
   tier?: string;
 }
 
+/** One line of stopping advice per threshold, matching the shared manual. */
+function thresholdGuidance(threshold: number): string {
+  if (threshold >= 0.9)
+    return "Only the commits that must happen; write the handoff.";
+  if (threshold >= 0.75)
+    return "Start wrapping up: finish the current unit and open no new ones.";
+  return "Keep going, but reserve room to wrap up.";
+}
+
 /**
  * Reminder text for one crossed threshold.
  *
@@ -207,8 +224,8 @@ export function buildDreamBudgetReminder(
   }
   return [
     `<system-reminder>`,
-    `Dream run budget reminder: ${spent}/${budget} budget tokens used (${percent}%).${nextTier}`,
-    `Start wrapping up the remaining plan; keep memory commits small and finish within the current tier.`,
+    `Dream run budget reminder: ${spent}/${budget} budget tokens used (${percent}%). ${thresholdGuidance(input.crossing.threshold)}${nextTier}`,
+    `Keep memory commits small and finish the current unit within this tier.`,
     `</system-reminder>`,
   ].join("\n");
 }

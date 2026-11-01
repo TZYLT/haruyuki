@@ -164,8 +164,11 @@ export function dreamStatusHint(spentPercent: number): string {
   if (spentPercent >= 100) {
     return "Budget exhausted: stop starting new work, commit what is coherent, and call DreamDone with a handoff.";
   }
-  if (spentPercent >= 80) {
-    return "Over 80% of the budget is spent: finish the current change, commit it, and call DreamDone with a handoff.";
+  if (spentPercent >= 90) {
+    return "Over 90% of the budget is spent: make only the commits that must happen, then call DreamDone with a handoff.";
+  }
+  if (spentPercent >= 75) {
+    return "Over 75% of the budget is spent: start wrapping up — finish the current change, commit it, and do not open new work.";
   }
   if (spentPercent >= 40) {
     return "Over 40% of the budget is spent: prefer finishing and committing what you started over opening new work.";

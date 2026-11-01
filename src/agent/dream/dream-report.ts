@@ -18,12 +18,13 @@
  * history is the archive. `reportPath` is memory-repository-relative, so the
  * hidden-session viewer and the run record can point at it.
  *
- * The agent never commits this path (`dream-task.md` says so): committing it
- * here, alone, is the whole point of the split.
+ * The agent never commits this path (the shared dream manual says so):
+ * committing it here, alone, is the whole point of the split.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCurrentAgentName } from "@/agent/context";
+import type { DreamNote, DreamNoteOutcome } from "@/agent/dream/dream-notes";
 import { getScopedMemoryFilesystemRoot } from "@/agent/memory-filesystem";
 import { commitMemoryWrite } from "@/agent/memory-git";
 import {
@@ -252,4 +253,107 @@ export async function writeDreamReport(
   });
 
   return { reportPath: DREAM_REPORT_PATH, committed: result.committed };
+}
+
+/** Longest note excerpt a `## Notes` report line carries (one line, by design). */
+export const DREAM_REPORT_NOTE_EXCERPT_CHARS = 120;
+
+/** The note-id shape the queue mints (`note-<8hex>`); tolerant of longer ids. */
+const DREAM_REPORT_NOTE_ID_PATTERN = /note-[A-Za-z0-9]+/u;
+
+/**
+ * Read one line's note answer. Status words are matched tolerantly
+ * (`not applicable`, `needs authorization`, capitalisation) because the answer
+ * is prose the agent wrote, not a machine field.
+ */
+function noteOutcomeIn(text: string): DreamNoteOutcome | undefined {
+  if (/needs?[-\s_]?authori[sz]ation/iu.test(text))
+    return "needs-authorization";
+  if (/not[-\s_]?applicable/iu.test(text)) return "not-applicable";
+  if (/\bapplied\b/iu.test(text)) return "applied";
+  return undefined;
+}
+
+/**
+ * Parse the agent's report for `note-<id>` answers (46-6-Fix-A W12).
+ *
+ * The report is model-written prose, so parsing is deliberately tolerant and
+ * conservative: a line counts only when it names a note the run actually
+ * claimed *and* carries one of the three answer words. A note with no parsed
+ * answer is left out of the map, and {@link consumeNotes} keeps it — an
+ * unparsed answer must never delete a note.
+ */
+export function parseDreamNoteOutcomes(
+  report: string,
+  claimedIds: readonly string[],
+): Record<string, DreamNoteOutcome> {
+  const wanted = new Set(claimedIds);
+  const outcomes: Record<string, DreamNoteOutcome> = {};
+  for (const rawLine of report.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (line.length === 0) continue;
+    const idMatch = DREAM_REPORT_NOTE_ID_PATTERN.exec(line);
+    if (idMatch === null) continue;
+    const id = idMatch[0];
+    if (!wanted.has(id)) continue;
+    if (Object.hasOwn(outcomes, id)) continue;
+    const after = line.slice(idMatch.index + id.length);
+    const outcome =
+      noteOutcomeIn(after) ?? noteOutcomeIn(line.slice(0, idMatch.index));
+    if (outcome !== undefined) outcomes[id] = outcome;
+  }
+  return outcomes;
+}
+
+function oneLine(text: string): string {
+  return text.replace(/\s+/gu, " ").trim();
+}
+
+export interface DreamNotesReportSectionInput {
+  /** Notes this run claimed and put in its seed. */
+  notes: readonly DreamNote[];
+  /** Parsed answers, keyed by note id. */
+  outcomes: Readonly<Record<string, DreamNoteOutcome>>;
+  /**
+   * True when the run reached a settled terminal state
+   * (`succeeded` / `budget_exhausted`): the queue was settled from the report.
+   */
+  settled: boolean;
+}
+
+/**
+ * The harness-written `## Notes` section appended to the report body.
+ *
+ * It is the durable half of the notes protocol: the run's own `## Notes 回应`
+ * section is the agent's answer, this section is what the harness did with the
+ * queue, and the two together let a user tell "answered and consumed" from
+ * "answered and kept" without reading the note store.
+ */
+export function buildDreamNotesSection(
+  input: DreamNotesReportSectionInput,
+): string {
+  const lines = [
+    "## Notes",
+    "",
+    input.settled
+      ? "The harness settled the queue from this run's report: `applied` notes were consumed, and every other note stays queued for a later run."
+      : "This run did not reach a settled state, so every note stays queued; the answers below are kept for the next run.",
+  ];
+  for (const note of input.notes) {
+    const outcome = input.outcomes[note.id];
+    const status = outcome ?? "no answer (kept)";
+    const excerpt = oneLine(note.text);
+    const text =
+      excerpt.length > DREAM_REPORT_NOTE_EXCERPT_CHARS
+        ? `${excerpt.slice(0, DREAM_REPORT_NOTE_EXCERPT_CHARS)}…`
+        : excerpt;
+    lines.push(`- ${note.id}: ${status} — ${text}`);
+  }
+  return lines.join("\n");
+}
+
+/** Append the `## Notes` section to the report body before it is written. */
+export function appendDreamNotesSection(body: string, section: string): string {
+  const trimmed = body.trimEnd();
+  return `${trimmed}\n\n${section}\n`;
 }

@@ -130,12 +130,14 @@ describe("buildDreamStatusSnapshot", () => {
 });
 
 describe("dreamStatusHint", () => {
-  test("escalates at the 40/80/100 thresholds", () => {
+  test("escalates at the 40/75/90/100 thresholds", () => {
     expect(dreamStatusHint(0)).toContain("comfortable");
     expect(dreamStatusHint(39)).toContain("comfortable");
     expect(dreamStatusHint(40)).toContain("prefer finishing");
-    expect(dreamStatusHint(79)).toContain("prefer finishing");
-    expect(dreamStatusHint(80)).toContain("call DreamDone");
+    expect(dreamStatusHint(74)).toContain("prefer finishing");
+    expect(dreamStatusHint(75)).toContain("wrapping up");
+    expect(dreamStatusHint(89)).toContain("wrapping up");
+    expect(dreamStatusHint(90)).toContain("call DreamDone");
     expect(dreamStatusHint(99)).toContain("call DreamDone");
     expect(dreamStatusHint(100)).toContain("Budget exhausted");
   });
