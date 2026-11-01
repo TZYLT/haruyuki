@@ -348,7 +348,51 @@ describe("dream family helpers", () => {
             scope: "agent",
           }),
       },
+      {
+        name: "dreamNoteAppend",
+        expectedType: "dream_note_append",
+        responseType: "dream_note_append_response",
+        invoke: (client) =>
+          client.dreamNoteAppend({ runtime, text: "review system/human.md" }),
+      },
+      {
+        name: "dreamNotesList",
+        expectedType: "dream_notes_list",
+        responseType: "dream_notes_list_response",
+        invoke: (client) => client.dreamNotesList({ runtime }),
+      },
+      {
+        name: "dreamNoteRemove",
+        expectedType: "dream_note_remove",
+        responseType: "dream_note_remove_response",
+        invoke: (client) =>
+          client.dreamNoteRemove({ runtime, note_id: "note-1" }),
+      },
     ]);
+  });
+
+  test("dreamNoteAppend sends the text and passes a queue refusal through", async () => {
+    const { client, socket } = createFakeClient();
+    const pending = client.dreamNoteAppend({
+      runtime,
+      text: "review system/human.md",
+    });
+    const sent = sentCommand(socket);
+    expect(sent).toMatchObject({
+      type: "dream_note_append",
+      runtime,
+      text: "review system/human.md",
+    });
+    const refusal = {
+      type: "dream_note_append_response",
+      request_id: sent.request_id,
+      success: false,
+      note: null,
+      error: "The dream note queue is full (50 notes)",
+    };
+    socket.receive(refusal);
+    expect(await pending).toMatchObject(refusal);
+    client.close();
   });
 
   test("surfaces a declined dream_run launch", async () => {

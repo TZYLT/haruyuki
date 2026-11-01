@@ -75,6 +75,12 @@ import type {
   CronTriggerResponseMessage,
   CronUpdateCommand,
   CronUpdateResponseMessage,
+  DreamNoteAppendCommand,
+  DreamNoteAppendResponseMessage,
+  DreamNoteRemoveCommand,
+  DreamNoteRemoveResponseMessage,
+  DreamNotesListCommand,
+  DreamNotesListResponseMessage,
   DreamRunCommand,
   DreamRunResponseMessage,
   DreamStatusCommand,
@@ -785,6 +791,39 @@ export class AppServerClient {
     return this.requestCommand<SetDreamSettingsResponseMessage>(
       { type: "set_dream_settings", ...command },
       "set_dream_settings_response",
+      options,
+    );
+  }
+
+  dreamNoteAppend(
+    command: CommandBody<DreamNoteAppendCommand>,
+    options: CommandOptions<DreamNoteAppendResponseMessage> = {},
+  ): Promise<DreamNoteAppendResponseMessage> {
+    return this.requestCommand<DreamNoteAppendResponseMessage>(
+      { type: "dream_note_append", ...command },
+      "dream_note_append_response",
+      options,
+    );
+  }
+
+  dreamNotesList(
+    command: CommandBody<DreamNotesListCommand>,
+    options: CommandOptions<DreamNotesListResponseMessage> = {},
+  ): Promise<DreamNotesListResponseMessage> {
+    return this.requestCommand<DreamNotesListResponseMessage>(
+      { type: "dream_notes_list", ...command },
+      "dream_notes_list_response",
+      options,
+    );
+  }
+
+  dreamNoteRemove(
+    command: CommandBody<DreamNoteRemoveCommand>,
+    options: CommandOptions<DreamNoteRemoveResponseMessage> = {},
+  ): Promise<DreamNoteRemoveResponseMessage> {
+    return this.requestCommand<DreamNoteRemoveResponseMessage>(
+      { type: "dream_note_remove", ...command },
+      "dream_note_remove_response",
       options,
     );
   }

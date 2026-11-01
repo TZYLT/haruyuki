@@ -59,6 +59,12 @@ import type { ConversationListRow } from "./conversation-provenance";
 import type * as CwdProtocol from "./cwd-protocol";
 import type {
   DreamDeviceSummary,
+  DreamNoteAppendCommand,
+  DreamNoteAppendResponseMessage,
+  DreamNoteRemoveCommand,
+  DreamNoteRemoveResponseMessage,
+  DreamNotesListCommand,
+  DreamNotesListResponseMessage,
   DreamRunCommand,
   DreamRunResponseMessage,
   DreamStatusCommand,
@@ -2537,6 +2543,9 @@ export type WsProtocolCommand =
   | DreamRunCommand
   | GetDreamSettingsCommand
   | SetDreamSettingsCommand
+  | DreamNoteAppendCommand
+  | DreamNotesListCommand
+  | DreamNoteRemoveCommand
   | CompactionPrepareCommand
   | CompactionCommitCommand
   | CompactionCancelCommand
@@ -2650,6 +2659,9 @@ export type WsProtocolMessage =
   | DreamRunResponseMessage
   | GetDreamSettingsResponseMessage
   | SetDreamSettingsResponseMessage
+  | DreamNoteAppendResponseMessage
+  | DreamNotesListResponseMessage
+  | DreamNoteRemoveResponseMessage
   | CompactionPrepareResponseMessage
   | CompactionCommitResponseMessage
   | CompactionCancelResponseMessage

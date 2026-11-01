@@ -116,6 +116,24 @@ describe("app-server protocol export", () => {
         created: { agent: false, conversation: false },
       },
       {
+        type: "dream_note_append_response",
+        request_id: "req",
+        success: true,
+        note: null,
+      },
+      {
+        type: "dream_notes_list_response",
+        request_id: "req",
+        success: true,
+        notes: [],
+      },
+      {
+        type: "dream_note_remove_response",
+        request_id: "req",
+        success: true,
+        deleted: false,
+      },
+      {
         type: "external_tool_call_request",
         request_id: "req",
         runtime: { agent_id: "agent-1", conversation_id: "conv-1" },
@@ -145,6 +163,9 @@ describe("app-server protocol export", () => {
       "conversation_messages_list_response",
       "conversation_compact_response",
       "runtime_start_response",
+      "dream_note_append_response",
+      "dream_notes_list_response",
+      "dream_note_remove_response",
       "external_tool_call_request",
     ]);
   });

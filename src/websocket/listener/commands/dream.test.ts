@@ -13,9 +13,18 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type WebSocket from "ws";
+import {
+  appendNote,
+  DREAM_NOTE_MAX_TEXT_CHARS,
+  type DreamNote,
+  listNotes,
+} from "@/agent/dream/dream-notes";
 import { __testSetBackend } from "@/backend";
 import { settingsManager } from "@/settings-manager";
 import type {
+  DreamNoteAppendCommand,
+  DreamNoteRemoveCommand,
+  DreamNotesListCommand,
   DreamRunCommand,
   DreamStatusCommand,
   DreamStatusSnapshot,
@@ -24,11 +33,20 @@ import type {
 } from "@/types/dream-protocol";
 import type { ExecuteCommandCommand } from "@/types/protocol_v2";
 import { handleExecuteCommand } from "@/websocket/listener/commands";
+import {
+  isDreamNoteAppendCommand,
+  isDreamNoteRemoveCommand,
+  isDreamNotesListCommand,
+} from "@/websocket/listener/dream-protocol-inbound";
+import { parseServerMessage } from "@/websocket/listener/protocol-inbound";
 import type { ConversationRuntime } from "@/websocket/listener/types";
 import {
   DREAM_TEXT_USAGE,
   formatDreamRelativeTime,
   formatDreamRunStatusLabel,
+  handleDreamNoteAppendCommand,
+  handleDreamNoteRemoveCommand,
+  handleDreamNotesListCommand,
   handleDreamProtocolCommand,
   handleDreamRunCommand,
   handleDreamStatusCommand,
@@ -547,5 +565,277 @@ describe("handleExecuteCommand dispatch", () => {
     );
     expect(response).toMatchObject({ success: false });
     expect(String(response?.output)).toContain("reflection");
+  });
+});
+
+// ── Dream notes (F-06 §2.5) ──────────────────────────────────────────
+
+describe("dream note inbound guards", () => {
+  const runtime = { agent_id: AGENT, conversation_id: CONVERSATION };
+
+  test("accept the three note command shapes", () => {
+    expect(
+      isDreamNoteAppendCommand({
+        type: "dream_note_append",
+        request_id: "n1",
+        runtime,
+        text: "review the human file first",
+      }),
+    ).toBe(true);
+    expect(
+      isDreamNotesListCommand({
+        type: "dream_notes_list",
+        request_id: "n2",
+        runtime,
+      }),
+    ).toBe(true);
+    expect(
+      isDreamNoteRemoveCommand({
+        type: "dream_note_remove",
+        request_id: "n3",
+        runtime,
+        note_id: "note-1234abcd",
+      }),
+    ).toBe(true);
+  });
+
+  test("reject malformed note commands", () => {
+    const invalid = [
+      { type: "dream_note_append", request_id: "n1", runtime },
+      { type: "dream_note_append", request_id: "n2", runtime: {}, text: "x" },
+      { type: "dream_note_append", request_id: "", runtime, text: "x" },
+      { type: "dream_notes_list", request_id: "n3" },
+      { type: "dream_note_remove", request_id: "n4", runtime },
+      { type: "dream_note_remove", request_id: "n5", runtime, note_id: "" },
+    ];
+    for (const value of invalid) {
+      expect(isDreamNoteAppendCommand(value)).toBe(false);
+      expect(isDreamNotesListCommand(value)).toBe(false);
+      expect(isDreamNoteRemoveCommand(value)).toBe(false);
+    }
+  });
+
+  test("the inbound OR-chain parses the note commands", () => {
+    const commands = [
+      { type: "dream_note_append", request_id: "n1", runtime, text: "x" },
+      { type: "dream_notes_list", request_id: "n2", runtime },
+      {
+        type: "dream_note_remove",
+        request_id: "n3",
+        runtime,
+        note_id: "note-1",
+      },
+    ] as const;
+    for (const command of commands) {
+      expect(
+        parseServerMessage(Buffer.from(JSON.stringify(command)))?.type,
+      ).toBe(command.type);
+    }
+    expect(
+      parseServerMessage(
+        Buffer.from(
+          JSON.stringify({
+            type: "dream_notes_list",
+            request_id: "n4",
+            runtime: {},
+          }),
+        ),
+      ),
+    ).toBeNull();
+  });
+
+  test("the dream protocol handler claims all three note commands", () => {
+    const queued: string[] = [];
+    const context = {
+      socket: {} as WebSocket,
+      safeSocketSend: () => true,
+      runDetachedListenerTask: (name: string) => {
+        queued.push(name);
+      },
+    };
+    const commands: Array<
+      DreamNoteAppendCommand | DreamNotesListCommand | DreamNoteRemoveCommand
+    > = [
+      {
+        type: "dream_note_append",
+        request_id: "n1",
+        runtime,
+        text: "x",
+      },
+      { type: "dream_notes_list", request_id: "n2", runtime },
+      {
+        type: "dream_note_remove",
+        request_id: "n3",
+        runtime,
+        note_id: "note-1",
+      },
+    ];
+    for (const command of commands) {
+      expect(handleDreamProtocolCommand(command, context)).toBe(true);
+    }
+    expect(queued).toEqual([
+      "dream_protocol_command",
+      "dream_protocol_command",
+      "dream_protocol_command",
+    ]);
+  });
+});
+
+describe("dream notes protocol handlers", () => {
+  const runtime = { agent_id: AGENT, conversation_id: CONVERSATION };
+
+  function appendCommand(
+    text: string,
+    requestId = "note-1",
+  ): DreamNoteAppendCommand {
+    return { type: "dream_note_append", request_id: requestId, runtime, text };
+  }
+
+  test("append queues a user note and list reads it back", async () => {
+    const appended = harness();
+    await handleDreamNoteAppendCommand(
+      appendCommand("review system/human.md before tidying"),
+      appended.socket,
+      appended.send,
+    );
+    const appendedResponse = lastSent<{ success: boolean; note: DreamNote }>(
+      appended.sent,
+    );
+    expect(appendedResponse.success).toBe(true);
+    expect(appendedResponse.note.author).toBe("user");
+    expect(appendedResponse.note.text).toBe(
+      "review system/human.md before tidying",
+    );
+    expect(appendedResponse.note.source).toEqual({
+      conversationId: CONVERSATION,
+    });
+
+    const listed = harness();
+    await handleDreamNotesListCommand(
+      { type: "dream_notes_list", request_id: "list-1", runtime },
+      listed.socket,
+      listed.send,
+    );
+    const listResponse = lastSent<{ success: boolean; notes: DreamNote[] }>(
+      listed.sent,
+    );
+    expect(listResponse.success).toBe(true);
+    expect(listResponse.notes.map((note) => note.id)).toEqual([
+      appendedResponse.note.id,
+    ]);
+  });
+
+  test("an over-long note is refused with the queue's reason and not saved", async () => {
+    const { sent, socket, send } = harness();
+    await handleDreamNoteAppendCommand(
+      appendCommand("x".repeat(DREAM_NOTE_MAX_TEXT_CHARS + 1)),
+      socket,
+      send,
+    );
+    const response = lastSent<{
+      success: boolean;
+      note: DreamNote | null;
+      error?: string;
+    }>(sent);
+    expect(response.success).toBe(false);
+    expect(response.note).toBeNull();
+    expect(response.error).toContain(`${DREAM_NOTE_MAX_TEXT_CHARS}`);
+    expect(await listNotes(AGENT)).toEqual([]);
+  });
+
+  test("a throwing append store answers success:false", async () => {
+    const { sent, socket, send } = harness();
+    await handleDreamNoteAppendCommand(
+      appendCommand("x"),
+      socket,
+      send,
+      async () => {
+        throw new Error("disk full");
+      },
+    );
+    expect(lastSent<Record<string, unknown>>(sent)).toEqual({
+      type: "dream_note_append_response",
+      request_id: "note-1",
+      success: false,
+      note: null,
+      error: "disk full",
+    });
+  });
+
+  test("list answers an empty queue", async () => {
+    const { sent, socket, send } = harness();
+    await handleDreamNotesListCommand(
+      { type: "dream_notes_list", request_id: "list-empty", runtime },
+      socket,
+      send,
+    );
+    expect(lastSent<Record<string, unknown>>(sent)).toEqual({
+      type: "dream_notes_list_response",
+      request_id: "list-empty",
+      success: true,
+      notes: [],
+    });
+  });
+
+  test("a throwing list store answers success:false with no notes", async () => {
+    const { sent, socket, send } = harness();
+    await handleDreamNotesListCommand(
+      { type: "dream_notes_list", request_id: "list-fail", runtime },
+      socket,
+      send,
+      async () => {
+        throw new Error("queue unreadable");
+      },
+    );
+    expect(lastSent<Record<string, unknown>>(sent)).toEqual({
+      type: "dream_notes_list_response",
+      request_id: "list-fail",
+      success: false,
+      notes: [],
+      error: "queue unreadable",
+    });
+  });
+
+  test("remove deletes an existing note and reports an unknown id as not deleted", async () => {
+    const queued = await appendNote(AGENT, { text: "drop me", author: "user" });
+    if (!queued.ok) throw new Error(queued.error);
+    const noteId = queued.note.id;
+
+    const removed = harness();
+    await handleDreamNoteRemoveCommand(
+      {
+        type: "dream_note_remove",
+        request_id: "remove-1",
+        runtime,
+        note_id: noteId,
+      },
+      removed.socket,
+      removed.send,
+    );
+    expect(lastSent<Record<string, unknown>>(removed.sent)).toEqual({
+      type: "dream_note_remove_response",
+      request_id: "remove-1",
+      success: true,
+      deleted: true,
+    });
+    expect(await listNotes(AGENT)).toEqual([]);
+
+    const again = harness();
+    await handleDreamNoteRemoveCommand(
+      {
+        type: "dream_note_remove",
+        request_id: "remove-2",
+        runtime,
+        note_id: noteId,
+      },
+      again.socket,
+      again.send,
+    );
+    expect(lastSent<Record<string, unknown>>(again.sent)).toEqual({
+      type: "dream_note_remove_response",
+      request_id: "remove-2",
+      success: true,
+      deleted: false,
+    });
   });
 });

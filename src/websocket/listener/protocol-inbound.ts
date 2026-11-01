@@ -129,6 +129,9 @@ import {
   isSetBootWorkingDirectoryCommand,
 } from "./cwd-protocol-inbound";
 import {
+  isDreamNoteAppendCommand,
+  isDreamNoteRemoveCommand,
+  isDreamNotesListCommand,
   isDreamRunCommand,
   isDreamStatusCommand,
   isGetDreamSettingsCommand,
@@ -2111,6 +2114,9 @@ export function parseServerMessage(
       isDreamRunCommand(parsed) ||
       isGetDreamSettingsCommand(parsed) ||
       isSetDreamSettingsCommand(parsed) ||
+      isDreamNoteAppendCommand(parsed) ||
+      isDreamNotesListCommand(parsed) ||
+      isDreamNoteRemoveCommand(parsed) ||
       isCompactionPrepareCommand(parsed) ||
       isCompactionCommitCommand(parsed) ||
       isCompactionCancelCommand(parsed) ||

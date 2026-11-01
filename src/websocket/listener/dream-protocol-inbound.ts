@@ -1,5 +1,8 @@
 import type { PermissionTier } from "@/cron/cron-types";
 import type {
+  DreamNoteAppendCommand,
+  DreamNoteRemoveCommand,
+  DreamNotesListCommand,
   DreamRunCommand,
   DreamSettingsPatch,
   DreamStatusCommand,
@@ -157,5 +160,51 @@ export function isSetDreamSettingsCommand(
     value.scope === undefined ||
     value.scope === "global" ||
     value.scope === "agent"
+  );
+}
+
+// ── Dream notes (F-06 §2.5) ──────────────────────────────────────────
+//
+// Shape-only validation: the queue's own rules (1–2000 characters, 50-note
+// cap) are answered by the handler with their specific reason, so a note that
+// is merely too long still reaches the store instead of being dropped here as
+// an unparseable frame.
+
+export function isDreamNoteAppendCommand(
+  value: unknown,
+): value is DreamNoteAppendCommand {
+  if (!isObjectRecord(value)) return false;
+  return (
+    value.type === "dream_note_append" &&
+    typeof value.request_id === "string" &&
+    value.request_id.length > 0 &&
+    isAgentRuntimeScope(value.runtime) &&
+    typeof value.text === "string"
+  );
+}
+
+export function isDreamNotesListCommand(
+  value: unknown,
+): value is DreamNotesListCommand {
+  if (!isObjectRecord(value)) return false;
+  return (
+    value.type === "dream_notes_list" &&
+    typeof value.request_id === "string" &&
+    value.request_id.length > 0 &&
+    isAgentRuntimeScope(value.runtime)
+  );
+}
+
+export function isDreamNoteRemoveCommand(
+  value: unknown,
+): value is DreamNoteRemoveCommand {
+  if (!isObjectRecord(value)) return false;
+  return (
+    value.type === "dream_note_remove" &&
+    typeof value.request_id === "string" &&
+    value.request_id.length > 0 &&
+    isAgentRuntimeScope(value.runtime) &&
+    typeof value.note_id === "string" &&
+    value.note_id.length > 0
   );
 }

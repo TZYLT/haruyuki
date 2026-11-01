@@ -1,3 +1,4 @@
+import type { DreamNote } from "@/agent/dream/dream-notes";
 import type { PermissionTier } from "@/cron/cron-types";
 import type {
   DreamRunStatus,
@@ -159,5 +160,83 @@ export interface SetDreamSettingsResponseMessage {
   request_id: string;
   success: boolean;
   settings: DreamSettingsSnapshot | null;
+  error?: string;
+}
+
+// ── Dream notes: the queue's app-server entrance (F-06 §2.5) ─────────
+//
+// The queue is per-agent and lives in the harness home, never in the memory
+// repository (design §2.2/§2.7), so every command carries the agent's runtime
+// scope exactly like `dream_status` — there is no conversation write path and
+// no hidden-conversation access here.
+
+/**
+ * One queued note. Re-exported from the queue's owner
+ * (`agent/dream/dream-notes`) instead of re-declared: the wire carries the
+ * stored shape, and a second definition would be a second truth. Type-only, so
+ * nothing from the queue module reaches a browser bundle.
+ */
+export type { DreamNote };
+
+/**
+ * `dream_note_append`: leave a note for this agent's next dream run.
+ *
+ * `author` is always `user` on this path — the desktop is the user's own
+ * entrance; the main agent's `DreamNote` tool and a run leaving a note for its
+ * next self carry their own author values. The conversation id in `runtime`
+ * becomes the note's `source.conversationId`.
+ */
+export interface DreamNoteAppendCommand {
+  type: "dream_note_append";
+  request_id: string;
+  runtime: AgentRuntimeScope;
+  /**
+   * 1–2000 characters after trimming. An over-long note is refused with the
+   * reason (never truncated) and answered `success: false`.
+   */
+  text: string;
+}
+export interface DreamNoteAppendResponseMessage {
+  type: "dream_note_append_response";
+  request_id: string;
+  success: boolean;
+  /** The queued note; `null` when the queue refused it (see `error`). */
+  note: DreamNote | null;
+  error?: string;
+}
+
+/** `dream_notes_list`: the agent's queue, oldest first. */
+export interface DreamNotesListCommand {
+  type: "dream_notes_list";
+  request_id: string;
+  runtime: AgentRuntimeScope;
+}
+export interface DreamNotesListResponseMessage {
+  type: "dream_notes_list_response";
+  request_id: string;
+  success: boolean;
+  /** Empty when the queue is empty; corrupt queue lines are skipped, not fatal. */
+  notes: DreamNote[];
+  error?: string;
+}
+
+/** `dream_note_remove`: drop one note the user no longer wants. */
+export interface DreamNoteRemoveCommand {
+  type: "dream_note_remove";
+  request_id: string;
+  runtime: AgentRuntimeScope;
+  note_id: string;
+}
+export interface DreamNoteRemoveResponseMessage {
+  type: "dream_note_remove_response";
+  request_id: string;
+  success: boolean;
+  /**
+   * `false` when no queued note has that id — not an error (it is already gone).
+   * Named `deleted` rather than the design sketch's `removed` because the
+   * outbound router's `RoutableMessage` already reserves `removed` for
+   * `update_queue`'s removed-id list; a boolean there breaks frame routing.
+   */
+  deleted: boolean;
   error?: string;
 }

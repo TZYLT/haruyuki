@@ -1,4 +1,5 @@
 import type WebSocket from "ws";
+import { appendNote, listNotes, removeNote } from "@/agent/dream/dream-notes";
 import {
   type StartDreamRunResult,
   startDreamRun,
@@ -9,6 +10,12 @@ import {
   updateDreamSettings,
 } from "@/dream-settings";
 import type {
+  DreamNoteAppendCommand,
+  DreamNoteAppendResponseMessage,
+  DreamNoteRemoveCommand,
+  DreamNoteRemoveResponseMessage,
+  DreamNotesListCommand,
+  DreamNotesListResponseMessage,
   DreamRunCommand,
   DreamRunResponseMessage,
   DreamSettingsSnapshot,
@@ -23,6 +30,9 @@ import type {
 import type { DreamRunStatus } from "@/types/dream-run-metadata";
 import { getErrorMessage } from "@/utils/error";
 import {
+  isDreamNoteAppendCommand,
+  isDreamNoteRemoveCommand,
+  isDreamNotesListCommand,
   isDreamRunCommand,
   isDreamStatusCommand,
   isGetDreamSettingsCommand,
@@ -63,7 +73,10 @@ type DreamProtocolCommand =
   | DreamStatusCommand
   | DreamRunCommand
   | GetDreamSettingsCommand
-  | SetDreamSettingsCommand;
+  | SetDreamSettingsCommand
+  | DreamNoteAppendCommand
+  | DreamNotesListCommand
+  | DreamNoteRemoveCommand;
 
 /** What a command handler sends on the socket; injected so tests stay local. */
 type DreamSend = (payload: unknown) => boolean;
@@ -238,6 +251,121 @@ export function handleSetDreamSettingsCommand(
   }
 }
 
+// ── Dream notes (F-06 §2.5) ──────────────────────────────────────────
+//
+// The queue's owner (`agent/dream/dream-notes`) decides what is acceptable:
+// empty/over-long text and a full queue are refused with the reason the user
+// must see, so the handler forwards that reason instead of flattening every
+// refusal into "invalid command". The injected default is the real store;
+// tests pass a fake only for the throw path.
+
+/**
+ * `dream_note_append`: queue one user note for this agent's next dream run.
+ *
+ * This is the user's own entrance (a desktop client), so the author is
+ * `user` and the runtime's conversation id becomes the note's source.
+ */
+export async function handleDreamNoteAppendCommand(
+  command: DreamNoteAppendCommand,
+  socket: WebSocket,
+  safeSocketSend: SafeSocketSend,
+  append: typeof appendNote = appendNote,
+): Promise<void> {
+  const send = createDreamSend(socket, safeSocketSend);
+  try {
+    const result = await append(command.runtime.agent_id, {
+      text: command.text,
+      author: "user",
+      source: { conversationId: command.runtime.conversation_id },
+    });
+    const response: DreamNoteAppendResponseMessage = result.ok
+      ? {
+          type: "dream_note_append_response",
+          request_id: command.request_id,
+          success: true,
+          note: result.note,
+        }
+      : {
+          type: "dream_note_append_response",
+          request_id: command.request_id,
+          success: false,
+          note: null,
+          error: result.error,
+        };
+    send(response);
+  } catch (error) {
+    const response: DreamNoteAppendResponseMessage = {
+      type: "dream_note_append_response",
+      request_id: command.request_id,
+      success: false,
+      note: null,
+      error: getErrorMessage(error),
+    };
+    send(response);
+  }
+}
+
+/** `dream_notes_list`: the agent's queue, oldest first (corrupt lines skipped). */
+export async function handleDreamNotesListCommand(
+  command: DreamNotesListCommand,
+  socket: WebSocket,
+  safeSocketSend: SafeSocketSend,
+  list: typeof listNotes = listNotes,
+): Promise<void> {
+  const send = createDreamSend(socket, safeSocketSend);
+  try {
+    const notes = await list(command.runtime.agent_id);
+    const response: DreamNotesListResponseMessage = {
+      type: "dream_notes_list_response",
+      request_id: command.request_id,
+      success: true,
+      notes,
+    };
+    send(response);
+  } catch (error) {
+    const response: DreamNotesListResponseMessage = {
+      type: "dream_notes_list_response",
+      request_id: command.request_id,
+      success: false,
+      notes: [],
+      error: getErrorMessage(error),
+    };
+    send(response);
+  }
+}
+
+/**
+ * `dream_note_remove`: drop one queued note. An unknown id is `deleted: false`
+ * with `success: true` — the note the user wanted gone is already gone.
+ */
+export async function handleDreamNoteRemoveCommand(
+  command: DreamNoteRemoveCommand,
+  socket: WebSocket,
+  safeSocketSend: SafeSocketSend,
+  remove: typeof removeNote = removeNote,
+): Promise<void> {
+  const send = createDreamSend(socket, safeSocketSend);
+  try {
+    const deleted = await remove(command.runtime.agent_id, command.note_id);
+    const response: DreamNoteRemoveResponseMessage = {
+      type: "dream_note_remove_response",
+      request_id: command.request_id,
+      success: true,
+      deleted,
+    };
+    send(response);
+  } catch (error) {
+    const response: DreamNoteRemoveResponseMessage = {
+      type: "dream_note_remove_response",
+      request_id: command.request_id,
+      success: false,
+      deleted: false,
+      error: getErrorMessage(error),
+    };
+    send(response);
+  }
+}
+
 async function handleDreamProtocolRequest(
   command: DreamProtocolCommand,
   socket: WebSocket,
@@ -256,6 +384,15 @@ async function handleDreamProtocolRequest(
     case "set_dream_settings":
       handleSetDreamSettingsCommand(command, socket, safeSocketSend);
       return;
+    case "dream_note_append":
+      await handleDreamNoteAppendCommand(command, socket, safeSocketSend);
+      return;
+    case "dream_notes_list":
+      await handleDreamNotesListCommand(command, socket, safeSocketSend);
+      return;
+    case "dream_note_remove":
+      await handleDreamNoteRemoveCommand(command, socket, safeSocketSend);
+      return;
   }
 }
 
@@ -268,7 +405,10 @@ export function handleDreamProtocolCommand(
     !isDreamStatusCommand(parsed) &&
     !isDreamRunCommand(parsed) &&
     !isGetDreamSettingsCommand(parsed) &&
-    !isSetDreamSettingsCommand(parsed)
+    !isSetDreamSettingsCommand(parsed) &&
+    !isDreamNoteAppendCommand(parsed) &&
+    !isDreamNotesListCommand(parsed) &&
+    !isDreamNoteRemoveCommand(parsed)
   ) {
     return false;
   }
