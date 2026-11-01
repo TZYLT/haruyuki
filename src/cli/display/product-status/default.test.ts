@@ -96,7 +96,7 @@ describe("defaultProductStatusPanel", () => {
 
     expect(lines).toHaveLength(1);
     expect(lines[0]).not.toContain(agentUrl);
-    expect(stripAnsi(lines[0] ?? "").trim()).toBe("⠋ dreaming (65s)");
+    expect(stripAnsi(lines[0] ?? "").trim()).toBe("⠋ reflection (65s)");
   });
 
   test("does not render inactive background reflection", () => {
@@ -159,7 +159,7 @@ describe("defaultProductStatusPanel", () => {
     // OSC-8 escape sequence should be present (clickable link)
     expect(lines[0]).toContain(agentUrl);
     // Should not render the URL as visible text
-    expect(stripAnsi(lines[0] ?? "").trim()).toBe("⠋ dreaming (65s)");
+    expect(stripAnsi(lines[0] ?? "").trim()).toBe("⠋ reflection (65s)");
   });
 
   test("does not render URL as plain text in tmux", () => {
@@ -186,7 +186,7 @@ describe("defaultProductStatusPanel", () => {
       expect(lines).toHaveLength(1);
       // No URL in the output at all (not even in escape sequences)
       expect(lines[0]).not.toContain(agentUrl);
-      expect(stripAnsi(lines[0] ?? "").trim()).toBe("⠋ dreaming (65s)");
+      expect(stripAnsi(lines[0] ?? "").trim()).toBe("⠋ reflection (65s)");
     } finally {
       if (originalTmux === undefined) {
         delete process.env.TMUX;
@@ -211,7 +211,7 @@ describe("product status panel ordering", () => {
 
     expect(Object.keys(withDefaultProductStatusPanel(panels))).toEqual([
       "additive",
-      "default:dreaming",
+      "default:product-status",
     ]);
   });
 

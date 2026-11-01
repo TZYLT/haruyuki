@@ -48,7 +48,7 @@ if (haruyuki.capabilities.ui.panels) {
 `order` is a signed coordinate around the input:
 
 - `order > 1` — additive panels above the input, higher nearer the top (default `100`).
-- `order === 1` — replaces the default dreaming/reflection indicator above the input. Use this only when intentionally overriding that row; otherwise use `order > 1`.
+- `order === 1` — replaces the default reflection/background-agent indicator above the input. Use this only when intentionally overriding that row; otherwise use `order > 1`.
 - `order === 0` — the primary line just below the input, overriding the built-in `agent · model`. This is the statusline slot; use `customizing-statusline` for that work.
 - `order < 0` — stacks below the primary line, `-1` closest.
 
@@ -79,9 +79,9 @@ render(ctx: {
 
 Close panels when they are transient, and close/replace long-lived panels from the activation disposer if reload should remove them.
 
-### Panel use case: dreaming indicator overrides
+### Panel use case: reflection indicator overrides
 
-When a user asks to change the "dreaming" UI/indicator or the reflection status above the input, use an `order: 1` panel replacement. The user should not need to know any internal row/component name.
+When a user asks to change the reflection/background-agent status above the input, use an `order: 1` panel replacement. The user should not need to know any internal row/component name.
 
 Checklist:
 
@@ -94,7 +94,7 @@ Critical shape:
 
 ```ts
 const panel = haruyuki.ui.openPanel({
-  id: "dreaming-indicator",
+  id: "reflection-indicator",
   order: 1,
   render(ctx) {
     const agent = ctx.backgroundAgents.find(

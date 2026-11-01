@@ -32,17 +32,20 @@ function paddedSpinnerFrame(frame: string, width: number): string {
 }
 
 function typeLabelForBackgroundAgent(type: string): string {
-  const rawType = type.toLowerCase();
-  return rawType === "reflection" ? "dreaming" : rawType;
+  // The background-agent types are already the user-facing feature names
+  // (`reflection`, `general-purpose`, …). There is deliberately no friendly
+  // alias: "dreaming" used to label reflection here, but F-06 made "dream" a
+  // real feature, so reusing that word for reflection is misleading.
+  return type.toLowerCase();
 }
 
 export function createDefaultProductStatusPanel(
   options: DefaultProductStatusPanelOptions = {},
 ): ModPanel {
   return {
-    id: "default:dreaming",
+    id: "default:product-status",
     order: DEFAULT_PRODUCT_STATUS_ORDER,
-    path: "default:dreaming",
+    path: "default:product-status",
     updatedAt: 0,
     render(ctx) {
       const backgroundAgent = ctx.backgroundAgents.find((agent) =>

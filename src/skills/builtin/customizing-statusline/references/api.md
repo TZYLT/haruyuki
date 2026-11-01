@@ -53,7 +53,7 @@ haruyuki.ui.closePanel(id: string): void
 `order` is a signed coordinate around the input:
 
 - `order > 1` — additive panels above the input. Higher numbers render nearer the top. Default when omitted is `100`.
-- `order === 1` — replaces the default product-status row (currently dreaming/reflection status). Use this only when intentionally overriding that row; otherwise use `order > 1`.
+- `order === 1` — replaces the default product-status row (currently reflection/background-agent status). Use this only when intentionally overriding that row; otherwise use `order > 1`.
 - `order === 0` — the primary line just below the input. Overrides the built-in `agent · model`. Use this for the statusline.
 - `order < 0` — stacks below the primary line. `-1` sits closest to it, more-negative lower.
 

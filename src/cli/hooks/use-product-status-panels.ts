@@ -1,7 +1,7 @@
 /**
  * Host-owned panels around the input: the product-status row above it (the
- * "dreaming" spinner for silent background agents) and the Workflow run
- * rows below it.
+ * spinner for silent background agents, labelled with the agent type — e.g.
+ * `reflection`) and the Workflow run rows below it.
  *
  * Everything here reads external stores (subagent lifecycle, workflow
  * execution registry) and a 1 s ticker while something is active, so the
