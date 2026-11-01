@@ -67,6 +67,7 @@ to that end.
 | **Topic trimming** | `/topic` marks a boundary; `/topic list`, `/topic search`, and `/topic show` look topics up and read one back; `/compact` **computes the overview and cut points first and trims only once you pick** (nothing touches disk before that; cancel and failure write nothing), instead of dropping the tail proportionally |
 | **Memory as a file tree** | MemFS: all context (including memory blocks) is tracked by git — diffable, revertible, and pushable to your own remote |
 | **Passive memory** | **Reflection rewritten**: reflection runs as a hidden session on the current context, adds only one task message, and writes the memory repository directly, so it no longer produces conflicting commits; `/reflect`, `/dream`, and `/memory config` control triggers and the time limit; the TUI's `/usage` detail now shows reflection cost under "Automated tasks" |
+| **Dreaming** | It automatically organizes memories during idle time to prevent the memory library from accumulating clutter.  |
 | **Local backend** | A single backend mode (`--backend local`): agent, conversations, memory, and transcripts all live on this machine |
 | **Multi-agent** | Any agent can act as another agent's subagent (including built-in subagents such as fork and recall) |
 | **Channels and a local server** | `haruyuki server` provides a local app-server, WebSocket, and Slack/Telegram channels |
@@ -204,7 +205,7 @@ something or want to contribute, a pull request is very welcome.
 - [ ] Active conversation tree → a continuous, unified conversation experience
 - [x] Redesign the TUI (still polishing the details)
 - [ ] Network access and a web UI
-- [ ] A stable "dreaming" mechanism → a little extra spend on memory upkeep and on finishing leftover small tasks
+- [x] A stable "dreaming" mechanism → a little extra spend on memory upkeep and on finishing leftover small tasks. It remains to be further verified.
 - [ ] Stable personality and conversational style
 - [ ] Vector-embedding-enhanced retrieval
 
@@ -222,7 +223,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
-| `0.5.0` | - | **Dreaming**: the agent wakes itself during idle windows to maintain memory (four tiers; budget, permissions and trigger conditions configurable; one run lives in a hidden conversation and can be reviewed afterwards). The same release fills the app-server protocol surface (dream, usage, multi-step compaction, the full scheduling field set) and repoints `/dream` at the dream feature (reflection is `/reflect`) — the **breaking change** of this version. |
+| `0.5.0` | + | **Dreaming**: The agent organizes its memories during idle time to maintain a stable and tidy memory library. Please use this experimental functions with caution. |
 | `0.4.5` | + | **Resident scheduling**: The entire scheduling task system has been rewritten to automatically launch scheduled tasks when the software is not running, ensuring that timed tasks can truly execute on schedule, provided the computer remains powered on. |
 | `0.4.4` | + | **Compaction rework**: Enable automatic processing of abstracts and topic tags before compression, making topic-inspired compression truly practical and providing queries for topics and corresponding original texts. |
 | `0.4.3` | + | **Reflection rewritten**: reflection now runs as a hidden session that writes memory directly, so it no longer produces conflicting commits; The TUI display section will undergo beautification in the future. |

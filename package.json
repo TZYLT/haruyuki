@@ -2,7 +2,7 @@
   "name": "haruyuki",
   "version": "0.5.0",
   "lettaStartupLogProtocol": 1,
-  "description": "Haruyuki is a local-first terminal runtime for stateful, long-lived agents.",
+  "description": "Haruyuki is a local-first, terminal runtime for stateful, cost-conscious, long-lived companion agents.",
   "author": "TZYLT <TZY143@126.com>",
   "keywords": [
     "ai",

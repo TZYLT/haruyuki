@@ -49,7 +49,8 @@ Haruyuki 把 agent 的记忆、身份与行为当作**可以长期演进的资�
 | **前缀冻结** | 提示/工具/记忆的改动**不会静默改写已发出的上下文**，不会让你不知不觉得到超级吓人的账单；`/context pending` 看待应用项，`/recompile` 显式应用 |
 | **话题裁切** | `/topic` 标边界，`/topic list`／`/topic search`／`/topic show` 查与回看；`/compact` **先算概况与切点、你选完才裁**（不落盘，取消与失败零写入），而不是默认按比例丢尾巴 |
 | **记忆即文件树** | MemFS：全部上下文（含记忆块）由 git 跟踪，可 diff、可回滚、可推到自己的远端仓库 |
-| **被动记忆** | **重写反思机制**：反思作为隐藏会话在当前上下文上运行，只多一条任务消息，直接写记忆仓、不再产生冲突提交；`/reflect`、`/dream`、`/memory config` 控制触发与时限；TUI 同步添加相关成本统计（`/usage` 明细「Automated tasks」） |
+| **被动记忆** | **重写反思机制**：反思作为隐藏会话在当前上下文上运行，只多一条任务消息，直接写记忆仓、不再产生冲突提交；`/reflect`、`/memory config` 控制触发与时限；TUI 同步添加相关成本统计（`/usage` 明细「Automated tasks」） |
+| **梦游** | 会在空闲时间自动整理记忆，避免记忆库不断累积杂乱。 |
 | **本地后端** | 单一后端模式（`--backend local`）：agent、会话、记忆、transcript 全在本机 |
 | **多 agent** | 任意 agent 可作为另一个 agent 的 subagent（含 fork、recall 等内置 subagent） |
 | **渠道与本地服务** | `haruyuki server` 提供本地 app-server ＋ WebSocket ＋ Slack/Telegram 渠道 |
@@ -169,7 +170,7 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 - [ ] 主动会话树机制 -> 提供连续统一的对话体验
 - [x] 重新设计TUI (仍在打磨细节)
 - [ ] 网络访问与webUI
-- [ ] 稳定的梦游机制 -> 多花一点点钱做记忆整理和完成余留小任务
+- [x] 稳定的梦游机制 -> 多花一点点钱做记忆整理和完成余留小任务，有待进一步验证。
 - [ ] 人格与对话风格稳定
 - [ ] 向量嵌入增强检索
 
