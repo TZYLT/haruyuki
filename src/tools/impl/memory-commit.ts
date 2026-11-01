@@ -24,6 +24,8 @@ import {
   commitMemoryWrite,
 } from "@/agent/memory-git";
 import { getBackend } from "@/backend";
+import { getRuntimeContext } from "@/runtime-context";
+import type { DreamTier } from "@/types/dream-run-metadata";
 import { validateRequiredParams } from "./validation";
 
 const TOOL_NAME = "MemoryCommit";
@@ -84,6 +86,30 @@ function error(content: string): MemoryCommitResult {
 }
 
 /**
+ * The model may already write `dream(tidy): ...` out of habit. The harness owns
+ * the prefix, so one existing `dream(...):` prefix is stripped before the real
+ * one is added — a doubled prefix in the git log is a bug, not a style choice.
+ */
+const DREAM_REASON_PREFIX = /^dream\([^)]*\):\s*/i;
+
+/**
+ * The commit message for one call: the reason verbatim outside a dream run,
+ * `dream(<tier>): <reason>` inside one (F-06 §1.4, checklist §5 decision 6).
+ *
+ * Exported so the prefix rules are testable without a git repository.
+ */
+export function buildMemoryCommitMessage(
+  reason: string,
+  dreamTier: DreamTier | undefined,
+): string {
+  if (dreamTier === undefined) return reason;
+  const body = reason.replace(DREAM_REASON_PREFIX, "").trim();
+  return body.length === 0
+    ? `dream(${dreamTier}):`
+    : `dream(${dreamTier}): ${body}`;
+}
+
+/**
  * Stage and commit the given memory paths.
  *
  * Returns a `status: "error"` result (not a throw) for refusals the model can
@@ -100,12 +126,17 @@ export async function memory_commit(
   if (reason.length === 0) {
     return error(`${TOOL_NAME}: "reason" must be a non-empty commit message.`);
   }
-  if (reason.length > MEMORY_COMMIT_MAX_REASON_CHARS) {
+  // A dream child gets the tier from the runtime context (`dream-run-wiring.ts`
+  // sets it), so the model never has to remember the prefix — and the length
+  // limit below applies to the final message, prefix included.
+  const dreamTier = getRuntimeContext()?.dreamTier;
+  const message = buildMemoryCommitMessage(reason, dreamTier);
+  if (message.length > MEMORY_COMMIT_MAX_REASON_CHARS) {
     return error(
-      `${TOOL_NAME}: "reason" is ${reason.length} characters; the limit is ${MEMORY_COMMIT_MAX_REASON_CHARS}.`,
+      `${TOOL_NAME}: the commit message is ${message.length} characters${dreamTier === undefined ? "" : " including the dream(<tier>): prefix"}; the limit is ${MEMORY_COMMIT_MAX_REASON_CHARS}.`,
     );
   }
-  if (reason.includes("\n") || reason.includes("\r")) {
+  if (message.includes("\n") || message.includes("\r")) {
     return error(
       `${TOOL_NAME}: "reason" must be one line (no newlines or carriage returns); put details in the memory file itself.`,
     );
@@ -159,7 +190,7 @@ export async function memory_commit(
   const result = await commit({
     memoryDir,
     pathspecs,
-    reason,
+    reason: message,
     author: {
       agentId,
       authorName: deps.agentName ?? getCurrentAgentName() ?? agentId,
@@ -176,7 +207,7 @@ export async function memory_commit(
     };
   }
   return {
-    content: `Committed ${result.sha.slice(0, 12)}: ${reason}`,
+    content: `Committed ${result.sha.slice(0, 12)}: ${message}`,
     status: "success",
   };
 }

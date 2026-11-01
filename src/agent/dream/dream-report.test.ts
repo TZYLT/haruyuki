@@ -192,7 +192,7 @@ describe("writeDreamReport", () => {
       expect(index.startsWith("---")).toBe(false);
 
       expect(repoOrThrow().git("log", "-1", "--pretty=%s")).toBe(
-        "dream: record run report (run-report-1)",
+        "dream(report): run-report-1",
       );
       const committedPaths = repoOrThrow()
         .git("show", "--name-only", "--pretty=format:")

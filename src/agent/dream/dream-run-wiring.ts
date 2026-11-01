@@ -107,6 +107,8 @@ export async function spawnDreamTurnWithSubagent(
       agentId: input.agentId,
       conversationId: input.conversationId,
       subagentPermissionMode: input.permissionMode,
+      dreamTier: input.tier,
+      dreamRunId: input.runId,
       executionSettings: {
         // C-20: no shell in a dream child, even if the parent CLI allowed it.
         allowed_tools: [],

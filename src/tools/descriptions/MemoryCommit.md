@@ -9,6 +9,9 @@ after adding or merging notes, after writing a conclusion worth keeping.
   `projects/acme/notes.md`, `maintenance`). Only changed paths are committed;
   nothing outside the repository, and nothing under `.git`, is accepted.
 - `reason` is the commit subject. Say what changed and why, in one line.
+- In a dream run the harness prefixes the final subject with `dream(<tier>): `
+  automatically. Write only the reason itself; do not add that prefix (a
+  model-written `dream(...):` prefix is stripped rather than doubled).
 - If the given paths have no changes, the tool reports "nothing to commit"
   instead of failing.
 - Commit in small, reviewable steps rather than once at the very end: the run's

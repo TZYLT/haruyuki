@@ -241,7 +241,7 @@ export async function writeDreamReport(
   const result = await commitMemoryWrite({
     memoryDir,
     pathspecs: [DREAM_REPORT_PATH, DREAM_REPORT_INDEX_PATH],
-    reason: `dream: record run report (${input.metadata.runId})`,
+    reason: `dream(report): ${input.metadata.runId}`,
     author: {
       agentId: input.agentId,
       authorName: getCurrentAgentName() ?? input.agentId,

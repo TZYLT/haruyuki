@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { homedir, tmpdir } from "node:os";
+import type { DreamTier } from "@/types/dream-run-metadata";
 import type { SkillSource } from "./agent/skills";
 import { isUsableDirectory } from "./helpers/usable-directory";
 import type { RuntimeExecutionSettings } from "./runtime-execution-settings";
@@ -56,6 +57,10 @@ export interface RuntimeContextSnapshot {
    * without widening the allowance for ordinary sessions.
    */
   dreamRun?: boolean;
+  /** Tier of the current dream turn; set only by the dream child process. */
+  dreamTier?: DreamTier;
+  /** Id of the current dream run; set only by the dream child process. */
+  dreamRunId?: string;
 }
 
 const runtimeContextStorage = new AsyncLocalStorage<RuntimeContextSnapshot>();
