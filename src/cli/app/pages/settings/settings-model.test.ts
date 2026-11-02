@@ -20,6 +20,7 @@ import {
 import {
   SETTINGS_GROUPS,
   SETTINGS_ITEMS,
+  settingItemById,
 } from "@/cli/app/pages/settings/settings-schema";
 
 /**
@@ -69,15 +70,18 @@ describe("the schema", () => {
     }
   });
 
-  test("an editable row has a writer; a read-only row says why", () => {
+  test("an editable row has a writer; a read-only row says why or where", () => {
     for (const item of SETTINGS_ITEMS) {
       if (item.editable) {
         expect(item.write).toBeDefined();
       } else {
+        // T-04: a read-only row answers "why not" (`reason`) or "where to go
+        // instead" (`jump`); one of the two has to exist.
         expect(
-          item.reason,
-          `${item.id} is read-only without a reason`,
+          item.reason ?? item.jump,
+          `${item.id} is read-only without a reason or a jump`,
         ).toBeTruthy();
+        expect(item.write).toBeUndefined();
       }
     }
   });
@@ -99,10 +103,107 @@ describe("the schema", () => {
 
   test("the inventory is pinned, so an addition is a decision", () => {
     // 32 writable + 13 read-only at P3; F-06 M4 added 15 writable dream knobs
-    // and one read-only setup row. Changing this list is fine; changing the
-    // number without a docs update is what this test is for.
-    expect(SETTINGS_ITEMS.filter((item) => item.editable)).toHaveLength(47);
-    expect(SETTINGS_ITEMS).toHaveLength(61);
+    // and one read-only setup row; T-04 added 12 rows (one writable
+    // `listenerEnvName`, eleven read-only gap rows, ten of them with a jump).
+    // Changing this list is fine; changing the number without a docs update is
+    // what this test is for.
+    expect(SETTINGS_ITEMS.filter((item) => item.editable)).toHaveLength(48);
+    expect(SETTINGS_ITEMS).toHaveLength(73);
+  });
+
+  test("T-04's twelve gap rows are present with their scope and owner", () => {
+    const expected: ReadonlyArray<{
+      id: string;
+      scope: string;
+      jump?: string;
+      editable: boolean;
+    }> = [
+      {
+        id: "compactionMode",
+        scope: "[agent]",
+        jump: "/compact config",
+        editable: false,
+      },
+      {
+        id: "compactionPrompt",
+        scope: "[agent]",
+        jump: "/compact config",
+        editable: false,
+      },
+      {
+        id: "compactionClipChars",
+        scope: "[agent]",
+        jump: "/compact config",
+        editable: false,
+      },
+      {
+        id: "compactionKeepPercentage",
+        scope: "[agent]",
+        jump: "/compact config",
+        editable: false,
+      },
+      {
+        id: "maxContext",
+        scope: "[model]",
+        jump: "/context limit",
+        editable: false,
+      },
+      {
+        id: "windowTitleProject",
+        scope: "[Project]",
+        jump: "/config title",
+        editable: false,
+      },
+      {
+        id: "windowTitleLocal",
+        scope: "[Local]",
+        jump: "/config title",
+        editable: false,
+      },
+      {
+        id: "consoleFont",
+        scope: "[Global]",
+        jump: "/config console-font",
+        editable: false,
+      },
+      {
+        id: "hooksSummary",
+        scope: "[Global]",
+        jump: "/config hooks",
+        editable: false,
+      },
+      {
+        id: "mcpServers",
+        scope: "[agent]",
+        jump: "/config mcp",
+        editable: false,
+      },
+      {
+        id: "worktreeProjectConfig",
+        scope: "[Project]",
+        editable: false,
+      },
+      {
+        id: "listenerEnvName",
+        scope: "[Local]",
+        editable: true,
+      },
+    ];
+    for (const entry of expected) {
+      const item = settingItemById(entry.id);
+      expect(item, `${entry.id} is missing`).toBeDefined();
+      if (!item) continue;
+      expect(scopeMarker(item)).toBe(entry.scope);
+      expect(item.jump).toBe(entry.jump);
+      expect(item.editable).toBe(entry.editable);
+    }
+    // The gaps are twelve rows and exactly one of them writes.
+    const gapIds = new Set(expected.map((entry) => entry.id));
+    const gaps = SETTINGS_ITEMS.filter((item) => gapIds.has(item.id));
+    expect(gaps).toHaveLength(12);
+    expect(gaps.filter((item) => item.editable)).toHaveLength(1);
+    // `env` is an OAuth-refresh side channel, not a user setting (R-04.4).
+    expect(SETTINGS_ITEMS.some((item) => item.id === "env")).toBe(false);
   });
 
   test("the Dream group carries R-5.9.2's minimal set, one control per key", () => {
@@ -223,6 +324,35 @@ describe("rows", () => {
     expect(row.note).toBe("start or /reload");
   });
 
+  test("a jump row is focusable and carries its command, but is not editable", () => {
+    // R-04.3 / Q-48: the row must not pretend to be editable, but `Enter` on it
+    // is a real action (prefill the composer), so it is not disabled either.
+    for (const item of SETTINGS_ITEMS.filter((entry) => entry.jump)) {
+      expect(item.editable).toBe(false);
+      expect(item.write).toBeUndefined();
+      const row = settingRow(item, CTX);
+      if (row.kind !== "item") throw new Error(`${item.id} is not an item row`);
+      expect(row.disabled, `${item.id} must be focusable`).not.toBe(true);
+      expect(row.note, `${item.id} carries its jump`).toBe(item.jump);
+    }
+  });
+
+  test("the worktree row explains its file and stays a plain read-only row", () => {
+    // §1.4 #1: the worktree block is read by the tool from disk, so the panel
+    // only points at the file — it has no jump and no writer.
+    const item = SETTINGS_ITEMS.find(
+      (entry) => entry.id === "worktreeProjectConfig",
+    );
+    if (!item) throw new Error("worktreeProjectConfig is missing");
+    expect(item.jump).toBeUndefined();
+    expect(item.editable).toBe(false);
+    const row = settingRow(item, CTX);
+    if (row.kind !== "item") throw new Error("not an item row");
+    expect(row.disabled).toBe(true);
+    expect(row.value).toBe(".haruyuki/settings.json");
+    expect(row.note).toBe("edit on disk");
+  });
+
   test("a row that needs a restart says so", () => {
     // `requiresRestart` was assigned by seven schema entries and read by nobody:
     // flipping `ui_v2` here rewrote a file, nothing on screen moved, and the page
@@ -241,6 +371,93 @@ describe("rows", () => {
     const liveRow = settingRow(live, CTX);
     if (liveRow.kind !== "item") throw new Error("not an item row");
     expect(liveRow.note).not.toBe("restart");
+  });
+});
+
+describe("T-04 gap rows", () => {
+  /** The agent state the shell would hand the page, minus the fields it reads. */
+  const AGENT_STATE = {
+    compaction_settings: {
+      mode: "sliding_window",
+      prompt: "Summarize briefly",
+      clip_chars: 2000,
+      sliding_window_percentage: 0.7,
+    },
+  } as unknown as NonNullable<SettingsContext["agentState"]>;
+
+  const gapsCtx: SettingsContext = {
+    ...CTX,
+    agentState: AGENT_STATE,
+    contextWindowSize: 200_000,
+  };
+
+  const itemOf = (id: string) => {
+    const item = SETTINGS_ITEMS.find((entry) => entry.id === id);
+    if (!item) throw new Error(`${id} is missing`);
+    return item;
+  };
+
+  const rowValueOf = (id: string, ctx: SettingsContext): string => {
+    const row = settingRow(itemOf(id), ctx);
+    if (row.kind !== "item") throw new Error(`${id} is not an item row`);
+    return row.value ?? "";
+  };
+
+  test("the compaction rows read the agent's stored values", () => {
+    expect(rowValueOf("compactionMode", gapsCtx)).toBe("sliding_window");
+    expect(rowValueOf("compactionPrompt", gapsCtx)).toBe("Summarize briefly");
+    expect(rowValueOf("compactionClipChars", gapsCtx)).toBe("2000");
+    expect(rowValueOf("compactionKeepPercentage", gapsCtx)).toBe("70%");
+  });
+
+  test("the compaction rows say what the runtime defaults to, not a fake zero", () => {
+    const bare: SettingsContext = { ...CTX, agentState: null };
+    expect(rowValueOf("compactionMode", bare)).toBe("(default)");
+    expect(rowValueOf("compactionPrompt", bare)).toBe("(mode default)");
+    expect(rowValueOf("compactionClipChars", bare)).toBe("(no clip)");
+    expect(rowValueOf("compactionKeepPercentage", bare)).toBe("(default)");
+  });
+
+  test("max context formats the shell's window, and says so when unknown", () => {
+    expect(rowValueOf("maxContext", gapsCtx)).toBe("200k tokens");
+    expect(rowValueOf("maxContext", CTX)).toBe("(unreadable)");
+  });
+
+  test("the hooks row is the synchronous three-layer summary", () => {
+    // With no settings loaded every layer counts zero; the point is the shape,
+    // and that reading it needs no backend round trip.
+    expect(rowValueOf("hooksSummary", CTX)).toMatch(
+      /^\d+g · \d+p · \d+l( \(off\))?$/,
+    );
+  });
+
+  test("the per-agent MCP row says it cannot read before the manager loads", () => {
+    // The schema is exercised without an initialized settings manager here; the
+    // page's rule is to say so rather than paint "none" (a real "no servers").
+    expect(rowValueOf("mcpServers", CTX)).toBe("(unreadable)");
+  });
+
+  test("listenerEnvName is the one writable gap row, local and directly editable", () => {
+    const item = itemOf("listenerEnvName");
+    expect(item.editable).toBe(true);
+    expect(item.kind).toBe("text");
+    expect(item.scope).toBe("local");
+    expect(item.write).toBeDefined();
+    expect(typeof item.read(CTX)).toBe("string");
+  });
+
+  test("the T-04 rows are split out of settings-schema.ts", () => {
+    // The parent file only spreads the gap table (the Dream precedent); the
+    // twelve rows and their formatters live in settings-gaps-schema.ts.
+    expect(SETTINGS_GROUPS.some((group) => group.id === "compaction")).toBe(
+      true,
+    );
+    expect(
+      SETTINGS_GROUPS.some((group) => group.id === "windowTitleLayers"),
+    ).toBe(true);
+    expect(
+      SETTINGS_GROUPS.find((group) => group.id === "compaction")?.section,
+    ).toBe("context");
   });
 });
 

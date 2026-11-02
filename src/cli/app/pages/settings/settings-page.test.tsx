@@ -2,10 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SessionStats } from "@/agent/stats";
 import { clearAllSubagents } from "@/agent/subagent-state";
 import type { AppViewProps } from "@/cli/app/AppView";
 import { ChromeHeightContext } from "@/cli/app/chrome-height";
 import { SettingsPage } from "@/cli/app/pages/settings/settings-page";
+import { ContextSidebarScope } from "@/cli/app/shell/sidebar-scope";
 import {
   focusTab,
   getTabsState,
@@ -71,18 +73,34 @@ function props(projectDirectory: string): AppViewProps {
     handlePermissionModeChange: () => {},
     runtimeFlags: { tokenStreaming: false, reasoningTabCycle: false },
     setRuntimeFlag: () => {},
+    setRestoredInput: () => {},
+    sessionStatsRef: { current: new SessionStats() },
+    streaming: false,
+    usedContextTokens: 0,
+    contextWindowSize: 200_000,
   } as unknown as AppViewProps;
 }
 
-function mount(projectDirectory: string): InkTty {
+function mount(
+  projectDirectory: string,
+  overrides: Partial<AppViewProps> = {},
+  options: { columns?: number; rows?: number; sidebar?: boolean } = {},
+): InkTty {
   clearAllSubagents();
   openConversationTab("M6 shell", "M6 shell");
   focusTab("settings");
-  return mountInkTty(
+  const page = (
     <ChromeHeightContext.Provider value={8}>
-      <SettingsPage {...props(projectDirectory)} />
-    </ChromeHeightContext.Provider>,
-    { columns: 80, rows: 24 },
+      <SettingsPage {...props(projectDirectory)} {...overrides} />
+    </ChromeHeightContext.Provider>
+  );
+  return mountInkTty(
+    options.sidebar ? (
+      <ContextSidebarScope.Provider value>{page}</ContextSidebarScope.Provider>
+    ) : (
+      page
+    ),
+    { columns: options.columns ?? 80, rows: options.rows ?? 24 },
   );
 }
 
@@ -103,7 +121,7 @@ function cursorLabel(rows: readonly string[]): string | undefined {
 
 /** Press `↑↓` until the cursor row is the one whose label starts with `label`. */
 async function moveCursorTo(tty: InkTty, label: string): Promise<void> {
-  for (let step = 0; step < 40; step += 1) {
+  for (let step = 0; step < 60; step += 1) {
     const rows = await tty.rows();
     if (cursorLabel(rows)?.startsWith(label)) return;
     await tty.press(DOWN);
@@ -318,6 +336,102 @@ describe("the settings page", () => {
       expect((await loadPermissions(dir)).allow ?? []).not.toContain(
         "Bash(ls:*)",
       );
+    } finally {
+      tty.stop();
+    }
+    // This case drives four mount/key sequences through the real Ink loop; the
+    // default 5 s budget is too tight when the suite runs beside the other
+    // worktree members' test processes.
+  }, 15000);
+
+  test("a jump row is focusable, is not editable, and Enter prefills only", async () => {
+    // R-04.3 / Q-48 / Q-49: the row is read-only but focusable; the note column
+    // carries the command, the header spells it out for the focused row, Space
+    // changes nothing, and Enter hands the command to the composer without
+    // running it or leaving the page's own write path.
+    const restored: (string | null)[] = [];
+    let submitted = 0;
+    const tty = mount(await projectDir(), {
+      setRestoredInput: ((value: string | null) => {
+        restored.push(value);
+      }) as unknown as AppViewProps["setRestoredInput"],
+      onSubmit: (async () => {
+        submitted += 1;
+        return { submitted: true };
+      }) as AppViewProps["onSubmit"],
+    });
+    try {
+      await moveCursorTo(tty, "Hooks (g/p/l)");
+      const focused = await tty.rows();
+      expect(cursorLabel(focused)).toContain("Hooks (g/p/l)");
+      // Q-49: the full command lives in the header while the row is focused.
+      expect(focused[0]).toContain("⏎ fills /config hooks (draft kept)");
+      expect(focused.join("\n")).toContain("/config hooks");
+
+      // Not editable: Space must not write (no transient "updated" note).
+      await tty.press(SPACE);
+      await settle(120);
+      expect((await tty.rows())[0]).not.toContain("updated");
+
+      await tty.press(ENTER);
+      await settle(120);
+      expect(restored).toEqual(["/config hooks"]);
+      // Q-48: prefill only — the composer gets the text, no turn is submitted.
+      expect(submitted).toBe(0);
+      expect(getTabsState().activeId).toBe("M6 shell");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("80 columns beside the rail truncates the note and the header still spells it", async () => {
+    // G-4 / C-09: with the rail up at 80 columns the note column is seven
+    // cells — `/config hooks` reaches the screen as `/config`. The focused row's
+    // command is printed in full in the header instead.
+    const tty = mount(
+      await projectDir(),
+      {},
+      { columns: 80, rows: 30, sidebar: true },
+    );
+    try {
+      await moveCursorTo(tty, "Hooks (g/p/l)");
+      const rows = await tty.rows();
+      const line = rows.find((row) => row.includes("Hooks (g/p/l)"));
+      expect(line).toBeDefined();
+      // The note is cut by the frame, exactly the case C-09 accepts: seven
+      // cells, so `/config hooks` arrives as `/con…`.
+      expect(line).toContain("/con");
+      expect(line).not.toContain("/config hooks");
+      // The focused row is called out in the header, with room to be readable.
+      expect(rows[0]).toContain("⏎ fills /config hooks (draft kept)");
+      // And the rail is really up (otherwise this would be the wide frame).
+      expect(rows.join("\n")).toContain("│");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the gap rows are reachable: a group screen and the writable local row", async () => {
+    const tty = mount(await projectDir());
+    try {
+      // A group row from the gap table opens a screen of its own rows.
+      await moveCursorTo(tty, "Compaction");
+      await tty.press(ENTER);
+      await settle(200);
+      const group = await tty.rows();
+      expect(group[0]).toContain("Settings / Compaction");
+      expect(group.join("\n")).toContain("Compaction keep %");
+      expect(group.join("\n")).toContain("/compact config");
+
+      await tty.press(ESC);
+      await settle(150);
+      // The writable gap row is a text leaf: Enter opens its inline editor.
+      await moveCursorTo(tty, "Listener environment");
+      await tty.press(ENTER);
+      await settle(150);
+      expect((await tty.rows())[0]).toContain("Listener environment:");
+      await tty.press(ESC);
+      await settle(80);
     } finally {
       tty.stop();
     }

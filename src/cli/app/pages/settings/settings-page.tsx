@@ -60,7 +60,7 @@ export function SettingsPage(view: AppViewProps) {
         ) : (
           <SettingsHeader
             crumbs={page.crumbs}
-            aside={page.note ?? page.hint}
+            aside={page.note ?? page.focusedHint ?? page.hint}
             note={page.note !== null}
             onSelectCrumb={page.selectCrumb}
           />

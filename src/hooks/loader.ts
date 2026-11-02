@@ -372,6 +372,70 @@ export function areHooksDisabled(
 }
 
 /**
+ * Hooks configured per settings layer, for a settings row (T-04 R-04.1).
+ *
+ * A count is all the panel shows: `/config hooks` owns the list, the matchers
+ * and the editors, and reading it from here would duplicate them.
+ */
+export type HooksLayerSummary = {
+  global: number;
+  project: number;
+  local: number;
+  /** Any layer's `disabled` wins, with the user layer's explicit `false` first. */
+  disabled: boolean;
+};
+
+/** Count the hook commands in one layer's config, across every event. */
+function countHookCommands(config: HooksConfig): number {
+  let count = 0;
+  for (const [event, matchers] of Object.entries(config)) {
+    // `disabled` is the one non-event key in the config.
+    if (event === "disabled" || !Array.isArray(matchers)) continue;
+    for (const matcher of matchers as Array<{ hooks?: readonly unknown[] }>) {
+      count += matcher.hooks?.length ?? 0;
+    }
+  }
+  return count;
+}
+
+/**
+ * The three-layer hooks summary, from the settings manager's in-memory cache.
+ *
+ * Synchronous on purpose: the settings page calls this on every snapshot, so it
+ * must not read a file or ask the backend (T-04's read contract). A layer that
+ * is not loaded yet counts as empty rather than throwing — the row then says
+ * what is in force this instant, and `/config hooks` is where the full answer
+ * lives.
+ */
+export function summarizeHooks(
+  workingDirectory: string = process.cwd(),
+): HooksLayerSummary {
+  let project: HooksConfig = {};
+  let local: HooksConfig = {};
+  try {
+    project = settingsManager.getProjectSettings(workingDirectory)?.hooks ?? {};
+  } catch (error) {
+    debugLog("hooks", "summarizeHooks: Project settings not loaded", error);
+  }
+  try {
+    local =
+      settingsManager.getLocalProjectSettings(workingDirectory)?.hooks ?? {};
+  } catch (error) {
+    debugLog(
+      "hooks",
+      "summarizeHooks: Local project settings not loaded",
+      error,
+    );
+  }
+  return {
+    global: countHookCommands(loadGlobalHooks()),
+    project: countHookCommands(project),
+    local: countHookCommands(local),
+    disabled: areHooksDisabled(workingDirectory),
+  };
+}
+
+/**
  * Convenience function to load hooks and get matching ones for an event
  */
 export async function getHooksForEvent(

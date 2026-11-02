@@ -28,6 +28,10 @@ import {
   DREAM_SETTINGS_GROUP,
   DREAM_SETTINGS_ITEMS,
 } from "./dream-settings-schema";
+import {
+  SETTINGS_GAPS_GROUPS,
+  SETTINGS_GAPS_ITEMS,
+} from "./settings-gaps-schema";
 import type {
   SettingsContext,
   SettingsGroup,
@@ -57,9 +61,11 @@ import type {
  *   rendered as a default.
  *
  * The one thing deliberately absent is the compaction pair (`mode`, `percentage`):
- * both need the agent's backend record and an `updateAgent` round trip, and a
- * read-only pair of "(unreadable)" rows would be worse than the `/compact config` face that
- * already owns them.
+ * both need the agent's backend record and an `updateAgent` round trip, so their
+ * writers live with `/compact config`. T-04 lists them (and the rest of the
+ * gaps) read-only from the shell's agent snapshot in `settings-gaps-schema.ts`:
+ * a row that says "the value is this, change it there" and never fabricates a
+ * write path.
  */
 
 const isOn = (value: boolean | undefined): string =>
@@ -146,6 +152,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
   { id: "recall", section: "memory", label: "Passive recall" },
   { id: "reflection", section: "memory", label: "Reflection" },
   DREAM_SETTINGS_GROUP,
+  ...SETTINGS_GAPS_GROUPS,
   { id: "experiments", section: "integrations", label: "Experiments" },
 ];
 
@@ -787,6 +794,10 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
         () => settingsManager.getSetting("preferredBackendMode") ?? "(unset)",
       ),
   },
+  // T-04's gap rows (settings-gaps-schema.ts): the values this page was
+  // missing, plus the module-owned knobs it lists read-only with the command
+  // that owns them.
+  ...SETTINGS_GAPS_ITEMS,
 ];
 
 /** The schema item with this id, or `undefined`. */

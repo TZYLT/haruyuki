@@ -1,5 +1,6 @@
 // src/cli/app/pages/settings/settings-model.ts
 
+import type { AgentState } from "@letta-ai/letta-client/resources/agents/agents";
 import type { PageRow } from "@/cli/app/pages/page-model";
 
 /**
@@ -71,6 +72,16 @@ export type SettingsContext = {
   modelLabel?: string | null;
   /** The live reasoning effort, when the shell supplied it. */
   reasoningEffort?: string | null;
+  /**
+   * The current agent's backend state, when the shell has one.
+   *
+   * A read-only source of agent-scoped values the settings manager does not
+   * keep (`compaction_settings`). The page never writes through it: compaction
+   * is `/compact config`'s, so the row shows the value and jumps there.
+   */
+  agentState?: AgentState | null;
+  /** The active model's context window, when the shell knows it. */
+  contextWindowSize?: number | null;
 };
 
 /** The two flags the composer owns; a page can only ask the shell to flip them. */
@@ -107,6 +118,19 @@ export type SettingsItem = {
   /** `false` means the row is drawn dimmed with `reason`, and cannot be edited. */
   editable: boolean;
   reason?: string;
+  /**
+   * The slash command that owns this value, for a row the page lists but does
+   * not edit (R-04.3).
+   *
+   * `Enter` on the row does **not** run it (Q-48): the page fills the composer
+   * with it and returns to the conversation, so the user sees the command, can
+   * edit it, and presses Enter themselves. A row with a `jump` is therefore
+   * focusable and `Enter`-able even though it is not editable
+   * (`disabled = !editable && !jump`), and its note column carries the command —
+   * the frame cuts that column on a narrow terminal, so the page header also
+   * prints it while the row is focused (Q-49).
+   */
+  jump?: string;
   /**
    * A value shape the generic checks cannot express, run by the inline editor
    * before the write (`/dream`'s window list, and the two nullable caps whose
@@ -281,6 +305,12 @@ export function itemsOfGroup(
  * where you would go instead" from "this is the value". Keeping it out of the value
  * means the value stays a value; keeping it out of the scope column means a narrow
  * terminal cannot cut it into illegibility.
+ *
+ * A row with a `jump` puts the command there instead. It is read-only in the
+ * strong sense — `Space`/`←→` do nothing, no writer exists — but it is *not*
+ * disabled: `Enter` is its entry point (prefill, never execute, Q-48). That is the
+ * one row-contract change T-04 makes; the frame already tells "disabled" (skipped
+ * by the cursor, dimmed) from "focusable" by `disabled` alone.
  */
 export function settingRow(item: SettingsItem, ctx: SettingsContext): PageRow {
   return {
@@ -289,7 +319,9 @@ export function settingRow(item: SettingsItem, ctx: SettingsContext): PageRow {
     label: item.label,
     value: displayValue(item, item.read(ctx)),
     hint: scopeMarker(item),
-    // The schema's `reason` already says where to go instead ("use /model").
+    // The schema's `reason` already says where to go instead ("use /model"),
+    // and `jump` is that answer as a command the row can hand over; the jump
+    // wins because it is actionable.
     //
     // `requiresRestart` used to be a dead field: assigned by seven schema entries
     // and read by nobody, so flipping `ui_v2` in this page changed a file and not
@@ -300,8 +332,9 @@ export function settingRow(item: SettingsItem, ctx: SettingsContext): PageRow {
       ? item.requiresRestart
         ? "restart"
         : undefined
-      : (item.reason ?? "read-only"),
-    disabled: !item.editable,
+      : (item.jump ?? item.reason ?? "read-only"),
+    // Only a row with nothing to do at all is disabled (and skipped by focus).
+    disabled: !item.editable && item.jump === undefined,
   };
 }
 

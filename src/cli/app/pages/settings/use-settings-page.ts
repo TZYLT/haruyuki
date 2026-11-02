@@ -1,6 +1,6 @@
 // src/cli/app/pages/settings/use-settings-page.ts
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { AppViewProps } from "@/cli/app/AppView";
 import type { PageActions } from "@/cli/app/pages/page-frame";
 import type { PageBody, PageRow } from "@/cli/app/pages/page-model";
@@ -86,6 +86,12 @@ export type SettingsPageState = {
   editor: SettingsEditorState | null;
   /** The transient feedback line, drawn beside the title by the page. */
   note: string | null;
+  /**
+   * The row under the cursor is a jump row: the header prints its full command
+   * (Q-49), because the frame's note column is only a few cells wide on a
+   * narrow terminal and the command must still be readable.
+   */
+  focusedHint: string | null;
   /** The path, one segment per level that exists as a screen. */
   crumbs: readonly Crumb[];
   /** The keys that work on this screen, in English, drawn beside the crumbs. */
@@ -122,6 +128,8 @@ export function useSettingsPage(view: AppViewProps): SettingsPageState {
     setRuntimeFlag: view.setRuntimeFlag,
     modelLabel: view.currentModelDisplay,
     reasoningEffort: view.currentReasoningEffort,
+    agentState: view.agentState,
+    contextWindowSize: view.contextWindowSize,
   };
 
   // The permission rules are file state, not settings-manager state: nothing else
@@ -177,6 +185,45 @@ export function useSettingsPage(view: AppViewProps): SettingsPageState {
     if (!item.write) return;
     void run(item.label, () => item.write?.(ctx, value));
   };
+
+  /**
+   * `Enter` on a row the page only points at (Q-48).
+   *
+   * The page does **not** run the command: it hands it to the composer and
+   * returns to the conversation, so the user reads it, can edit it, and presses
+   * Enter themselves. A non-empty draft is left alone by `InputRich` (it drops
+   * the restored value instead of clobbering the user's text); the header says
+   * so while the row is focused.
+   */
+  const prefill = (command: string): void => {
+    view.setRestoredInput(command);
+    if (view.conversationId) {
+      focusTab(view.conversationId);
+      return;
+    }
+    setNote(`${command} copied to the composer`);
+  };
+
+  /**
+   * The focused row's header hint (Q-49).
+   *
+   * The frame owns the cursor and tells the page only through
+   * `bindings(cursorRow)`, which runs inside the frame's render; a `setState`
+   * from there would update a parent mid-render. The rail's own pattern applies
+   * (`tabs.ts`, `hover-store.ts`): a tiny module store — the frame's render
+   * publishes, the header subscribes with `useSyncExternalStore`. Publication is
+   * deferred one microtask so it never fires while React is rendering.
+   */
+  const focusedHint = useSyncExternalStore(
+    subscribeFocusedHint,
+    getFocusedHint,
+  );
+  useEffect(() => {
+    // A page that unmounts must not leave its last hint behind for the next one.
+    return () => {
+      publishFocusedHint(null);
+    };
+  }, []);
 
   const openEditor = (
     target: SettingsEditorState["target"],
@@ -349,7 +396,14 @@ export function useSettingsPage(view: AppViewProps): SettingsPageState {
     }
 
     const item = settingItemById(row.id);
-    if (!item?.editable) return;
+    if (!item) return;
+    // A read-only row with a jump hands its command over (Q-48); it is never
+    // toggled, opened as an editor, or written — the row is focusable, not
+    // editable (R-04.3).
+    if (!item.editable) {
+      if (item.jump) prefill(item.jump);
+      return;
+    }
     if (item.kind === "toggle") {
       writeSetting(item, item.read(ctx) === "true" ? "false" : "true");
       return;
@@ -407,6 +461,7 @@ export function useSettingsPage(view: AppViewProps): SettingsPageState {
    * render's rows.
    */
   const bindings = (cursorRow: PageRow | undefined): readonly KeyBinding[] => {
+    publishFocusedHint(focusedHintFor(cursorRow));
     if (screen.kind !== "bucket" || !isRuleBucket(screen.bucket)) return [];
     const bucket = screen.bucket;
     return [
@@ -472,6 +527,7 @@ export function useSettingsPage(view: AppViewProps): SettingsPageState {
     actions: { activate, toggle, adjust, back: goBack, bindings },
     editor,
     note,
+    focusedHint,
     crumbs: built.crumbs,
     hint: built.hint,
     setDraft,
@@ -569,4 +625,62 @@ function permissionRuleCount(
     (rules.alwaysAsk?.length ?? 0) +
     (rules.additionalDirectories?.length ?? 0)
   );
+}
+
+/**
+ * The jump command of a focused row, as the header prints it (Q-49).
+ *
+ * A jump row's note column is the command, and the frame reserves it only 60%
+ * of whatever the value does not need — at 80 columns beside the rail that is
+ * seven cells, so `/config hooks` arrives on screen as `/config`. The header has
+ * the width to spell it out, and it also carries Q-48's rule in one phrase: the
+ * command is *filled*, never run, and an existing draft is kept.
+ */
+function focusedHintFor(row: PageRow | undefined): string | null {
+  if (!row || row.kind !== "item") return null;
+  const command = settingItemById(row.id)?.jump;
+  return command === undefined ? null : `⏎ fills ${command} (draft kept)`;
+}
+
+/**
+ * The focused row's header hint, as a module store.
+ *
+ * The frame owns the cursor, and `bindings(cursorRow)` — called inside the
+ * frame's render — is the only channel it gives a page. Publishing a store
+ * update from there is safe only if it is deferred: notifying subscribers
+ * synchronously would render a parent while the frame is rendering. One
+ * microtask later the header re-renders with the row the cursor just landed on,
+ * so a cursor move is one extra render of the page, never one per keystroke.
+ *
+ * The store outlives a mount on purpose (it is the rail's pattern, not React
+ * state): the page clears it on unmount so a fresh mount does not inherit the
+ * last cursor's hint.
+ */
+let focusedHint: string | null = null;
+let pendingFocusedHint: string | null = null;
+let publishQueued = false;
+const focusedHintListeners = new Set<() => void>();
+
+function subscribeFocusedHint(listener: () => void): () => void {
+  focusedHintListeners.add(listener);
+  return () => {
+    focusedHintListeners.delete(listener);
+  };
+}
+
+function getFocusedHint(): string | null {
+  return focusedHint;
+}
+
+function publishFocusedHint(hint: string | null): void {
+  if (hint === pendingFocusedHint) return;
+  pendingFocusedHint = hint;
+  if (publishQueued) return;
+  publishQueued = true;
+  queueMicrotask(() => {
+    publishQueued = false;
+    if (pendingFocusedHint === focusedHint) return;
+    focusedHint = pendingFocusedHint;
+    for (const listener of focusedHintListeners) listener();
+  });
 }
