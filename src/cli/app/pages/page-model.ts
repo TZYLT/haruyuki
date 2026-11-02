@@ -234,23 +234,43 @@ export function pageWindow(input: {
   return { start, end, above: start, below: count - end, reserved };
 }
 
-/** The largest offset `pageWindow` will honour. */
+/**
+ * The largest offset `pageWindow` will honour.
+ *
+ * The capacity is in **terminal lines**, so a body of multi-line items has a
+ * smaller maximum than its row count: `heights` is what makes `End` stop on the
+ * last window that still fits. Omitting it is the one-line-per-row arithmetic
+ * every pre-T-10 page uses.
+ */
 export function maxPageOffset(input: {
   count: number;
   height: number;
+  /** Terminal lines each row occupies, one entry per row (`rowHeight`). */
+  heights?: readonly number[];
 }): number {
   const count = Math.max(0, Math.trunc(input.count));
   const height = Math.max(0, Math.trunc(input.height));
-  const rows = count > height ? Math.max(1, height - 2) : height;
-  return Math.max(0, count - rows);
+  const heights = normalizedHeights(count, input.heights);
+  const totalLines = heights.reduce((sum, rowLines) => sum + rowLines, 0);
+  // Same reservation rule as `pageWindow`: when the body overflows, two of the
+  // height's rows are the markers, even at an end.
+  const capacity = totalLines > height ? Math.max(1, height - 2) : height;
+  return lastWindowStart(heights, capacity);
 }
 
-/** Step the offset, clamped. `delta` is in rows. */
+/**
+ * Step the offset, clamped. `delta` is in rows.
+ *
+ * `heights` is passed through so the step lands on a window that exists (the
+ * clamp is in lines); the offset itself stays a row index (R-10.6).
+ */
 export function scrollPageOffset(input: {
   count: number;
   height: number;
   offset: number;
   delta: number;
+  /** Terminal lines each row occupies, one entry per row (`rowHeight`). */
+  heights?: readonly number[];
 }): number {
   const max = maxPageOffset(input);
   return Math.min(Math.max(0, Math.trunc(input.offset + input.delta)), max);

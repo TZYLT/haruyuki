@@ -5,9 +5,14 @@ import { join } from "node:path";
 import { clearAllSubagents } from "@/agent/subagent-state";
 import type { AppViewProps } from "@/cli/app/AppView";
 import { ChromeHeightContext } from "@/cli/app/chrome-height";
-import { PageFrame } from "@/cli/app/pages/page-frame";
+import { offsetForCursor, PageFrame } from "@/cli/app/pages/page-frame";
 import { PageHost } from "@/cli/app/pages/page-host";
-import type { PageBody } from "@/cli/app/pages/page-model";
+import {
+  type PageBody,
+  type PageRow,
+  pageWindow,
+  rowHeight,
+} from "@/cli/app/pages/page-model";
 import {
   focusTab,
   getTabsState,
@@ -323,6 +328,277 @@ describe("a page that overflows", () => {
       expect(back).not.toContain("↑ ");
     } finally {
       page.stop();
+    }
+  });
+});
+
+const UP = "\u001B[A";
+const DOWN = "\u001B[B";
+const HOME = "\u001B[1~";
+const END = "\u001B[4~";
+
+/** The row the cursor marks. The frame pads the body by one column. */
+function cursorRowIndex(rows: readonly string[]): number {
+  return rows.findIndex((row) => row.slice(1).startsWith("> "));
+}
+
+function cursorLine(rows: readonly string[]): string | undefined {
+  const index = cursorRowIndex(rows);
+  return index < 0 ? undefined : rows[index];
+}
+
+/**
+ * The T-10 row-model demo page (G-8): a header and items of one to three
+ * continuation lines, two of them indented like the overview's descriptions.
+ *
+ * It lives in this file on purpose. W-05 must not add a production page — W-08
+ * and W-15 own the real overview — but the gate asks for a page the multi-line
+ * row model can be judged on: blocks painted whole, `↑↓` moving by item, and a
+ * window that counts terminal lines rather than rows. The body is 14 lines for
+ * a 13-line body area, so it overflows by exactly one row under the old
+ * arithmetic: `↓ 1 more` on the first frame, and the same item count after a
+ * scroll.
+ */
+function mountMultiLineDemo() {
+  openConversationTab("M6 shell", "M6 shell");
+  const rows: PageRow[] = [
+    { kind: "header", text: "Agents" },
+    {
+      kind: "item",
+      id: "alpha",
+      label: "Alpha",
+      value: "3 convs",
+      lines: ["  Alpha description", "  writes the release notes"],
+    },
+    {
+      kind: "item",
+      id: "beta",
+      label: "Beta",
+      value: "1 conv",
+      lines: ["  Beta description"],
+    },
+    {
+      kind: "item",
+      id: "gamma",
+      label: "Gamma",
+      value: "0 convs",
+      lines: ["  Gamma description", "  recently active", "  no summary"],
+    },
+    { kind: "item", id: "delta", label: "Delta", value: "7 convs" },
+    {
+      kind: "item",
+      id: "epsilon",
+      label: "Epsilon",
+      value: "2 convs",
+      lines: ["  Epsilon description", "  two conversations"],
+    },
+  ];
+  const body: PageBody = { title: "Overview", rows };
+  return mountInkTty(
+    <ChromeHeightContext.Provider value={8}>
+      <PageFrame
+        view={{ ...DEFAULT_PAGE_PROPS, conversationId: "M6 shell" }}
+        body={body}
+      />
+    </ChromeHeightContext.Provider>,
+    { columns: 80, rows: 24 },
+  );
+}
+
+describe("a page of multi-line items", () => {
+  test("paints an item as one contiguous block, continuation lines included", async () => {
+    const page = mountMultiLineDemo();
+    try {
+      const painted = await page.rows();
+      expect(painted[0]?.trim()).toBe("Overview");
+      // The body's group header is a row of its own, above the first item.
+      expect(painted[1]?.trim()).toBe("Agents");
+      expect(cursorRowIndex(painted)).toBe(2);
+      expect(painted[2]).toContain("Alpha");
+
+      // The page's own lines are drawn verbatim: its two-space indent is the
+      // indent on screen, and the frame neither re-indents nor clips them.
+      expect(painted[3]).toContain("  Alpha description");
+      expect(painted[4]).toContain("  writes the release notes");
+
+      // The next item starts after the whole block, not after its first line.
+      expect(painted[5]).toContain("Beta");
+      expect(painted[6]).toContain("  Beta description");
+      expect(painted[7]).toContain("Gamma");
+      expect(painted[10]).toContain("  no summary");
+      expect(painted[11]).toContain("Delta");
+
+      // The selection mark is the item's first line; the block below it is part
+      // of the same item and carries no second mark.
+      expect(painted[3]?.slice(1).startsWith("> ")).toBe(false);
+      expect(painted.join("\n")).toContain("↓ 1 more");
+    } finally {
+      page.stop();
+    }
+  });
+
+  test("↑↓ move by item, not by terminal line", async () => {
+    const page = mountMultiLineDemo();
+    try {
+      await page.press(DOWN);
+      const second = await page.rows();
+      expect(cursorRowIndex(second)).toBe(5);
+      expect(second[5]).toContain("Beta");
+      // The block that was selected before is still drawn in full: stepping to
+      // the next item did not scroll or reflow the page.
+      expect(second[3]).toContain("Alpha description");
+      expect(second[4]).toContain("writes the release notes");
+
+      await page.press(DOWN);
+      const third = await page.rows();
+      expect(cursorRowIndex(third)).toBe(7);
+      expect(third[7]).toContain("Gamma");
+
+      await page.press(UP);
+      const back = await page.rows();
+      expect(cursorRowIndex(back)).toBe(5);
+      expect(back[5]).toContain("Beta");
+    } finally {
+      page.stop();
+    }
+  });
+
+  test("the cursor leaving the bottom scrolls by whole blocks", async () => {
+    const page = mountMultiLineDemo();
+    try {
+      // Alpha → Beta → Gamma → Delta → Epsilon. The last step drags the window
+      // down; it must land on a row boundary, so both continuation lines of
+      // Epsilon (and the whole of every other visible item) are drawn.
+      await page.press(DOWN, DOWN, DOWN, DOWN);
+      const painted = await page.rows();
+      const text = painted.join("\n");
+      expect(cursorLine(painted)).toContain("Epsilon");
+      expect(text).toContain("↑ 2 more");
+      expect(text).not.toContain("↓");
+      expect(text).toContain("Beta description");
+      expect(text).toContain("Gamma description");
+      expect(text).toContain("Epsilon description");
+      expect(text).toContain("two conversations");
+      expect(text).not.toContain("Alpha description");
+    } finally {
+      page.stop();
+    }
+  });
+
+  test("End and Home move the window over the line heights, not the row count", async () => {
+    const page = mountMultiLineDemo();
+    try {
+      // The last window starts at row 2 (Beta); with the old row-count clamp
+      // `End` could not move at all on this body.
+      await page.press(END);
+      const ended = await page.rows();
+      const endedText = ended.join("\n");
+      expect(endedText).toContain("↑ 2 more");
+      expect(endedText).not.toContain("↓");
+      expect(endedText).toContain("Epsilon description");
+      expect(endedText).toContain("two conversations");
+
+      await page.press(HOME);
+      const top = await page.rows();
+      expect(top[0]?.trim()).toBe("Overview");
+      expect(top.join("\n")).toContain("↓ 1 more");
+      expect(top.join("\n")).not.toContain("↑");
+    } finally {
+      page.stop();
+    }
+  });
+
+  test("an empty continuation line is painted, not collapsed", async () => {
+    openConversationTab("M6 shell", "M6 shell");
+    const body: PageBody = {
+      title: "Blanks",
+      rows: [
+        {
+          kind: "item",
+          id: "one",
+          label: "One",
+          lines: ["", "  after the blank"],
+        },
+        { kind: "item", id: "two", label: "Two" },
+      ],
+    };
+    const page = mountInkTty(
+      <ChromeHeightContext.Provider value={8}>
+        <PageFrame
+          view={{ ...DEFAULT_PAGE_PROPS, conversationId: "M6 shell" }}
+          body={body}
+        />
+      </ChromeHeightContext.Provider>,
+      { columns: 80, rows: 24 },
+    );
+    try {
+      const painted = await page.rows();
+      expect(cursorRowIndex(painted)).toBe(1);
+      // Ink collapses <Text>{""}</Text>, so the page's blank line would vanish
+      // and every row under it would move up while the window still counted it.
+      expect(painted[2]?.trim()).toBe("");
+      expect(painted[3]).toContain("  after the blank");
+      expect(painted[4]).toContain("Two");
+    } finally {
+      page.stop();
+    }
+  });
+});
+
+describe("offsetForCursor over multi-line items", () => {
+  const rows: PageRow[] = [
+    { kind: "item", id: "a", label: "A", lines: ["1", "2", "3"] },
+    { kind: "item", id: "b", label: "B", lines: ["1", "2"] },
+    { kind: "item", id: "c", label: "C", lines: ["1"] },
+    { kind: "item", id: "d", label: "D" },
+  ];
+  const heights = rows.map(rowHeight);
+
+  test("leaves a cursor that is already visible where it is", () => {
+    expect(
+      offsetForCursor({ rows, heights, height: 6, offset: 0, cursor: 0 }),
+    ).toBe(0);
+  });
+
+  test("scrolls the fewest rows that show the cursor's whole block", () => {
+    // The six-line window reserves two marker rows, so only the four-line first
+    // item fits: a cursor on row 2 pulls the window down to that row's block.
+    expect(
+      offsetForCursor({ rows, heights, height: 6, offset: 0, cursor: 2 }),
+    ).toBe(2);
+    // …and a cursor above the window pulls it back to the cursor's own row.
+    expect(
+      offsetForCursor({ rows, heights, height: 6, offset: 2, cursor: 1 }),
+    ).toBe(1);
+  });
+
+  test("with one-line rows it matches the old arithmetic at every offset", () => {
+    const flat: PageRow[] = Array.from({ length: 12 }, (_, index) => ({
+      kind: "item" as const,
+      id: `row-${index}`,
+      label: `row ${index}`,
+    }));
+    const heights = flat.map(rowHeight);
+    for (let height = 0; height <= 10; height += 1) {
+      for (let offset = -1; offset <= 12; offset += 1) {
+        const window = pageWindow({ count: flat.length, height, offset });
+        for (let cursor = 0; cursor < flat.length; cursor += 1) {
+          // The function this replaced, verbatim: a row-index formula that
+          // only knew how many *rows* were visible.
+          const legacy =
+            cursor < window.start
+              ? cursor
+              : cursor < window.end
+                ? window.start
+                : Math.max(0, cursor - (window.end - window.start) + 1);
+          expect(offsetForCursor({ rows: flat, height, offset, cursor })).toBe(
+            legacy,
+          );
+          expect(
+            offsetForCursor({ rows: flat, heights, height, offset, cursor }),
+          ).toBe(legacy);
+        }
+      }
     }
   });
 });

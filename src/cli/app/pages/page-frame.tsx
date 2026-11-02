@@ -204,6 +204,7 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
         height: bodyHeight,
         offset: current,
         delta,
+        heights,
       }),
     );
   };
@@ -607,7 +608,7 @@ function PageRowLine({
   const padding =
     background === undefined ? "" : " ".repeat(Math.max(0, width - used));
 
-  return (
+  const firstLine = (
     <Box flexDirection="row" backgroundColor={background}>
       <Text color={focused ? colors.selector.itemHighlighted : undefined}>
         {focused ? "> " : "  "}
@@ -629,6 +630,46 @@ function PageRowLine({
       {padding !== "" && <Text>{padding}</Text>}
     </Box>
   );
+
+  // A multi-line item is one **block**: the composed first line, then the page's
+  // own lines under it (T-10 / R-10.12). The frozen contract is that each entry
+  // is a terminal line the page has already indented and clipped, so the frame
+  // draws it verbatim — no truncation, no extra indent — and applies only the
+  // block's style: the focus colour over the whole item, the hover background
+  // over the whole item. An item without `lines` returns exactly the first line
+  // it returned before T-10, so every old page paints the same frame.
+  const continuation = row.lines ?? [];
+  if (continuation.length === 0) return firstLine;
+  return (
+    <Box flexDirection="column">
+      {firstLine}
+      {continuation.map((text, lineIndex) => {
+        // An empty continuation is still a line the page asked for. Ink
+        // collapses <Text>{""}</Text> to zero height, so work like a blank text
+        // row: one space keeps the row, and the block's height stays truthful.
+        const painted = text === "" ? " " : text;
+        const fill =
+          background === undefined
+            ? ""
+            : " ".repeat(Math.max(0, width - terminalTextWidth(painted)));
+        return (
+          <Box
+            key={`${row.id}:${lineIndex}`}
+            flexDirection="row"
+            backgroundColor={background}
+          >
+            <Text
+              dimColor={!focused}
+              color={focused ? colors.selector.itemHighlighted : undefined}
+            >
+              {painted}
+            </Text>
+            {fill !== "" && <Text>{fill}</Text>}
+          </Box>
+        );
+      })}
+    </Box>
+  );
 }
 
 /** The first row the cursor may land on, or 0 when there is none. */
@@ -643,6 +684,12 @@ function firstSelectable(rows: readonly PageRow[]): number {
  *
  * Called while moving the cursor, so it must not scroll on every step: a cursor
  * that is visible stays visible, and only a step off an edge drags the window.
+ *
+ * The offset stays a **row index** (↑↓ move by item, R-10.6); the heights only
+ * decide how far the window has to move. Below the window the new start is found
+ * by filling the window from the cursor upwards, so the cursor's block ends at
+ * the bottom edge — with one line per row that is exactly the old
+ * `cursor - visibleRows + 1`, so pre-T-10 pages keep their arithmetic.
  */
 export function offsetForCursor(input: {
   rows: readonly PageRow[];
@@ -652,17 +699,41 @@ export function offsetForCursor(input: {
   offset: number;
   cursor: number;
 }): number {
+  const count = input.rows.length;
+  const height = Math.max(0, Math.trunc(input.height));
   const window = pageWindow({
-    count: input.rows.length,
-    height: input.height,
+    count,
+    height,
     offset: input.offset,
     heights: input.heights,
   });
-  if (input.cursor < window.start) return input.cursor;
-  if (input.cursor >= window.end) {
-    return Math.max(0, input.cursor - (window.end - window.start) + 1);
+  if (input.cursor < window.start) {
+    return Math.max(0, Math.trunc(input.cursor));
   }
-  return window.start;
+  if (input.cursor < window.end) return window.start;
+
+  // A row taller than the whole window still has to be reachable on its own
+  // (`pageWindow` draws it alone), so the walk stops when nothing more fits.
+  const cursor = Math.min(
+    Math.max(0, Math.trunc(input.cursor)),
+    Math.max(0, count - 1),
+  );
+  const capacity = window.reserved ? Math.max(1, height - 2) : height;
+  const lineHeight = (index: number): number => {
+    const given = input.heights?.[index];
+    if (typeof given === "number" && Number.isFinite(given)) {
+      return Math.max(1, Math.trunc(given));
+    }
+    const row = input.rows[index];
+    return row === undefined ? 1 : rowHeight(row);
+  };
+  let start = cursor;
+  let used = lineHeight(cursor);
+  while (start > 0 && used + lineHeight(start - 1) <= capacity) {
+    start -= 1;
+    used += lineHeight(start);
+  }
+  return start;
 }
 
 /** Absolute row/column bounds of a laid-out box, in mouse coordinates (1-based). */

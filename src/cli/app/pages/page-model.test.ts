@@ -3,6 +3,8 @@ import {
   maxPageOffset,
   type PageRow,
   pageWindow,
+  rowHeight,
+  rowLineOffsets,
   scrollPageOffset,
   selectableRows,
   stepSelectableRow,
@@ -122,6 +124,171 @@ describe("a body that composes its own lines", () => {
     ];
     const window = pageWindow({ count: body.length, height: 2, offset: 0 });
     expect(window.reserved).toBe(true);
-    // Both marker rows are reserved, so only one body row fits.\r\n    expect(window.end - window.start).toBe(1);
+    // Both marker rows are reserved, so only one body row fits.
+    expect(window.end - window.start).toBe(1);
+  });
+});
+
+describe("a multi-line item", () => {
+  const item = (id: string, lines?: readonly string[]): PageRow => ({
+    kind: "item",
+    id,
+    label: id,
+    lines,
+  });
+
+  test("is one line taller than its continuation lines", () => {
+    expect(rowHeight(item("one"))).toBe(1);
+    expect(rowHeight(item("empty", []))).toBe(1);
+    expect(rowHeight(item("two", ["  description"]))).toBe(2);
+    expect(rowHeight(item("three", ["  user", "  agent"]))).toBe(3);
+    // Every other row kind is still one line: the old pages are untouched.
+    expect(rowHeight({ kind: "header", text: "Agents" })).toBe(1);
+    expect(rowHeight({ kind: "note", text: "empty" })).toBe(1);
+    expect(rowHeight({ kind: "text", text: "  ██  " })).toBe(1);
+  });
+
+  test("rowLineOffsets maps every row to its first line, and gives the total", () => {
+    const body: PageRow[] = [
+      { kind: "header", text: "Agents" },
+      item("alpha", ["  Alpha description", "  writes release notes"]),
+      item("beta", ["  Beta description"]),
+      { kind: "note", text: "no more agents" },
+    ];
+    // alpha draws lines 1–3, beta 4–5, the note 6; 7 is one past the body.
+    expect(rowLineOffsets(body)).toEqual([0, 1, 4, 6, 7]);
+    const offsets = rowLineOffsets(body);
+    // The inverse is the same walk: a terminal line belongs to exactly one row.
+    const rowAtLine = (line: number): number =>
+      body.findIndex(
+        (_, index) =>
+          line >= (offsets[index] ?? 0) && line < (offsets[index + 1] ?? 0),
+      );
+    expect(rowAtLine(0)).toBe(0);
+    expect(rowAtLine(1)).toBe(1);
+    expect(rowAtLine(3)).toBe(1);
+    expect(rowAtLine(4)).toBe(2);
+    expect(rowAtLine(6)).toBe(3);
+    expect(rowAtLine(7)).toBe(-1);
+  });
+});
+
+describe("the window over multi-line items", () => {
+  const twoLineItems = (count: number): PageRow[] =>
+    Array.from({ length: count }, (_, index) => ({
+      kind: "item" as const,
+      id: `item-${index}`,
+      label: `item ${index}`,
+      lines: [`  description ${index}`],
+    }));
+
+  test("capacity is counted in terminal lines, not in rows", () => {
+    const body = twoLineItems(5);
+    const heights = body.map(rowHeight);
+    // Ten lines into an eight-line body: the two marker rows leave six, so
+    // three two-line items fit and the last two are hidden.
+    expect(pageWindow({ count: 5, height: 8, offset: 0, heights })).toEqual({
+      start: 0,
+      end: 3,
+      above: 0,
+      below: 2,
+      reserved: true,
+    });
+  });
+
+  test("the last window starts on a row that still fits", () => {
+    const body = twoLineItems(5);
+    const heights = body.map(rowHeight);
+    expect(maxPageOffset({ count: 5, height: 8, heights })).toBe(2);
+    const window = pageWindow({ count: 5, height: 8, offset: 99, heights });
+    expect(window.start).toBe(2);
+    expect(window.end).toBe(5);
+    expect(window.below).toBe(0);
+    // Scrolling is clamped to the same row, so PgDn cannot over-scroll and
+    // leave the page showing an empty window.
+    expect(
+      scrollPageOffset({ count: 5, height: 8, offset: 0, delta: 99, heights }),
+    ).toBe(2);
+    expect(
+      scrollPageOffset({ count: 5, height: 8, offset: 2, delta: -99, heights }),
+    ).toBe(0);
+  });
+
+  test("a row taller than the window is still reachable on its own", () => {
+    const body: PageRow[] = [
+      { kind: "item", id: "small", label: "small" },
+      {
+        kind: "item",
+        id: "tall",
+        label: "tall",
+        lines: ["1", "2", "3", "4", "5"],
+      },
+      { kind: "item", id: "another", label: "another" },
+    ];
+    // One, six and one lines into a six-line body.
+    const heights = body.map(rowHeight);
+    expect(heights).toEqual([1, 6, 1]);
+    expect(pageWindow({ count: 3, height: 6, offset: 1, heights })).toEqual({
+      start: 1,
+      end: 2,
+      above: 1,
+      below: 1,
+      reserved: true,
+    });
+  });
+
+  test("heights that are not positive count as one line", () => {
+    expect(
+      pageWindow({ count: 3, height: 3, offset: 0, heights: [0, -4, 2] }),
+    ).toEqual(
+      pageWindow({ count: 3, height: 3, offset: 0, heights: [1, 1, 2] }),
+    );
+  });
+});
+
+describe("the pre-T-10 identity", () => {
+  /** The window arithmetic before `heights` existed, kept as the reference. */
+  function legacyWindow(count: number, height: number, offset: number) {
+    const reserved = count > height;
+    const rows = reserved ? Math.max(1, height - 2) : height;
+    const maxOffset = Math.max(0, count - rows);
+    const start = Math.min(Math.max(0, offset), maxOffset);
+    const end = Math.min(count, start + rows);
+    return { start, end, above: start, below: count - end, reserved };
+  }
+
+  test("omitted or all-one heights give the old window, bit for bit", () => {
+    for (let count = 0; count <= 20; count += 1) {
+      const ones = Array.from({ length: count }, () => 1);
+      for (let height = 0; height <= 12; height += 1) {
+        const legacyMax = Math.max(
+          0,
+          count - (count > height ? Math.max(1, height - 2) : height),
+        );
+        for (let offset = -2; offset <= count + 2; offset += 1) {
+          const legacy = legacyWindow(count, height, offset);
+          expect(pageWindow({ count, height, offset })).toEqual(legacy);
+          expect(pageWindow({ count, height, offset, heights: ones })).toEqual(
+            legacy,
+          );
+          expect(maxPageOffset({ count, height })).toBe(legacyMax);
+          expect(maxPageOffset({ count, height, heights: ones })).toBe(
+            legacyMax,
+          );
+          expect(scrollPageOffset({ count, height, offset, delta: 3 })).toBe(
+            Math.min(Math.max(0, offset + 3), legacyMax),
+          );
+          expect(
+            scrollPageOffset({
+              count,
+              height,
+              offset,
+              delta: 3,
+              heights: ones,
+            }),
+          ).toBe(Math.min(Math.max(0, offset + 3), legacyMax));
+        }
+      }
+    }
   });
 });
