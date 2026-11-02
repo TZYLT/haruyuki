@@ -151,6 +151,11 @@ describe("parseDreamAction", () => {
     expect(parseDreamAction(["wander"])).toMatchObject({
       error: expect.stringContaining("Usage: /dream"),
     });
+    // The line is rendered from `DREAM_COMMAND_SPECS`; the third level is the
+    // row that used to be the easiest to leave out of a hand-written copy.
+    expect(parseDreamAction(["wander"])).toMatchObject({
+      error: expect.stringContaining("/dream note remove <id>"),
+    });
   });
 
   test("the note entrances parse without touching the existing ones", () => {

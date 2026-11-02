@@ -13,6 +13,7 @@ import {
   SCHEDULE_SUBCOMMANDS,
   tokenizeScheduleInput,
 } from "@/cli/commands/schedule";
+import { SCHEDULE_COMMAND_SPECS } from "@/cli/commands/subcommand-specs";
 import { resetScheduleStore } from "@/cli/helpers/schedule-store";
 import { listScheduleTasks } from "@/cron";
 
@@ -60,6 +61,13 @@ describe("the hub", () => {
     expect(SCHEDULE_SUBCOMMANDS).toHaveLength(9);
     for (const subcommand of SCHEDULE_SUBCOMMANDS) {
       expect(help).toContain(`/schedule ${subcommand}`);
+    }
+    // The rows are rendered from the spec table, so each one's syntax hint has
+    // to appear too (the table is the only place the nine are listed).
+    for (const spec of SCHEDULE_COMMAND_SPECS) {
+      expect(help).toContain(
+        ["/schedule", spec.name, spec.args].filter(Boolean).join(" "),
+      );
     }
     // The permission tiers' limits are stated where a user picks one.
     expect(help).toContain("shell is still denied");

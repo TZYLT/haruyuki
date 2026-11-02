@@ -23,6 +23,12 @@ export interface HubSubcommand {
   /** Syntax hint for the rest of the line, without the subcommand. */
   args?: string;
   desc: string;
+  /**
+   * Enumerable values the subcommand accepts next (T-02, O-07). Structured so
+   * completion can offer them; `args` stays the human syntax hint. Only the
+   * nine subcommands whose hint is a closed enum carry it.
+   */
+  options?: readonly string[];
   /** Command the subcommand runs (an internal form). */
   command: string;
   /** Words inserted between `command` and the user's arguments. */
@@ -95,6 +101,7 @@ export const HUBS: Record<string, HubDefinition> = {
       {
         name: "profile",
         args: "<save|load|delete|usage> [name]",
+        options: ["save", "load", "delete", "usage"],
         desc: "Save, load or delete a local agent profile",
         command: "/profile",
       },
@@ -144,12 +151,14 @@ export const HUBS: Record<string, HubDefinition> = {
       {
         name: "memfs",
         args: "[enable|disable|sync|reset]",
+        options: ["enable", "disable", "sync", "reset"],
         desc: "Manage the filesystem-backed memory",
         command: "/memfs",
       },
       {
         name: "remote",
         args: "<set|unset|status|push> [url]",
+        options: ["set", "unset", "status", "push"],
         desc: "Push this agent's memory repo to another git remote",
         command: "/memory-repository",
       },
@@ -239,6 +248,7 @@ export const HUBS: Record<string, HubDefinition> = {
       {
         name: "secret",
         args: "<set|list|unset> [key] [value]",
+        options: ["set", "list", "unset"],
         desc: "Manage secrets for shell commands",
         command: "/secret",
       },
@@ -250,6 +260,7 @@ export const HUBS: Record<string, HubDefinition> = {
       {
         name: "mods",
         args: "learn [memory-citations] [options] | generate-env [request]",
+        options: ["learn", "generate-env"],
         desc: "Run mod learning targets",
         command: "/mods",
       },
@@ -273,12 +284,14 @@ export const HUBS: Record<string, HubDefinition> = {
       {
         name: "font-width",
         args: "auto|narrow|wide",
+        options: ["auto", "narrow", "wide"],
         desc: "How wide this terminal draws ambiguous characters",
         command: "/font-width",
       },
       {
         name: "console-font",
         args: "auto|off|<face>",
+        options: ["auto", "off"],
         desc: "Hold the Windows console font at the configured face",
         command: "/console-font",
       },
@@ -290,12 +303,14 @@ export const HUBS: Record<string, HubDefinition> = {
       {
         name: "reasoning-tab",
         args: "[on|off|status]",
+        options: ["on", "off", "status"],
         desc: "Toggle Tab shortcut for reasoning tiers",
         command: "/reasoning-tab",
       },
       {
         name: "system-reminders",
         args: "[on|off|status]",
+        options: ["on", "off", "status"],
         desc: "Show or hide system reminders",
         command: "/system-reminders",
       },

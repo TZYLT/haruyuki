@@ -45,41 +45,38 @@ import {
   type ScheduleTaskV2,
   unregisterAutostart,
 } from "@/cron";
+import { findSubcommandSpec, SCHEDULE_COMMAND_SPECS } from "./subcommand-specs";
 
 // ── Help ────────────────────────────────────────────────────────────
 
-export const SCHEDULE_SUBCOMMANDS = [
-  "list",
-  "show",
-  "add",
-  "run",
-  "pause",
-  "resume",
-  "delete",
-  "logs",
-  "autostart",
-] as const;
+/**
+ * The nine subcommand words, read from the shared spec table (R-02.6). The
+ * parser, the help and the completion popup all answer from that one list.
+ */
+export const SCHEDULE_SUBCOMMANDS: readonly ScheduleSubcommand[] =
+  SCHEDULE_COMMAND_SPECS.map((spec) => spec.name);
 
-export type ScheduleSubcommand = (typeof SCHEDULE_SUBCOMMANDS)[number];
+export type ScheduleSubcommand =
+  (typeof SCHEDULE_COMMAND_SPECS)[number]["name"];
 
 /**
  * The help text, printed by `/schedule` with no subcommand and by an unknown
  * one. It names all nine (R-5.12.1) and the facts a user needs before choosing a
  * permission tier (R-5.8.3, Q-50).
+ *
+ * The subcommand block is rendered from `SCHEDULE_COMMAND_SPECS` rather than
+ * retyped: the help used to be the third hand-maintained copy of the nine names
+ * (after the parser and the TUI switch).
  */
 export function formatScheduleHelp(): string {
+  const rows = SCHEDULE_COMMAND_SPECS.map((spec) => {
+    const usage = ["/schedule", spec.name, spec.args].filter(Boolean).join(" ");
+    return `  ${usage.padEnd(34)}${spec.desc}`;
+  });
   return [
     "/schedule — scheduled tasks (local; run by a host)",
     "",
-    "  /schedule list [--all]            List tasks (current agent only by default)",
-    "  /schedule show <id|name>          Show one task",
-    "  /schedule add [options]           Create; complete flags create in one step, otherwise the wizard asks",
-    "  /schedule run <id|name>           Run once now (does not consume the next scheduled trigger)",
-    "  /schedule pause <id|name>         Pause",
-    "  /schedule resume <id|name>        Resume (resets the failure streak)",
-    "  /schedule delete <id|name>        Delete",
-    "  /schedule logs <id|name>          Run history (grouped by runId)",
-    "  /schedule autostart on|off|status OS autostart (wakes a short-lived host every minute)",
+    ...rows,
     "",
     "add options:",
     "  --cron <5 fields> | --every <5m|2h|1d> | --at <time>   When (--at is one-off)",
@@ -402,6 +399,12 @@ export function parseScheduleInvocation(
   if (!sub || sub === "help" || sub === "--help" || sub === "-h") {
     return { kind: "help" };
   }
+  // Membership is the shared spec table's, not this switch's (R-02.6): a word
+  // the completion popup offers and this parser refuses (or the reverse) is
+  // exactly the drift the table exists to stop.
+  if (!findSubcommandSpec(SCHEDULE_COMMAND_SPECS, sub)) {
+    return unknownSubcommand(sub);
+  }
   const rest = args.slice(1);
   const ref = rest[0];
   switch (sub) {
@@ -432,11 +435,15 @@ export function parseScheduleInvocation(
       };
     }
     default:
-      return {
-        kind: "error",
-        message: `Unknown subcommand ${sub}. Available: ${SCHEDULE_SUBCOMMANDS.join(" / ")}`,
-      };
+      return unknownSubcommand(sub);
   }
+}
+
+function unknownSubcommand(sub: string): ScheduleInvocation {
+  return {
+    kind: "error",
+    message: `Unknown subcommand ${sub}. Available: ${SCHEDULE_SUBCOMMANDS.join(" / ")}`,
+  };
 }
 
 function missingRef(sub: string): ScheduleInvocation {

@@ -27,6 +27,10 @@ import {
   readTopicRecallSpan,
   renderTopicRecall,
 } from "@/backend/local/topic-recall";
+import {
+  findSubcommandSpec,
+  TOPIC_COMMAND_SPECS,
+} from "@/cli/commands/subcommand-specs";
 import { shortTimestamp } from "@/cli/helpers/topic-list";
 import {
   formatTopicShowOutput,
@@ -329,7 +333,16 @@ export async function handleTopicCommand(
   // A subcommand, not a title. Without this branch the fall-through below records
   // a marker called "show foo" — the C-22 bug one word over. The cost is that a
   // topic cannot be titled "show …"; `list` and `search` already pay the same cost.
-  if (args[0]?.toLowerCase() === "show") {
+  //
+  // The word is looked up in the shared spec table (R-02.6), so completion and
+  // this branch cannot disagree about which words are subcommands. `list` and
+  // `search` are dispatched one layer up, in the registry, because they open
+  // faces; `show` is the one this handler must intercept.
+  const subcommand = findSubcommandSpec(
+    TOPIC_COMMAND_SPECS,
+    args[0]?.toLowerCase() ?? "",
+  );
+  if (subcommand?.name === "show") {
     return handleTopicShowCommand(args.slice(1), scope, deps);
   }
   const parsed = parseTopicCommandArgs(args);

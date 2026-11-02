@@ -42,6 +42,11 @@ import type { DreamCommandScope } from "@/agent/reflection-runs";
 import { getBackend } from "@/backend";
 import type { CommandHandle } from "@/cli/commands/runner";
 import {
+  DREAM_COMMAND_SPECS,
+  formatSubcommandUsage,
+  hasSubcommand,
+} from "@/cli/commands/subcommand-specs";
+import {
   ensureDreamTask,
   type StartDreamRunInput,
   type StartDreamRunResult,
@@ -405,8 +410,20 @@ type DreamAction =
 
 export type DreamActionParse = { action: DreamAction } | { error: string };
 
-const DREAM_USAGE =
-  "Usage: /dream [status] | /dream run [--budget <tokens>] | /dream config | /dream on | /dream off | /dream note <text> | /dream notes [clear] | /dream note remove <id>";
+/** The command row's opening line, keyed by the action the parser produced. */
+const DREAM_OPENING_LINES: Record<DreamAction["kind"], string> = {
+  status: "Reading dream settings...",
+  on: "Enabling dream...",
+  off: "Disabling dream...",
+  config: "Opening dream settings...",
+  run: "Starting a dream run...",
+  "note-add": "Saving a dream note...",
+  "note-list": "Reading dream notes...",
+  "note-remove": "Removing a dream note...",
+  "notes-clear": "Clearing dream notes...",
+};
+/** Rendered from the spec table, so a new row cannot escape the usage line. */
+const DREAM_USAGE = formatSubcommandUsage("/dream", DREAM_COMMAND_SPECS);
 
 /** `22:00-07:00, 12:00-13:00` — the window editor's canonical form. */
 export function formatDreamWindowsInput(
@@ -465,6 +482,11 @@ export function parseDreamAction(args: readonly string[]): DreamActionParse {
   const [subcommand, ...rest] = args;
   if (subcommand === undefined || subcommand === "") {
     return { action: { kind: "status" } };
+  }
+  // Membership comes from the shared table (R-02.6): this switch may only
+  // spell words the completion popup also offers.
+  if (!hasSubcommand(DREAM_COMMAND_SPECS, subcommand)) {
+    return { error: DREAM_USAGE };
   }
   switch (subcommand) {
     case "status":
@@ -914,7 +936,7 @@ export async function handleDreamSlashCommand(
     return { submitted: true };
   }
 
-  const cmd = commandRunner.start(input, openingLine(action));
+  const cmd = commandRunner.start(input, DREAM_OPENING_LINES[action.kind]);
   try {
     const result = await runDreamAction(action, resolved);
     if (result.ok) cmd.finish(result.output, true);
@@ -925,29 +947,6 @@ export async function handleDreamSlashCommand(
     );
   }
   return { submitted: true };
-}
-
-function openingLine(action: DreamAction): string {
-  switch (action.kind) {
-    case "status":
-      return "Reading dream settings...";
-    case "on":
-      return "Enabling dream...";
-    case "off":
-      return "Disabling dream...";
-    case "config":
-      return "Opening dream settings...";
-    case "run":
-      return "Starting a dream run...";
-    case "note-add":
-      return "Saving a dream note...";
-    case "note-list":
-      return "Reading dream notes...";
-    case "note-remove":
-      return "Removing a dream note...";
-    case "notes-clear":
-      return "Clearing dream notes...";
-  }
 }
 
 /**
