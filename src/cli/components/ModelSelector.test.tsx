@@ -14,6 +14,13 @@ import { clearAvailableModelsCache } from "@/agent/available-models";
 import type { Backend } from "@/backend";
 import { __testSetBackend } from "@/backend";
 import { FakeHeadlessBackend } from "@/backend/dev/fake-headless-backend";
+import {
+  acquireInputScope,
+  resetInputScopes,
+} from "@/cli/helpers/focus-ledger";
+import { getHoverTarget, resetHoverForTests } from "@/cli/helpers/hover-store";
+import { resetMouseHandlers } from "@/cli/helpers/mouse-router";
+import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
 import { settingsManager } from "@/settings-manager";
 import type { InkTty } from "@/test-utils/ink-tty";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
@@ -88,6 +95,10 @@ beforeEach(() => {
 
 afterEach(() => {
   resetInkTtyState();
+  resetMouseHandlers();
+  resetMouseTrackingForTests();
+  resetHoverForTests();
+  resetInputScopes();
   clearAvailableModelsCache();
   __testSetBackend(null);
 });
@@ -315,6 +326,87 @@ describe("ModelSelector keys", () => {
       await pressKeys(shell, [CTRL_C]);
       expect(cancelled).toEqual(["cancel"]);
     } finally {
+      shell.stop();
+    }
+  });
+});
+
+// --- The pointer, through the shared overlay seam --------------------------
+//
+// The frame is `SHORT_FRAME`, so the five model rows are screen rows 10-14.
+// Clicking row 11 is `Model 2`; a wheel notch on row 10 steps the cursor the
+// same one row `↓` does. Judged against the keyboard path in the same test so
+// the three cannot drift apart.
+
+const MOUSE_ESC = String.fromCharCode(27);
+const pressAt = (column: number, row: number) =>
+  `${MOUSE_ESC}[<0;${column};${row}M`;
+const releaseAt = (column: number, row: number) =>
+  `${MOUSE_ESC}[<0;${column};${row}m`;
+const moveTo = (column: number, row: number) =>
+  `${MOUSE_ESC}[<35;${column};${row}M`;
+const wheelAt = (direction: "up" | "down", column: number, row: number) =>
+  `${MOUSE_ESC}[<${direction === "up" ? 64 : 65};${column};${row}M`;
+
+const MODEL_ROW_1 = 10;
+
+describe("ModelSelector pointer", () => {
+  test("a click is that row's Enter; a wheel notch steps like ↓", async () => {
+    const clicked = await mountSelector();
+    try {
+      await clicked.shell.press(
+        pressAt(3, MODEL_ROW_1 + 1),
+        releaseAt(3, MODEL_ROW_1 + 1),
+      );
+      expect(clicked.selected).toEqual(["prov/model-2"]);
+    } finally {
+      clicked.shell.stop();
+    }
+
+    const wheeled = await mountSelector();
+    try {
+      await wheeled.shell.press(wheelAt("down", 3, MODEL_ROW_1));
+      await wheeled.shell.press(ENTER);
+      expect(wheeled.selected).toEqual(["prov/model-2"]);
+    } finally {
+      wheeled.shell.stop();
+    }
+
+    const keyed = await mountSelector();
+    try {
+      await keyed.shell.press(DOWN);
+      await keyed.shell.press(ENTER);
+      expect(keyed.selected).toEqual(["prov/model-2"]);
+    } finally {
+      keyed.shell.stop();
+    }
+  });
+
+  test("hover lights the row under the pointer, and only while it is there", async () => {
+    const { shell } = await mountSelector();
+    try {
+      await shell.press(moveTo(3, MODEL_ROW_1 + 2));
+      expect(getHoverTarget()?.index).toBe(2);
+      // Off the list: the highlight must not stay lit on the row it left.
+      await shell.press(moveTo(3, 2));
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      shell.stop();
+    }
+  });
+
+  test("a modal above the overlay refuses the pointer", async () => {
+    const { shell, selected } = await mountSelector();
+    const releaseModal = acquireInputScope("modal");
+    try {
+      await shell.press(
+        pressAt(3, MODEL_ROW_1 + 1),
+        releaseAt(3, MODEL_ROW_1 + 1),
+      );
+      expect(selected).toEqual([]);
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      releaseModal();
       shell.stop();
     }
   });

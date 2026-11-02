@@ -663,6 +663,7 @@ export function AgentSelector({
           <OverlayListView
             items={pinnedItems}
             cursor={pinnedList.cursor}
+            mouse={pinnedList.mouse}
             renderRow={(_item, index, isCursor) => {
               const data = pinnedPageAgents[index];
               if (!data) return null;
@@ -676,6 +677,7 @@ export function AgentSelector({
         <OverlayListView
           items={localItems}
           cursor={localList.cursor}
+          mouse={localList.mouse}
           renderRow={(_item, index, isCursor) => {
             const agent = localPageAgents[index];
             if (!agent) return null;

@@ -8,6 +8,13 @@ import {
 } from "@/backend/backend-mode";
 import { FakeHeadlessBackend } from "@/backend/dev/fake-headless-backend";
 import { createOrUpdateLocalProvider } from "@/backend/local/local-provider-auth-store";
+import {
+  acquireInputScope,
+  resetInputScopes,
+} from "@/cli/helpers/focus-ledger";
+import { getHoverTarget, resetHoverForTests } from "@/cli/helpers/hover-store";
+import { resetMouseHandlers } from "@/cli/helpers/mouse-router";
+import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
 import { settingsManager } from "@/settings-manager";
 import {
   type InkTty,
@@ -57,6 +64,10 @@ afterEach(() => {
   __testSetBackend(null);
   setConfiguredBackendMode(previousBackendMode);
   resetInkTtyState();
+  resetMouseHandlers();
+  resetMouseTrackingForTests();
+  resetHoverForTests();
+  resetInputScopes();
 });
 
 interface Mounted {
@@ -338,6 +349,85 @@ describe("Home and End", () => {
       await tty.press(END, HOME);
       expect(cursorRow(await tty.rows())).toContain("Amazon Bedrock");
     } finally {
+      tty.stop();
+    }
+  });
+});
+
+// --- The pointer, through the shared overlay seam --------------------------
+//
+// At 100 columns the first two provider rows are screen rows 9 and 10
+// (`> [ ] Amazon Bedrock …`, `  [ ] Ant Ling …`). Clicking `Ant Ling` is that
+// row's Enter: its step opens. The wheel path and the keyboard path are judged
+// against the same step so the three cannot disagree.
+
+const MOUSE_ESC = String.fromCharCode(27);
+const pressAt = (column: number, row: number) =>
+  `${MOUSE_ESC}[<0;${column};${row}M`;
+const releaseAt = (column: number, row: number) =>
+  `${MOUSE_ESC}[<0;${column};${row}m`;
+const moveTo = (column: number, row: number) =>
+  `${MOUSE_ESC}[<35;${column};${row}M`;
+const wheelAt = (direction: "up" | "down", column: number, row: number) =>
+  `${MOUSE_ESC}[<${direction === "up" ? 64 : 65};${column};${row}M`;
+
+const PROVIDER_ROW_1 = 9;
+
+describe("ProviderSelector pointer", () => {
+  test("a click is that row's Enter, and a wheel notch steps like ↓", async () => {
+    const clicked = await mountSelector();
+    try {
+      await clicked.tty.press(
+        pressAt(3, PROVIDER_ROW_1 + 1),
+        releaseAt(3, PROVIDER_ROW_1 + 1),
+      );
+      expect(await clicked.tty.text()).toContain("Connect your Ant Ling key:");
+    } finally {
+      clicked.tty.stop();
+    }
+
+    const wheeled = await mountSelector();
+    try {
+      await wheeled.tty.press(wheelAt("down", 3, PROVIDER_ROW_1));
+      await wheeled.tty.press(ENTER);
+      expect(await wheeled.tty.text()).toContain("Connect your Ant Ling key:");
+    } finally {
+      wheeled.tty.stop();
+    }
+
+    const keyed = await mountSelector();
+    try {
+      await keyed.tty.press("\u001b[B", ENTER);
+      expect(await keyed.tty.text()).toContain("Connect your Ant Ling key:");
+    } finally {
+      keyed.tty.stop();
+    }
+  });
+
+  test("hover lights the row under the pointer, and only while it is there", async () => {
+    const { tty } = await mountSelector();
+    try {
+      await tty.press(moveTo(3, PROVIDER_ROW_1 + 1));
+      expect(getHoverTarget()?.index).toBe(1);
+      await tty.press(moveTo(3, 2));
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a modal above the overlay refuses the pointer", async () => {
+    const { tty } = await mountSelector();
+    const releaseModal = acquireInputScope("modal");
+    try {
+      await tty.press(
+        pressAt(3, PROVIDER_ROW_1 + 1),
+        releaseAt(3, PROVIDER_ROW_1 + 1),
+      );
+      expect(await tty.text()).toContain("Connect your LLM API keys");
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      releaseModal();
       tty.stop();
     }
   });

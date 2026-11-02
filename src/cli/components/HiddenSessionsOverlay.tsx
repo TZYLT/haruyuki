@@ -713,6 +713,7 @@ export function HiddenSessionsOverlay({
         <OverlayListView
           items={listItems}
           cursor={list.cursor}
+          mouse={list.mouse}
           rows={listRows}
           renderRow={(_item, index, isCursor) => {
             const row = runRows[index];

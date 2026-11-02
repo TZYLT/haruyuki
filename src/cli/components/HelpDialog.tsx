@@ -213,6 +213,7 @@ export function HelpDialog({ onClose }: HelpDialogProps) {
       <OverlayListView
         items={listItems}
         cursor={list.cursor}
+        mouse={list.mouse}
         rows={PAGE_SIZE}
         anchor="page"
         indicators={false}

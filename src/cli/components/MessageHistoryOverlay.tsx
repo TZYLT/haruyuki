@@ -161,6 +161,7 @@ export function MessageHistoryOverlay({ onClose }: { onClose: () => void }) {
       <OverlayListView
         items={items}
         cursor={list.cursor}
+        mouse={list.mouse}
         rows={WINDOW_ROWS}
         emptyLabel="Nothing yet — what the toast band announces lands here."
       />

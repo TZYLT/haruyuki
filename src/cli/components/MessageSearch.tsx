@@ -739,6 +739,7 @@ export function MessageSearch({
         <OverlayListView
           items={listItems}
           cursor={searchList.cursor}
+          mouse={searchList.mouse}
           rows={VISIBLE_ITEMS}
           anchor="center"
           indicators={false}

@@ -1,4 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import {
+  acquireInputScope,
+  resetInputScopes,
+} from "@/cli/helpers/focus-ledger";
+import { getHoverTarget, resetHoverForTests } from "@/cli/helpers/hover-store";
+import { resetMouseHandlers } from "@/cli/helpers/mouse-router";
+import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
 import { ModelReasoningSelector } from "./ModelReasoningSelector";
 
@@ -49,7 +56,13 @@ const TIERS: { effort: string | null; modelId: string }[] = [
   { effort: "max", modelId: "m" },
 ];
 
-afterEach(resetInkTtyState);
+afterEach(() => {
+  resetInkTtyState();
+  resetMouseHandlers();
+  resetMouseTrackingForTests();
+  resetHoverForTests();
+  resetInputScopes();
+});
 
 describe("ModelReasoningSelector", () => {
   test("a full tier list with a distinct max draws its own bar count", async () => {
@@ -188,5 +201,109 @@ describe("ModelReasoningSelector", () => {
       shell.stop();
     }
     expect(selected).toEqual(["low"]);
+  });
+});
+
+// --- The pointer, through the shared primitives -----------------------------
+//
+// This face renders its own carousel rather than an `OverlayListView`, so it
+// takes the hover store, the mouse router and the click tracker directly. The
+// bar strip is screen row 8 (the frame draws the header, rule, title, model
+// label and their blank rows above it), and the bars start at screen column 2:
+// bar `i` is column `2 + i`. With `TIERS` the pickable tiers are
+// low/medium/high/xhigh/max, so the third bar is `high` and the first is `low`.
+
+const MOUSE_ESC = String.fromCharCode(27);
+const pressAt = (column: number, row: number) =>
+  `${MOUSE_ESC}[<0;${column};${row}M`;
+const releaseAt = (column: number, row: number) =>
+  `${MOUSE_ESC}[<0;${column};${row}m`;
+/** Any-motion (`1003`): the pointer moved, no button down. */
+const moveTo = (column: number, row: number) =>
+  `${MOUSE_ESC}[<35;${column};${row}M`;
+/** A wheel notch: 64 = up, 65 = down. */
+const wheelAt = (direction: "up" | "down", column: number, row: number) =>
+  `${MOUSE_ESC}[<${direction === "up" ? 64 : 65};${column};${row}M`;
+
+const BAR_ROW = 8;
+const FIRST_BAR_COLUMN = 2;
+
+async function mountPointer(initialEffort: string | null = "medium") {
+  const selected: string[] = [];
+  const shell = mountInkTty(
+    <ModelReasoningSelector
+      modelLabel="m"
+      options={TIERS as never}
+      initialModelId="m"
+      initialEffort={initialEffort as never}
+      onSelect={(option) => selected.push(String(option.effort))}
+      onCancel={NOTHING}
+    />,
+    { columns: 60, rows: 30 },
+  );
+  return { shell, selected };
+}
+
+describe("ModelReasoningSelector pointer", () => {
+  test("a click on a bar is that tier's Enter", async () => {
+    const { shell, selected } = await mountPointer();
+    try {
+      // Third bar = `high`, then the first = `low`.
+      await shell.press(
+        pressAt(FIRST_BAR_COLUMN + 2, BAR_ROW),
+        releaseAt(FIRST_BAR_COLUMN + 2, BAR_ROW),
+      );
+      await shell.press(
+        pressAt(FIRST_BAR_COLUMN, BAR_ROW),
+        releaseAt(FIRST_BAR_COLUMN, BAR_ROW),
+      );
+      expect(selected).toEqual(["high", "low"]);
+    } finally {
+      shell.stop();
+    }
+  });
+
+  test("hover lights the bar under the pointer and follows it away", async () => {
+    const { shell } = await mountPointer();
+    try {
+      await shell.press(moveTo(FIRST_BAR_COLUMN + 1, BAR_ROW));
+      expect(getHoverTarget()?.index).toBe(1);
+      // Off the strip entirely: the highlight must not stay lit.
+      await shell.press(moveTo(1, 2));
+      expect(getHoverTarget()).toBeNull();
+      // Inside the row but on the label: still not a bar.
+      await shell.press(moveTo(FIRST_BAR_COLUMN + 6, BAR_ROW));
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      shell.stop();
+    }
+  });
+
+  test("a wheel notch is not this face's: it selects nothing", async () => {
+    const { shell, selected } = await mountPointer();
+    try {
+      await shell.press(wheelAt("down", FIRST_BAR_COLUMN + 2, BAR_ROW));
+      expect(selected).toEqual([]);
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      shell.stop();
+    }
+  });
+
+  test("a modal above the overlay owns the pointer: bars decline it", async () => {
+    const { shell, selected } = await mountPointer();
+    const releaseModal = acquireInputScope("modal");
+    try {
+      await shell.press(
+        pressAt(FIRST_BAR_COLUMN + 2, BAR_ROW),
+        releaseAt(FIRST_BAR_COLUMN + 2, BAR_ROW),
+      );
+      await shell.press(moveTo(FIRST_BAR_COLUMN + 1, BAR_ROW));
+      expect(selected).toEqual([]);
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      releaseModal();
+      shell.stop();
+    }
   });
 });

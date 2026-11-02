@@ -13,6 +13,13 @@ import {
   LOCAL_BACKEND_DIR_ENV,
   LOCAL_BACKEND_EXPERIMENTAL_ENV,
 } from "@/backend/local/paths";
+import {
+  acquireInputScope,
+  resetInputScopes,
+} from "@/cli/helpers/focus-ledger";
+import { getHoverTarget, resetHoverForTests } from "@/cli/helpers/hover-store";
+import { resetMouseHandlers } from "@/cli/helpers/mouse-router";
+import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
 import { settingsManager } from "@/settings-manager";
 import {
   type InkTty,
@@ -114,6 +121,10 @@ afterEach(async () => {
   delete process.env[LOCAL_BACKEND_EXPERIMENTAL_ENV];
   setServiceName("letta-code");
   resetInkTtyState();
+  resetMouseHandlers();
+  resetMouseTrackingForTests();
+  resetHoverForTests();
+  resetInputScopes();
   for (const dir of [fakeHome, storageDir]) {
     try {
       rmSync(dir, { recursive: true, force: true });
@@ -437,6 +448,96 @@ describe("AgentSelector", () => {
       await press(tty, ENTER);
       expect(created).toEqual([`my-new-agent:local`]);
     } finally {
+      tty.stop();
+    }
+  });
+});
+
+// --- The pointer, through the shared overlay seam --------------------------
+//
+// At 100 columns the pinned row is three lines tall: screen rows 9, 10 and 11
+// (`> Alpha …`, `  No description`, `  Just now`). On the Local tab each agent
+// repeats that shape (Alpha 9-11, Beta 13-15), which is what makes the
+// any-line-of-a-row rule testable here.
+
+const MOUSE_ESC = String.fromCharCode(27);
+const pressAt = (column: number, row: number) =>
+  `${MOUSE_ESC}[<0;${column};${row}M`;
+const releaseAt = (column: number, row: number) =>
+  `${MOUSE_ESC}[<0;${column};${row}m`;
+const moveTo = (column: number, row: number) =>
+  `${MOUSE_ESC}[<35;${column};${row}M`;
+const wheelAt = (direction: "up" | "down", column: number, row: number) =>
+  `${MOUSE_ESC}[<${direction === "up" ? 64 : 65};${column};${row}M`;
+
+describe("AgentSelector pointer", () => {
+  test("every line of a multi-line row is that row's Enter", async () => {
+    seedAgents();
+    const { tty, selected } = mount();
+    try {
+      await settledRows(tty);
+      // Second and third lines of the same pinned row.
+      await tty.press(pressAt(3, 10), releaseAt(3, 10));
+      await tty.press(pressAt(3, 11), releaseAt(3, 11));
+      expect(selected).toEqual([`${ALPHA}:local`, `${ALPHA}:local`]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a click on the Local tab's second row selects Beta", async () => {
+    seedAgents();
+    const { tty, selected } = mount(ALPHA);
+    try {
+      await settledRows(tty);
+      await press(tty, TAB);
+      // Beta's title line is screen row 13; its description is row 14.
+      await tty.press(pressAt(3, 14), releaseAt(3, 14));
+      expect(selected).toEqual([`${BETA}:local`]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a wheel notch steps like ↓", async () => {
+    seedAgents();
+    const { tty, selected } = mount(ALPHA);
+    try {
+      await settledRows(tty);
+      await press(tty, TAB);
+      await tty.press(wheelAt("down", 3, 9));
+      await press(tty, ENTER);
+      expect(selected).toEqual([`${BETA}:local`]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("hover lights the row under the pointer", async () => {
+    seedAgents();
+    const { tty } = mount();
+    try {
+      await settledRows(tty);
+      await tty.press(moveTo(3, 10));
+      expect(getHoverTarget()?.index).toBe(0);
+      await tty.press(moveTo(3, 2));
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a modal above the overlay refuses the pointer", async () => {
+    seedAgents();
+    const { tty, selected } = mount();
+    const releaseModal = acquireInputScope("modal");
+    try {
+      await settledRows(tty);
+      await tty.press(pressAt(3, 10), releaseAt(3, 10));
+      expect(selected).toEqual([]);
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      releaseModal();
       tty.stop();
     }
   });

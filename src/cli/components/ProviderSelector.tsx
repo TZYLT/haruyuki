@@ -1006,6 +1006,7 @@ export function ProviderSelector({
           <OverlayListView
             items={providerItems}
             cursor={selectedIndex}
+            mouse={providerList.mouse}
             rows={VISIBLE_PROVIDERS}
             anchor="edge"
             indicators={false}

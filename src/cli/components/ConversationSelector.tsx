@@ -875,6 +875,7 @@ export function ConversationSelector({
         <OverlayListView
           items={listItems}
           cursor={conversationList.cursor}
+          mouse={conversationList.mouse}
           rows={listPageSize}
           anchor="center"
           indicators={false}

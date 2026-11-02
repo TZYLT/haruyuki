@@ -496,6 +496,7 @@ export const HooksManager = memo(function HooksManager({
         <OverlayListView
           items={eventRows}
           cursor={eventsList.cursor}
+          mouse={eventsList.mouse}
           renderRow={(item, index, isCursor) => {
             if (index === 0) {
               return (
@@ -577,6 +578,7 @@ export const HooksManager = memo(function HooksManager({
         <OverlayListView
           items={hookItems}
           cursor={hooksList.cursor}
+          mouse={hooksList.mouse}
           rows={WINDOW_ROWS}
           anchor="edge"
           renderRow={(_item, index, isCursor) => {

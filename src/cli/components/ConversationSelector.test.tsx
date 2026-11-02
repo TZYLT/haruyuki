@@ -2,6 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { __testSetBackend } from "@/backend";
 import { FakeHeadlessBackend } from "@/backend/dev/fake-headless-backend";
 import { ConversationSelector } from "@/cli/components/ConversationSelector";
+import {
+  acquireInputScope,
+  resetInputScopes,
+} from "@/cli/helpers/focus-ledger";
+import { getHoverTarget, resetHoverForTests } from "@/cli/helpers/hover-store";
+import { resetMouseHandlers } from "@/cli/helpers/mouse-router";
+import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
 
 /**
@@ -171,6 +178,10 @@ function itemRows(rows: string[]): string[] {
 
 afterEach(() => {
   resetInkTtyState();
+  resetMouseHandlers();
+  resetMouseTrackingForTests();
+  resetHoverForTests();
+  resetInputScopes();
   __testSetBackend(null);
 });
 
@@ -275,5 +286,70 @@ describe("ConversationSelector", () => {
     expect(rows.join("\n")).toContain("Error: backend is offline");
     expect(rows.join("\n")).not.toContain("Showing ");
     harness.stop();
+  });
+});
+
+// --- The pointer, through the shared overlay seam --------------------------
+//
+// At 80x24 each conversation is four lines tall, which is the case the row
+// registry exists for: `default` is screen rows 8-11, `Conversation 0` rows
+// 13-16. A press on any of those lines is that row's Enter, not the row below.
+
+const MOUSE_ESC = String.fromCharCode(27);
+const pressAt = (column: number, row: number) =>
+  `${MOUSE_ESC}[<0;${column};${row}M`;
+const releaseAt = (column: number, row: number) =>
+  `${MOUSE_ESC}[<0;${column};${row}m`;
+const moveTo = (column: number, row: number) =>
+  `${MOUSE_ESC}[<35;${column};${row}M`;
+const wheelAt = (direction: "up" | "down", column: number, row: number) =>
+  `${MOUSE_ESC}[<${direction === "up" ? 64 : 65};${column};${row}M`;
+
+describe("ConversationSelector pointer", () => {
+  test("every line of a multi-line row is that row's Enter", async () => {
+    const harness = await mount();
+    // `Conversation 0` occupies screen rows 13-16: press its preview line and
+    // its timestamp line, both of which used to fall on whatever was below.
+    await harness.press(pressAt(3, 14), releaseAt(3, 14));
+    await harness.press(pressAt(3, 16), releaseAt(3, 16));
+    expect(harness.selected).toEqual(["conv-00", "conv-00"]);
+    harness.stop();
+  });
+
+  test("a click on the synthetic default row selects it", async () => {
+    const harness = await mount();
+    await harness.press(pressAt(3, 10), releaseAt(3, 10));
+    expect(harness.selected).toEqual(["default"]);
+    harness.stop();
+  });
+
+  test("a wheel notch steps like ↓", async () => {
+    const harness = await mount();
+    await harness.press(wheelAt("down", 3, 8));
+    await harness.press(ENTER);
+    expect(harness.selected).toEqual(["conv-00"]);
+    harness.stop();
+  });
+
+  test("hover lights the conversation under the pointer", async () => {
+    const harness = await mount();
+    await harness.press(moveTo(3, 14));
+    expect(getHoverTarget()?.index).toBe(1);
+    await harness.press(moveTo(3, 2));
+    expect(getHoverTarget()).toBeNull();
+    harness.stop();
+  });
+
+  test("a modal above the overlay refuses the pointer", async () => {
+    const harness = await mount();
+    const releaseModal = acquireInputScope("modal");
+    try {
+      await harness.press(pressAt(3, 14), releaseAt(3, 14));
+      expect(harness.selected).toEqual([]);
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      releaseModal();
+      harness.stop();
+    }
   });
 });

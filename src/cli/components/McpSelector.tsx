@@ -309,6 +309,7 @@ export const McpSelector = memo(function McpSelector({
         <OverlayListView
           items={rowItems}
           cursor={list.cursor}
+          mouse={list.mouse}
           rows={WINDOW_ROWS}
           anchor="edge"
           renderRow={(_item, index, isCursor) => {

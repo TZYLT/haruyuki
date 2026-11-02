@@ -1102,6 +1102,7 @@ export function ModelSelector({
             <OverlayListView
               items={listItems}
               cursor={modelList.cursor}
+              mouse={modelList.mouse}
               renderRow={(item, _index, isCursor) => (
                 <Box flexDirection="column" marginBottom={1}>
                   <Text
@@ -1156,6 +1157,7 @@ export function ModelSelector({
       <OverlayListView
         items={listItems}
         cursor={modelList.cursor}
+        mouse={modelList.mouse}
         rows={allEmpty ? undefined : visibleCount}
         renderRow={(_item, index, isCursor) => {
           const model = currentList[index];

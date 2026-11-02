@@ -342,6 +342,7 @@ export function TopicListOverlay({
         <OverlayListView
           items={items}
           cursor={list.cursor}
+          mouse={list.mouse}
           rows={listRows}
           renderRow={(_item, index, isCursor) => {
             const row = rows[index];

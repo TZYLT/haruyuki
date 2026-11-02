@@ -275,6 +275,7 @@ export function TopicSearchOverlay({
         <OverlayListView
           items={items}
           cursor={list.cursor}
+          mouse={list.mouse}
           rows={VISIBLE_ITEMS}
           anchor="center"
           indicators={false}
