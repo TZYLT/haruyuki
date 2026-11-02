@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Readable, Writable } from "node:stream";
 import { render, Text } from "ink";
+import type { ReactElement } from "react";
 import { useCallback, useEffect } from "react";
+import { owningInputScope } from "@/cli/helpers/focus-ledger";
 import { useAutocompleteNavigation } from "@/cli/hooks/use-autocomplete-navigation";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { resetInkTtyState } from "@/test-utils/ink-tty";
@@ -66,6 +68,10 @@ function renderProbe(element: React.ReactElement) {
   return {
     async press(sequence: string) {
       stdin.push(sequence);
+      await tick();
+    },
+    async rerender(element: ReactElement) {
+      instance.rerender(element);
       await tick();
     },
     stop() {
@@ -200,6 +206,166 @@ describe("autocomplete navigation on the input router", () => {
       expect(seen.filter((entry) => entry.startsWith("index:"))).toEqual([
         "index:0",
       ]);
+    } finally {
+      probe.stop();
+    }
+  });
+});
+
+/**
+ * The slash-command popup opts into a two-step Enter (T-02, Q-46) and an Esc of
+ * its own; `FileAutocomplete` opts into neither. Both halves are weighed here
+ * because the hook is shared and the legacy meaning is the default, not a
+ * special case.
+ */
+describe("a popup with its own Enter (Q-46)", () => {
+  test("Enter is the caller's; select and fill are not called", async () => {
+    const seen: string[] = [];
+    function Probe() {
+      useAutocompleteNavigation({
+        matches: ["one"],
+        onSelect: (item) => seen.push(`select:${item}`),
+        onAutocomplete: (item) => seen.push(`fill:${item}`),
+        onEnter: (item) => {
+          seen.push(`enter:${item}`);
+          return true;
+        },
+      });
+      return <Text>probe</Text>;
+    }
+    const probe = renderProbe(<Probe />);
+    try {
+      await probe.press("\r");
+      expect(seen).toEqual(["enter:one"]);
+    } finally {
+      probe.stop();
+    }
+  });
+
+  test("a declined Enter falls through to the next table", async () => {
+    const seen: string[] = [];
+    function Probe() {
+      useAutocompleteNavigation({
+        matches: ["one"],
+        onEnter: (item) => {
+          seen.push(`enter:${item}`);
+          return false;
+        },
+      });
+      // Registered after the hook's table: only reached because the hook
+      // declined. This is the composer's Return path in the real tree.
+      useKeyBindings("probe-after-autocomplete", [
+        {
+          scope: "app",
+          bindings: [
+            {
+              id: "probe.return",
+              chords: [{ key: "return" }],
+              run: () => {
+                seen.push("later:return");
+                return "consumed";
+              },
+            },
+          ],
+        },
+      ]);
+      return <Text>probe</Text>;
+    }
+    const probe = renderProbe(<Probe />);
+    try {
+      await probe.press("\r");
+      expect(seen).toEqual(["enter:one", "later:return"]);
+    } finally {
+      probe.stop();
+    }
+  });
+});
+
+describe("a popup with its own Esc (T-02)", () => {
+  interface DismissState {
+    matches: string[];
+    seen: string[];
+  }
+
+  function elementFor(state: DismissState) {
+    function Probe() {
+      useAutocompleteNavigation({
+        matches: state.matches,
+        onDismiss: () => state.seen.push("dismiss"),
+      });
+      useKeyBindings("probe-interrupt", [
+        {
+          scope: "app",
+          bindings: [
+            {
+              id: "probe.interrupt",
+              chords: [{ key: "escape" }],
+              run: () => {
+                state.seen.push("interrupt");
+                return "consumed";
+              },
+            },
+          ],
+        },
+      ]);
+      return <Text>probe</Text>;
+    }
+    return <Probe />;
+  }
+
+  test("Esc dismisses while the rows are up, then the interrupt gets it back", async () => {
+    const seen: string[] = [];
+    const probe = renderProbe(elementFor({ matches: ["one"], seen }));
+    try {
+      // The claim is what beats the composer's app-scope interrupt: while the
+      // rows are up the popup is the keyboard owner, so the app table below is
+      // not consulted at all.
+      await tick();
+      expect(owningInputScope()).toBe("overlay");
+      await probe.press(ESCAPE);
+      expect(seen).toEqual(["dismiss"]);
+
+      // With no rows the popup is not a surface, and Esc is the app's again.
+      await probe.rerender(elementFor({ matches: [], seen }));
+      await tick();
+      expect(owningInputScope()).toBe("app");
+      await probe.press(ESCAPE);
+      expect(seen).toEqual(["dismiss", "interrupt"]);
+    } finally {
+      probe.stop();
+    }
+  });
+
+  test("without onDismiss Esc is not the popup's at all", async () => {
+    const seen: string[] = [];
+    function Probe() {
+      useAutocompleteNavigation({
+        matches: ["one"],
+        onSelect: (item) => seen.push(`select:${item}`),
+      });
+      useKeyBindings("probe-interrupt", [
+        {
+          scope: "app",
+          bindings: [
+            {
+              id: "probe.interrupt",
+              chords: [{ key: "escape" }],
+              run: () => {
+                seen.push("interrupt");
+                return "consumed";
+              },
+            },
+          ],
+        },
+      ]);
+      return <Text>probe</Text>;
+    }
+    const probe = renderProbe(<Probe />);
+    try {
+      await tick();
+      expect(owningInputScope()).toBe("app");
+      await probe.press(ESCAPE);
+      expect(seen).toEqual(["interrupt"]);
     } finally {
       probe.stop();
     }

@@ -1,6 +1,20 @@
 import { Box, type DOMElement } from "ink";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { commands } from "@/cli/commands/registry";
+import {
+  findSubcommandSpec,
+  getSubcommandSpecs,
+  type SubcommandSpec,
+} from "@/cli/commands/subcommand-specs";
+import { terminalTextWidth } from "@/cli/helpers/char-width";
+import {
+  applyCandidate,
+  type CompletionCandidate,
+  type CompletionState,
+  fillCompletion,
+  isCandidateAlreadyTyped,
+  resolveCommandCompletion,
+} from "@/cli/helpers/command-completion";
 import { useRowHovered } from "@/cli/helpers/hover-store";
 import { truncateText } from "@/cli/helpers/truncate-text";
 import { useMouseRows } from "@/cli/helpers/use-mouse-rows";
@@ -19,6 +33,9 @@ import type { AutocompleteProps, CommandMatch } from "./types/autocomplete";
 // on short terminals, but never expands just because the terminal is tall.
 const MAX_POPUP_ROWS = 8;
 const CMD_COL_WIDTH = 14;
+
+/** A stable empty list: an inactive popup keeps the same `matches` identity. */
+const NO_CANDIDATES: readonly CompletionCandidate[] = [];
 
 const BUILTIN_SKILL_ALIASES = new Set([
   "acquiring-skills",
@@ -69,27 +86,89 @@ const _allCommands: CommandMatch[] = Object.entries(commands)
   }))
   .sort((a, b) => a.order - b.order);
 
-// Extract the text after the "/" symbol where the cursor is positioned
-function extractSearchQuery(
-  input: string,
-  cursor: number,
-): { query: string; hasSpaceAfter: boolean } | null {
-  if (!input.startsWith("/")) return null;
+interface CommandListSources {
+  /** Registry commands, already pin-filtered for the current agent. */
+  builtin: readonly CommandMatch[];
+  /** User-level command files (`.commands/` + `<harness>/commands/`). */
+  custom: readonly CommandMatch[];
+  /** User-invocable skills. */
+  skill: readonly CommandMatch[];
+  /** Commands contributed by trusted local mods. */
+  mod: readonly CommandMatch[];
+}
 
-  const afterSlash = input.slice(1);
-  const spaceIndex = afterSlash.indexOf(" ");
-  const endPos = spaceIndex === -1 ? input.length : 1 + spaceIndex;
+/**
+ * Merge the four command sources into the single level-1 list the resolver
+ * filters, with the precedence the popup has always had: a custom command hides
+ * the builtin of the same name, a mod command hides it too, and a skill yields
+ * to both. Sorting is by `order`, stably, so a source cannot reorder another's
+ * rows.
+ *
+ * Pulled out of the component so the precedence is testable without mounting:
+ * the custom and skill sources come from files on disk and from the checkout's
+ * own skill set, which a frame test cannot own.
+ */
+export function mergeCommandList(
+  sources: CommandListSources,
+  options: { fullScreen: boolean },
+): CommandMatch[] {
+  const customCommandNames = new Set(sources.custom.map((cmd) => cmd.cmd));
+  const modCommandNames = new Set(sources.mod.map((cmd) => cmd.cmd));
 
-  // Check if cursor is within this /command
-  if (cursor < 0 || cursor > endPos) {
-    return null;
+  const visibleBuiltins = sources.builtin.filter(
+    (cmd) =>
+      !customCommandNames.has(cmd.cmd) &&
+      !modCommandNames.has(cmd.cmd) &&
+      (options.fullScreen || !FULL_SCREEN_ONLY_COMMANDS.has(cmd.cmd)),
+  );
+  const visibleModCommands = sources.mod.filter(
+    (cmd) => !customCommandNames.has(cmd.cmd),
+  );
+
+  const reservedCommands = new Set([
+    ...visibleBuiltins.map((cmd) => cmd.cmd),
+    ...visibleModCommands.map((cmd) => cmd.cmd),
+    ...sources.custom.map((cmd) => cmd.cmd),
+  ]);
+  const visibleSkillCommands = sources.skill.filter(
+    (cmd) => !reservedCommands.has(cmd.cmd),
+  );
+
+  return [
+    ...visibleBuiltins,
+    ...visibleModCommands,
+    ...sources.custom,
+    ...visibleSkillCommands,
+  ].sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
+}
+
+/**
+ * The description a level-3 enumerated value is shown with (R-02.5).
+ *
+ * An `options` row is a bare string in the spec table, so the resolver gives it
+ * no description of its own. The row borrows its parent's one-line description
+ * instead of inventing a second glossary: `on/off/status` under `/schedule
+ * autostart` read as the values of *that* subcommand, and the words stay in the
+ * one table completion and dispatch share.
+ */
+function optionParentDescription(state: CompletionState): string | undefined {
+  if (!state.candidates.some((candidate) => candidate.kind === "option")) {
+    return undefined;
   }
+  if (state.command === null) return undefined;
 
-  const query =
-    spaceIndex === -1 ? afterSlash : afterSlash.slice(0, spaceIndex);
-  const hasSpaceAfter = spaceIndex !== -1;
-
-  return { query, hasSpaceAfter };
+  let rows: readonly SubcommandSpec[] | undefined = getSubcommandSpecs(
+    state.command,
+  );
+  let last: SubcommandSpec | undefined;
+  for (const word of state.path) {
+    if (rows === undefined) return undefined;
+    const match = findSubcommandSpec(rows, word);
+    if (!match) return undefined;
+    last = match;
+    rows = match.children;
+  }
+  return last?.desc;
 }
 
 export function SlashCommandAutocomplete({
@@ -164,147 +243,129 @@ export function SlashCommandAutocomplete({
   }, [agentId]);
 
   // Check pin status to conditionally show/hide pin/unpin commands
-  const allCommands = useMemo(() => {
-    let builtins = _allCommands;
-
-    if (agentId) {
-      try {
-        const isPinned = settingsManager.isAgentPinned(agentId);
-
-        builtins = _allCommands.filter((cmd) => {
-          // Hide /pin if agent is already pinned
-          if (cmd.cmd === "/pin" && isPinned) {
-            return false;
-          }
-          // Hide /unpin if agent is not pinned
-          if (cmd.cmd === "/unpin" && !isPinned) {
-            return false;
-          }
-          return true;
-        });
-      } catch (_error) {
-        // If settings aren't loaded, just use all builtins
-        builtins = _allCommands;
-      }
+  const builtinCommands = useMemo(() => {
+    if (!agentId) return _allCommands;
+    try {
+      const isPinned = settingsManager.isAgentPinned(agentId);
+      return _allCommands.filter((cmd) => {
+        // Hide /pin if agent is already pinned, /unpin when it is not
+        if (cmd.cmd === "/pin" && isPinned) return false;
+        if (cmd.cmd === "/unpin" && !isPinned) return false;
+        return true;
+      });
+    } catch (_error) {
+      // If settings aren't loaded, just use all builtins
+      return _allCommands;
     }
+  }, [agentId]);
 
-    const modCommandMatches: CommandMatch[] = Object.values(modCommands).map(
-      (command) => ({
+  const modCommandMatches = useMemo<CommandMatch[]>(
+    () =>
+      Object.values(modCommands).map((command) => ({
         cmd: `/${command.id}`,
         desc: `${command.description}${command.args ? ` ${command.args}` : ""} (mod)`,
         order: command.order,
-      }),
-    );
-
-    const customCommandNames = new Set(customCommands.map((cmd) => cmd.cmd));
-    const modCommandNames = new Set(modCommandMatches.map((cmd) => cmd.cmd));
-    const fullScreen = resolveUiV2Once();
-    const visibleBuiltins = builtins.filter(
-      (cmd) =>
-        !customCommandNames.has(cmd.cmd) &&
-        !modCommandNames.has(cmd.cmd) &&
-        (fullScreen || !FULL_SCREEN_ONLY_COMMANDS.has(cmd.cmd)),
-    );
-    const visibleModCommands = modCommandMatches.filter(
-      (cmd) => !customCommandNames.has(cmd.cmd),
-    );
-
-    const reservedCommands = new Set([
-      ...visibleBuiltins.map((cmd) => cmd.cmd),
-      ...visibleModCommands.map((cmd) => cmd.cmd),
-      ...customCommands.map((cmd) => cmd.cmd),
-    ]);
-    const visibleSkillCommands = skillCommands.filter(
-      (cmd) => !reservedCommands.has(cmd.cmd),
-    );
-
-    // Merge command sources and sort by order.
-    return [
-      ...visibleBuiltins,
-      ...visibleModCommands,
-      ...customCommands,
-      ...visibleSkillCommands,
-    ].sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
-  }, [agentId, modCommands, customCommands, skillCommands]);
-
-  const queryInfo = useMemo(
-    () => extractSearchQuery(currentInput, cursorPosition),
-    [currentInput, cursorPosition],
+      })),
+    [modCommands],
   );
 
-  const { matches, showNoMatches, hideAutocomplete } = useMemo(() => {
-    if (!queryInfo) {
-      return {
-        matches: [] as CommandMatch[],
-        showNoMatches: false,
-        hideAutocomplete: true,
-      };
-    }
+  const allCommands = useMemo(
+    () =>
+      mergeCommandList(
+        {
+          builtin: builtinCommands,
+          custom: customCommands,
+          skill: skillCommands,
+          mod: modCommandMatches,
+        },
+        { fullScreen: resolveUiV2Once() },
+      ),
+    [builtinCommands, customCommands, skillCommands, modCommandMatches],
+  );
 
-    const { query, hasSpaceAfter } = queryInfo;
-    if (hasSpaceAfter) {
-      return {
-        matches: [] as CommandMatch[],
-        showNoMatches: false,
-        hideAutocomplete: true,
-      };
-    }
+  // The typed level, its next words and the candidates after the filter rule
+  // (level 1 `includes`, levels 2+ prefix) — the whole of R-02.3's data half.
+  const completion = useMemo(
+    () => resolveCommandCompletion(currentInput, allCommands, cursorPosition),
+    [allCommands, currentInput, cursorPosition],
+  );
 
-    if (query.length === 0) {
-      return {
-        matches: allCommands,
-        showNoMatches: false,
-        hideAutocomplete: allCommands.length === 0,
-      };
-    }
+  // Esc closes the popup (R-02.3). Dismissal is stored as "the text it was
+  // dismissed for", so it expires on its own the moment the draft changes and
+  // the popup reopens on the next keystroke — no reset effect needed.
+  const [dismissedAt, setDismissedAt] = useState<string | null>(null);
+  const dismissed = dismissedAt === currentInput;
+  const active = completion.active && !dismissed;
+  const matches = active ? completion.candidates : NO_CANDIDATES;
+  const optionDescription = useMemo(
+    () => optionParentDescription(completion),
+    [completion],
+  );
 
-    const lowerQuery = query.toLowerCase();
-    const filtered = allCommands.filter((item) => {
-      const cmdName = item.cmd.slice(1).toLowerCase(); // Remove leading "/"
-      return cmdName.includes(lowerQuery);
+  /**
+   * Tab (and a row click): fill the highlighted word **and the separating
+   * space**, which is what opens the next level, and keep the popup. At the last
+   * level the next resolve has no candidates, so the popup closes by itself.
+   */
+  const fillCandidate = (candidate: CompletionCandidate): void => {
+    const filled = fillCompletion(currentInput, completion, candidate);
+    if (onAutocomplete) {
+      onAutocomplete(filled);
+    } else {
+      onSelect?.(filled);
+    }
+  };
+
+  /**
+   * Enter, B case (Q-46 / R-02.4).
+   *
+   * The popup is visible, so Enter first fills the highlighted word — without a
+   * separator, which is what keeps "half a command costs two Enters" true: the
+   * second Enter sees the word already typed and executes. When the fill would
+   * not change the text (`isCandidateAlreadyTyped`), there is nothing to fill and
+   * Enter falls through to the ordinary execution path with the whole draft.
+   *
+   * Returns whether this popup acted; `false` would let the composer's own Enter
+   * have the key, which only matters for a caller that cannot fill.
+   */
+  const handleEnter = (candidate: CompletionCandidate): boolean => {
+    if (isCandidateAlreadyTyped(currentInput, completion, candidate)) {
+      if (!onSelect) return false;
+      onSelect(currentInput);
+      return true;
+    }
+    if (!onAutocomplete) return false;
+    onAutocomplete(applyCandidate(currentInput, completion, candidate));
+    return true;
+  };
+
+  const { selectedIndex, setSelectedIndex } =
+    useAutocompleteNavigation<CompletionCandidate>({
+      matches,
+      onEnter: handleEnter,
+      onAutocomplete: fillCandidate,
+      onDismiss: () => {
+        setDismissedAt(currentInput);
+      },
+      // Disable automatic active state management - we handle it manually below
+      manageActiveState: false,
     });
 
-    return {
-      matches: filtered,
-      showNoMatches: filtered.length === 0,
-      hideAutocomplete: false,
-    };
-  }, [queryInfo, allCommands]);
-
-  const { selectedIndex, setSelectedIndex } = useAutocompleteNavigation({
-    matches,
-    onSelect: onSelect ? (item) => onSelect(item.cmd) : undefined,
-    onAutocomplete: onAutocomplete
-      ? (item) => onAutocomplete(item.cmd)
-      : undefined,
-    // Disable automatic active state management - we handle it manually below
-    manageActiveState: false,
-  });
-
-  // Manually manage active state - only active when there are matches to select
-  // When there are no matches, we don't block submit so the user can still
-  // run commands that aren't in the autocomplete registry (e.g., /help, /reflection)
+  // The composer reads this flag to stand its Enter submit and history handler
+  // down, so it must flip with what the user can actually see: a dismissed
+  // popup is not active even while its candidate list would still resolve.
   useLayoutEffect(() => {
-    const isActive = !hideAutocomplete && matches.length > 0;
-    onActiveChange?.(isActive);
-  }, [hideAutocomplete, matches.length, onActiveChange]);
+    onActiveChange?.(active);
+  }, [active, onActiveChange]);
 
   // Don't show if input doesn't start with "/"
   if (!currentInput.startsWith("/")) {
     return null;
   }
 
-  // Show "no matching commands" message when query has content but no results
-  if (showNoMatches) {
-    return (
-      <AutocompleteBox>
-        <Text dimColor>{"  "}No matching commands</Text>
-      </AutocompleteBox>
-    );
-  }
-
-  // Don't show if no matches and query is empty (shouldn't happen, but safety check)
-  if (hideAutocomplete || matches.length === 0) {
+  // No candidates: nothing to show at all (R-02.3). The composer keeps Enter and
+  // the unknown command still reaches the registry as ordinary input.
+  if (!active) {
     return null;
   }
 
@@ -328,15 +389,15 @@ export function SlashCommandAutocomplete({
   );
   const showScrollDown = startIndex + visibleCommandCount < totalMatches;
 
-  // A click is that row's `Enter` (《38》§19.2): it moves the cursor onto the row
-  // it landed on and then runs the *same* callback the `return` binding runs, with
-  // the row as the argument — never through the cursor state, which the next
-  // render would still be showing on the previous row.
-  const acceptCommand = (index: number): void => {
+  // A click is the row's *accept*, and accept is the fill half of Tab
+  // (R-02.4: "鼠标点击候选行与填词同义") — never an execution. It moves the
+  // cursor onto the row it landed on and fills that same candidate, so the two
+  // inputs cannot disagree about what accepting means.
+  const acceptCandidate = (index: number): void => {
     const item = matches[index];
     if (!item) return;
     setSelectedIndex(index);
-    onSelect?.(item.cmd);
+    fillCandidate(item);
   };
 
   return (
@@ -346,7 +407,8 @@ export function SlashCommandAutocomplete({
         startIndex={startIndex}
         selectedIndex={selectedIndex}
         columns={columns}
-        onActivate={acceptCommand}
+        optionDescription={optionDescription}
+        onActivate={acceptCandidate}
       />
       {showScrollDown ? (
         <Text dimColor>
@@ -367,7 +429,7 @@ const AUTOCOMPLETE_AREA = "autocomplete";
  *
  * A block of its own rather than the whole `AutocompleteBox`: the "↓ N more below"
  * footer is drawn under the rows and is not a command, so a click there must not
- * run the last row. The geometry is measured from this box at event time
+ * accept the last row. The geometry is measured from this box at event time
  * (`use-mouse-rows.ts`), which is also why the window offset is applied here — the
  * box's row 0 is list row `startIndex`, not row 0.
  *
@@ -379,12 +441,14 @@ function CommandRows({
   startIndex,
   selectedIndex,
   columns,
+  optionDescription,
   onActivate,
 }: {
-  items: readonly CommandMatch[];
+  items: readonly CompletionCandidate[];
   startIndex: number;
   selectedIndex: number;
   columns: number;
+  optionDescription: string | undefined;
   onActivate: (index: number) => void;
 }) {
   const rowsRef = useRef<DOMElement | null>(null);
@@ -400,10 +464,11 @@ function CommandRows({
     <Box ref={rowsRef} flexDirection="column">
       {items.map((item, idx) => (
         <CommandRow
-          key={item.cmd}
+          key={`${item.kind}:${item.value}`}
           item={item}
           index={idx}
           columns={columns}
+          optionDescription={optionDescription}
           selected={startIndex + idx === selectedIndex}
         />
       ))}
@@ -419,36 +484,63 @@ function CommandRows({
  * end of the row to read as a row: the description is padded to the width the row
  * has left, and only while hovered (the padding is invisible otherwise, and a
  * frame would see trailing spaces where no row used to have any).
+ *
+ * The row's three fields are the ones R-02.5 asks for: the name, the argument
+ * placeholder (`<name>`, `[--all]`) dim and never a row of its own, and one line
+ * of description. An enumerated value has no description of its own in the spec
+ * table, so it borrows the subcommand's — the parent's line explains what the
+ * enum controls.
  */
 function CommandRow({
   item,
   index,
   columns,
+  optionDescription,
   selected,
 }: {
-  item: CommandMatch;
+  item: CompletionCandidate;
   index: number;
   columns: number;
+  optionDescription: string | undefined;
   selected: boolean;
 }) {
   const hovered = useRowHovered(AUTOCOMPLETE_AREA, index);
 
   // Keep the footer height stable while navigating by forcing a single-line
   // representation for each row.
-  const displayCmd = truncateText(item.cmd, CMD_COL_WIDTH).padEnd(
+  const displayName = truncateText(item.label, CMD_COL_WIDTH).padEnd(
     CMD_COL_WIDTH,
   );
   // 2-char gutter comes from <AutocompleteItem />.
-  const maxDescWidth = Math.max(0, columns - 2 - CMD_COL_WIDTH - 1);
-  const displayDesc = truncateText(item.desc, maxDescWidth);
+  const remaining = Math.max(0, columns - 2 - CMD_COL_WIDTH - 1);
+  // `args` is the syntax hint the spec table carries (`<id|name>`, `[--all]`):
+  // display only, never a candidate row of its own.
+  const hint = item.args;
+  const hintText = hint === undefined ? "" : truncateText(hint, remaining);
+  const hintWidth = hintText.length === 0 ? 0 : terminalTextWidth(hintText);
+  const separatorWidth = hintText.length === 0 ? 0 : 1;
+  const description =
+    item.desc.length > 0
+      ? item.desc
+      : item.kind === "option"
+        ? (optionDescription ?? "")
+        : "";
+  const displayDesc = truncateText(
+    description,
+    Math.max(0, remaining - hintWidth - separatorWidth),
+  );
+  const suffixWidth = hintWidth + separatorWidth + displayDesc.length;
   const pad =
     hovered && !selected
-      ? " ".repeat(Math.max(0, maxDescWidth - displayDesc.length))
+      ? " ".repeat(Math.max(0, remaining - suffixWidth))
       : "";
 
   return (
     <AutocompleteItem selected={selected} hovered={hovered}>
-      {displayCmd} <Text dimColor={!selected}>{displayDesc}</Text>
+      {displayName}{" "}
+      {hintText.length > 0 ? <Text dimColor>{hintText}</Text> : null}
+      {hintText.length > 0 && displayDesc.length > 0 ? " " : null}
+      <Text dimColor={!selected}>{displayDesc}</Text>
       {pad}
     </AutocompleteItem>
   );

@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { KeyBinding } from "@/cli/helpers/input-keys";
-import { useKeyBindings } from "@/cli/hooks/use-input-router";
+import {
+  useInputScopeClaim,
+  useKeyBindings,
+} from "@/cli/hooks/use-input-router";
 
 interface UseAutocompleteNavigationOptions<T> {
   /** Array of items to navigate through */
-  matches: T[];
+  matches: readonly T[];
   /** Maximum number of visible items (for wrapping navigation) */
   maxVisible?: number;
   /** Callback when an item is selected via Tab (autocomplete only) or Enter (when onAutocomplete is not provided) */
@@ -17,6 +20,32 @@ interface UseAutocompleteNavigationOptions<T> {
   manageActiveState?: boolean;
   /** Whether navigation is currently disabled (e.g., during loading) */
   disabled?: boolean;
+  /**
+   * Return for a popup whose Enter has its own two-step meaning (T-02, Q-46).
+   *
+   * Plain Enter is the composer's submit key, so a popup that wants to *fill*
+   * first must own the key and answer whether it acted. The callback returns
+   * `true` when it consumed the key (filled a word, or fell through to the
+   * caller's submit because the word was already typed) and `false` to decline
+   * and let the ordinary path have it. Left undefined, Return keeps its legacy
+   * meaning (`onSelect`), which is what `FileAutocomplete` wants: its "fill" and
+   * its "accept" are the same message edit.
+   */
+  onEnter?: (item: T) => boolean;
+  /**
+   * Esc: dismiss the popup (T-02, R-02.3) before the app's interrupt runs.
+   *
+   * Providing this also makes the popup the keyboard owner while it has rows:
+   * the hook claims the `overlay` scope, which is the only way to beat the
+   * composer's app-scope `Esc` (interrupt / double-escape-to-clear) without
+   * editing the pinned `InputRich`. The trade is the one `BtwPane` documents —
+   * app-scope chords (Ctrl+C, Ctrl+O/R/T, Shift+Tab, the leader prefix) are not
+   * consulted while the rows are up; the text editor's own keys stay live
+   * because `PasteAwareTextInput` registers its table in the `overlay` scope
+   * too, so typing/editing a command is unaffected. `FileAutocomplete` leaves
+   * this undefined: its Esc keeps the composer's meaning.
+   */
+  onDismiss?: () => void;
 }
 
 interface UseAutocompleteNavigationResult {
@@ -26,10 +55,10 @@ interface UseAutocompleteNavigationResult {
    * Put the cursor on an index without running anything.
    *
    * The pointer needs this: a click moves the cursor to the row it landed on and
-   * *then* runs that row's `Enter` (《38》§19.2), and it must not wait for the next
-   * render to do so. The accepting half stays the caller's `onSelect` — this hook
+   * *then* runs that row's accept callback, and it must not wait for the next
+   * render to do so. The accepting half stays the caller's callback — this hook
    * owns no execution path of its own, and the click calls the same callback the
-   * `return` binding below calls.
+   * bindings below call.
    */
   setSelectedIndex: (index: number) => void;
 }
@@ -52,10 +81,16 @@ interface UseAutocompleteNavigationResult {
  * key continues down its ordinary path — the text editor, the wrapped-line and
  * history handler, or the composer's own Tab.
  *
+ * A popup with Esc-dismissal (`onDismiss`) is different: it is the keyboard
+ * owner while it has rows, so its table moves to the `overlay` scope and the
+ * hook claims that scope. That is what gives Esc its priority over `interrupt`
+ * (T-02) — the composer's `app` table is not consulted at all while the popup is
+ * up, so `Esc` cannot both close the popup and interrupt the turn behind it.
+ *
  * Two of those neighbours already stand down for the popup and keep doing so:
  * `InputRich`'s history handler reads the live `isAutocompleteActive`, and the
  * composer's Tab binding returns `false` while the popup is up. What changes is
- * that the popup now *owns* ↑/↓/Tab/Enter at the dispatch point instead of
+ * that the popup now *owns* ↑/↓/Tab/Enter/Esc at the dispatch point instead of
  * relying on every legacy listener to notice it — which is the state this hook
  * cannot read for itself (see the `memo`/`useEffectEvent` note in
  * `overlay/README.md`).
@@ -68,10 +103,23 @@ export function useAutocompleteNavigation<T>({
   onActiveChange,
   manageActiveState = true,
   disabled = false,
+  onEnter,
+  onDismiss,
 }: UseAutocompleteNavigationOptions<T>): UseAutocompleteNavigationResult {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const prevMatchCountRef = useRef(0);
   const prevIsActiveRef = useRef(false);
+  const ownsKeyboard = onDismiss !== undefined;
+
+  // Esc can only beat the composer's interrupt if this popup is the keyboard
+  // owner, and the focus ledger is what says so. Claimed only while there are
+  // rows to dismiss: with no candidates the popup is not a surface at all, and
+  // Esc must keep its ordinary app meaning (`onDismiss` is not even bound, since
+  // the overlay-scope table is not consulted while the claim is absent).
+  useInputScopeClaim(
+    "overlay",
+    ownsKeyboard && !disabled && matches.length > 0,
+  );
 
   // Reset selected index when matches change significantly
   useEffect(() => {
@@ -141,16 +189,36 @@ export function useAutocompleteNavigation<T>({
       id: "autocomplete.select",
       chords: [{ key: "return" }],
       run: () => {
-        if (!matches.length || disabled || !onSelect) return "declined";
+        if (!matches.length || disabled) return "declined";
         const selected = matches[selectedIndex];
         if (!selected) return "declined";
+        // Enter with a caller-owned two-step meaning (T-02): the caller decides
+        // between fill and fall-through, and answers whether it acted.
+        if (onEnter) {
+          return onEnter(selected) ? "consumed" : "declined";
+        }
+        if (!onSelect) return "declined";
         onSelect(selected);
         return "consumed";
       },
     },
   ];
 
-  useKeyBindings("autocomplete-navigation", [{ scope: "app", bindings }]);
+  if (onDismiss) {
+    bindings.push({
+      id: "autocomplete.dismiss",
+      chords: [{ key: "escape" }],
+      run: () => {
+        if (!matches.length || disabled) return "declined";
+        onDismiss();
+        return "consumed";
+      },
+    });
+  }
+
+  useKeyBindings("autocomplete-navigation", [
+    { scope: ownsKeyboard ? "overlay" : "app", bindings },
+  ]);
 
   return { selectedIndex, setSelectedIndex };
 }

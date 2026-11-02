@@ -156,4 +156,42 @@ describe("FileAutocomplete on the frame", () => {
     expect(await frame("hello", [file("README.md", "README.md")])).toEqual([]);
     expect(await frame("@zz", [])).toEqual([]);
   });
+
+  test("Enter and Tab both apply the completion, and Esc stays the composer's", async () => {
+    // The `@` popup is the regression the slash-command popup's two-step Enter
+    // and Esc dismissal must not touch (T-02, R-02.7): its accept is one edit,
+    // so both keys apply the highlighted suggestion, and `Esc` has no dismissal
+    // of its own — the frame is unchanged.
+    setItems([file("README.md", "README.md")]);
+    const applied: Array<{ value: string; cursorPosition: number }> = [];
+    const tty = mountInkTty(
+      <FileAutocomplete
+        currentInput="@"
+        cursorPosition={1}
+        fdPath="fd"
+        workingDirectory="/tmp/haruyuki-file-autocomplete"
+        onApplyCompletion={(value, cursorPosition) => {
+          applied.push({ value, cursorPosition });
+        }}
+      />,
+      { columns: 100, rows: 40 },
+    );
+    try {
+      await settle();
+      await tty.press("\r");
+      await tty.press("\t");
+      expect(applied).toEqual([
+        { value: "stub", cursorPosition: 0 },
+        { value: "stub", cursorPosition: 0 },
+      ]);
+
+      await tty.press("\u001b");
+      expect(await tty.rows()).toEqual([
+        "File autocomplete (↑↓ navigate, Tab/Enter select):",
+        "  📄 README.md",
+      ]);
+    } finally {
+      tty.stop();
+    }
+  });
 });
