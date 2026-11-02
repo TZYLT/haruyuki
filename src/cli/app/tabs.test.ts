@@ -58,17 +58,43 @@ describe("the tab model", () => {
     expect(getTabsState().activeId).toBe("conv-1");
   });
 
-  test("the two pages are always on the strip, after the conversations", () => {
+  test("the three fixed pages are always on the strip, after the conversations", () => {
     openConversationTab("conv-1", "first");
     expect(allTabs().map((tab) => tab.id)).toEqual([
       "conv-1",
+      "overview",
       "usage",
       "settings",
     ]);
-    expect(pageTabs().map((tab) => tab.id)).toEqual(["usage", "settings"]);
+    expect(pageTabs().map((tab) => tab.id)).toEqual([
+      "overview",
+      "usage",
+      "settings",
+    ]);
     expect(isPageTabId("settings")).toBe(true);
+    expect(isPageTabId("overview")).toBe(true);
     expect(isPageTabId("conv-1")).toBe(false);
     expect(findTab("usage")?.title).toBe("Usage");
+  });
+
+  test("the + tab sits after every conversation tab and before Usage", () => {
+    // Q-43 / R-10.1: `+` is the first fixed page, so it lands immediately after
+    // the last conversation tab, not at the right end.
+    openConversationTab("conv-1", "first");
+    openConversationTab("conv-2", "second");
+    const ids = allTabs().map((tab) => tab.id);
+    expect(ids.indexOf("overview")).toBe(ids.indexOf("conv-2") + 1);
+    expect(ids.indexOf("overview")).toBeLessThan(ids.indexOf("usage"));
+
+    expect(findTab("overview")?.title).toBe("+");
+  });
+
+  test("focusing the + page moves the main area without touching the conversations", () => {
+    openConversationTab("conv-1", "first");
+    focusTab("overview");
+
+    expect(getTabsState().activeId).toBe("overview");
+    expect(getOpenConversations().map((tab) => tab.id)).toEqual(["conv-1"]);
   });
 
   test("focusing a page moves the main area without touching the conversations", () => {

@@ -1,5 +1,6 @@
 // src/cli/app/shell/tab-strip-layout.ts
 
+import { OVERVIEW_TAB_ID } from "@/cli/app/tabs";
 import {
   truncateToWidth,
   visibleWidth,
@@ -34,9 +35,10 @@ import { CLI_GLYPHS } from "@/cli/helpers/glyphs";
  *   never dropped, even when it is the rightmost one: it is pulled back in and
  *   the tabs between are dropped instead.
  * - **The pages are admitted from the right**: `Settings` first, then `Usage`
- *   when it still fits beside the current conversation tab. A terminal too narrow
- *   for all of that keeps the conversation tabs (and loses `Usage`, which is the
- *   order 《38》§3.4 gives).
+ *   when it still fits beside the current conversation tab — but the `+` overview
+ *   page is always admitted (Q-43; it does not collapse). A terminal too narrow
+ *   for all of that keeps the conversation tabs and loses `Usage` before
+ *   `Settings` (Q-52).
  *
  * Region columns are 1-based and inclusive, the same space the mouse reports use.
  */
@@ -257,9 +259,10 @@ function regionsFor(segments: readonly TabStripSegment[]): TabStripRegion[] {
 /**
  * Lay the strip out for a terminal `columns` wide.
  *
- * `items` is in strip order: conversations in open order, then `Usage` and
- * `Settings`. Items whose kind the caller does not want drawn (a page tab before
- * its page exists) are simply not passed in.
+ * `items` is in strip order: conversations in open order, then the page tabs
+ * (`+`, `Usage`, `Settings`). Items whose kind the caller does not want drawn (a
+ * page tab before its page exists) are simply not passed in; a caller that omits
+ * the `+` gets the pre-T-10 page admission unchanged.
  */
 export function layoutTabStrip(
   items: readonly TabStripItem[],
@@ -279,15 +282,27 @@ export function layoutTabStrip(
   const activeWidth = activeCell ? cellWidth(activeCell) : 0;
 
   // The pages are admitted from the right while the current conversation tab
-  // still fits beside them: both, then `Settings` alone, then neither.
-  let admittedPages = pages;
+  // still fits beside them, giving `Usage` up first and `Settings` second (Q-52).
+  // The `+` overview page never collapses (Q-43), so it is the last resort even
+  // when keeping it squeezes the current conversation tab down to its chrome.
   const pagesFit = (candidate: readonly Cell[]): boolean => {
     const total = rowWidth(candidate.map(cellWidth), candidate.length);
     return width - total - (candidate.length > 0 ? TAB_GAP : 0) >= activeWidth;
   };
-  if (!pagesFit(pages)) {
-    admittedPages = pages.filter((cell) => cell.item.id === "settings");
-    if (!pagesFit(admittedPages)) admittedPages = [];
+  const overview = pages.find((cell) => cell.item.id === OVERVIEW_TAB_ID);
+  const withoutUsage = pages.filter((cell) => cell.item.id !== "usage");
+  const onlyOverview = pages.filter((cell) => cell.item.id === OVERVIEW_TAB_ID);
+  let admittedPages: readonly Cell[] =
+    [pages, withoutUsage, onlyOverview].find(pagesFit) ??
+    (overview === undefined ? [] : onlyOverview);
+  // Below the `+`'s own four columns there is nothing to shorten, so the row
+  // becomes padding rather than a tab wider than the terminal — a wrapped top row
+  // scrolls the strip itself away.
+  if (
+    admittedPages.length > 0 &&
+    rowWidth(admittedPages.map(cellWidth), admittedPages.length) > width
+  ) {
+    admittedPages = [];
   }
 
   const pageWidths = admittedPages.map(cellWidth);

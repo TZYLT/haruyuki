@@ -114,6 +114,35 @@ describe("the tab row inside the shell", () => {
     }
   });
 
+  test("the + page tab is clickable at 60 and 40 columns (G-9)", async () => {
+    openConversationTab("conv-1", "M6 shell");
+    openConversationTab("conv-2", "Ledger");
+    // G-9: `+` is always on the row and its region is clickable at both widths.
+    // The last `+` is the overview page; an earlier one would be the `+N`
+    // collapse marker, which is a different target (`onOverflow`).
+    for (const columns of [60, 40]) {
+      const shell = mountInkTty(<Shell earlySelection={false} />, {
+        columns,
+        rows: 24,
+      });
+      try {
+        const rows = await shell.rows();
+        const at = (rows[0] ?? "").lastIndexOf("+");
+        if (at < 0) {
+          throw new Error(`columns ${columns}: no + on the row: ${rows[0]}`);
+        }
+        await shell.press(press(at + 1), release(at + 1));
+        expect({ columns, seen }).toEqual({
+          columns,
+          seen: ["select:overview"],
+        });
+      } finally {
+        shell.stop();
+        seen.length = 0;
+      }
+    }
+  });
+
   test("the click a real terminal sends — with motion in the middle — still lands", async () => {
     openConversationTab("conv-1", "M6 shell");
     openConversationTab("conv-2", "Ledger");

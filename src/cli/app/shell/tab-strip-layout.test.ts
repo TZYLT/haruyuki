@@ -35,15 +35,26 @@ function conversation(
   };
 }
 
-function page(id: "usage" | "settings", active = false): TabStripItem {
+function page(
+  id: "overview" | "usage" | "settings",
+  active = false,
+): TabStripItem {
+  const title = id === "overview" ? "+" : id === "usage" ? "Usage" : "Settings";
   return {
     id,
     kind: "page",
-    title: id === "usage" ? "Usage" : "Settings",
+    title,
     active,
     unread: false,
     closeable: false,
   };
+}
+
+/** Whether the `+` overview page was admitted as a clickable name region. */
+function hasOverview(layout: TabStripLayout): boolean {
+  return layout.regions.some(
+    (region) => region.id === "overview" && region.part === "name",
+  );
 }
 
 function draw(layout: TabStripLayout): string {
@@ -237,6 +248,62 @@ describe("the tab row", () => {
     expect(draw(tiny)).not.toContain("Settings");
   });
 
+  test("the + page tab is admitted at 60 and 40 columns (G-9)", () => {
+    // R-10.1 / Q-43: `+` is a fixed page that never collapses, so the two widths
+    // the gate names must both draw it — and its columns must be clickable, which
+    // is what the region list is.
+    const items = [
+      conversation("a", { title: "M6 shell work", active: true }),
+      conversation("b", { title: "Ledger" }),
+      conversation("c", { title: "Diff face review" }),
+      page("overview"),
+      page("usage"),
+      page("settings"),
+    ];
+    for (const columns of [60, 40]) {
+      const layout = layoutTabStrip(items, columns);
+      expect({ columns, width: visibleWidth(draw(layout)) }).toEqual({
+        columns,
+        width: columns,
+      });
+      expect({ columns, hasOverview: hasOverview(layout) }).toEqual({
+        columns,
+        hasOverview: true,
+      });
+      // The rectangle the pointer aims at is exactly the `+` cell it draws.
+      const region = layout.regions.find(
+        (candidate) => candidate.id === "overview" && candidate.part === "name",
+      ) as TabStripRegion;
+      expect(covered(layout, region)).toBe("   +");
+    }
+  });
+
+  test("the + is the last page standing: Usage goes first, then Settings (Q-52)", () => {
+    const items = [
+      conversation("a", { title: "M6 shell work", active: true }),
+      conversation("b", { title: "Ledger" }),
+      conversation("c", { title: "Diff face review" }),
+      page("overview"),
+      page("usage"),
+      page("settings"),
+    ];
+    // Wide enough for all three pages...
+    const wide = draw(layoutTabStrip(items, 100));
+    expect(wide).toContain("Usage");
+    expect(wide).toContain("Settings");
+    // ...40 columns keeps Settings and the `+`, and drops Usage...
+    const at40 = layoutTabStrip(items, 40);
+    expect(hasOverview(at40)).toBe(true);
+    expect(draw(at40)).toContain("Settings");
+    expect(draw(at40)).not.toContain("Usage");
+    // ...and 20 columns keeps only the `+`.
+    const at20 = layoutTabStrip(items, 20);
+    expect(hasOverview(at20)).toBe(true);
+    expect(draw(at20)).not.toContain("Usage");
+    expect(draw(at20)).not.toContain("Settings");
+    expect(visibleWidth(draw(at20))).toBe(20);
+  });
+
   test("no items and no columns draw nothing", () => {
     expect(layoutTabStrip([], 80).segments).toEqual([]);
     expect(
@@ -350,6 +417,40 @@ describe("the tab row, at every width", () => {
     );
     expect(draw(blank).trim()).toBe("");
     expect(visibleWidth(draw(blank))).toBe(1);
+  });
+
+  test("the + page tab never wraps the row, at every width", () => {
+    const items: TabStripItem[] = [
+      conversation("a", { title: "M6 shell work", active: true, unread: true }),
+      conversation("b", { title: "Ledger" }),
+      conversation("c", { title: "Diff face review" }),
+      page("overview"),
+      page("usage"),
+      page("settings"),
+    ];
+    for (let columns = 1; columns <= 140; columns += 1) {
+      const layout = layoutTabStrip(items, columns);
+      expect({ columns, width: visibleWidth(draw(layout)) }).toEqual({
+        columns,
+        width: columns,
+      });
+      // `+` is drawn at every width its own chrome fits in; below that there is
+      // nothing to shorten, so the row is padding rather than a tab wider than the
+      // terminal (a wrapped top row scrolls the strip away).
+      if (columns >= 4) {
+        expect({ columns, hasOverview: hasOverview(layout) }).toEqual({
+          columns,
+          hasOverview: true,
+        });
+      }
+      for (const region of layout.regions) {
+        if (region.to > columns) {
+          throw new Error(
+            `columns ${columns}: region ${JSON.stringify(region)} is outside the row`,
+          );
+        }
+      }
+    }
   });
 
   test("a collapsed count is a rectangle you can click (《38》§3.8)", () => {

@@ -13,10 +13,11 @@ import { useSyncExternalStore } from "react";
  * notifies instead of re-rendering the composer or the transcript per keystroke
  * (the flicker red line in `src/cli/AGENTS.md`).
  *
- * **The set** is the M6 ruling (《38》§3.1): every conversation this session has
- * opened, in open order, then the two fixed pages with `Usage` immediately left
- * of `Settings` at the right end. Every conversation the app switches to is
- * recorded here; nothing else opens a tab.
+ * **The set** is the M6 ruling (《38》§3.1), extended by T-10: every conversation
+ * this session has opened, in open order, then the fixed page tabs — `+` (the
+ * overview page) first, with `Usage` immediately left of `Settings` at the right
+ * end. Every conversation the app switches to is recorded here; nothing else
+ * opens a tab.
  *
  * **A tab is a handle, not a runtime.** The app keeps exactly one live
  * conversation (甲), so a background tab stores identity and display only:
@@ -31,10 +32,24 @@ import { useSyncExternalStore } from "react";
  * left-to-right history of where the user has been.
  */
 
-/** The fixed page tabs, in strip order: `Usage` then `Settings` (rightmost). */
-export type PageTabId = "usage" | "settings";
+/**
+ * The `+` tab's id: the overview page (T-10).
+ *
+ * Exported because the tab row's layout has to tell this one page apart from the
+ * ones it may drop: `+` never collapses (Q-43), while `Usage` and `Settings` give
+ * way on a narrow terminal (Q-52). One constant, so the two sides cannot drift.
+ */
+export const OVERVIEW_TAB_ID = "overview";
+
+/**
+ * The fixed page tabs, in strip order: `+` (the overview), then `Usage`, then
+ * `Settings` (rightmost). They are appended after every conversation tab, which
+ * is what puts `+` after the conversations and before `Usage`.
+ */
+export type PageTabId = "overview" | "usage" | "settings";
 
 export const PAGE_TABS = [
+  { kind: "page", id: OVERVIEW_TAB_ID, title: "+" },
   { kind: "page", id: "usage", title: "Usage" },
   { kind: "page", id: "settings", title: "Settings" },
 ] as const satisfies readonly PageTab[];
@@ -64,9 +79,9 @@ export type TabsState = {
    * The tab the main area shows: a conversation id, or a page id.
    *
    * One id space, because the strip is one row and only one tab is active. The
-   * two page ids are reserved words ("usage" / "settings"), never conversation
-   * ids: a conversation id that collided with one would be a backend id shaped
-   * like a page name.
+   * page ids are reserved words ("overview" / "usage" / "settings"), never
+   * conversation ids: a conversation id that collided with one would be a backend
+   * id shaped like a page name.
    */
   activeId: string;
 };
@@ -129,7 +144,7 @@ export function useActiveTabIsPage(): boolean {
 
 /** Whether an id names one of the fixed pages rather than a conversation. */
 export function isPageTabId(id: string): id is PageTabId {
-  return id === "usage" || id === "settings";
+  return id === OVERVIEW_TAB_ID || id === "usage" || id === "settings";
 }
 
 /** The fixed page tabs, as a plain array (the readonly tuple is not iterable-friendly in JSX). */
