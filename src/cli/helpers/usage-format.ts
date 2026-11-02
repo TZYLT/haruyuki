@@ -23,6 +23,8 @@
  * cannot back.
  */
 
+import { formatCompact } from "./format";
+
 /** What a screen prints when a number does not exist. */
 export const UNKNOWN_VALUE = "—";
 
@@ -80,4 +82,30 @@ export function formatPercent(part: number, whole: number): string {
 export function formatRate(rate: number | undefined): string {
   if (rate === undefined || !Number.isFinite(rate)) return UNKNOWN_VALUE;
   return `${(rate * 100).toFixed(2)}%`;
+}
+
+/**
+ * An **estimated** token count, marked with `~`: `~20k` (T-05 / T-06).
+ *
+ * The `~` is the contract, not the number of significant figures: every value
+ * this formats was derived from a heuristic (4 bytes per token), never measured.
+ * **W-04 owns the exact compacting detail** (which thresholds round, whether a
+ * decimal survives); this seam exists so the Usage page and the rail agree on
+ * the marker and the function name before either is written.
+ */
+export function formatEstimatedCompact(n: number): string {
+  if (!Number.isFinite(n)) return UNKNOWN_VALUE;
+  return `~${formatCompact(Math.max(0, Math.round(n)))}`;
+}
+
+/**
+ * An **estimated** percentage from a 0..1 ratio, marked with `~`: `~43%`.
+ *
+ * Same ownership split as {@link formatEstimatedCompact}: the `~` is frozen
+ * here, W-04 owns rounding/precision. A non-finite ratio is unknown, and a
+ * negative one is clamped — a percentage of a context window cannot be negative.
+ */
+export function formatEstimatedPercent(ratio: number): string {
+  if (!Number.isFinite(ratio)) return UNKNOWN_VALUE;
+  return `~${Math.round(Math.max(0, ratio) * 100)}%`;
 }

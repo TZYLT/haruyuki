@@ -42,6 +42,16 @@ export type MouseRowsOptions = {
   firstRow?: number;
   /** Rows the pointer may act on. Default: every row. */
   isInteractive?: (index: number) => boolean;
+  /**
+   * Terminal lines each item occupies, one entry per item (T-10 / W-09).
+   *
+   * Omitted means every item is one line, which is the row-per-index mapping
+   * every pre-T-10 surface uses. When a page draws multi-line items, a pointer
+   * row maps to the *item* that owns that line, so a click on any of an item's
+   * lines activates it (R-10.4/R-10.5). The same `rowHeight` values the page
+   * windowed with feed this array.
+   */
+  spans?: readonly number[];
   /** Click on a row: move the cursor there and run that row's Enter. */
   activate: (index: number) => void;
   /** Whether hovering paints a row (`surface.hoverBg`). Default: true. */
@@ -54,6 +64,34 @@ export type MouseRowsOptions = {
 
 type Row = { index: number; row: number; from: number; to: number };
 
+/**
+ * Map a line inside the block to the item that draws it.
+ *
+ * Without `spans` this is the identity (and is bounded by `rowCount`); with
+ * `spans` it walks the item heights, so a line anywhere inside a multi-line
+ * item resolves to that item and its first line.
+ */
+function itemAtLine(
+  options: MouseRowsOptions,
+  line: number,
+): { index: number; start: number } | null {
+  const spans = options.spans;
+  if (spans === undefined) {
+    return line < options.rowCount ? { index: line, start: line } : null;
+  }
+  let start = 0;
+  for (let index = 0; index < options.rowCount; index += 1) {
+    const value = spans[index];
+    const span =
+      typeof value === "number" && Number.isFinite(value)
+        ? Math.max(1, Math.trunc(value))
+        : 1;
+    if (line < start + span) return { index, start };
+    start += span;
+  }
+  return null;
+}
+
 function rowAt(options: MouseRowsOptions, report: MouseReport): Row | null {
   const node = options.ref.current;
   if (!node) return null;
@@ -62,14 +100,16 @@ function rowAt(options: MouseRowsOptions, report: MouseReport): Row | null {
   const firstRow = options.firstRow ?? 0;
   // `measureElement` is 0-based on both axes (the layout tree's origin), while a
   // mouse report is 1-based: the frame's first row and column are 1.
-  const index = report.row - 1 - box.y - firstRow;
-  if (index < 0 || index >= options.rowCount) return null;
+  const line = report.row - 1 - box.y - firstRow;
+  if (line < 0) return null;
   if (report.column < box.x + 1 || report.column > box.x + box.width)
     return null;
-  if (options.isInteractive && !options.isInteractive(index)) return null;
+  const item = itemAtLine(options, line);
+  if (!item) return null;
+  if (options.isInteractive && !options.isInteractive(item.index)) return null;
   return {
-    index,
-    row: box.y + 1 + firstRow + index,
+    index: item.index,
+    row: box.y + 1 + firstRow + item.start,
     from: box.x + 1,
     to: box.x + box.width,
   };

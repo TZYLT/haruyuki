@@ -13,6 +13,7 @@ import {
   type PageBody,
   type PageRow,
   pageWindow,
+  rowHeight,
   scrollPageOffset,
   stepSelectableRow,
 } from "@/cli/app/pages/page-model";
@@ -170,10 +171,15 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
   // must not leave the cursor past the end: `clampSelectableRow` moves it to the
   // nearest row the user could have meant.
   const cursor = clampSelectableRow(rows, cursorRow);
+  // The frame is line-based, the body is row-based: `heights` is the one
+  // conversion. Every row is one line until a page hands the frame multi-line
+  // items, so this is the same arithmetic (and the same frame) as pre-T-10.
+  const heights = rows.map(rowHeight);
   const window = pageWindow({
     count: rows.length,
     height: bodyHeight,
     offset,
+    heights,
   });
   const visible = rows.slice(window.start, window.end);
 
@@ -208,6 +214,7 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
       setOffset((currentOffset) =>
         offsetForCursor({
           rows,
+          heights,
           height: bodyHeight,
           offset: currentOffset,
           cursor: next,
@@ -388,6 +395,9 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
     area: PAGE_AREA,
     ref: rowsRef,
     rowCount: visible.length,
+    // A multi-line item answers the pointer on every line it draws; with
+    // one-line rows this is the same row-per-index mapping as before.
+    spans: visible.map(rowHeight),
     isInteractive: (index) => {
       const row = visible[index];
       return row?.kind === "item" && !row.disabled;
@@ -636,6 +646,8 @@ function firstSelectable(rows: readonly PageRow[]): number {
  */
 export function offsetForCursor(input: {
   rows: readonly PageRow[];
+  /** Terminal lines per row (`rowHeight`); omitted means one line per row. */
+  heights?: readonly number[];
   height: number;
   offset: number;
   cursor: number;
@@ -644,6 +656,7 @@ export function offsetForCursor(input: {
     count: input.rows.length,
     height: input.height,
     offset: input.offset,
+    heights: input.heights,
   });
   if (input.cursor < window.start) return input.cursor;
   if (input.cursor >= window.end) {

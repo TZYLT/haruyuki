@@ -31,6 +31,7 @@ import {
   captureProcessIdentity,
   isProcessAlive,
 } from "@/cron/process-identity";
+import { type DreamTier, isDreamTier } from "@/types/dream-run-metadata";
 import { appHomePath } from "@/utils/app-paths";
 
 const LEASE_VERSION = 1;
@@ -66,6 +67,21 @@ export interface DreamRunLease {
   conversationId: string | null;
   /** Baseline commit, once created. Recovery rolls back to it. */
   baselineSha: string | null;
+  /**
+   * The tier the run is on, or about to run next (T-01 / 47-2 §2.3).
+   *
+   * Written at the top of the tier loop, so this is the *current* tier and not
+   * `tierReached` in the run metadata. Optional because leases written before
+   * T-01 do not have it: a missing value normalizes to `undefined` (no data),
+   * never to a default tier. Deliberately does **not** bump `LEASE_VERSION` —
+   * a version bump would make every older lease unreadable, which is the
+   * failure mode this field exists to avoid.
+   */
+  tier?: DreamTier | null;
+  /** Tokens spent in this run at the last tier/turn boundary, optional. */
+  spentTokens?: number | null;
+  /** Token budget fixed when the run started, optional. */
+  budgetTokens?: number | null;
 }
 
 export interface CreateDreamLeaseInput {
@@ -97,6 +113,29 @@ function writeLeaseFile(lease: DreamRunLease): void {
   writeFileSync(temp, `${JSON.stringify(lease, null, 2)}\n`);
   // Atomic rename: a recovery scan never sees a half-written lease.
   renameSync(temp, path);
+}
+
+/**
+ * Normalize one optional T-01 field so an old lease JSON reads without throwing.
+ *
+ * - missing (or a wrong type) → `undefined`, i.e. "this lease has no data";
+ * - an explicit `null` stays `null`, i.e. "written and known to be absent";
+ * - a finite number stays a number.
+ *
+ * The distinction matters to the panel: an old lease has no tier, while a live
+ * lease that has not entered a tier yet may legitimately say `null`.
+ */
+function optionalFiniteNumber(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+/** The optional tier, normalized like {@link optionalFiniteNumber}. */
+function optionalTier(value: unknown): DreamTier | null | undefined {
+  if (value === null) return null;
+  return isDreamTier(value) ? value : undefined;
 }
 
 function normalizeLease(value: unknown): DreamRunLease | undefined {
@@ -137,6 +176,9 @@ function normalizeLease(value: unknown): DreamRunLease | undefined {
       typeof record.conversationId === "string" ? record.conversationId : null,
     baselineSha:
       typeof record.baselineSha === "string" ? record.baselineSha : null,
+    tier: optionalTier(record.tier),
+    spentTokens: optionalFiniteNumber(record.spentTokens),
+    budgetTokens: optionalFiniteNumber(record.budgetTokens),
   };
 }
 
@@ -210,7 +252,13 @@ export function updateDreamLease(
   patch: Partial<
     Pick<
       DreamRunLease,
-      "conversationId" | "baselineSha" | "status" | "heartbeatAt"
+      | "conversationId"
+      | "baselineSha"
+      | "status"
+      | "heartbeatAt"
+      | "tier"
+      | "spentTokens"
+      | "budgetTokens"
     >
   >,
 ): DreamRunLease | null {

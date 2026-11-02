@@ -46,6 +46,17 @@ export type PageRow =
       note?: string;
       /** Rows that exist but cannot be acted on (disabled, or read-only). */
       disabled?: boolean;
+      /**
+       * Continuation lines drawn under the item's composed first line (T-10).
+       *
+       * The first line stays the label/value row the frame composes; each entry
+       * here is one extra terminal line the page has already formatted and
+       * clipped. `rowHeight` is therefore `1 + lines.length`, so an item with no
+       * `lines` is exactly the one-row item every pre-T-10 page draws. The
+       * multi-line rendering itself is W-05's; W-01 freezes the field so the
+       * window arithmetic and the mouse mapping can be written against it.
+       */
+      lines?: readonly string[];
     }
   | { kind: "note"; text: string }
   /**
@@ -118,6 +129,70 @@ export type PageWindow = {
 };
 
 /**
+ * How many terminal lines a row occupies.
+ *
+ * Every row kind but a multi-line item is one line. An item is `1 +
+ * lines.length`: the composed first line plus its continuation lines. This is
+ * the single place the page-row → terminal-line conversion is defined; the
+ * frame's window and the mouse mapping both read it instead of re-deriving it.
+ */
+export function rowHeight(row: PageRow): number {
+  if (row.kind !== "item") return 1;
+  const lines = row.lines;
+  if (lines === undefined || lines.length === 0) return 1;
+  return 1 + lines.length;
+}
+
+/**
+ * The terminal-line offset of every row, plus the body's total line count.
+ *
+ * `offsets[i]` is the first line of row `i`, and `offsets[rows.length]` is the
+ * line after the last row (the total). One extra entry so a line position can be
+ * mapped back to the row that owns it without a second sum.
+ */
+export function rowLineOffsets(rows: readonly PageRow[]): readonly number[] {
+  const offsets: number[] = [0];
+  let total = 0;
+  for (const row of rows) {
+    total += rowHeight(row);
+    offsets.push(total);
+  }
+  return offsets;
+}
+
+/** One entry per row, each at least one line; missing/heights absent → 1. */
+function normalizedHeights(
+  count: number,
+  heights: readonly number[] | undefined,
+): readonly number[] {
+  const result = new Array<number>(count);
+  for (let index = 0; index < count; index += 1) {
+    const value = heights?.[index];
+    result[index] =
+      typeof value === "number" && Number.isFinite(value)
+        ? Math.max(1, Math.trunc(value))
+        : 1;
+  }
+  return result;
+}
+
+/** The furthest first row that still fills the window from the bottom. */
+function lastWindowStart(heights: readonly number[], capacity: number): number {
+  const count = heights.length;
+  let start = count;
+  let used = 0;
+  while (start > 0) {
+    const lines = heights[start - 1] ?? 1;
+    if (used + lines > capacity) break;
+    used += lines;
+    start -= 1;
+  }
+  // A single row taller than the window still has to be reachable: show it
+  // alone rather than an empty page.
+  return Math.min(start, Math.max(0, count - 1));
+}
+
+/**
  * Windowing for a page body.
  *
  * The same rule the overlay list uses (`overlay/list-view.tsx`): **when the list
@@ -125,20 +200,37 @@ export type PageWindow = {
  * change the page's height. A height that moves with the offset is a reflow of the
  * whole frame — the band is measured chrome — and it would make `PgDn` look like a
  * jump on screen as well as in the text.
+ *
+ * `offset` stays a **row index**, not a line index: ↑↓ move by item (R-10.6) and
+ * the frame stores the cursor the same way. `heights` only decides how many rows
+ * fit; omitting it is the all-one-line arithmetic every pre-T-10 page uses.
  */
 export function pageWindow(input: {
   count: number;
   /** Rows the body may draw, markers included. */
   height: number;
+  /** First row drawn. */
   offset: number;
+  /** Terminal lines each row occupies, one entry per row (`rowHeight`). */
+  heights?: readonly number[];
 }): PageWindow {
   const count = Math.max(0, Math.trunc(input.count));
   const height = Math.max(0, Math.trunc(input.height));
-  const reserved = count > height;
-  const rows = reserved ? Math.max(1, height - 2) : height;
-  const maxOffset = Math.max(0, count - rows);
+  const heights = normalizedHeights(count, input.heights);
+  const totalLines = heights.reduce((sum, rowLines) => sum + rowLines, 0);
+  const reserved = totalLines > height;
+  const capacity = reserved ? Math.max(1, height - 2) : height;
+  const maxOffset = lastWindowStart(heights, capacity);
   const start = Math.min(Math.max(0, Math.trunc(input.offset)), maxOffset);
-  const end = Math.min(count, start + rows);
+  let end = start;
+  let used = 0;
+  while (
+    end < count &&
+    (end === start || used + (heights[end] ?? 1) <= capacity)
+  ) {
+    used += heights[end] ?? 1;
+    end += 1;
+  }
   return { start, end, above: start, below: count - end, reserved };
 }
 

@@ -18,6 +18,15 @@ export interface UsageContextBreakdown {
   tools: number;
 }
 
+/**
+ * The label the Usage screen and the rail print for the `system` component
+ * (T-05/T-06, 47-2 §2.3): memory is compiled into the system prompt locally, so
+ * the honest name is `sys+mem` and the separate "memory is included" note goes
+ * away (R-05.5 / R-06.6). Both owners import this constant instead of spelling
+ * the string twice.
+ */
+export const CONTEXT_SYSTEM_LABEL = "sys+mem";
+
 /** Sum of the parts, which is what the context window is compared against. */
 export function contextBreakdownTotal(
   breakdown: UsageContextBreakdown,
