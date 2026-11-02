@@ -15,6 +15,7 @@ import {
 } from "@/agent/subagent-state";
 import { BRAILLE_SPINNER_FRAMES } from "@/cli/components/BlinkingSpinner";
 import {
+  DEFAULT_PRODUCT_STATUS_ORDER,
   PRODUCT_STATUS_SPINNER_INTERVAL_MS,
   PRODUCT_STATUS_SPINNER_PULSE_INTERVAL_MS,
   withDefaultProductStatusPanel,
@@ -23,6 +24,7 @@ import {
   visibleWorkflowExecutions,
   withWorkflowStatusPanel,
 } from "@/cli/display/product-status/workflows";
+import { useDreamRunStatus } from "@/cli/hooks/use-dream-run-status";
 import type { ModContext, ModPanel } from "@/cli/mods/types";
 import type { LocalModAdapter } from "@/cli/mods/use-local-mod-adapter";
 import {
@@ -93,7 +95,25 @@ export function useProductStatusPanels(params: {
   }, [subagentLifecycleSnapshot, subagentLifecycleTick]);
 
   const hasActiveProductStatus = liveBackgroundAgents.length > 0;
-  const shouldAnimateProductStatus = hasActiveProductStatus && shouldAnimate;
+  const hasUserProductStatusPanel = useMemo(
+    () =>
+      Object.values(modAdapter.registry?.ui.panels ?? {}).some(
+        (panel) => panel.order === DEFAULT_PRODUCT_STATUS_ORDER,
+      ),
+    [modAdapter.registry?.ui.panels],
+  );
+  // T-01: the dream half of the same row. Polling only makes sense while this
+  // panel is the one drawn (a user mod at order 1 replaces it); the hook's own
+  // state stays inside this subtree, and it does nothing while the TUI has no
+  // agent yet. Animation (not polling) is what `shouldAnimate` gates: the row
+  // itself stays visible when the transcript is too tall to animate.
+  const dreamStatus = useDreamRunStatus({
+    agentId: modContext.agent.id,
+    active: !hasUserProductStatusPanel,
+  });
+  const hasActiveDream = dreamStatus?.phase === "running";
+  const shouldAnimateProductStatus =
+    (hasActiveProductStatus || hasActiveDream) && shouldAnimate;
   const [productStatusSpinnerFrameIndex, setProductStatusSpinnerFrameIndex] =
     useState(0);
   const [productStatusSpinnerPulseOn, setProductStatusSpinnerPulseOn] =
@@ -147,6 +167,7 @@ export function useProductStatusPanels(params: {
             BRAILLE_SPINNER_FRAMES[productStatusSpinnerFrameIndex] ??
             BRAILLE_SPINNER_FRAMES[0],
           agentUrl: activeBackgroundAgentUrl,
+          dreamStatus,
         }),
         workflowExecutions,
       ),
@@ -157,6 +178,7 @@ export function useProductStatusPanels(params: {
       shouldAnimateProductStatus,
       activeBackgroundAgentUrl,
       workflowExecutions,
+      dreamStatus,
     ],
   );
 

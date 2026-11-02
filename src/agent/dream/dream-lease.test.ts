@@ -7,7 +7,13 @@
  * heartbeat/status updates the run controller writes as it progresses.
  */
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -124,5 +130,91 @@ describe("dream lease", () => {
 
   test("the lease path stays inside the configured harness home", () => {
     expect(getDreamLeasePath("agent-a")).toContain(join(root, "dream", "runs"));
+  });
+
+  // ── T-01 (47-2 G-1): the status fields are optional add-ons, not a version ──
+  test("T-01 fields round-trip through the lease without a version bump", () => {
+    createDreamLease({ agentId: "agent-a", runId: "run-1" });
+    updateDreamLease("agent-a", {
+      tier: "think",
+      spentTokens: 504,
+      budgetTokens: 1200,
+    });
+    expect(readDreamLease("agent-a")).toMatchObject({
+      version: 1,
+      tier: "think",
+      spentTokens: 504,
+      budgetTokens: 1200,
+    });
+  });
+
+  test("a lease written before T-01 still reads: absent fields stay undefined", () => {
+    // The exact pre-T-01 key set (plus a future key the reader must ignore):
+    // read side must not throw or invent a default tier.
+    const legacy = {
+      version: 1,
+      agentId: "agent-legacy",
+      runId: "run-legacy",
+      taskId: null,
+      pid: process.pid,
+      processStartedAt: null,
+      processStartTicks: null,
+      bootId: null,
+      startedAt: 1_700_000_000_000,
+      heartbeatAt: 1_700_000_000_000,
+      status: "running",
+      conversationId: null,
+      baselineSha: null,
+      someFutureField: "ignored",
+    };
+    mkdirSync(join(root, "dream", "runs"), { recursive: true });
+    writeFileSync(
+      getDreamLeasePath("agent-legacy"),
+      `${JSON.stringify(legacy, null, 2)}\n`,
+    );
+    const read = readDreamLease("agent-legacy");
+    expect(read).not.toBeNull();
+    expect(read?.runId).toBe("run-legacy");
+    expect(read?.version).toBe(1);
+    expect(read?.tier).toBeUndefined();
+    expect(read?.spentTokens).toBeUndefined();
+    expect(read?.budgetTokens).toBeUndefined();
+  });
+
+  test("an explicit null means 'known absent'; a wrong type degrades to undefined", () => {
+    createDreamLease({ agentId: "agent-a", runId: "run-1" });
+    updateDreamLease("agent-a", {
+      tier: null,
+      spentTokens: null,
+      budgetTokens: null,
+    });
+    expect(readDreamLease("agent-a")).toMatchObject({
+      tier: null,
+      spentTokens: null,
+      budgetTokens: null,
+    });
+
+    // A corrupt/older variant: strings where numbers belong must not throw.
+    const raw = JSON.parse(
+      readFileSync(getDreamLeasePath("agent-a"), "utf-8"),
+    ) as Record<string, unknown>;
+    writeFileSync(
+      getDreamLeasePath("agent-a"),
+      `${JSON.stringify(
+        {
+          ...raw,
+          tier: "not-a-tier",
+          spentTokens: "many",
+          budgetTokens: "lots",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const degraded = readDreamLease("agent-a");
+    expect(degraded).not.toBeNull();
+    expect(degraded?.tier).toBeUndefined();
+    expect(degraded?.spentTokens).toBeUndefined();
+    expect(degraded?.budgetTokens).toBeUndefined();
   });
 });

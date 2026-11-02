@@ -276,6 +276,19 @@ export async function executeDreamRun(
       overBudgetApprovals: settings.overBudgetApprovals,
     });
 
+    // T-01: the TUI reads the run's tier and budget from the lease (the host is
+    // a short-lived child process, so its subagent snapshot is unreachable).
+    // Seed both before the first turn: the tier is the one about to run, not
+    // `tierReached`. Best effort — the status line must never fail a run.
+    try {
+      deps.updateLease({
+        agentId,
+        patch: { tier: tierPlan[0] ?? null, budgetTokens },
+      });
+    } catch {
+      // The lease is a breadcrumb; the in-process state is the authority.
+    }
+
     const initialMetadata: DreamRunMetadata = {
       runId,
       triggerSource: manual ? "manual" : "scheduled",
@@ -757,6 +770,15 @@ async function runTierLoop(input: {
       );
     }
 
+    // T-01: write the tier at the *top* of the loop — the one this turn is
+    // about to run — so the status line shows the current/next tier and never
+    // the last completed one (`tierReached` stays on the run metadata).
+    try {
+      deps.updateLease({ agentId: input.agentId, patch: { tier } });
+    } catch {
+      // Best effort, same as the run-start write.
+    }
+
     const promptInfo = {
       runId: input.runId,
       baselineSha: input.baselineSha,
@@ -848,6 +870,17 @@ async function runTierLoop(input: {
       });
     } catch {
       // Spend telemetry is advisory; the in-process tracker is the gate.
+    }
+
+    // T-01: spend is only knowable at a turn boundary, so the lease's figure
+    // (and the status line's percentage) steps once per tier (O-02).
+    try {
+      deps.updateLease({
+        agentId: input.agentId,
+        patch: { spentTokens: tracker.spentTokens },
+      });
+    } catch {
+      // Best effort: the in-process tracker still gates the budget.
     }
 
     if (turn.aborted) {

@@ -106,6 +106,15 @@ export interface DreamRunDeps {
       conversationId?: string;
       baselineSha?: string;
       status?: "running" | "finishing";
+      /**
+       * T-01 status fields: the *current/next* tier, the spend recorded at the
+       * last turn boundary and the budget fixed at run start. They live on the
+       * lease so the TUI can read them across the process boundary; the run
+       * metadata keeps its own `tierReached` (the last completed tier).
+       */
+      tier?: DreamTier | null;
+      spentTokens?: number | null;
+      budgetTokens?: number | null;
     };
   }): void;
   startLeaseHeartbeat(agentId: string): () => void;

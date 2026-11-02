@@ -493,3 +493,39 @@ describe("executeDreamRun · failure classes", () => {
     expect(harness.released).toEqual({ dream: 1, memory: 1 });
   });
 });
+
+describe("executeDreamRun · T-01 lease status fields", () => {
+  test("seeds tier/budget, then writes the current tier and turn-end spend", async () => {
+    const harness = makeHarness();
+    const statusPatches: Array<Record<string, unknown>> = [];
+    const originalUpdateLease = harness.deps.updateLease;
+    harness.deps.updateLease = (input) => {
+      const patch = input.patch as Record<string, unknown>;
+      if (
+        "tier" in patch ||
+        "spentTokens" in patch ||
+        "budgetTokens" in patch
+      ) {
+        statusPatches.push({ ...patch });
+      }
+      originalUpdateLease(input);
+    };
+
+    const result = await executeDreamRun(RUN_INPUT, harness.deps);
+    expect(result.outcome).toBe("success");
+
+    // Initial: the tier about to run + the run budget. Then per tier: the
+    // current tier at the top of the loop, then that turn's spend at its end.
+    expect(statusPatches).toHaveLength(5);
+    expect(statusPatches[0]?.tier).toBe("tidy");
+    expect(typeof statusPatches[0]?.budgetTokens).toBe("number");
+    expect(statusPatches[1]).toEqual({ tier: "tidy" });
+    expect(statusPatches[2]).toEqual({ spentTokens: 100 });
+    expect(statusPatches[3]).toEqual({ tier: "think" });
+    expect(statusPatches[4]).toEqual({ spentTokens: 200 });
+
+    // `tier` is the tier being run, never the last completed one
+    // (`tierReached` = "think" is recorded on the run metadata instead).
+    expect(harness.metadata.at(-1)?.tierReached).toBe("think");
+  });
+});
