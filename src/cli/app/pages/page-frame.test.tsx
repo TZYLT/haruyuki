@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { clearAllSubagents } from "@/agent/subagent-state";
 import type { AppViewProps } from "@/cli/app/AppView";
 import { ChromeHeightContext } from "@/cli/app/chrome-height";
+import type { PageActions } from "@/cli/app/pages/page-frame";
 import { offsetForCursor, PageFrame } from "@/cli/app/pages/page-frame";
 import { PageHost } from "@/cli/app/pages/page-host";
 import {
@@ -25,13 +26,18 @@ import {
   resetViewportScroll,
 } from "@/cli/app/viewport-scroll";
 import { resetInputScopes } from "@/cli/helpers/focus-ledger";
+import { getHoverTarget, resetHoverForTests } from "@/cli/helpers/hover-store";
 import { resetBindingOwners } from "@/cli/helpers/input-router";
 import {
   registerMouseHandler,
   resetMouseHandlers,
 } from "@/cli/helpers/mouse-router";
 import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
-import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
+import {
+  type InkTty,
+  mountInkTty,
+  resetInkTtyState,
+} from "@/test-utils/ink-tty";
 
 /**
  * The page frame, as it is painted.
@@ -94,6 +100,7 @@ afterEach(() => {
   clearAllSubagents();
   resetMouseHandlers();
   resetMouseTrackingForTests();
+  resetHoverForTests();
   resetBindingOwners();
   resetInputScopes();
   resetViewportScroll();
@@ -359,7 +366,7 @@ function cursorLine(rows: readonly string[]): string | undefined {
  * arithmetic: `↓ 1 more` on the first frame, and the same item count after a
  * scroll.
  */
-function mountMultiLineDemo() {
+function mountMultiLineDemo(actions?: PageActions) {
   openConversationTab("M6 shell", "M6 shell");
   const rows: PageRow[] = [
     { kind: "header", text: "Agents" },
@@ -399,11 +406,205 @@ function mountMultiLineDemo() {
       <PageFrame
         view={{ ...DEFAULT_PAGE_PROPS, conversationId: "M6 shell" }}
         body={body}
+        actions={actions}
       />
     </ChromeHeightContext.Provider>,
     { columns: 80, rows: 24 },
   );
 }
+
+/**
+ * The T-10 row-model demo page as the pointer sees it (G-8's mouse half).
+ *
+ * The frame's real geometry is the assertion: a multi-line item is a block of
+ * terminal rows, and the pointer has to answer that block on every row it draws.
+ * The row a click lands on is found from the painted frame rather than hardcoded,
+ * so the test keeps describing the page and not this terminal's padding.
+ */
+const ESC = "\u001B";
+
+/** A left press / release at a cell of the 80×24 frame. */
+const pressAt = (column: number, row: number) => `${ESC}[<0;${column};${row}M`;
+const releaseAt = (column: number, row: number) =>
+  `${ESC}[<0;${column};${row}m`;
+/** Any-motion (`1003`), which is what a hover sees: no button down. */
+const moveTo = (column: number, row: number) => `${ESC}[<35;${column};${row}M`;
+
+/** The 1-based screen row of the first painted line containing `text`. */
+function screenRowOf(rows: readonly string[], text: string): number {
+  const index = rows.findIndex((row) => row.includes(text));
+  if (index < 0) throw new Error(`no painted row contains ${text}`);
+  return index + 1;
+}
+
+/** Press and release on one cell: the frame's own click grammar. */
+async function clickRow(
+  page: InkTty,
+  rows: readonly string[],
+  text: string,
+): Promise<void> {
+  const row = screenRowOf(rows, text);
+  await page.press(pressAt(2, row), releaseAt(2, row));
+}
+
+describe("the multi-line page's pointer", () => {
+  test("a click on any line of a block activates that item once", async () => {
+    const activated: string[] = [];
+    const page = mountMultiLineDemo({
+      activate: (row) => {
+        if (row.kind === "item") activated.push(row.id);
+      },
+    });
+    try {
+      // The first, a middle and the last line of Alpha's three-line block: all
+      // three are the same item, exactly as one `Enter` on the item is.
+      for (const line of [
+        "Alpha",
+        "Alpha description",
+        "writes the release notes",
+      ]) {
+        await clickRow(page, await page.rows(), line);
+      }
+      expect(activated).toEqual(["alpha", "alpha", "alpha"]);
+
+      // And a click moves the cursor to the block's first line, so the keyboard
+      // continues from the item the pointer chose: `Enter` re-runs it, `↓` goes
+      // to the next item. This is the "a click is the row's Enter" contract.
+      const painted = await page.rows();
+      expect(cursorLine(painted)).toContain("Alpha");
+      await page.press("\r");
+      expect(activated).toEqual(["alpha", "alpha", "alpha", "alpha"]);
+      await page.press(DOWN);
+      const afterDown = await page.rows();
+      expect(cursorLine(afterDown)).toContain("Beta");
+    } finally {
+      page.stop();
+    }
+  });
+
+  test("a click on a continuation line of a later item lands on that item", async () => {
+    const activated: string[] = [];
+    const page = mountMultiLineDemo({
+      activate: (row) => {
+        if (row.kind === "item") activated.push(row.id);
+      },
+    });
+    try {
+      // Beta's only continuation line, then Gamma's last one.
+      await clickRow(page, await page.rows(), "Beta description");
+      expect(activated).toEqual(["beta"]);
+      expect(cursorLine(await page.rows())).toContain("Beta");
+
+      await clickRow(page, await page.rows(), "no summary");
+      expect(activated).toEqual(["beta", "gamma"]);
+      expect(cursorLine(await page.rows())).toContain("Gamma");
+    } finally {
+      page.stop();
+    }
+  });
+
+  test("hover is the whole block, and prose rows the pointer cannot act on are transparent", async () => {
+    const page = mountMultiLineDemo();
+    try {
+      // Alpha's continuation line lights Alpha (visible index 1: header 0).
+      await page.press(
+        moveTo(2, screenRowOf(await page.rows(), "Alpha description")),
+      );
+      expect(getHoverTarget()).toEqual({ area: "page", index: 1 });
+
+      // Gamma's last continuation line lights Gamma (visible index 3).
+      await page.press(moveTo(2, screenRowOf(await page.rows(), "no summary")));
+      expect(getHoverTarget()).toEqual({ area: "page", index: 3 });
+
+      // The group header and the `↓ N more` marker are prose: no item, no hover.
+      await page.press(moveTo(2, screenRowOf(await page.rows(), "Agents")));
+      expect(getHoverTarget()).toBeNull();
+      await page.press(moveTo(2, screenRowOf(await page.rows(), "↓ 1 more")));
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      page.stop();
+    }
+  });
+
+  test("in a scrolled window the marker row is not a target and clicks stay in step with ↑↓", async () => {
+    // W-01's registration: the measured block includes the `↑ N more` marker, so
+    // without `firstRow` every pointer row answered the item above it. On this
+    // body that is one visible defect and one hidden one: a click on the marker
+    // activated Beta, and a click on Delta (one line) activated Epsilon.
+    const activated: string[] = [];
+    const page = mountMultiLineDemo({
+      activate: (row) => {
+        if (row.kind === "item") activated.push(row.id);
+      },
+    });
+    try {
+      // Four `↓` steps put the window on Beta with the marker above it, the
+      // state the keyboard reaches on the same body.
+      await page.press(DOWN, DOWN, DOWN, DOWN);
+      const painted = await page.rows();
+      const text = painted.join("\n");
+      expect(text).toContain("↑ 2 more");
+      expect(cursorLine(painted)).toContain("Epsilon");
+
+      // The marker is a chrome row, not an item: clicking it activates nothing.
+      const marker = screenRowOf(painted, "↑ 2 more");
+      await page.press(pressAt(2, marker), releaseAt(2, marker));
+      expect(activated).toEqual([]);
+      expect(getHoverTarget()).toBeNull();
+
+      // A one-line item is where the old off-by-one is visible on the frame: the
+      // click on Delta must activate Delta, not Epsilon.
+      await clickRow(page, painted, "Delta");
+      expect(activated).toEqual(["delta"]);
+      expect(cursorLine(await page.rows())).toContain("Delta");
+
+      // A continuation line near the bottom still answers its own block.
+      await clickRow(page, await page.rows(), "two conversations");
+      expect(activated).toEqual(["delta", "epsilon"]);
+      expect(cursorLine(await page.rows())).toContain("Epsilon");
+    } finally {
+      page.stop();
+    }
+  });
+
+  test("the wheel scrolls the same window the keyboard reaches, and clicks follow it", async () => {
+    const activated: string[] = [];
+    const page = mountMultiLineDemo({
+      activate: (row) => {
+        if (row.kind === "item") activated.push(row.id);
+      },
+    });
+    try {
+      // One notch over a continuation line (code 65 is "wheel down"), then the
+      // frame the keyboard's `End` produces: the page is at its last window.
+      const top = await page.rows();
+      await page.press(
+        `${ESC}[<65;2;${screenRowOf(top, "Alpha description")}M`,
+      );
+      const wheeled = await page.rows();
+      await page.press(END);
+      const ended = await page.rows();
+      expect(wheeled.join("\n")).toContain("↑ 2 more");
+      expect(wheeled).toEqual(ended);
+
+      // A click in the wheeled window answers the line it is on (Delta is the
+      // one-line item the offset used to shift).
+      await clickRow(page, wheeled, "Delta");
+      expect(activated).toEqual(["delta"]);
+
+      // A notch back up lands on the keyboard's `Home` window.
+      await page.press(
+        `${ESC}[<64;2;${screenRowOf(await page.rows(), "Delta")}M`,
+      );
+      const wheeledBack = await page.rows();
+      await page.press(HOME);
+      expect(wheeledBack.join("\n")).toContain("↓ 1 more");
+      expect(wheeledBack).toEqual(await page.rows());
+    } finally {
+      page.stop();
+    }
+  });
+});
 
 describe("a page of multi-line items", () => {
   test("paints an item as one contiguous block, continuation lines included", async () => {

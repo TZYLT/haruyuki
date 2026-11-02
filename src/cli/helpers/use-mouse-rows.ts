@@ -38,7 +38,16 @@ export type MouseRowsOptions = {
   ref: RefObject<DOMElement | null>;
   /** How many rows the block has. */
   rowCount: number;
-  /** Rows above index 0 inside the same box (a header line, say). */
+  /**
+   * Rows above index 0 inside the same box (a header line, say).
+   *
+   * A windowed block's `↑ N more` marker is above index 0 as well: it is drawn
+   * inside the box the pointer measures, so a page that windows its body must
+   * pass `1` while the marker is up. Without it every pointer line answers the
+   * item above it — the marker itself activates the first visible item, and a
+   * one-line item answers its neighbour's line (`page-frame.tsx` did exactly
+   * this until W-09).
+   */
   firstRow?: number;
   /** Rows the pointer may act on. Default: every row. */
   isInteractive?: (index: number) => boolean;
@@ -49,7 +58,9 @@ export type MouseRowsOptions = {
    * every pre-T-10 surface uses. When a page draws multi-line items, a pointer
    * row maps to the *item* that owns that line, so a click on any of an item's
    * lines activates it (R-10.4/R-10.5). The same `rowHeight` values the page
-   * windowed with feed this array.
+   * windowed with feed this array, for the visible rows only; an `↑ N more`
+   * marker drawn above them is not an item line, so the page counts it in
+   * `firstRow` rather than in `spans`.
    */
   spans?: readonly number[];
   /** Click on a row: move the cursor there and run that row's Enter. */
@@ -63,6 +74,20 @@ export type MouseRowsOptions = {
 };
 
 type Row = { index: number; row: number; from: number; to: number };
+
+/**
+ * One item's height in terminal lines.
+ *
+ * The page hands `rowHeight` values (`page-model.ts`), which are always one or
+ * more; a missing or malformed entry is one line here for the same reason the
+ * window arithmetic normalizes it that way, so the two cannot disagree about
+ * which item owns a line.
+ */
+function itemSpan(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(1, Math.trunc(value))
+    : 1;
+}
 
 /**
  * Map a line inside the block to the item that draws it.
@@ -81,11 +106,7 @@ function itemAtLine(
   }
   let start = 0;
   for (let index = 0; index < options.rowCount; index += 1) {
-    const value = spans[index];
-    const span =
-      typeof value === "number" && Number.isFinite(value)
-        ? Math.max(1, Math.trunc(value))
-        : 1;
+    const span = itemSpan(spans[index]);
     if (line < start + span) return { index, start };
     start += span;
   }

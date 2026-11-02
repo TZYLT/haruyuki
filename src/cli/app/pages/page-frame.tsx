@@ -396,6 +396,13 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
     area: PAGE_AREA,
     ref: rowsRef,
     rowCount: visible.length,
+    // The measured box starts on the `↑ N more` marker when the page has
+    // scrolled, so the first item line is one row below its top. Without this,
+    // every pointer row answered the item above it: the marker itself activated
+    // the first visible item, and a one-line item answered its neighbour's line
+    // (W-01 registered the offset; W-09 fixed it here). The `↓ N more` marker
+    // needs no counterpart — a line past the items maps to nothing already.
+    firstRow: window.above > 0 ? 1 : 0,
     // A multi-line item answers the pointer on every line it draws; with
     // one-line rows this is the same row-per-index mapping as before.
     spans: visible.map(rowHeight),
