@@ -5,6 +5,10 @@
  * and their keys/pointer at 80×24 and 40 columns, a fake backend for the
  * hidden/`N+`/default/cancelled-preview cases, and the three open paths. The
  * frame and the tab store are real; the backend is the only thing faked.
+ *
+ * W-17's two New rows and their outcome notes live in
+ * `overview-actions.test.tsx`, split out when this file reached the 1,000-line
+ * limit: the shell's claims stay here, the action rows' claims live there.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { clearAllSubagents } from "@/agent/subagent-state";
@@ -464,21 +468,6 @@ describe("the agent level (G-8)", () => {
       tty.stop();
     }
   });
-
-  test("New Agent is selectable and says it is not wired here yet (W-17)", async () => {
-    const tty = mountAgents();
-    try {
-      await settle();
-      await clickRow(tty, await tty.rows(), "New Agent");
-      const rows = await tty.rows();
-      expect(rows[0]).toContain("New Agent is not available yet.");
-      // A no-op, not a crash: still on the agent level.
-      expect(getTabsState().activeId).toBe("overview");
-      expect(rows.join("\n")).not.toContain("Agents / ");
-    } finally {
-      tty.stop();
-    }
-  });
 });
 
 describe("the conversation level (G-8)", () => {
@@ -509,25 +498,6 @@ describe("the conversation level (G-8)", () => {
     __testSetBackend(backend);
     return mount();
   }
-
-  test("New Session is the first row and a click on it is a visible no-op", async () => {
-    const tty = mountConversations();
-    try {
-      await settle();
-      await moveCursorTo(tty, "Alpha");
-      await tty.press(ENTER);
-      await settle();
-      expect((await tty.rows())[0]).toContain("Agents / Alpha");
-
-      await clickRow(tty, await tty.rows(), "New Session");
-      expect((await tty.rows())[0]).toContain(
-        "New Session is not available yet.",
-      );
-      expect(getTabsState().activeId).toBe("overview");
-    } finally {
-      tty.stop();
-    }
-  });
 
   test("an agent with no conversations shows the one-line empty note", async () => {
     const { backend } = createFakeBackend({

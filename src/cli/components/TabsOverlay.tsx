@@ -1,6 +1,11 @@
 import { Box } from "ink";
 import { useMemo, useRef } from "react";
-import { allTabs, isPageTabId, useTabsState } from "@/cli/app/tabs";
+import {
+  allTabs,
+  isPageTabId,
+  OVERVIEW_TAB_ID,
+  useTabsState,
+} from "@/cli/app/tabs";
 import type { TabStripProjection } from "@/cli/app/types";
 import { colors } from "@/cli/components/colors";
 import { OverlayFrame } from "@/cli/overlay/frame";
@@ -44,6 +49,18 @@ export interface TabsOverlayProps {
 /** A list row plus the strip's own fact: whether it can be closed. */
 type TabItem = OverlayListItem & { closeable: boolean };
 
+/**
+ * What the overview page is called in this face (`C-14`).
+ *
+ * The strip draws the tab as `+` — it is the one fixed page whose whole label is
+ * a symbol, and that symbol is the door. In a list of words a lone `+` reads as
+ * an add action, so the face spells the destination out. This is display only:
+ * the row's key stays the tab id, so Enter and a click still do what the strip
+ * does. `T-03` claimed this file; that conflict is settled, so the rename is the
+ * one line it always needed.
+ */
+const OVERVIEW_ROW_LABEL = "Agents";
+
 export function TabsOverlay({ actions, onDismiss }: TabsOverlayProps) {
   const state = useTabsState();
   const items = useMemo<TabItem[]>(() => {
@@ -51,7 +68,7 @@ export function TabsOverlay({ actions, onDismiss }: TabsOverlayProps) {
       const page = isPageTabId(tab.id);
       return {
         key: tab.id,
-        label: tab.title,
+        label: tab.id === OVERVIEW_TAB_ID ? OVERVIEW_ROW_LABEL : tab.title,
         description: page ? "page" : undefined,
         isCurrent: tab.id === state.activeId,
         closeable: !page,

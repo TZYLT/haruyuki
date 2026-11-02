@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   focusTab,
   openConversationTab,
+  pageTabs,
   resetTabsForTests,
 } from "@/cli/app/tabs";
 import type { TabStripProjection } from "@/cli/app/types";
@@ -85,6 +86,28 @@ describe("the /tabs face", () => {
     }
   });
 
+  test("the overview page is spelled Agents, while the strip's own label stays + (C-14)", async () => {
+    openConversationTab("conv-1", "M6 shell");
+    const { harness, tty } = mount();
+    try {
+      const rows = await tty.rows();
+      const text = rows.join("\n");
+      // C-14: a lone `+` in a list of words reads as "add", so the face names
+      // the destination. The strip keeps drawing `+` — that symbol is the door.
+      expect(text).toContain("Agents");
+      expect(rows.some((row) => row.includes("+"))).toBe(false);
+      expect(pageTabs()[0]?.title).toBe("+");
+
+      // The row still targets the overview tab: ↓ from `conv-1`, then Enter.
+      await tty.press("\u001B[B");
+      await tty.press("\r");
+      expect(harness.selected).toEqual(["overview"]);
+      expect(harness.dismissed).toBe(1);
+    } finally {
+      tty.stop();
+    }
+  });
+
   test("Enter switches to the row under the cursor and dismisses", async () => {
     openConversationTab("conv-1", "M6 shell");
     openConversationTab("conv-2", "Ledger work");
@@ -150,7 +173,8 @@ describe("the /tabs face", () => {
 // hit test and the click=Enter rule now come from `OverlayListView`, so these
 // tests are the regression that the dedupe kept the behaviour. The list starts on
 // screen row 6 (the frame draws `/tabs`, the rule, the title and their blanks
-// above it): `conv-1`, `conv-2`, `+`, `Usage`, `Settings` are rows 6-10.
+// above it): `conv-1`, `conv-2`, `Agents` (the overview page's row), `Usage`,
+// `Settings` are rows 6-10.
 
 const ESC = "\u001B";
 /** A left press / release at a cell (1-based screen coordinates). */
