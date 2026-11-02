@@ -44,6 +44,16 @@ export const CLI_FLAG_CATALOG = {
     mode: "interactive",
     help: { description: "Open agent selector UI after loading" },
   },
+  "no-provider": {
+    parser: { type: "boolean" },
+    mode: "interactive",
+    help: {
+      description: "Start the TUI with no agent and no model, then connect",
+      continuationLines: [
+        "Opens the empty state; connecting a provider creates the default agent",
+      ],
+    },
+  },
   conversation: { parser: { type: "string", short: "C" }, mode: "both" },
   "new-agent": {
     parser: { type: "boolean" },

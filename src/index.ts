@@ -41,6 +41,13 @@ import {
 } from "./backend";
 import { getBillingTier } from "./backend/api/metadata";
 import { LOCAL_BACKEND_EXPERIMENTAL_ENV } from "./backend/local/paths";
+import { NoProviderEmptyState } from "./cli/app/no-provider/NoProviderEmptyState";
+import { runTuiStartupPreflight } from "./cli/app/no-provider/startup-preflight";
+import {
+  failTuiStartup,
+  registerTuiStartupRoot,
+} from "./cli/app/startup/fail-tui-startup";
+import * as startupFailure from "./cli/app/startup/startup-failure-messages";
 import {
   extractBackendFlag,
   type ParsedCliArgs,
@@ -53,7 +60,6 @@ import {
   parseCsvListFlag,
 } from "./cli/flag-utils";
 import { renderHelpText } from "./cli/help-text";
-import { formatErrorDetails } from "./cli/helpers/error-formatter";
 import { ensureFdPath, resolveFdPath } from "./cli/helpers/file-autocomplete";
 import { listPinnedAgentsForCurrentUser } from "./cli/helpers/pinned-agent-listing";
 import type { ApprovalRequest } from "./cli/helpers/stream";
@@ -596,6 +602,7 @@ async function main(): Promise<void> {
   }
 
   const specifiedAgentName = values.name ?? null;
+  const noProviderFlag = values["no-provider"] === true;
   const specifiedModel = values.model ?? undefined;
   const systemPromptPreset = values.system ?? undefined;
   const systemCustom = values["system-custom"] ?? undefined;
@@ -853,6 +860,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // T-07: decide before Ink mounts, so a missing provider reports to the terminal
+  // (not the alternate screen) and `--no-provider` can open the empty state.
+  await runTuiStartupPreflight({ values, isHeadless });
+
   if (isHeadless) {
     markMilestone("HEADLESS_MODE_START");
     // For headless mode, load tools synchronously (respecting model/toolset when provided)
@@ -905,6 +916,7 @@ async function main(): Promise<void> {
     systemPromptPreset,
     toolset,
     skillsDirectory,
+    noProvider,
   }: {
     forceNew: boolean;
     baseTools?: string[];
@@ -914,6 +926,7 @@ async function main(): Promise<void> {
     systemPromptPreset?: string;
     toolset?: ToolsetPreference;
     skillsDirectory?: string;
+    noProvider: boolean;
   }) {
     const [showKeybindingSetup, setShowKeybindingSetup] = useState<
       boolean | null
@@ -926,6 +939,7 @@ async function main(): Promise<void> {
       | "initializing"
       | "checking"
       | "ready"
+      | "no_provider"
     >("selecting");
     const [agentId, setAgentId] = useState<string | null>(null);
     const [agentState, setAgentState] = useState<AgentState | null>(null);
@@ -1054,6 +1068,11 @@ async function main(): Promise<void> {
     useEffect(() => {
       async function checkAndStart() {
         markMilestone("TUI_CHECK_AND_START");
+        // T-07 --no-provider: the empty state owns startup until connected.
+        if (noProvider) {
+          setLoadingState("no_provider");
+          return;
+        }
         // Load settings
         await settingsManager.loadLocalProjectSettings();
         const backend = getBackend();
@@ -1106,8 +1125,7 @@ async function main(): Promise<void> {
             startupTargetLookupOrder,
           );
           if (!resolved) {
-            console.error(`Conversation ${specifiedConversationId} not found`);
-            process.exit(1);
+            failTuiStartup(`Conversation ${specifiedConversationId} not found`);
           }
           configureBackendMode(resolved.backendMode);
           // Use the agent that owns this conversation
@@ -1155,9 +1173,7 @@ async function main(): Promise<void> {
           }
 
           // No valid agent found anywhere
-          console.error("No recent session in .haruyuki/ or ~/.haruyuki.");
-          console.error("Run 'haruyuki' to get started.");
-          process.exit(1);
+          failTuiStartup(startupFailure.noRecentSessionMessage());
         }
 
         // =====================================================================
@@ -1297,10 +1313,7 @@ async function main(): Promise<void> {
               }
               // If null (createDefaultAgents disabled), fall through
             } catch (err) {
-              console.error(
-                `Failed to create default agent: ${err instanceof Error ? err.message : String(err)}`,
-              );
-              process.exit(1);
+              failTuiStartup(startupFailure.defaultAgentCreateFailure(err));
             }
             break;
           }
@@ -1308,8 +1321,15 @@ async function main(): Promise<void> {
 
         setLoadingState("assembling");
       }
-      checkAndStart();
-    }, [forceNew, agentIdArg, shouldResume, specifiedConversationId]);
+      // R-07.2: an async startup failure takes the same unmount-then-report path.
+      checkAndStart().catch(startupFailure.failAgentResolution);
+    }, [
+      forceNew,
+      agentIdArg,
+      shouldResume,
+      specifiedConversationId,
+      noProvider,
+    ]);
 
     // Main initialization effect - runs after profile selection
     const initStartedRef = React.useRef(false);
@@ -1439,14 +1459,9 @@ async function main(): Promise<void> {
               include: ["agent.tags"],
             });
           } catch (error) {
-            console.error(
-              `Agent ${agentIdArg} not found (error: ${JSON.stringify(error)})`,
+            failTuiStartup(
+              startupFailure.missingAgentMessage(agentIdArg, error),
             );
-            console.error(
-              "When using --agent, the specified agent ID must exist.",
-            );
-            console.error("Run 'haruyuki' without --agent to create an agent.");
-            process.exit(1);
           }
         }
 
@@ -1522,10 +1537,7 @@ async function main(): Promise<void> {
         // All paths should have resolved to an agent by now
         // If not, it's an unexpected state - error out instead of auto-creating
         if (!agent) {
-          console.error(
-            "No agent found. Use --new-agent to create a new agent.",
-          );
-          process.exit(1);
+          failTuiStartup(startupFailure.noAgentMessage());
         }
 
         // Ensure local project settings are loaded before updating
@@ -1607,8 +1619,7 @@ async function main(): Promise<void> {
           if (model) {
             const modelHandle = resolveModel(model);
             if (!modelHandle) {
-              console.error(`Error: Invalid model "${model}"`);
-              process.exit(1);
+              failTuiStartup(`Error: Invalid model "${model}"`);
             }
 
             // Always apply model update - different model IDs can share the same
@@ -1653,10 +1664,7 @@ async function main(): Promise<void> {
             try {
               await memfsSyncPromise;
             } catch (error) {
-              console.error(
-                error instanceof Error ? error.message : String(error),
-              );
-              process.exit(1);
+              failTuiStartup(startupFailure.startupErrorMessage(error));
             }
 
             const result = await updateAgentSystemPrompt(
@@ -1664,8 +1672,7 @@ async function main(): Promise<void> {
               systemPromptPreset,
             );
             if (!result.success || !result.agent) {
-              console.error(`Error: ${result.message}`);
-              process.exit(1);
+              failTuiStartup(`Error: ${result.message}`);
             }
             agent = result.agent;
           }
@@ -1721,10 +1728,9 @@ async function main(): Promise<void> {
           } catch (error) {
             // Only treat 404/422 as "not found", rethrow other errors
             if (isBackendNotFoundError(error)) {
-              console.error(
+              failTuiStartup(
                 `Conversation ${specifiedConversationId} not found`,
               );
-              process.exit(1);
             }
             throw error;
           }
@@ -1775,10 +1781,7 @@ async function main(): Promise<void> {
           try {
             await memfsSyncPromise;
           } catch (error) {
-            console.error(
-              error instanceof Error ? error.message : String(error),
-            );
-            process.exit(1);
+            failTuiStartup(startupFailure.startupErrorMessage(error));
           }
         }
 
@@ -1843,12 +1846,9 @@ async function main(): Promise<void> {
           err,
           "tui_app_initialization",
         );
-        const message = formatErrorDetails(err);
-        console.error(`\nError during initialization: ${message}`);
-        if (isDebugEnabled()) {
-          console.error(err);
-        }
-        process.exit(1);
+        failTuiStartup(
+          startupFailure.initializationFailureMessage(err, isDebugEnabled()),
+        );
       });
     }, [
       forceNew,
@@ -1863,6 +1863,15 @@ async function main(): Promise<void> {
       selectedConversationId,
     ]);
 
+    // T-07 empty state: connecting a provider creates the agent, then assembly.
+    if (loadingState === "no_provider") {
+      return React.createElement(NoProviderEmptyState, {
+        onConnected: (connectedAgentId: string) => {
+          setSelectedGlobalAgentId(connectedAgentId);
+          setLoadingState("assembling");
+        },
+      });
+    }
     // Wait for keybinding auto-install to complete before showing UI
     if (showKeybindingSetup === null) {
       return null;
@@ -1922,7 +1931,10 @@ async function main(): Promise<void> {
 
     const appLoadingState = loadingState as Exclude<
       typeof loadingState,
-      "selecting" | "selecting_global" | "selecting_conversation"
+      | "selecting"
+      | "selecting_global"
+      | "selecting_conversation"
+      | "no_provider"
     >;
     const startupConversationTitleEligible = !isResumedConversation(
       resumeData?.conversation,
@@ -1978,7 +1990,7 @@ async function main(): Promise<void> {
   }
 
   markMilestone("REACT_RENDER_START");
-  render(
+  const tuiRoot = render(
     React.createElement(LoadingApp, {
       forceNew: forceNew,
       baseTools: baseTools,
@@ -1988,6 +2000,7 @@ async function main(): Promise<void> {
       systemPromptPreset: systemPromptPreset,
       toolset: specifiedToolset as ToolsetPreference | undefined,
       skillsDirectory: skillsDirectory,
+      noProvider: noProviderFlag,
     }),
     {
       exitOnCtrlC: false, // We handle CTRL-C manually with double-press guard
@@ -2005,6 +2018,8 @@ async function main(): Promise<void> {
       alternateScreen: wireFullScreenTerminal(),
     },
   );
+  // T-07: let a post-mount startup failure leave the alternate screen first.
+  registerTuiStartupRoot(tuiRoot);
 }
 
 assertSupportedBunRuntime();
