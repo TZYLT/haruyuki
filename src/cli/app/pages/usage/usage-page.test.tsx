@@ -85,6 +85,39 @@ async function homeWithLedger(): Promise<string> {
   return dir;
 }
 
+/**
+ * One automated run, so the detail screen has an Automated tasks table to lay
+ * out (an all-interactive ledger only draws the empty-state line).
+ */
+async function appendReflectionRecord(): Promise<void> {
+  await appendUsageRecord(
+    buildUsageRecord({
+      at: todayAtNine(),
+      agentId: "agent-1",
+      model: "openai/gpt-5.5",
+      prompt: 10_000,
+      cachedInput: 2_000,
+      cacheWrite: 1_000,
+      completion: 500,
+      steps: 1,
+      wallMs: 2_000,
+      apiMs: 1_000,
+      source: "reflection",
+      outcome: "completed",
+      runId: "reflection-agent-1-abc",
+      sessionId: "local-conv-2",
+      parentSessionId: "local-conv-1",
+      cost: {
+        input: 0.1,
+        cacheRead: 0.2,
+        cacheWrite: 0.05,
+        output: 0.01,
+        total: 0.36,
+      },
+    }),
+  );
+}
+
 function props(columns: number): AppViewProps {
   return {
     columns,
@@ -221,10 +254,52 @@ describe("the usage page", () => {
     expect(detail).toContain("Usage / Detail");
     expect(detail).toContain("Cost (est. $ 1.00000)");
     expect(detail).toContain("History (last 14 days)");
+    // The header advertises the table key, and it is drawn from the same
+    // segments the click targets come from (so a click test and the frame agree).
+    expect(detail).toContain("f table");
 
     await tty.press(TAB);
     await settle();
     expect((await tty.rows()).join("\n")).toContain("Usage / Overview");
+  });
+
+  test("a narrow terminal draws the compact table and f expands it", async () => {
+    // 47-1 R-05.8: the complete Automated tasks table is naturally 58 columns;
+    // 80 columns with the rail leaves ~51, which falls to the narrow side. `f`
+    // is bound in this page's own `page` scope (not in page-frame), and these
+    // assertions are on the painted frame — a state-only assertion would pass
+    // while the expand painted nothing.
+    await homeWithLedger();
+    await appendReflectionRecord();
+    const tty = mount(50);
+    try {
+      await settle();
+      await tty.press(TAB);
+      await settle();
+      let frame = (await tty.rows()).join("\n");
+      // At 50 columns the header itself wraps, so only the word is asserted.
+      expect(frame).toContain("Detail");
+      expect(frame).toContain("Automated tasks");
+      expect(frame).toContain("reflection");
+      expect(frame).toContain("source");
+      // Narrow: runs and hit% are hidden, the other columns survive.
+      expect(frame).not.toContain("runs");
+      expect(frame).not.toContain("hit%");
+
+      await tty.press("f");
+      await settle();
+      frame = (await tty.rows()).join("\n");
+      expect(frame).toContain("runs");
+
+      // The key toggles: a second press returns to the compact set.
+      await tty.press("f");
+      await settle();
+      frame = (await tty.rows()).join("\n");
+      expect(frame).not.toContain("runs");
+      expect(frame).not.toContain("hit%");
+    } finally {
+      tty.stop();
+    }
   });
 
   test("the screen word carries the other screen as its target", () => {
@@ -341,6 +416,10 @@ describe("the usage page", () => {
     expect(frame).toContain("Automated tasks");
     expect(frame).toContain("reflection");
     expect(frame).toContain("total");
+    // 100 columns holds the complete table (58 at its narrowest), so the wide
+    // default includes the runs and hit% columns (R-05.8).
+    expect(frame).toContain("runs");
+    expect(frame).toContain("hit%");
   });
 
   test("Esc hands focus back to the conversation tab", async () => {

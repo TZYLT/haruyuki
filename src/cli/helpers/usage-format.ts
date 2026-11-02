@@ -23,6 +23,7 @@
  * cannot back.
  */
 
+import { terminalTextWidth } from "./char-width";
 import { formatCompact } from "./format";
 
 /** What a screen prints when a number does not exist. */
@@ -89,9 +90,10 @@ export function formatRate(rate: number | undefined): string {
  *
  * The `~` is the contract, not the number of significant figures: every value
  * this formats was derived from a heuristic (4 bytes per token), never measured.
- * **W-04 owns the exact compacting detail** (which thresholds round, whether a
- * decimal survives); this seam exists so the Usage page and the rail agree on
- * the marker and the function name before either is written.
+ * The magnitude uses the same `formatCompact` the measured columns use, so a
+ * component and a total that read the same way also *compare* the same way; a
+ * negative or non-finite count cannot be one, so it is clamped to zero / shown
+ * as unknown instead of printing `~-3k` or `~NaN`.
  */
 export function formatEstimatedCompact(n: number): string {
   if (!Number.isFinite(n)) return UNKNOWN_VALUE;
@@ -101,11 +103,47 @@ export function formatEstimatedCompact(n: number): string {
 /**
  * An **estimated** percentage from a 0..1 ratio, marked with `~`: `~43%`.
  *
- * Same ownership split as {@link formatEstimatedCompact}: the `~` is frozen
- * here, W-04 owns rounding/precision. A non-finite ratio is unknown, and a
- * negative one is clamped — a percentage of a context window cannot be negative.
+ * Whole percent, because only the `~` is meaningful here: the numerator was
+ * estimated from bytes, and the denominator can be a provider-reported total
+ * that the estimate is not guaranteed to reach (an old ledger row can therefore
+ * read `~103%`; that history is deliberately not rewritten — R-05.7). Two
+ * decimals would claim a precision the estimate does not have. Neither the
+ * ratio nor the rounding is clamped at 100%: the screens report what the stored
+ * numbers say (Q-30), and a value above 100% is honest evidence that the two
+ * sides of the division came from different eras of the estimator.
  */
 export function formatEstimatedPercent(ratio: number): string {
   if (!Number.isFinite(ratio)) return UNKNOWN_VALUE;
   return `~${Math.round(Math.max(0, ratio) * 100)}%`;
+}
+
+/**
+ * The narrowest the detail screen's cost column may be drawn (T-05 / R-05.9).
+ *
+ * Eleven columns is what `$ 0.00000` needs — the five-decimal detail cost. It is
+ * a floor rather than a constant: a table whose priced rows are wider (a bigger
+ * total, or a `$ <0.00001` marker) asks for its own width through
+ * {@link costColumnWidth}, instead of being cut off at eleven, which is what the
+ * old hard-coded `padStart(11)` did.
+ */
+export const DETAIL_COST_MIN_WIDTH = 11;
+
+/**
+ * The width a table's cost column needs for the cells it will draw.
+ *
+ * Terminal columns, not string length: the unknown marker is `—`, an ambiguous
+ * character, and under a CJK console it is two cells wide while `string.length`
+ * says one — padding on the latter would misalign every row after it. The result
+ * is never below {@link DETAIL_COST_MIN_WIDTH}, and every cell in the returned
+ * width is right-aligned by the caller so the `$`/digit columns line up.
+ */
+export function costColumnWidth(
+  cells: readonly string[],
+  minWidth: number = DETAIL_COST_MIN_WIDTH,
+): number {
+  let width = minWidth;
+  for (const cell of cells) {
+    width = Math.max(width, terminalTextWidth(cell));
+  }
+  return width;
 }

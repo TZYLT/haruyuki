@@ -9,6 +9,7 @@ import type { LettaStreamingResponse } from "@letta-ai/letta-client/resources/ag
 import {
   contextTokensFromLocalUsage,
   estimateLocalContextTokens,
+  estimateLocalMessagesTokens,
 } from "@/backend/local/local-context-estimate";
 import type {
   LocalAssistantMessage,
@@ -193,6 +194,15 @@ function estimateSerializedTokens(value: unknown): number {
  * transcript, and the tool definitions. The Usage detail screen shows this
  * split; the backend is the only place that can answer it, because the
  * serialized request exists nowhere else.
+ *
+ * `messages` is the **pure transcript estimate** (`estimateLocalMessagesTokens`),
+ * not the anchored whole-request total (`estimateLocalContextTokens`). The
+ * anchored number already contains the system prompt, the tools and the previous
+ * reply, so using it here counted them twice and the three parts could sum to
+ * more than the context window; the pure transcript is the one component that is
+ * actually the transcript's own size (T-05 / R-05.3, 47-2 §1.5 #1). Compaction
+ * planning and the whole-request total/overflow floor keep the anchored
+ * estimator — only this composition changes.
  */
 export function estimateProviderContextComposition(
   input: ProviderTurnInput,
@@ -200,7 +210,7 @@ export function estimateProviderContextComposition(
   const system = estimateSerializedTokens(
     input.systemPrompt ?? input.agent.system,
   );
-  const messages = estimateLocalContextTokens(input.uiMessages).tokens;
+  const messages = estimateLocalMessagesTokens(input.uiMessages);
   const tools = estimateSerializedTokens(input.clientTools);
   if (system === 0 && messages === 0 && tools === 0) return undefined;
   return { system, messages, tools };

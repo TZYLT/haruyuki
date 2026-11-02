@@ -43,6 +43,11 @@ type LedgerState =
 export function UsagePage(view: AppViewProps) {
   const [state, setState] = useState<LedgerState>({ status: "loading" });
   const [screen, setScreen] = useState<UsageScreen>("overview");
+  // The Automated tasks table's full/narrow choice (T-05). The page decides the
+  // default from its own width inside `detail.ts` (58 columns is O-05's
+  // threshold); this flag is only the user's `f` override, so it starts false
+  // and never has to be recomputed when the terminal resizes.
+  const [fullTable, setFullTable] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,6 +75,22 @@ export function UsagePage(view: AppViewProps) {
             setScreen((current) =>
               current === "overview" ? "detail" : "overview",
             );
+            return "consumed";
+          },
+        },
+        {
+          // R-05.8 / Q-28: on a narrow band the detail screen hides `runs` and
+          // `hit%`; `f` asks for the complete table. The binding lives here, in
+          // the page's own table, rather than in `page-frame.tsx`'s `actions`,
+          // because it is this page's column set — the frame owns no table.
+          id: "usage.table.full",
+          chords: [{ key: "f" }],
+          label: "Full table",
+          run: () => {
+            // Only the detail screen has the table; on the overview the key is
+            // left unborn so it cannot swallow a keystroke that means nothing.
+            if (screen !== "detail") return "declined";
+            setFullTable((current) => !current);
             return "consumed";
           },
         },
@@ -106,6 +127,7 @@ export function UsagePage(view: AppViewProps) {
             // The window is the current model's, and the composition line is
             // the last request's: the same model, by construction.
             contextWindow: view.contextWindowSize ?? null,
+            fullTable,
           });
     },
   };
@@ -149,12 +171,16 @@ export function usageHeaderSegments(
   range: string,
 ): readonly ClickSegment<UsageScreen>[] {
   const other: UsageScreen = screen === "overview" ? "detail" : "overview";
+  // The detail screen advertises `f`: it is the only screen with a table whose
+  // column set depends on the band's width (R-05.8).
+  const keys =
+    screen === "detail" ? "Tab switch · f table · Esc" : "Tab switch · Esc";
   return [
     // The page's own name, not a destination.
     { label: "Usage / " },
     // The current screen's name; clicking it opens the other screen.
     { label: SCREEN_LABEL[screen], target: other },
-    { label: `   ${range}   Tab switch · Esc` },
+    { label: `   ${range}   ${keys}` },
   ];
 }
 
@@ -168,9 +194,13 @@ function UsageHeader({
   onScreen: (screen: UsageScreen) => void;
 }) {
   const headerRef = useRef<DOMElement | null>(null);
+  // One source for what is drawn and what is clickable: a header that spelled
+  // its text a second time could drift from the segments and move every click
+  // target by the difference.
+  const segments = usageHeaderSegments(screen, range);
   useLineClicks<UsageScreen>({
     ref: headerRef,
-    segments: usageHeaderSegments(screen, range),
+    segments,
     onSelect: (segment) => {
       if (segment.target) onScreen(segment.target);
     },
@@ -179,8 +209,18 @@ function UsageHeader({
 
   return (
     <Box ref={headerRef} flexDirection="row">
-      <Text bold>{`Usage / ${SCREEN_LABEL[screen]}`}</Text>
-      <Text dimColor>{`   ${range}   Tab switch · Esc`}</Text>
+      <Text bold>
+        {segments
+          .slice(0, 2)
+          .map((segment) => segment.label)
+          .join("")}
+      </Text>
+      <Text dimColor>
+        {segments
+          .slice(2)
+          .map((segment) => segment.label)
+          .join("")}
+      </Text>
     </Box>
   );
 }

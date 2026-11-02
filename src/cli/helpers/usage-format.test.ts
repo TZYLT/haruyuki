@@ -2,9 +2,13 @@ import { describe, expect, test } from "bun:test";
 import {
   COST_DECIMALS,
   CURRENCY,
+  costColumnWidth,
   DETAIL_COST_DECIMALS,
+  DETAIL_COST_MIN_WIDTH,
   formatCost,
   formatCostAmount,
+  formatEstimatedCompact,
+  formatEstimatedPercent,
   formatPercent,
   formatRate,
   UNKNOWN_VALUE,
@@ -72,5 +76,64 @@ describe("formatRate", () => {
 
   test("an unknown rate is a dash", () => {
     expect(formatRate(undefined)).toBe(UNKNOWN_VALUE);
+  });
+
+  test("two decimals is the hit-rate contract the rail and the page share", () => {
+    // R-05.9 / R-06.4: `hit%` is the only percentage that keeps two decimals.
+    expect(formatRate(1 / 6)).toBe("16.67%");
+    expect(formatRate(0.9999)).toBe("99.99%");
+  });
+});
+
+describe("formatEstimatedCompact", () => {
+  test("marks the estimate and keeps the compact magnitude", () => {
+    expect(formatEstimatedCompact(20_000)).toBe("~20k");
+    expect(formatEstimatedCompact(8_000)).toBe("~8k");
+    expect(formatEstimatedCompact(31_500)).toBe("~32k");
+    expect(formatEstimatedCompact(999)).toBe("~999");
+  });
+
+  test("an impossible count is unknown, not a negative estimate", () => {
+    expect(formatEstimatedCompact(-5)).toBe("~0"); // clamped, not `~-5`
+    expect(formatEstimatedCompact(Number.NaN)).toBe(UNKNOWN_VALUE);
+    expect(formatEstimatedCompact(Number.POSITIVE_INFINITY)).toBe(
+      UNKNOWN_VALUE,
+    );
+  });
+});
+
+describe("formatEstimatedPercent", () => {
+  test("marks the estimate, whole percent", () => {
+    expect(formatEstimatedPercent(0.43)).toBe("~43%");
+    expect(formatEstimatedPercent(0.0952)).toBe("~10%");
+    expect(formatEstimatedPercent(0)).toBe("~0%");
+  });
+
+  test("an old ledger row may exceed 100% and is reported as it is", () => {
+    // R-05.7 / Q-30: no clamping to 100 — the shares are what the stored
+    // components and the provider total say, even when they disagree.
+    expect(formatEstimatedPercent(1.24)).toBe("~124%");
+    expect(formatEstimatedPercent(0.62)).toBe("~62%");
+  });
+
+  test("a non-finite ratio is unknown and a negative one cannot be a share", () => {
+    expect(formatEstimatedPercent(Number.NaN)).toBe(UNKNOWN_VALUE);
+    expect(formatEstimatedPercent(-0.2)).toBe("~0%");
+  });
+});
+
+describe("costColumnWidth", () => {
+  test("is never narrower than the eleven columns of a five-decimal cost", () => {
+    expect(DETAIL_COST_MIN_WIDTH).toBe(11);
+    expect(costColumnWidth([])).toBe(11);
+    expect(costColumnWidth(["$ 0.50000", "—"])).toBe(11);
+  });
+
+  test("grows to the widest formatted cell instead of assuming eleven", () => {
+    // R-05.9: the old `padStart(11)` silently shifted every column after cost.
+    expect(costColumnWidth(["$ 1234.50000"])).toBe(12);
+    expect(costColumnWidth(["$ 123456.50000"])).toBe(14);
+    // The caller may ask for a wider floor (e.g. a right-aligned header).
+    expect(costColumnWidth(["$ 0.50000"], 13)).toBe(13);
   });
 });

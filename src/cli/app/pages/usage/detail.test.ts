@@ -10,6 +10,13 @@ import {
   latestContextTokens,
   recentDays,
 } from "./detail";
+import {
+  AUTOMATED_TABLE_FULL_WIDTH,
+  automatedTableColumns,
+  automatedTableNaturalWidth,
+  modelTableColumns,
+  renderDetailTable,
+} from "./detail-tables";
 
 function record(
   tsHour: string,
@@ -41,14 +48,19 @@ function texts(rows: readonly PageRow[]): string[] {
   );
 }
 
-function detailOf(records: UsageRecord[], contextWindow?: number): string[] {
+function detailOf(
+  records: UsageRecord[],
+  contextWindow?: number,
+  options: { width?: number; fullTable?: boolean } = {},
+): string[] {
   return texts(
     buildDetailRows({
       summary: summarizeUsage(records, NOW),
       records,
       now: NOW,
-      width: 80,
+      width: options.width ?? 80,
       contextWindow,
+      fullTable: options.fullTable,
     }),
   );
 }
@@ -147,7 +159,12 @@ describe("buildDetailRows", () => {
     expect(joined).toContain("$ 0.00040");
   });
 
-  test("the composition is drawn with two-decimal shares and the window", () => {
+  test("the composition is marked as an estimate, with the measured total unmarked", () => {
+    // T-05 / R-05.3–R-05.6: the components are estimates (4 bytes/token) and the
+    // shares derived from them inherit the `~`; the total is the provider's
+    // `context_tokens` and is what the rail's ctx% shows, so it must NOT be
+    // marked. The denominator is that total, not the component sum: the estimate
+    // is allowed to miss it, and marking each share is the honest way to say so.
     const withComposition = record("2026-10-22T09", {
       contextTokens: 84_000,
       contextBreakdown: {
@@ -160,15 +177,64 @@ describe("buildDetailRows", () => {
     const joined = rows.join("\n");
     expect(joined).toContain("84k / 128k");
     expect(joined).toContain("65.63%");
-    // 8k / 62k = 12.90%, 31k = 50.00%, 23k = 37.10%.
-    expect(joined).toContain("system");
-    expect(joined).toContain("12.90%");
+    // 8k / 84k = 9.5% -> ~10%, 31k = 36.9% -> ~37%, 23k = 27.4% -> ~27%.
+    expect(joined).toContain("sys+mem");
+    expect(joined).toContain("~8k");
+    expect(joined).toContain("~10%");
     expect(joined).toContain("tools");
-    expect(joined).toContain("50.00%");
+    expect(joined).toContain("~31k");
+    expect(joined).toContain("~37%");
     expect(joined).toContain("messages");
-    expect(joined).toContain("37.10%");
-    // Memory cannot be separated locally; the screen must say so.
-    expect(joined).toContain("memory is folded into the system prompt locally");
+    expect(joined).toContain("~23k");
+    expect(joined).toContain("~27%");
+    // The moving parts are marked; the measured total is not.
+    expect(joined).not.toContain("~84k");
+    expect(joined).not.toContain("~128k");
+    // Memory is compiled into the system prompt locally, and the label now says
+    // so: the separate "memory is folded" note row is gone (R-05.5).
+    expect(joined).not.toContain("memory is folded");
+    expect(rows.some((row) => row.includes("system"))).toBe(false);
+  });
+
+  test("an old ledger row keeps its components and may exceed 100%", () => {
+    // R-05.7 / Q-30: old rows are not recomputed. Their components were stored
+    // under the old anchoring, so against the provider total they can sum past
+    // it; the screen reports that rather than clamping or dividing by the sum.
+    const old = record("2026-10-22T09", {
+      contextTokens: 50_000,
+      contextBreakdown: {
+        system: 8_000,
+        messages: 23_000,
+        tools: 31_000,
+      },
+    });
+    const joined = detailOf([old], 128_000).join("\n");
+    // 8/50 = 16%, 31/50 = 62%, 23/50 = 46%: the rows add up to 124%.
+    expect(joined).toContain("~16%");
+    expect(joined).toContain("~62%");
+    expect(joined).toContain("~46%");
+    // The stored component values are drawn as-is, with the estimate marker.
+    expect(joined).toContain("~8k");
+    expect(joined).toContain("~31k");
+    expect(joined).toContain("~23k");
+  });
+
+  test("a composition without a provider total falls back to the estimated sum", () => {
+    const withComposition = record("2026-10-22T09", {
+      contextBreakdown: {
+        system: 8_000,
+        messages: 23_000,
+        tools: 31_000,
+      },
+    });
+    const joined = detailOf([withComposition]).join("\n");
+    // 62k is the component sum, so it is itself an estimate and carries `~`.
+    expect(joined).toContain("~62k tokens (estimated)");
+    // With no provider total the sum is the only denominator: 100% in total.
+    expect(joined).toContain("sys+mem");
+    expect(joined).toContain("~13%"); // 8 / 62
+    expect(joined).toContain("~50%"); // 31 / 62
+    expect(joined).toContain("~37%"); // 23 / 62
   });
 
   test("without a composition the section falls back to the occupancy", () => {
@@ -276,19 +342,30 @@ describe("the automated tasks section", () => {
     const rows = automatedUsageRows(automated);
     expect(rows.map((row) => row.source)).toEqual(["dream", "reflection"]);
     const reflection = rows[1];
-    expect(reflection?.turns).toBe(2);
-    // 800 + 200 + 200 = 1200 in, 100 + 100 = 200 out.
-    expect(reflection?.tokens).toBe(1_400);
-    expect(reflection?.output).toBe(200);
+    expect(reflection?.runs).toBe(2);
+    // in = prompt + cacheWrite, hit = cachedInput, out = completion.
+    expect(reflection?.in).toBe(1_000);
+    expect(reflection?.hit).toBe(200);
+    expect(reflection?.out).toBe(200);
+    // The split loses nothing: in + hit + out is the old four-bucket total.
+    expect(
+      (reflection?.in ?? 0) + (reflection?.hit ?? 0) + (reflection?.out ?? 0),
+    ).toBe(1_400);
     expect(reflection?.cost).toBeCloseTo(0.5);
-    // 200 cached of 1000 miss + 200 cached: the hit rate is input-only.
-    expect(reflection?.cacheHitRate).toBeCloseTo(200 / 1_200);
+    // The hit rate stays the ledger's input-only rate:
+    // cachedInput / (prompt + cachedInput), not hit / (in + hit).
+    expect(reflection?.hitRate).toBeCloseTo(200 / 1_200);
 
     const total = automatedUsageTotal(automated);
-    expect(total?.turns).toBe(3);
-    expect(total?.tokens).toBe(1_500);
+    expect(total?.runs).toBe(3);
+    expect(total?.in).toBe(1_100);
+    expect(total?.hit).toBe(200);
+    expect(total?.out).toBe(200);
+    expect((total?.in ?? 0) + (total?.hit ?? 0) + (total?.out ?? 0)).toBe(
+      1_500,
+    );
     expect(total?.cost).toBeCloseTo(0.5);
-    expect(total?.cacheHitRate).toBeCloseTo(200 / 1_300);
+    expect(total?.hitRate).toBeCloseTo(200 / 1_300);
   });
 
   test("interactive turns are not automated runs", () => {
@@ -298,7 +375,7 @@ describe("the automated tasks section", () => {
       "reflection",
     ]);
     // Interactive spend must not move the automated total.
-    expect(automatedUsageTotal(mixed)?.tokens).toBe(1_500);
+    expect(automatedUsageTotal(mixed)?.in).toBe(1_100);
   });
 
   test("the screen lists the sources and their total between By model and History", () => {
@@ -318,15 +395,59 @@ describe("the automated tasks section", () => {
       /^ {2}(dream|reflection|total)\b/.test(row),
     );
     expect(table).toHaveLength(3);
-    // The source column is ten wide, so the columns after it line up: the runs
-    // cell is columns 12–17 whatever the source's own length is.
+    // The full table at 80 columns: source 2..12, runs 12..18, in 18..25,
+    // hit 25..32, out 32..39, cost 39..50, hit% 50..58 (O-05's 58).
     const reflection = table.find((row) => row.startsWith("  reflection"));
     expect(reflection?.slice(2, 12)).toBe("reflection");
     expect(reflection?.slice(12, 18).trim()).toBe("2");
+    expect(reflection?.slice(18, 25).trim()).toBe("1k"); // in
+    expect(reflection?.slice(25, 32).trim()).toBe("200"); // hit
+    expect(reflection?.slice(32, 39).trim()).toBe("200"); // out
+    expect(reflection?.slice(39, 50).trim()).toBe("$ 0.50000");
+    expect(reflection?.slice(50, 58).trim()).toBe("16.67%");
     const total = table.find((row) => row.startsWith("  total"));
     expect(total?.slice(12, 18).trim()).toBe("3");
     expect(joined).toContain("16.67%");
     expect(joined).toContain("$ 0.50000");
+  });
+
+  test("a narrow band hides runs and hit%, keeps the rest, and f restores them", () => {
+    // R-05.8 / O-05: the complete table's natural width is 58 columns (80-column
+    // terminal + rail leaves ~51), so below it the default column set is
+    // source/in/hit/out/cost. `f` passes `fullTable` through to buildDetailRows.
+    const narrow = detailOf(automated, undefined, { width: 51 });
+    const narrowHeader = narrow.find((row) =>
+      row.trimStart().startsWith("source"),
+    );
+    expect(narrowHeader).toBeDefined();
+    expect(narrowHeader).toContain("in");
+    expect(narrowHeader).toContain("hit");
+    expect(narrowHeader).toContain("out");
+    expect(narrowHeader).toContain("cost");
+    expect(narrowHeader).not.toContain("runs");
+    expect(narrowHeader).not.toContain("hit%");
+    // The hidden columns' data is gone too, not merely their labels.
+    expect(narrow.join("\n")).not.toContain("16.67%");
+
+    const expanded = detailOf(automated, undefined, {
+      width: 51,
+      fullTable: true,
+    });
+    const expandedHeader = expanded.find((row) =>
+      row.trimStart().startsWith("source"),
+    );
+    expect(expandedHeader).toContain("runs");
+    // A full table forced into a narrow band is still cut at the band's edge
+    // (there is no horizontal scroll, R-05.8): the leftmost new column survives.
+    expect(expandedHeader).toContain("in");
+  });
+
+  test("a wide band draws the complete table without asking", () => {
+    const rows = detailOf(automated, undefined, { width: 80 });
+    const header = rows.find((row) => row.trimStart().startsWith("source"));
+    expect(header).toContain("runs");
+    expect(header).toContain("hit%");
+    expect(header).toHaveLength(58);
   });
 
   test("an all-interactive ledger says there is nothing automated", () => {
@@ -337,5 +458,115 @@ describe("the automated tasks section", () => {
   test("a section with automated records has no empty-state line", () => {
     const rows = detailOf(automated);
     expect(rows.join("\n")).not.toContain("no automated runs recorded");
+  });
+});
+
+describe("the by model table", () => {
+  test("is a fixed-width table: model/in/hit/out/cost, numbers right-aligned", () => {
+    const rows = detailOf([record("2026-10-22T09")]);
+    const index = rows.findIndex((row) => row.startsWith("By model"));
+    expect(index).toBeGreaterThan(0);
+    const header = rows[index + 1];
+    // indent 2 + model 24 + in 7 + hit 7 + out 7 + cost 11 = 58.
+    expect(header?.slice(2, 26).trim()).toBe("model");
+    expect(header?.slice(26, 33).trim()).toBe("in");
+    expect(header?.slice(33, 40).trim()).toBe("hit");
+    expect(header?.slice(40, 47).trim()).toBe("out");
+    expect(header?.slice(47, 58).trim()).toBe("cost");
+
+    const row = rows[index + 2];
+    expect(row?.slice(2, 26)).toBe("openai/gpt-5.5".padEnd(24));
+    // in = prompt + cacheWrite (400 + 50), hit = cachedInput, out = completion.
+    expect(row?.slice(26, 33).trim()).toBe("450");
+    expect(row?.slice(33, 40).trim()).toBe("100");
+    expect(row?.slice(40, 47).trim()).toBe("50");
+    // Unpriced: a dash, never a false zero.
+    expect(row?.slice(47, 58).trim()).toBe("—");
+  });
+
+  test("a long model name is ellipsized, not allowed to shift the numbers", () => {
+    const rows = detailOf([
+      record("2026-10-22T09", {
+        model: "anthropic/claude-sonnet-4-5-20260101-preview",
+      }),
+    ]);
+    const index = rows.findIndex((row) => row.startsWith("By model"));
+    const row = rows[index + 2] ?? "";
+    expect(row.slice(2, 26)).toHaveLength(24);
+    expect(row.slice(2, 26)).toContain("...");
+    expect(row.slice(26, 33).trim()).toBe("450");
+  });
+});
+
+describe("detail table layout", () => {
+  test("the complete automated table's natural width is 58 columns", () => {
+    // O-05 / R-05.8: 2 + 10 + 6 + 7 + 7 + 7 + 11 + 8.
+    expect(AUTOMATED_TABLE_FULL_WIDTH).toBe(58);
+    expect(automatedTableNaturalWidth()).toBe(58);
+    // A wider cost cell moves the threshold by exactly its growth, so the full
+    // table never wraps (R-05.9).
+    expect(automatedTableNaturalWidth(13)).toBe(60);
+    expect(automatedTableNaturalWidth(3)).toBe(58);
+  });
+
+  test("the narrow column set keeps source/in/hit/out/cost", () => {
+    expect(
+      automatedTableColumns({ full: false }).map((column) => column.key),
+    ).toEqual(["source", "in", "hit", "out", "cost"]);
+  });
+
+  test("the full column set is the spec's seven", () => {
+    expect(
+      automatedTableColumns({ full: true }).map((column) => column.key),
+    ).toEqual(["source", "runs", "in", "hit", "out", "cost", "hit%"]);
+  });
+
+  test("renders a header and right-aligned numeric cells under a left source", () => {
+    const lines = renderDetailTable(automatedTableColumns({ full: true }), [
+      ["reflection", "2", "1k", "200", "200", "$ 0.50000", "16.67%"],
+    ]);
+    expect(lines[0]).toHaveLength(58);
+    expect(lines[0]?.trimStart().startsWith("source")).toBe(true);
+    expect(lines[1]).toHaveLength(58);
+    expect(lines[1]?.slice(2, 12)).toBe("reflection");
+    // Right-aligned: the runs cell fills its six columns from the right.
+    expect(lines[1]?.slice(12, 18)).toBe("     2");
+    expect(lines[1]?.slice(50, 58).trim()).toBe("16.67%");
+  });
+
+  test("an overlong source is ellipsized inside its own column", () => {
+    // The cost width is decided by the caller from its own cells (R-05.9); 12
+    // here is what `$ 1234.50000` needs, so the table grows to 59 columns.
+    const lines = renderDetailTable(
+      automatedTableColumns({ full: true, costWidth: 12 }),
+      [
+        [
+          "a-very-long-source-name",
+          "12",
+          "1.2k",
+          "300",
+          "400",
+          "$ 1234.50000",
+          "66.67%",
+        ],
+      ],
+    );
+    expect(lines[1]?.slice(2, 12)).toHaveLength(10);
+    expect(lines[1]?.slice(2, 12)).toContain("...");
+    // The cost column adapts to its widest cell (12, not the old hard-coded 11),
+    // so the table is 59 wide and nothing to the left moved by a single cell.
+    expect(lines[0]).toHaveLength(59);
+    expect(lines[1]?.slice(18, 25).trim()).toBe("1.2k");
+    expect(lines[1]?.slice(25, 32).trim()).toBe("300");
+    expect(lines[1]?.slice(39, 51).trim()).toBe("$ 1234.50000");
+    expect(lines[1]?.slice(51, 59).trim()).toBe("66.67%");
+  });
+
+  test("the model column shrinks to fit a narrow band and stops at its floor", () => {
+    expect(modelTableColumns({ availableWidth: 80 })[0]?.width).toBe(24);
+    // Band 49 - indent 2 - numeric 21 - cost 11 = 15: still aligned, just cut.
+    expect(modelTableColumns({ availableWidth: 49 })[0]?.width).toBe(15);
+    // Below the floor the row is truncated as a whole rather than misaligned.
+    expect(modelTableColumns({ availableWidth: 40 })[0]?.width).toBe(10);
   });
 });

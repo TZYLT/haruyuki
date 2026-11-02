@@ -29,14 +29,28 @@
  * space (Ink collapses an empty `<Text>` to zero height, so asking for the row is
  * not the same as getting it). It costs four rows: the detail screen does not
  * have a tier rule — it scrolls — so nothing is pushed off screen by them.
+ *
+ * **T-05 (2026-11-02).** The two tables are laid out by `detail-tables.ts`: the
+ * Automated tasks row is `source/runs/in/hit/out/cost/hit%` (the `in`/`hit` split,
+ * full columns only when the band is at least the O-05 58 columns or the user
+ * pressed `f`), the By model row is the fixed `model/in/hit/out/cost`, and the
+ * cost column is as wide as its own cells instead of a hard-coded eleven. The
+ * context section marks its estimated components and derived shares with `~`,
+ * labels `system` as `sys+mem` (memory is compiled in before the request exists)
+ * and no longer prints a separate "memory is folded" line; the provider-reported
+ * total stays unmarked. Old ledger rows are shown as stored, so their shares can
+ * exceed 100% — deliberate (R-05.7).
  */
 
 import type { PageRow } from "@/cli/app/pages/page-model";
 import { formatCompact } from "@/cli/helpers/format";
 import { truncateText } from "@/cli/helpers/truncate-text";
 import {
+  costColumnWidth,
   DETAIL_COST_DECIMALS,
   formatCost,
+  formatEstimatedCompact,
+  formatEstimatedPercent,
   formatPercent,
   formatRate,
 } from "@/cli/helpers/usage-format";
@@ -53,21 +67,20 @@ import {
 import type { UsageSummary } from "@/usage/summary";
 import {
   contextBreakdownTotal,
+  contextComponents,
+  contextShareDenominator,
   type UsageContextBreakdown,
 } from "@/utils/usage-context";
 import { addUsageCost } from "@/utils/usage-cost";
+import {
+  automatedTableColumns,
+  automatedTableNaturalWidth,
+  modelTableColumns,
+  renderDetailTable,
+} from "./detail-tables";
 
 /** Days of history the screen shows (docs/38 §14.8). */
 export const DETAIL_HISTORY_DAYS = 14;
-
-/**
- * Columns the Automated tasks table gives its source name.
- *
- * Ten because `reflection` — the longest source F-03 writes — is exactly ten,
- * and `truncateText` (not the padding) is what protects the columns to its
- * right if a later source is longer.
- */
-const SOURCE_COLUMN_WIDTH = 10;
 
 function textRow(text: string, width: number): PageRow {
   return { kind: "text", text: truncateText(text, width) };
@@ -172,19 +185,41 @@ function money(value: number | undefined): string {
 }
 
 /**
- * One row of the Automated tasks table (F-03 §5.16.5).
+ * A bucket's total cost, or `undefined` when nothing in it carried a price.
  *
- * `tokens` is all four billed buckets, the same definition the cost section
- * uses, so the rows here add up to what the automated runs really spent.
+ * A zero total is treated as unpriced because that is what the ledger means by
+ * it: the price buckets are omitted for a model with no price, and `—` says
+ * "unknown" where `$ 0.00000` would claim the spend was free (§14.7 #1).
+ */
+function modelCost(totals: UsageTotals): number | undefined {
+  return totals.cost.total > 0 ? totals.cost.total : undefined;
+}
+
+/**
+ * One row of the Automated tasks table (F-03 §5.16.5, T-05).
+ *
+ * The old row had a single `tokens` cell (all four billed buckets). `in` is now
+ * the non-cached input (`prompt + cacheWrite`), `hit` the cached input
+ * (`cachedInput`) and `out` the completion, so the three cells still add up to
+ * that same `tokens` total (R-05.1 / Q-10) — the split costs no spend, it only
+ * separates what was cached from what was not.
+ *
+ * `hitRate` stays the ledger's own input-only rate
+ * (`cachedInput / (prompt + cachedInput)`, docs/38 §14.7 #3): it is the number
+ * written into the ledger per turn and the same one the rail shows (T-06), so it
+ * is not recomputed as `hit / (in + hit)`.
  */
 export interface AutomatedUsageRow {
   source: UsageSource;
-  turns: number;
-  /** prompt + cached + cacheWrite + completion, all four billed buckets. */
-  tokens: number;
-  output: number;
+  runs: number;
+  /** prompt + cacheWrite (R-05.1). */
+  in: number;
+  /** cachedInput (R-05.1). */
+  hit: number;
+  /** completion (R-05.1). */
+  out: number;
   cost: number | undefined;
-  cacheHitRate: number | undefined;
+  hitRate: number | undefined;
 }
 
 function automatedRow(
@@ -194,17 +229,13 @@ function automatedRow(
   const billedInput = totals.prompt + totals.cachedInput;
   return {
     source,
-    turns: totals.turns,
-    tokens:
-      totals.prompt +
-      totals.cachedInput +
-      totals.cacheWrite +
-      totals.completion,
-    output: totals.completion,
+    runs: totals.turns,
+    in: totals.prompt + totals.cacheWrite,
+    hit: totals.cachedInput,
+    out: totals.completion,
     // Absent, not zero: a record with no price is unknown, not free.
     cost: totals.cost.total > 0 ? totals.cost.total : undefined,
-    cacheHitRate:
-      billedInput > 0 ? totals.cachedInput / billedInput : undefined,
+    hitRate: billedInput > 0 ? totals.cachedInput / billedInput : undefined,
   };
 }
 
@@ -267,10 +298,45 @@ export function automatedUsageTotal(
   return total ? automatedRow("other", total) : undefined;
 }
 
-/** The Automated tasks section: one row per source, then its total. */
+/** One Automated tasks cell, selected by the column's stable key. */
+function automatedCell(
+  key: string,
+  label: string,
+  row: AutomatedUsageRow,
+): string {
+  switch (key) {
+    case "source":
+      return label;
+    case "runs":
+      return `${row.runs}`;
+    case "in":
+      return formatCompact(row.in);
+    case "hit":
+      return formatCompact(row.hit);
+    case "out":
+      return formatCompact(row.out);
+    case "cost":
+      return money(row.cost);
+    case "hit%":
+      return formatRate(row.hitRate);
+    default:
+      return "";
+  }
+}
+
+/**
+ * The Automated tasks section: one row per source, then its total.
+ *
+ * Layout lives in `detail-tables.ts`: the cost column is as wide as the table's
+ * own formatted costs (R-05.9), and the full set (`source/runs/in/hit/out/cost/hit%`)
+ * is drawn by default only when the band can hold its natural width — the 58
+ * columns of O-05. Under that, `runs` and `hit%` are hidden (R-05.8) unless the
+ * user presses `f`, which `usage-page.tsx` passes in as `fullTable`.
+ */
 function automatedSectionRows(
   records: readonly UsageRecord[],
   width: number,
+  fullTable: boolean,
 ): PageRow[] {
   const rows: PageRow[] = [];
   const automated = automatedUsageRows(records);
@@ -278,33 +344,21 @@ function automatedSectionRows(
     rows.push(textRow("  no automated runs recorded", width));
     return rows;
   }
-  rows.push(
-    textRow(
-      `  ${"source".padEnd(SOURCE_COLUMN_WIDTH)}${"runs".padStart(6)}${"tokens".padStart(9)}${"out".padStart(9)}${"cost".padStart(11)}${"hit".padStart(8)}`,
-      width,
-    ),
-  );
   const total = automatedUsageTotal(records);
   const table: Array<{ label: string; row: AutomatedUsageRow }> = [
     ...automated.map((row) => ({ label: row.source, row })),
     ...(total ? [{ label: "total", row: total }] : []),
   ];
-  for (const { label, row } of table) {
-    // `truncateText` first: a future source may be longer than the column, and
-    // padding a string that is about to be cut would shift every column after
-    // it. Ten columns is `reflection` exactly.
-    const source = truncateText(label, SOURCE_COLUMN_WIDTH).padEnd(
-      SOURCE_COLUMN_WIDTH,
-    );
-    const cells = [
-      `${row.turns}`.padStart(6),
-      formatCompact(row.tokens).padStart(9),
-      formatCompact(row.output).padStart(9),
-      money(row.cost).padStart(11),
-      formatRate(row.cacheHitRate).padStart(8),
-    ];
-    rows.push(textRow(`  ${source}${cells.join("")}`, width));
-  }
+  const costWidth = costColumnWidth(table.map(({ row }) => money(row.cost)));
+  const full = fullTable || width >= automatedTableNaturalWidth(costWidth);
+  const columns = automatedTableColumns({ full, costWidth });
+  const lines = renderDetailTable(
+    columns,
+    table.map(({ label, row }) =>
+      columns.map((column) => automatedCell(column.key, label, row)),
+    ),
+  );
+  for (const line of lines) rows.push(textRow(line, width));
   return rows;
 }
 
@@ -316,8 +370,16 @@ export function buildDetailRows(input: {
   width: number;
   /** The conversation's context window, for the occupancy line. */
   contextWindow?: number | null;
+  /**
+   * The user asked for the complete Automated tasks table with `f`.
+   *
+   * Only widens the table: a band already wide enough for the full columns draws
+   * them anyway (the default), so the flag matters on the narrow side only.
+   */
+  fullTable?: boolean;
 }): PageRow[] {
   const { summary, records, now, width, contextWindow } = input;
+  const fullTable = input.fullTable === true;
   const rows: PageRow[] = [];
   if (summary.recordCount === 0) {
     rows.push(textRow("No usage recorded yet.", width));
@@ -366,32 +428,31 @@ export function buildDetailRows(input: {
   const contextTokens = latestContextTokens(records);
   const composition = latestContextBreakdown(records);
   if (composition) {
-    const total = contextBreakdownTotal(composition);
+    // Denominator = the total the screen shows, which is the provider-reported
+    // occupancy when the row has one (R-05.4/R-05.6). The components are
+    // estimates, hence `~` on each of them and on the shares they derive; the
+    // total itself is measured, so it carries none. An old row whose components
+    // sum past its total can therefore read `~103%` — reported, not rewritten
+    // (R-05.7/Q-30).
+    const denominator = contextShareDenominator(composition, contextTokens);
     const occupancy =
       contextTokens !== undefined && contextWindow && contextWindow > 0
         ? `${formatCompact(contextTokens)} / ${formatCompact(contextWindow)} · ${formatPercent(contextTokens, contextWindow)}`
         : contextTokens !== undefined
           ? `${formatCompact(contextTokens)} tokens`
-          : `${formatCompact(total)} tokens (estimated)`;
+          : `${formatEstimatedCompact(contextBreakdownTotal(composition))} tokens (estimated)`;
     rows.push(textRow(`  ${occupancy}`, width));
-    const parts: Array<{ label: string; tokens: number }> = [
-      { label: "system", tokens: composition.system },
-      { label: "tools", tokens: composition.tools },
-      { label: "messages", tokens: composition.messages },
-    ];
-    for (const part of parts) {
+    // `sys+mem`, not `system`: memory is compiled into the system prompt before
+    // the request exists, so it is part of this component — the label says so
+    // and the separate "memory is included" note is gone (R-05.5).
+    for (const part of contextComponents(composition)) {
       rows.push(
         textRow(
-          `  ${part.label.padEnd(9)}${formatCompact(part.tokens).padStart(7)}  ${formatPercent(part.tokens, total).padStart(6)}`,
+          `  ${part.label.padEnd(9)}${formatEstimatedCompact(part.tokens).padStart(7)}  ${formatEstimatedPercent(part.tokens / denominator).padStart(6)}`,
           width,
         ),
       );
     }
-    // Memory is compiled into the system prompt locally, so a separate row
-    // would be a guess. Say so instead of splitting it by eye.
-    rows.push(
-      textRow("  memory is folded into the system prompt locally", width),
-    );
   } else {
     rows.push(
       textRow(
@@ -404,22 +465,35 @@ export function buildDetailRows(input: {
   }
 
   openSection(rows, "By model");
-  for (const [model, totals] of aggregateUsageByModel(records)) {
-    const input = totals.prompt + totals.cachedInput + totals.cacheWrite;
-    const cost = totals.cost.total > 0 ? money(totals.cost.total) : "—";
-    rows.push(
-      textRow(
-        `  ${model}  in ${formatCompact(input)}  out ${formatCompact(totals.completion)}  ${cost}`,
-        width,
-      ),
-    );
+  // A fixed-width table (`model/in/hit/out/cost`, R-05.2): same in/hit split as
+  // the Automated tasks section, model names ellipsized rather than allowed to
+  // push the right-aligned numbers out of their columns.
+  const modelRows = [...aggregateUsageByModel(records)];
+  const modelCostWidth = costColumnWidth(
+    modelRows.map(([, totals]) => money(modelCost(totals))),
+  );
+  const modelColumns = modelTableColumns({
+    availableWidth: width,
+    costWidth: modelCostWidth,
+  });
+  for (const line of renderDetailTable(
+    modelColumns,
+    modelRows.map(([model, totals]) => [
+      model,
+      formatCompact(totals.prompt + totals.cacheWrite),
+      formatCompact(totals.cachedInput),
+      formatCompact(totals.completion),
+      money(modelCost(totals)),
+    ]),
+  )) {
+    rows.push(textRow(line, width));
   }
 
   // F-03 §5.16.5: automated spend sits between the per-model split and the
   // history, so the bill and the runs behind it are read together. The totals
   // above already include these records; this section only separates them.
   openSection(rows, "Automated tasks");
-  rows.push(...automatedSectionRows(records, width));
+  rows.push(...automatedSectionRows(records, width, fullTable));
 
   openSection(rows, `History (last ${DETAIL_HISTORY_DAYS} days)`);
   const byDay = aggregateUsageByDay(records);
