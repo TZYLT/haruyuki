@@ -1,14 +1,29 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Readable, Writable } from "node:stream";
-import { render, Text } from "ink";
-import type { ReactElement } from "react";
+import { Box, render, Text } from "ink";
+import { type ReactElement, useEffect } from "react";
+import {
+  acquireInputScope,
+  owningInputScope,
+} from "@/cli/helpers/focus-ledger";
+import { getHoverTarget, resetHoverForTests } from "@/cli/helpers/hover-store";
+import {
+  registeredMouseHandlers,
+  registerMouseHandler,
+  resetMouseHandlers,
+} from "@/cli/helpers/mouse-router";
+import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
 import {
   getTerminalFrame,
   installTerminalFrameCapture,
-  resetTerminalFrameForTests,
 } from "@/cli/helpers/terminal-frame";
+import { useInputRouter } from "@/cli/hooks/use-input-router";
 import type { OverlayListItem } from "@/cli/overlay/list-model";
-import { OverlayListView } from "@/cli/overlay/list-view";
+import {
+  type OverlayListMouse,
+  OverlayListView,
+} from "@/cli/overlay/list-view";
+import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
 
 /**
  * The rows the list actually paints.
@@ -78,7 +93,12 @@ function rows(count: number, description = true): OverlayListItem[] {
 }
 
 afterEach(() => {
-  resetTerminalFrameForTests();
+  // The pointer seam's stores are module-level like the frame capture: a hover
+  // target or a handler left behind by one test would answer the next one.
+  resetInkTtyState();
+  resetHoverForTests();
+  resetMouseHandlers();
+  resetMouseTrackingForTests();
 });
 
 describe("OverlayListView", () => {
@@ -237,5 +257,313 @@ describe("OverlayListView", () => {
       "*Row 6",
       " ↓ 4 more",
     ]);
+  });
+});
+
+// --- The pointer seam -------------------------------------------------------
+//
+// One row-level hit test for every selector: the geometry is measured from the
+// box this component drew, so the tests below press *screen* cells (the frame is
+// pinned to the terminal) and judge what the list decided. `mouse` is a stub in
+// this file — the cursor and the confirm live in `useOverlayList`; what is under
+// test here is the mapping (row → full-list index, indicator lines excluded), the
+// hover store, the wheel fall-through, and the modal stacking guard.
+
+const ESC = "\u001B";
+/** A left press / release at a cell (1-based screen coordinates). */
+const pressAt = (column: number, row: number) => `${ESC}[<0;${column};${row}M`;
+const releaseAt = (column: number, row: number) =>
+  `${ESC}[<0;${column};${row}m`;
+/** Any-motion (`1003`): the pointer moved, no button down. */
+const moveTo = (column: number, row: number) => `${ESC}[<35;${column};${row}M`;
+/** A wheel notch: 64 = up, 65 = down. */
+const wheelAt = (direction: "up" | "down", column: number, row: number) =>
+  `${ESC}[<${direction === "up" ? 64 : 65};${column};${row}M`;
+
+interface MouseProbe extends OverlayListMouse {
+  calls: string[];
+}
+
+function mouseProbe(overrides: Partial<OverlayListMouse> = {}): MouseProbe {
+  const calls: string[] = [];
+  return {
+    area: "list-view-test",
+    activate: (index) => {
+      calls.push(`activate:${index}`);
+    },
+    wheel: (direction) => {
+      calls.push(`wheel:${direction}`);
+    },
+    blocked: () => false,
+    calls,
+    ...overrides,
+  };
+}
+
+/** Mount the list with the router installed, so stdin mouse reports are routed. */
+function mountMouseList(options: {
+  mouse: OverlayListMouse;
+  items?: OverlayListItem[];
+  cursor?: number;
+  rows?: number;
+  renderRow?: (
+    item: OverlayListItem,
+    index: number,
+    isCursor: boolean,
+  ) => ReactElement | null;
+  /** A lower-layer handler, to prove a report the list declines still travels. */
+  fallback?: string[];
+}) {
+  function Harness() {
+    useInputRouter();
+    const fallback = options.fallback;
+    useEffect(() => {
+      if (!fallback) return undefined;
+      return registerMouseHandler(
+        (report) => {
+          if (!report.wheel) return false;
+          fallback.push(`fallback:${report.wheel}`);
+          return true;
+        },
+        { layer: "content", name: "test-fallback" },
+      );
+    }, [fallback]);
+    return (
+      <OverlayListView
+        items={options.items ?? rows(5)}
+        cursor={options.cursor ?? 0}
+        rows={options.rows}
+        renderRow={options.renderRow}
+        mouse={options.mouse}
+      />
+    );
+  }
+  return mountInkTty(<Harness />, { columns: 60, rows: 24 });
+}
+
+/** Paint a bare element and return its frame rows, trailing blanks included. */
+async function paintedRows(element: ReactElement): Promise<string[]> {
+  const tty = mountInkTty(element, { columns: 60, rows: 20 });
+  try {
+    return await tty.rows({ keepTrailingBlanks: true });
+  } finally {
+    tty.stop();
+    resetInkTtyState();
+  }
+}
+
+describe("the pointer seam", () => {
+  test("a click is that row's Enter, a blocked row included", async () => {
+    const mouse = mouseProbe();
+    const tty = mountMouseList({
+      mouse,
+      items: [
+        { key: "a", label: "Alpha" },
+        { key: "b", label: "Beta", disabled: true },
+        { key: "c", label: "Gamma" },
+      ],
+    });
+    try {
+      await tty.press(pressAt(2, 1), releaseAt(2, 1));
+      await tty.press(pressAt(2, 2), releaseAt(2, 2));
+      // The list does not decide what a blocked row means; it hands over the
+      // index exactly as `Enter` does (`useOverlayList` calls the same callback).
+      expect(mouse.calls).toEqual(["activate:0", "activate:1"]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("hover lights the row under the pointer, never a blocked one", async () => {
+    const mouse = mouseProbe();
+    const tty = mountMouseList({
+      mouse,
+      items: [
+        { key: "a", label: "Alpha" },
+        { key: "b", label: "Beta", disabled: true },
+        { key: "c", label: "Gamma" },
+      ],
+    });
+    try {
+      await tty.press(moveTo(2, 1));
+      expect(getHoverTarget()).toEqual({ area: "list-view-test", index: 0 });
+
+      // A blocked row does not light, and the row left behind must clear.
+      await tty.press(moveTo(2, 2));
+      expect(getHoverTarget()).toBeNull();
+
+      await tty.press(moveTo(2, 3));
+      expect(getHoverTarget()).toEqual({ area: "list-view-test", index: 2 });
+
+      // Out of the list: the highlight goes with the pointer.
+      await tty.press(moveTo(2, 10));
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a wheel notch is one cursor step; outside the rows it falls through", async () => {
+    const fallback: string[] = [];
+    const mouse = mouseProbe();
+    const tty = mountMouseList({ mouse, fallback });
+    try {
+      await tty.press(wheelAt("down", 2, 2));
+      await tty.press(wheelAt("up", 2, 3));
+      expect(mouse.calls).toEqual(["wheel:down", "wheel:up"]);
+      expect(fallback).toEqual([]);
+
+      // Below the last row: the list declines, so the page/transcript layer gets
+      // the notch (《38》§19.4 `chrome > page > content`).
+      await tty.press(wheelAt("down", 2, 10));
+      expect(mouse.calls).toEqual(["wheel:down", "wheel:up"]);
+      expect(fallback).toEqual(["fallback:down"]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the window mapping survives the indicator rows", async () => {
+    const mouse = mouseProbe();
+    // A windowed list of 10 at cursor 5 draws `↑ 3 more`, items 3-5, `↓ 4 more`.
+    const tty = mountMouseList({
+      mouse,
+      items: rows(10),
+      cursor: 5,
+      rows: 3,
+    });
+    try {
+      // Screen row 1 is the indicator; the items are screen rows 2-4.
+      await tty.press(pressAt(2, 2), releaseAt(2, 2));
+      await tty.press(pressAt(2, 3), releaseAt(2, 3));
+      await tty.press(pressAt(2, 4), releaseAt(2, 4));
+      expect(mouse.calls).toEqual(["activate:3", "activate:4", "activate:5"]);
+
+      // Neither indicator line is a row: no press is claimed, so no click.
+      await tty.press(pressAt(2, 1), releaseAt(2, 1));
+      await tty.press(pressAt(2, 5), releaseAt(2, 5));
+      expect(mouse.calls).toHaveLength(3);
+
+      // The wheel over the indicator still scrolls the list it belongs to.
+      await tty.press(wheelAt("down", 2, 1));
+      expect(mouse.calls.at(-1)).toBe("wheel:down");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a modal above the list refuses the whole frame", async () => {
+    // An approval (or any exclusive modal) outranks a selector that is still
+    // mounted behind it: the pointer must not click through it.
+    const releaseModal = acquireInputScope("modal");
+    const fallback: string[] = [];
+    const mouse = mouseProbe({
+      blocked: () => owningInputScope() === "modal",
+    });
+    const tty = mountMouseList({ mouse, fallback });
+    try {
+      await tty.press(moveTo(2, 1));
+      expect(getHoverTarget()).toBeNull();
+
+      await tty.press(pressAt(2, 1), releaseAt(2, 1));
+      expect(mouse.calls).toEqual([]);
+
+      // Declined, not swallowed: the wheel still reaches the layer below.
+      await tty.press(wheelAt("down", 2, 1));
+      expect(mouse.calls).toEqual([]);
+      expect(fallback).toEqual(["fallback:down"]);
+    } finally {
+      tty.stop();
+      releaseModal();
+    }
+  });
+
+  test("a multi-line row answers every one of its lines", async () => {
+    // `/resume` and `/agent` draw a summary, a preview and a timestamp: a hit
+    // test that assumed one line per item would activate the row below (or
+    // nothing) on the second line.
+    const mouse = mouseProbe();
+    const tty = mountMouseList({
+      mouse,
+      items: rows(4),
+      renderRow: (item, index) => (
+        <Box flexDirection="column">
+          <Text>{`${index}:${item.label}`}</Text>
+          <Text dimColor>{"  second line"}</Text>
+        </Box>
+      ),
+    });
+    try {
+      // Items occupy screen rows 1-2, 3-4, 5-6, 7-8.
+      await tty.press(pressAt(2, 4), releaseAt(2, 4));
+      expect(mouse.calls).toEqual(["activate:1"]);
+
+      await tty.press(moveTo(2, 6));
+      expect(getHoverTarget()?.index).toBe(2);
+
+      await tty.press(pressAt(2, 1), releaseAt(2, 1));
+      expect(mouse.calls).toEqual(["activate:1", "activate:0"]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("an empty list registers no handler and asks for no hover reporting", async () => {
+    const mouse = mouseProbe();
+    const tty = mountMouseList({ mouse, items: [] });
+    try {
+      await tty.rows();
+      expect(registeredMouseHandlers()).toBe(0);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("unhovered, the seam paints the bytes the list painted without it", async () => {
+    // The acceptance property behind the 19 `renderRow` sites: turning the
+    // pointer seam on may not move a single cell until a row is hovered.
+    const mouse = mouseProbe();
+    const shapes: Array<(pointer?: OverlayListMouse) => ReactElement> = [
+      (pointer) => (
+        <OverlayListView items={rows(10)} cursor={5} rows={3} mouse={pointer} />
+      ),
+      (pointer) => (
+        <OverlayListView
+          items={[
+            { key: "a", label: "Alpha", description: "first", isCurrent: true },
+            { key: "b", label: "Beta", dimLabel: true },
+            { key: "c", label: "Blocked", disabled: true },
+          ]}
+          cursor={0}
+          mouse={pointer}
+        />
+      ),
+      (pointer) => (
+        <OverlayListView
+          items={rows(6)}
+          cursor={2}
+          rows={3}
+          indicators={false}
+          mouse={pointer}
+          renderRow={(item, index, isCursor) => (
+            <Text>{`${isCursor ? "*" : "-"}${item.label}:${index}`}</Text>
+          )}
+        />
+      ),
+      (pointer) => (
+        <OverlayListView
+          items={[]}
+          cursor={0}
+          emptyLabel="No worktrees."
+          mouse={pointer}
+        />
+      ),
+    ];
+
+    for (const shape of shapes) {
+      expect(await paintedRows(shape(mouse))).toEqual(
+        await paintedRows(shape(undefined)),
+      );
+    }
   });
 });

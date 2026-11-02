@@ -1,10 +1,8 @@
-import { Box, type DOMElement } from "ink";
+import { Box } from "ink";
 import { useMemo, useRef } from "react";
 import { allTabs, isPageTabId, useTabsState } from "@/cli/app/tabs";
 import type { TabStripProjection } from "@/cli/app/types";
 import { colors } from "@/cli/components/colors";
-import { useRowHovered } from "@/cli/helpers/hover-store";
-import { useMouseRows } from "@/cli/helpers/use-mouse-rows";
 import { OverlayFrame } from "@/cli/overlay/frame";
 import type { OverlayListItem } from "@/cli/overlay/list-model";
 import { OverlayListView } from "@/cli/overlay/list-view";
@@ -106,35 +104,21 @@ export function TabsOverlay({ actions, onDismiss }: TabsOverlayProps) {
   });
   cursorRef.current = list.cursor;
 
-  // The rows the pointer aims at are the rows the list drew, in the same order:
-  // no window (a session has a handful of tabs) and no indicator rows, so row `n`
-  // of the box is row `n` of the list. `chrome` layer, because the face is drawn
-  // in the bottom chrome and the wheel below must not see its press.
-  const listRef = useRef<DOMElement | null>(null);
-  useMouseRows({
-    area: "tabs",
-    ref: listRef,
-    rowCount: items.length,
-    activate: select,
-    layer: "chrome",
-  });
-
   return (
     <OverlayFrame
       command="/tabs"
       title="Tabs"
       footer="↑↓ select · Enter switch · D close · Esc cancel"
     >
-      <Box ref={listRef} flexDirection="column">
+      <Box flexDirection="column">
         <OverlayListView
           items={items}
           cursor={list.cursor}
           indicators={false}
-          renderRow={(item, index, isCursor) => (
+          mouse={list.mouse}
+          renderRow={(item, _index, isCursor) => (
             <TabLine
               key={item.key}
-              area="tabs"
-              index={index}
               label={item.label}
               current={item.isCurrent === true}
               cursor={isCursor}
@@ -147,33 +131,26 @@ export function TabsOverlay({ actions, onDismiss }: TabsOverlayProps) {
 }
 
 /**
- * One row, with its own hover subscription.
+ * One row, painted by the pointer seam it shares with every other selector.
  *
- * A row rather than a loop in the parent: `useRowHovered` is a boolean snapshot
- * per row, so a pointer moving across the list re-renders the two rows involved
- * instead of the whole face on every cell the terminal reports (《38》§19.3 5).
+ * This used to subscribe to `useRowHovered` and paint the hover background
+ * itself, and wire its own `useMouseRows` block: the row-level hit test and the
+ * click=Enter rule now live once in `OverlayListView`, so the face only says what
+ * a row *looks like*. The pointer's highlight arrives as the wrapper's
+ * background; the cursor row keeps `> ` + colour and is not overpainted
+ * (《38》§19.3 2).
  */
 function TabLine({
-  area,
-  index,
   label,
   current,
   cursor,
 }: {
-  area: string;
-  index: number;
   label: string;
   current: boolean;
   cursor: boolean;
 }) {
-  const hovered = useRowHovered(area, index);
   return (
-    <Box
-      flexDirection="row"
-      // Selection wins (《38》§19.3.2): the cursor row keeps its `> ` + colour and
-      // does not also take the hover background, so the two signals never stack.
-      backgroundColor={hovered && !cursor ? colors.surface.hoverBg : undefined}
-    >
+    <Box flexDirection="row">
       <Text color={cursor ? colors.selector.itemHighlighted : undefined}>
         {cursor ? "> " : "  "}
       </Text>

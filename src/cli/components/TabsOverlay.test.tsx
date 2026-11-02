@@ -7,6 +7,7 @@ import {
 import type { TabStripProjection } from "@/cli/app/types";
 import { TabsOverlay } from "@/cli/components/TabsOverlay";
 import { resetInputScopes } from "@/cli/helpers/focus-ledger";
+import { getHoverTarget, resetHoverForTests } from "@/cli/helpers/hover-store";
 import { resetBindingOwners } from "@/cli/helpers/input-router";
 import { resetMouseHandlers } from "@/cli/helpers/mouse-router";
 import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
@@ -59,6 +60,7 @@ afterEach(() => {
   resetBindingOwners();
   resetMouseHandlers();
   resetMouseTrackingForTests();
+  resetHoverForTests();
   resetInputScopes();
 });
 
@@ -135,6 +137,101 @@ describe("the /tabs face", () => {
       await tty.press("\u001B");
       expect(harness.dismissed).toBe(1);
       expect(harness.selected).toEqual([]);
+      expect(harness.closed).toEqual([]);
+    } finally {
+      tty.stop();
+    }
+  });
+});
+
+// --- The pointer, through the shared seam ----------------------------------
+//
+// This face used to wire `useMouseRows` and its own hover subscription; the row
+// hit test and the click=Enter rule now come from `OverlayListView`, so these
+// tests are the regression that the dedupe kept the behaviour. The list starts on
+// screen row 6 (the frame draws `/tabs`, the rule, the title and their blanks
+// above it): `conv-1`, `conv-2`, `+`, `Usage`, `Settings` are rows 6-10.
+
+const ESC = "\u001B";
+/** A left press / release at a cell (1-based screen coordinates). */
+const pressAt = (column: number, row: number) => `${ESC}[<0;${column};${row}M`;
+const releaseAt = (column: number, row: number) =>
+  `${ESC}[<0;${column};${row}m`;
+/** Any-motion (`1003`): the pointer moved, no button down. */
+const moveTo = (column: number, row: number) => `${ESC}[<35;${column};${row}M`;
+/** A wheel notch: 64 = up, 65 = down. */
+const wheelAt = (direction: "up" | "down", column: number, row: number) =>
+  `${ESC}[<${direction === "up" ? 64 : 65};${column};${row}M`;
+
+describe("the /tabs face answers the pointer", () => {
+  test("a click is that row's Enter: switch and dismiss", async () => {
+    openConversationTab("conv-1", "M6 shell");
+    openConversationTab("conv-2", "Ledger work");
+    const { harness, tty } = mount();
+    try {
+      // Screen row 6 is `conv-1`; the cursor starts on the active `conv-2`.
+      await tty.press(pressAt(3, 6), releaseAt(3, 6));
+      expect(harness.selected).toEqual(["conv-1"]);
+      expect(harness.dismissed).toBe(1);
+      expect(harness.closed).toEqual([]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a click on the current tab only dismisses", async () => {
+    openConversationTab("conv-1", "M6 shell");
+    openConversationTab("conv-2", "Ledger work");
+    const { harness, tty } = mount();
+    try {
+      await tty.press(pressAt(3, 7), releaseAt(3, 7));
+      expect(harness.selected).toEqual([]);
+      expect(harness.dismissed).toBe(1);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("hover lights the row under the pointer, including a page tab", async () => {
+    openConversationTab("conv-1", "M6 shell");
+    const { tty } = mount();
+    try {
+      await tty.press(moveTo(3, 6));
+      expect(getHoverTarget()?.index).toBe(0);
+      // `Settings` (screen row 9) is a page tab: same rule, no exception.
+      await tty.press(moveTo(3, 9));
+      expect(getHoverTarget()?.index).toBe(3);
+      await tty.press(moveTo(3, 12));
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a wheel notch moves the cursor one row", async () => {
+    openConversationTab("conv-1", "M6 shell");
+    openConversationTab("conv-2", "Ledger work");
+    const { tty } = mount();
+    try {
+      // The cursor starts on `conv-2` (row 7); one notch up is `conv-1`.
+      await tty.press(wheelAt("up", 3, 7));
+      const rows = await tty.rows();
+      const cursorRow = rows.find(
+        (row) => row.startsWith("> ") && !row.startsWith("> /"),
+      );
+      expect(cursorRow).toContain("M6 shell");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a click on a page tab selects it, still without closing anything", async () => {
+    openConversationTab("conv-1", "M6 shell");
+    const { harness, tty } = mount();
+    try {
+      await tty.press(pressAt(3, 9), releaseAt(3, 9));
+      expect(harness.selected).toEqual(["settings"]);
+      expect(harness.dismissed).toBe(1);
       expect(harness.closed).toEqual([]);
     } finally {
       tty.stop();

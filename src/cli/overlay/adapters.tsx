@@ -143,6 +143,7 @@ export const SingleSelectPicker = memo(function SingleSelectPicker({
         anchor={anchor}
         indicators={indicators}
         renderRow={renderItem}
+        mouse={list.mouse}
       />
 
       {/* Footer */}
@@ -248,6 +249,7 @@ export const MultiSelectPicker = memo(function MultiSelectPicker({
         <OverlayListView
           items={orderedItems}
           cursor={list.cursor}
+          mouse={list.mouse}
           renderRow={(item, _index, isCursor) => {
             const isChecked = selectedSet.has(item.key);
             const isDisabled = item.disabled ?? false;

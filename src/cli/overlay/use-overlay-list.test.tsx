@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Readable, Writable } from "node:stream";
 import { type Key, render, Text, useInput } from "ink";
-import { owningInputScope, resetInputScopes } from "@/cli/helpers/focus-ledger";
+import {
+  acquireInputScope,
+  owningInputScope,
+  resetInputScopes,
+} from "@/cli/helpers/focus-ledger";
 import { resetBindingOwners } from "@/cli/helpers/input-router";
 import type { OverlayListItem } from "@/cli/overlay/list-model";
 import {
@@ -424,6 +428,146 @@ describe("useOverlayList", () => {
       await tick();
       expect(probe.latest.current?.cursor).toBe(3);
       expect(probe.latest.current?.current?.key).toBe("k3");
+    } finally {
+      probe.stop();
+    }
+  });
+});
+
+describe("the mouse half of the controller", () => {
+  test("a click is that row's Enter: move there, then confirm that index", async () => {
+    const confirmed: Array<[string, number]> = [];
+    const probe = mountProbe({
+      items: rows(5),
+      onConfirm: (key, index) => {
+        confirmed.push([key, index]);
+      },
+    });
+    try {
+      await tick();
+      // The cursor is at 0 and the click is on row 3. §19.2 requires the click's
+      // own index — an implementation that moved the cursor and then re-read it
+      // through React state would confirm `k0` here.
+      probe.latest.current?.mouse.activate(3);
+      await tick();
+      expect(confirmed).toEqual([["k3", 3]]);
+      expect(probe.latest.current?.cursor).toBe(3);
+    } finally {
+      probe.stop();
+    }
+  });
+
+  test("a click still hands a blocked row over; the caller owns that policy", async () => {
+    const confirmed: string[] = [];
+    const probe = mountProbe({
+      items: [{ key: "only", label: "Only", disabled: true }],
+      onConfirm: (key) => {
+        confirmed.push(key);
+      },
+    });
+    try {
+      await tick();
+      probe.latest.current?.mouse.activate(0);
+      await tick();
+      expect(confirmed).toEqual(["only"]);
+    } finally {
+      probe.stop();
+    }
+  });
+
+  test("a wheel notch is one row, clamped at both ends", async () => {
+    const probe = mountProbe({ items: rows(4) });
+    try {
+      await tick();
+      probe.latest.current?.mouse.wheel("up");
+      await tick();
+      expect(probe.latest.current?.cursor).toBe(0);
+
+      for (let index = 0; index < 6; index += 1) {
+        probe.latest.current?.mouse.wheel("down");
+        await tick();
+      }
+      expect(probe.latest.current?.cursor).toBe(3);
+    } finally {
+      probe.stop();
+    }
+  });
+
+  test("refuses to act when a text sub-view owns the keys", async () => {
+    const confirmed: string[] = [];
+    const probe = mountProbe({
+      items: rows(3),
+      initialCursorIndex: 1,
+      navigationEnabled: false,
+      onConfirm: (key) => {
+        confirmed.push(key);
+      },
+    });
+    try {
+      await tick();
+      probe.latest.current?.mouse.activate(2);
+      probe.latest.current?.mouse.wheel("down");
+      await tick();
+      // No second path around the rule the keys obey: the arrows and `j`/`k` are
+      // the editor's here, so the click and the wheel are too.
+      expect(confirmed).toEqual([]);
+      expect(probe.latest.current?.cursor).toBe(1);
+    } finally {
+      probe.stop();
+    }
+  });
+
+  test("a click declines where Enter does: no confirm handler, nothing to run", async () => {
+    const probe = mountProbe({ items: rows(3) });
+    try {
+      await tick();
+      probe.latest.current?.mouse.activate(2);
+      await tick();
+      expect(probe.latest.current?.cursor).toBe(0);
+    } finally {
+      probe.stop();
+    }
+  });
+
+  test("the modal guard reads the focus ledger, not a render-time flag", async () => {
+    const probe = mountProbe({ items: rows(3) });
+    try {
+      await tick();
+      expect(probe.latest.current?.mouse.blocked()).toBe(false);
+
+      // A confirmation raised above the selector owns the pointer as well as the
+      // keys (《38》§19.4); the claim is module state, so the list does not have to
+      // re-render to learn about it.
+      const releaseModal = acquireInputScope("modal");
+      expect(owningInputScope()).toBe("modal");
+      expect(probe.latest.current?.mouse.blocked()).toBe(true);
+
+      releaseModal();
+      expect(probe.latest.current?.mouse.blocked()).toBe(false);
+    } finally {
+      probe.stop();
+    }
+  });
+
+  test("a modal-scoped list is not blocked by its own claim", async () => {
+    const probe = mountProbe({ items: rows(3), scope: "modal" });
+    try {
+      await tick();
+      expect(owningInputScope()).toBe("modal");
+      expect(probe.latest.current?.mouse.blocked()).toBe(false);
+    } finally {
+      probe.stop();
+    }
+  });
+
+  test("the hover area is stable across renders", async () => {
+    const probe = mountProbe({ items: rows(4) });
+    try {
+      await tick();
+      const area = probe.latest.current?.mouse.area;
+      expect(area).toBeTruthy();
+      await probe.setItems(rows(2));
+      expect(probe.latest.current?.mouse.area).toBe(area);
     } finally {
       probe.stop();
     }

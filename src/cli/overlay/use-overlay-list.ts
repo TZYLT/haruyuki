@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { owningInputScope } from "@/cli/helpers/focus-ledger";
 import type { InputScope, KeyBinding } from "@/cli/helpers/input-keys";
 import {
   useInputScopeClaim,
@@ -13,6 +14,7 @@ import {
   type OverlayListItem,
   visibleWindow,
 } from "./list-model";
+import type { OverlayListMouse } from "./list-view";
 
 /**
  * Wiring the list model and the key table to the input router.
@@ -46,6 +48,16 @@ import {
  * single-select confirmed nothing, while the multi-select confirmed the whole
  * selection from wherever the cursor stood — so the decision belongs where the
  * history is. The key is consumed either way.
+ *
+ * **The pointer rides the same policy as the keys.** `mouse` is the part of the
+ * controller the list view aims at: a click is *that row's Enter* (it moves the
+ * cursor and calls the same `onConfirm` the keyboard calls, with the row's index
+ * so it never acts on the previous frame), a wheel notch is one `↑`/`↓` step, and
+ * both are refused while a text sub-view has the keys
+ * (`navigationEnabled: false`) — the seam adds no second execution path
+ * (《38》§19.2). A list rendered without asking for a window still answers the
+ * wheel: the cursor moves and the whole list is on screen, which is what every
+ * unwindowed face had before the pointer existed.
  */
 
 type OverlayInputScope = Extract<InputScope, "overlay" | "modal">;
@@ -122,6 +134,13 @@ export interface OverlayListController {
    * the identity never has to change.
    */
   setCursor: (index: number) => void;
+  /**
+   * The pointer's half of the same seam (hover area, click, wheel). Pass it to
+   * `OverlayListView` as `mouse`: that is the whole wiring — the list view owns
+   * the geometry (it is the thing that drew the rows) and this hook owns the
+   * cursor and the confirm callback, so neither has to know the other's state.
+   */
+  mouse: OverlayListMouse;
 }
 
 export function useOverlayList(
@@ -160,6 +179,19 @@ export function useOverlayList(
   const moveTo = useCallback((index: number) => {
     setRawCursor(clampCursor(index, countRef.current));
   }, []);
+
+  const moveBy = useCallback((delta: number) => {
+    setRawCursor((prev) => clampCursor(prev + delta, countRef.current));
+  }, []);
+
+  const mouse = useListMouseController({
+    items,
+    navigationEnabled,
+    scope,
+    moveTo,
+    moveBy,
+    onConfirm,
+  });
 
   useKeyBindings(owner, [
     {
@@ -200,5 +232,85 @@ export function useOverlayList(
     current: itemAt(items, cursor),
     window: visibleWindow({ count, cursor, rows, anchor }),
     setCursor: moveTo,
+    mouse,
   };
+}
+
+/**
+ * The pointer half of the controller.
+ *
+ * It is built here rather than in `list-view.tsx` because the two callbacks it
+ * needs — the cursor and the confirm — are this hook's state; the list view only
+ * knows geometry. The callbacks read the render through refs, the same reason the
+ * key table does: the mouse handler is registered once and must act on the frame
+ * the user is looking at, not the one that was on screen when it registered.
+ *
+ * `blocked` is the overlay/modal stacking guard: a modal outranks an overlay in
+ * the focus ledger, so a selector still mounted behind one must not answer the
+ * pointer (《38》§19.4, "overlay/modal open ⇒ refuse the whole frame"). A list that
+ * *is* modal-scoped is not blocked by its own claim — it is the modal.
+ */
+function useListMouseController(options: {
+  items: readonly OverlayListItem[];
+  navigationEnabled: boolean;
+  scope: OverlayInputScope;
+  moveTo: (index: number) => void;
+  moveBy: (delta: number) => void;
+  onConfirm?: (key: string, index: number) => void;
+}): OverlayListMouse {
+  const { items, navigationEnabled, scope, moveTo, moveBy, onConfirm } =
+    options;
+  // A stable name for the hover store. `useId` is per component instance, so two
+  // lists mounted at once (a wizard stack) cannot light each other's rows.
+  const area = `overlay-list:${useId()}`;
+
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const navigationRef = useRef(navigationEnabled);
+  navigationRef.current = navigationEnabled;
+  const onConfirmRef = useRef(onConfirm);
+  onConfirmRef.current = onConfirm;
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+
+  const activate = useCallback(
+    (index: number) => {
+      // The keys are not the list's right now (a text sub-view owns them), so a
+      // click is not the row's Enter either: no second path around the rule.
+      if (!navigationRef.current) return;
+      // `Enter` declines when there is no confirm handler; a click that moved the
+      // cursor anyway would be an action Enter never had.
+      const confirm = onConfirmRef.current;
+      if (!confirm) return;
+      const list = itemsRef.current;
+      const at = clampCursor(index, list.length);
+      const item = list[at];
+      if (!item) return;
+      // §19.2: move the cursor, then call the handler the keyboard calls. Both
+      // with the clicked index — never with React state that has not landed yet.
+      moveTo(at);
+      confirm(item.key, at);
+    },
+    [moveTo],
+  );
+
+  const wheel = useCallback(
+    (direction: "up" | "down") => {
+      if (!navigationRef.current) return;
+      moveBy(direction === "up" ? -1 : 1);
+    },
+    [moveBy],
+  );
+
+  const blocked = useCallback(
+    () => owningInputScope() === "modal" && scopeRef.current !== "modal",
+    [],
+  );
+
+  // `area` is already stable; the callbacks are stable; one object identity for
+  // the life of the list keeps the list view's effect from re-registering.
+  return useMemo(
+    () => ({ area, activate, wheel, blocked }),
+    [area, activate, wheel, blocked],
+  );
 }

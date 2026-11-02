@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Text, useInput } from "ink";
+import { acquireInputScope } from "@/cli/helpers/focus-ledger";
+import { getHoverTarget, resetHoverForTests } from "@/cli/helpers/hover-store";
+import { resetMouseHandlers } from "@/cli/helpers/mouse-router";
+import { resetMouseTrackingForTests } from "@/cli/helpers/mouse-tracking";
 import {
   type MultiSelectItem,
   MultiSelectPicker,
@@ -48,7 +52,12 @@ const MULTI: MultiSelectItem[] = [
   { key: "c", label: "Gamma", description: "third" },
 ];
 
-afterEach(resetInkTtyState);
+afterEach(() => {
+  resetInkTtyState();
+  resetHoverForTests();
+  resetMouseHandlers();
+  resetMouseTrackingForTests();
+});
 
 describe("SingleSelectPicker", () => {
   test("paints the rows, the cursor and the default hint", async () => {
@@ -404,6 +413,188 @@ describe("MultiSelectPicker", () => {
       expect(painted).not.toContain("←→");
     } finally {
       plain.stop();
+    }
+  });
+});
+
+// --- The pointer seam, on the two pickers every legacy face rides ----------
+//
+// `SingleSelectPicker`/`MultiSelectPicker` are where ten pre-toolkit faces get
+// the pointer from this package: the seam is wired once in `adapters.tsx`, and
+// the assertions here are the integration — real component, real layout, real
+// routed mouse reports — rather than the list view's own geometry (which
+// `list-view.test.tsx` covers).
+
+const ESC = "\u001B";
+/** A left press / release at a cell (1-based screen coordinates). */
+const pressAt = (column: number, row: number) => `${ESC}[<0;${column};${row}M`;
+const releaseAt = (column: number, row: number) =>
+  `${ESC}[<0;${column};${row}m`;
+/** Any-motion (`1003`): the pointer moved, no button down. */
+const moveTo = (column: number, row: number) => `${ESC}[<35;${column};${row}M`;
+/** A wheel notch: 64 = up, 65 = down. */
+const wheelAt = (direction: "up" | "down", column: number, row: number) =>
+  `${ESC}[<${direction === "up" ? 64 : 65};${column};${row}M`;
+
+const TWELVE: SingleSelectItem[] = Array.from({ length: 12 }, (_, index) => ({
+  key: `k${index}`,
+  label: `Row ${index + 1}`,
+}));
+
+describe("the pickers answer the pointer", () => {
+  test("a click selects the row it landed on, not the cursor row", async () => {
+    const selected: string[] = [];
+    const picker = mountInkTty(
+      <SingleSelectPicker
+        items={SINGLE}
+        onSelect={(key) => selected.push(key)}
+        onCancel={() => {}}
+      />,
+    );
+    try {
+      // Rows are screen rows 1-4; row 2 is `Beta`, while the cursor is on `Alpha`.
+      await picker.press(pressAt(2, 2), releaseAt(2, 2));
+      expect(selected).toEqual(["b"]);
+      // The cursor moved there first, exactly as the keyboard would have.
+      expect(await cursorRow(picker, "> ")).toContain("Beta");
+    } finally {
+      picker.stop();
+    }
+  });
+
+  test("a blocked row takes the cursor and confirms nothing", async () => {
+    const selected: string[] = [];
+    const picker = mountInkTty(
+      <SingleSelectPicker
+        items={SINGLE}
+        onSelect={(key) => selected.push(key)}
+        onCancel={() => {}}
+      />,
+    );
+    try {
+      await picker.press(pressAt(2, 3), releaseAt(2, 3));
+      // Click = Enter, and Enter on `Gamma` is consumed but selects nothing.
+      expect(selected).toEqual([]);
+      expect(await cursorRow(picker, "> ")).toContain("Gamma");
+    } finally {
+      picker.stop();
+    }
+  });
+
+  test("a wheel notch moves the cursor one row, and clamps at the end", async () => {
+    const picker = mountInkTty(
+      <SingleSelectPicker
+        items={SINGLE}
+        onSelect={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    try {
+      await picker.press(wheelAt("down", 2, 1));
+      expect(await cursorRow(picker, "> ")).toContain("Beta");
+      await picker.press(wheelAt("up", 2, 2));
+      expect(await cursorRow(picker, "> ")).toContain("Alpha");
+      await picker.press(wheelAt("up", 2, 1));
+      expect(await cursorRow(picker, "> ")).toContain("Alpha");
+    } finally {
+      picker.stop();
+    }
+  });
+
+  test("the wheel below the rows is not the picker's", async () => {
+    const picker = mountInkTty(
+      <SingleSelectPicker
+        items={SINGLE}
+        onSelect={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    try {
+      // Row 6 is the hint line (`SingleSelectPicker`'s footer), not a row.
+      await picker.press(wheelAt("down", 2, 6));
+      expect(await cursorRow(picker, "> ")).toContain("Alpha");
+    } finally {
+      picker.stop();
+    }
+  });
+
+  test("a windowed picker maps its indicator rows correctly", async () => {
+    const selected: string[] = [];
+    const picker = mountInkTty(
+      <SingleSelectPicker
+        items={TWELVE}
+        rows={4}
+        onSelect={(key) => selected.push(key)}
+        onCancel={() => {}}
+      />,
+    );
+    try {
+      // The window reserves `↑ 0 more` above the rows: screen row 1 is chrome,
+      // and the items start on screen row 2.
+      await picker.press(pressAt(2, 1), releaseAt(2, 1));
+      expect(selected).toEqual([]);
+      await picker.press(pressAt(2, 3), releaseAt(2, 3));
+      expect(selected).toEqual(["k1"]);
+    } finally {
+      picker.stop();
+    }
+  });
+
+  test("hover targets the row under the pointer and clears on the hint line", async () => {
+    const picker = mountInkTty(
+      <SingleSelectPicker
+        items={SINGLE}
+        onSelect={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    try {
+      await picker.press(moveTo(2, 2));
+      expect(getHoverTarget()?.index).toBe(1);
+      await picker.press(moveTo(2, 6));
+      expect(getHoverTarget()).toBeNull();
+    } finally {
+      picker.stop();
+    }
+  });
+
+  test("a multi-select click is Enter: it confirms the selection", async () => {
+    const confirmed: string[][] = [];
+    const picker = mountInkTty(
+      <MultiSelectPicker
+        items={MULTI}
+        selected={new Set(["a", "c"])}
+        onConfirm={(keys) => confirmed.push(keys)}
+        onCancel={() => {}}
+      />,
+    );
+    try {
+      await picker.press(pressAt(2, 2), releaseAt(2, 2));
+      // Enter anywhere on this picker confirms the checkbox set in list order.
+      expect(confirmed).toEqual([["a", "c"]]);
+    } finally {
+      picker.stop();
+    }
+  });
+
+  test("a modal above the picker refuses the click and the wheel", async () => {
+    const selected: string[] = [];
+    const releaseModal = acquireInputScope("modal");
+    const picker = mountInkTty(
+      <SingleSelectPicker
+        items={SINGLE}
+        onSelect={(key) => selected.push(key)}
+        onCancel={() => {}}
+      />,
+    );
+    try {
+      await picker.press(pressAt(2, 2), releaseAt(2, 2));
+      await picker.press(wheelAt("down", 2, 1));
+      expect(selected).toEqual([]);
+      expect(await cursorRow(picker, "> ")).toContain("Alpha");
+    } finally {
+      picker.stop();
+      releaseModal();
     }
   });
 });
