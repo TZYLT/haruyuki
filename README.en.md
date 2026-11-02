@@ -109,8 +109,8 @@ bun run build        # produces haruyuki.js at the repo root (gitignored)
 node ./haruyuki.js   # start the interactive UI
 ```
 
-> The build output is a **single-file bundle** (~14.8 MiB) with production dependencies inlined;
-> `--version` should print `0.5.0 (Haruyuki)`. The number comes from `package.json`'s `version`
+> The build output is a **single-file bundle** (~15.0 MiB) with production dependencies inlined;
+> `--version` should print `0.5.1 (Haruyuki)`. The number comes from `package.json`'s `version`
 > and is **inlined at build time**, so changing it requires a rebuild.
 
 ### Option 2 — the npm package (recommended)
@@ -223,6 +223,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
+| `0.5.1` | - | **TUI display and operation pass I**: dream status line, multi-level command completion, picker mouse support, settings gaps, usage and sidebar figures, the `+` overview page, startup guidance and console-font protection. |
 | `0.5.0` | + | **Dreaming**: The agent organizes its memories during idle time to maintain a stable and tidy memory library. Please use this experimental functions with caution. |
 | `0.4.5` | + | **Resident scheduling**: The entire scheduling task system has been rewritten to automatically launch scheduled tasks when the software is not running, ensuring that timed tasks can truly execute on schedule, provided the computer remains powered on. |
 | `0.4.4` | + | **Compaction rework**: Enable automatic processing of abstracts and topic tags before compression, making topic-inspired compression truly practical and providing queries for topics and corresponding original texts. |
