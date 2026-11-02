@@ -1,5 +1,5 @@
 # wander — dream work manual
-## 目标与边界
+## Goal and boundaries
 
 wander is generation aimed at the future: ideas, drafts, something usable. It is the lowest priority,
 allowed to fail, allowed to be discarded. Its reason to exist is curiosity nobody asked for — it is not a
@@ -9,14 +9,14 @@ wander may grow one record in place, add a direction or a small draft, and leave
 memory. It may not judge the user's choices, attribute psychology, give life advice, nudge tasks, write a
 "conclusion", or perform any irreversible or out-of-scope action.
 
-## 工作分级（各档自己的名字）
+## Work levels
 
 Priority: **idea class > plan class > free class**.
 - **Idea class** — a record the user left half-thought ("I have not figured this out", "leave it for now").
 - **Plan class** — a direction the user sketched but did not decide; give direction only, no schedule.
 - **Free class** — the fallback: it must attach to one concrete record.
 
-## 工作流（S1…S5 或等价）
+## Workflow (S0–S5 or equivalent)
 
 ### S0 — semantic entry (no keyword table)
 
@@ -41,8 +41,10 @@ from S0. Do not mix two records in one run.
 ### S2 — grow in place
 
 Write back into the chosen record — a dated section or paragraph. Do not create a structured ledger:
-memory itself is the ledger. Marker: `**(2026-11-01) 梦游漫游**：……` (type + date). think's marker is
-`梦游猜想`; neither writes "evidence", because the record is right there.
+memory itself is the ledger. Mark it as what it is: `**(2026-11-01) 梦游漫游**：……` (what it is + date), so
+a later reader can tell a direction from a record. Do not write an "evidence" section — the record this
+grows from is right there — and keep the source modality in the prose: these are your ideas, not the
+user's words.
 
 ### S3 — directions and decision points
 
@@ -63,7 +65,7 @@ different angle; do not repeat it. If the record is exhausted, say so and stop.
 wander runs last and uses the remaining budget. Stop when it is written — do not pad to use the budget. If
 less than 5k tokens remain, skip the tier. If the output is weak, stop early and say so.
 
-## 检查清单
+## Checklist
 
 - [ ] The record was chosen by meaning, not by a keyword match.
 - [ ] The class (idea / plan / free) is stated, and the choice reason is in the report.
@@ -75,7 +77,7 @@ less than 5k tokens remain, skip the tier. If the output is weak, stop early and
 - [ ] Nothing irreversible, no judgement of the user, no life advice.
 - [ ] The report is ≤5 lines.
 
-## 常见陷阱
+## Common traps
 
 - ❌ Grepping a keyword list to find growable records. ✅ Judge by meaning; the examples are the anchor.
 - ❌ Turning wander into a fifth tidy. ✅ No structure, no cleanup; grow one record.
@@ -84,7 +86,7 @@ less than 5k tokens remain, skip the tier. If the output is weak, stop early and
 - ❌ Padding to use the remaining budget. ✅ Stop when it is written.
 - ❌ Judging the user's choices or attributing psychology. ✅ Stay with the record's content.
 
-## 示例
+## Example
 
 The user wrote on 2026-10-28: "the memory index could maybe become a graph, not sure, leave it for now".
 That is an idea-class record. I append under it: "**(2026-11-01) 梦游漫游**：two directions — (a) a link
@@ -93,7 +95,7 @@ but stale quickly. Trade-off: (a) needs no maintenance, (b) reads better. 需要
 is for navigation or for finding gaps." No new file. Report: record, class, reason, the two directions,
 and one line for the decision point — 4 lines.
 
-## 本轮执行
+## This turn
 
 This turn you handle **wander only**. From what this run already read, choose one growable record by
 meaning (S0), declare its class and reason (S1), and grow it in place with the `梦游漫游` marker (S2). Give

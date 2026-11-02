@@ -1,5 +1,5 @@
 # tidy — dream work manual
-## 目标与边界
+## Goal and boundaries
 
 tidy is the only tier that tidies. Its job is to leave the memory repository measurably better: fewer dangling links,
 complete indexes, no oversized files, and a written record of what changed and what is left. It is the highest-value tier
@@ -17,7 +17,7 @@ segments with a `next:` resume point.
 Read the layout block first: every index rule below depends on the runtime format and the core set. The rest of the seed
 is ordered for reading — manifest, changes, decay, core cost, deferred plan, notes.
 
-## 工作分级（各档自己的名字）
+## Work levels
 
 **L1 — mechanical repair** (low risk, high certainty): dangling links, missing `MEMORY.md` indexes, missing or invalid
 frontmatter, duplicate headings, wiki-links that point at nothing. Do these first: they are cheap, verifiable, and never
@@ -29,7 +29,7 @@ rebuilding a timeline. Every move must update the indexes and links in the same 
 **L3 — content disposal** (high risk, needs evidence): deleting or rewriting content, resolving a contradiction,
 archiving. Evidence goes in the report and git history is the rollback point; check references before deleting anything.
 
-## 工作流（S1…S5 或等价）
+## Workflow (S0–S4 or equivalent)
 
 The decay table is a reading list, not a to-do list. Four columns: `path | decay | size | note`. `decay` is a sort key —
 higher means staler and/or more important, so look there sooner, but do not follow it blindly. `size` is the character
@@ -94,7 +94,7 @@ characters but not forced; every block stays logically complete. Evidence: chara
 
 **4.5 Contradiction / doubt** — Detect: the same entity with different values, unsourced assertions, clearly outdated
 statements. Act: order the evidence — sourced over unsourced, original conversation findable over not, dated over undated,
-newer over older. If none wins, keep both, mark `置信度: 低 / 待验证`, and add the date. Evidence: quoted source / conversation
+newer over older. If none wins, keep both, mark them as low confidence and unverified, and add the date. Evidence: quoted source / conversation
 id.
 
 **4.6 Time and source** — Detect: event order unclear, or an as-of date is missing and changes the reading. Act: use
@@ -133,13 +133,13 @@ report it and do not fix it.
 v2 adds two: build the index before the file, and commit a new file together with its index line. `shared-memory` mode:
 report only, do not restructure, until the conflict semantics are defined.
 
-### Done definition (DoD)
+### Done definition
 
 - At least one commit this run (or an honest "no work" report), plus index updates and the report.
 - The decay distribution improved: covered files' decay went down, or a `DreamReviewMark` with evidence was left.
 - The report contains the three lists: `consumed` / `still-deferred` (with attempts + 1) / `blocked`.
 
-## 检查清单
+## Checklist
 
 - [ ] The entry point was notes first, then decay top-1; I did not pick a file at random.
 - [ ] The unit stayed within the target + 5 related files and 60k characters.
@@ -151,7 +151,7 @@ report only, do not restructure, until the conflict semantics are defined.
 - [ ] Deletions and rewrites have evidence in the report.
 - [ ] `next` / `deferred` / `blocked` are recorded, and each unconsumed item got `attempts + 1`.
 
-## 常见陷阱
+## Common traps
 
 - ❌ Batch-renaming files, which breaks every link at once. ✅ Do not rename: split out a new file and leave a stub, then
   update the index.
@@ -161,7 +161,7 @@ report only, do not restructure, until the conflict semantics are defined.
 - ❌ Treating the decay table as a to-do list and only ever fixing the top row. ✅ Use it as a reading order; review marks
   and `next` move the queue on.
 
-## 示例
+## Example
 
 A short, competent run on a v1 repository: the decay top-1 is `system/human.md` with `note: "next: from 4.3"` and the seed
 reports 2 dangling links and 3 files over 10k characters. S0 takes the file; S1 estimates 9k characters of work against a
@@ -170,7 +170,7 @@ card 4.4 splits the file on topic boundaries into `system/human.md` (7.2k) and `
 after one unit. Report evidence: "system/human.md 14,100 → 7,200 chars; archive/core-notes.md added; both INDEX.md links
 verified; dangling links 0/0".
 
-## 本轮执行
+## This turn
 
 This turn you handle **tidy only**. Start at S0 with the seed's pending notes; if there are none, take the decay top-1.
 Estimate the effort before reading deeply (S1), repair only the index chain you touch (S2), and process one unit at a time
