@@ -324,9 +324,10 @@ describe("the agent level (G-8)", () => {
       expect(rows[0]).toContain("↑↓ move");
       // "内容与页头之间空一行".
       expect(rows[1]?.trim()).toBe("");
-      // R-10.2: `New Agent` is the fixed first row; the cursor starts on it.
+      // R-10.2: `New Agent` is the fixed first row; the cursor opens on the
+      // first real agent (user report, 2026-11-03), not on the creation row.
       expect(rows[2]).toContain("New Agent");
-      expect(cursorLabel(rows)).toContain("New Agent");
+      expect(cursorLabel(rows)).toContain("Alpha");
 
       const text = rows.join("\n");
       expect(text).toContain("Alpha");
@@ -376,7 +377,9 @@ describe("the agent level (G-8)", () => {
       expect(second[titleIndex + 1]).toContain("the last user words");
       expect(second[titleIndex + 2]).toContain("the last agent words");
       expect(second[titleIndex + 3]?.trim()).toBe("");
-      expect(cursorLabel(second)).toContain("New Session");
+      // The cursor opens on the newest conversation, not on `New Session`
+      // above it (user report, 2026-11-03).
+      expect(cursorLabel(second)).toContain("Team standup");
     } finally {
       tty.stop();
     }

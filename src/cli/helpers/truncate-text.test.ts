@@ -4,7 +4,7 @@ import {
   setAmbiguousWidth,
   terminalTextWidth,
 } from "@/cli/helpers/char-width";
-import { truncateText } from "@/cli/helpers/truncate-text";
+import { padToWidth, truncateText } from "@/cli/helpers/truncate-text";
 
 afterEach(() => {
   resetAmbiguousWidthForTests();
@@ -75,18 +75,23 @@ describe("truncateText", () => {
 /**
  * The row shape `app/pages/page-frame.tsx` composes: two leading cells, a fixed
  * label column, a fixed scope column, then the value clipped to what is left. The
- * value is where a `—`/`·` used to drift the row one column past the frame.
+ * value is where a `—`/`·` used to drift the row one column past the frame; the
+ * label is where a code-unit `padEnd` used to widen it by half again.
  */
-describe("a page row built with truncateText", () => {
+describe("a page row built with truncateText and padToWidth", () => {
   const WIDTH = 80;
   const LABEL_COLUMN = 26;
   const SCOPE_COLUMN = 11;
 
-  function pageRow(value: string): string {
-    const label = truncateText("Appearance", LABEL_COLUMN - 1).padEnd(
+  function pageRow(value: string, labelText = "Appearance"): string {
+    const label = padToWidth(
+      truncateText(labelText, LABEL_COLUMN - 1),
       LABEL_COLUMN,
     );
-    const hint = truncateText("type a path", SCOPE_COLUMN).padEnd(SCOPE_COLUMN);
+    const hint = padToWidth(
+      truncateText("type a path", SCOPE_COLUMN),
+      SCOPE_COLUMN,
+    );
     const available = Math.max(0, WIDTH - 2 - LABEL_COLUMN - SCOPE_COLUMN);
     return `  ${label}${hint}${truncateText(value, available)}`;
   }
@@ -102,5 +107,27 @@ describe("a page row built with truncateText", () => {
   test("stays inside the frame when they are one column", () => {
     withAmbiguousWidth(1);
     expect(terminalTextWidth(pageRow(value))).toBeLessThanOrEqual(WIDTH);
+  });
+
+  test("a wide label keeps the row inside the frame, hovered or not", () => {
+    // A 12-character CJK title is 24 columns and 12 code units. Padding it with
+    // `padEnd` would add 14 spaces instead of 2 and put every right-hand cell
+    // past the band, which wraps the row once a hover background is filled.
+    const row = pageRow(value, "中午好，你可以啥也不记得吗");
+    expect(terminalTextWidth(row)).toBeLessThanOrEqual(WIDTH);
+    expect(row).toContain("中午好");
+  });
+});
+
+describe("padToWidth", () => {
+  test("pads by terminal columns, not code units", () => {
+    expect(padToWidth("ab", 5)).toBe("ab   ");
+    expect(terminalTextWidth(padToWidth("中文", 6))).toBe(6);
+    expect(padToWidth("中文", 6)).toBe("中文  ");
+  });
+
+  test("text that already fills or overflows the cell is unchanged", () => {
+    expect(padToWidth("abc", 3)).toBe("abc");
+    expect(padToWidth("abcdef", 3)).toBe("abcdef");
   });
 });

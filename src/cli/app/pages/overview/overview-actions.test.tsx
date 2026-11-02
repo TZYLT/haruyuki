@@ -52,7 +52,7 @@ const CURRENT_CONVERSATION = "conv-current";
 const AGENT_NAME = "Alpha";
 
 const ESC = "\u001B";
-const DOWN = "\u001B[B";
+const UP = "\u001B[A";
 const ENTER = "\r";
 
 /** Long enough for a fake read to land and Ink to paint the frame after it. */
@@ -121,9 +121,17 @@ function mount(
   });
 }
 
-/** The New Agent row is the page's first item, so the cursor starts on it. */
+/**
+ * The page opens its cursor on the first real agent (user report, 2026-11-03),
+ * so the fixed New Agent row is one `↑` above the opening position.
+ */
 async function openNameEditor(tty: InkTty): Promise<void> {
   await settle();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (cursorLabel(await tty.rows())?.startsWith("New Agent")) break;
+    await tty.press(UP);
+    await settle(60);
+  }
   await tty.press(ENTER);
   await settle();
 }
@@ -134,17 +142,9 @@ function cursorLabel(rows: readonly string[]): string | undefined {
   return line?.slice(3);
 }
 
-/** ↓ to the agent row, Enter: the conversation level, whose first row is New Session. */
+/** Enter on the opening cursor (the first agent) opens its conversation level. */
 async function openConversationLevel(tty: InkTty): Promise<void> {
   await settle();
-  // Step until the cursor actually moves: a single press can be lost while the
-  // mount settles, and asserting on the frame means waiting for the frame.
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const before = cursorLabel(await tty.rows());
-    await tty.press(DOWN);
-    await settle(60);
-    if (cursorLabel(await tty.rows()) !== before) break;
-  }
   await tty.press(ENTER);
   await settle();
 }

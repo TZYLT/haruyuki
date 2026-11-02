@@ -32,3 +32,22 @@ export function truncateText(text: string, maxWidth: number): string {
   }
   return out + suffix;
 }
+
+/**
+ * Pad text with spaces to `width` terminal columns.
+ *
+ * `String.prototype.padEnd` counts UTF-16 code units, so a wide label is padded
+ * as if each CJK character were one column: a 12-character title occupies 24
+ * columns but `padEnd(26)` adds 14 spaces instead of 2, every column to its
+ * right shifts, and a hover background filled to the nominal width pushes the
+ * row past the band — an over-wide first line wraps, costing a physical row the
+ * window arithmetic never budgeted. The cell width is the terminal's, the same
+ * answer [truncateText] uses, so the two cannot disagree.
+ *
+ * Text already at or past `width` is returned unchanged: this pads, it does not
+ * clip (truncate first when both are wanted).
+ */
+export function padToWidth(text: string, width: number): string {
+  const missing = width - terminalTextWidth(text);
+  return missing > 0 ? text + " ".repeat(missing) : text;
+}

@@ -28,7 +28,7 @@ import { terminalTextWidth } from "@/cli/helpers/char-width";
 import { useRowHovered } from "@/cli/helpers/hover-store";
 import type { KeyBinding } from "@/cli/helpers/input-keys";
 import { registerMouseHandler } from "@/cli/helpers/mouse-router";
-import { truncateText } from "@/cli/helpers/truncate-text";
+import { padToWidth, truncateText } from "@/cli/helpers/truncate-text";
 import { useMouseRows } from "@/cli/helpers/use-mouse-rows";
 import {
   useInputScopeClaim,
@@ -166,7 +166,9 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
       : body.rows;
 
   const [offset, setOffset] = useState(0);
-  const [cursorRow, setCursorRow] = useState(() => firstSelectable(rows));
+  const [cursorRow, setCursorRow] = useState(() =>
+    seatCursor(rows, body.initialCursor),
+  );
   // A body whose rows changed under the cursor (a rule deleted, a value row gone)
   // must not leave the cursor past the end: `clampSelectableRow` moves it to the
   // nearest row the user could have meant.
@@ -189,11 +191,16 @@ export function PageFrame({ view, body, actions, headerSlot }: PageFrameProps) {
   // page that writes settings — do not re-seat it.
   const latestRows = useRef<readonly PageRow[]>(rows);
   latestRows.current = rows;
+  // The page's preferred opening row is read through a ref for the same reason:
+  // the effect re-seats the cursor on a screen change, not whenever a new
+  // callback identity arrives (an inline callback changes every render).
+  const latestInitialCursor = useRef(body.initialCursor);
+  latestInitialCursor.current = body.initialCursor;
   const screen = body.screen;
   useEffect(() => {
     // `screen` is the trigger, not data: the rows come through the ref.
     void screen;
-    setCursorRow(firstSelectable(latestRows.current));
+    setCursorRow(seatCursor(latestRows.current, latestInitialCursor.current));
     setOffset(0);
   }, [screen]);
 
@@ -579,12 +586,15 @@ function PageRowLine({
     return <Text dimColor={row.dim}>{row.text === "" ? " " : row.text}</Text>;
   }
 
-  const label = truncateText(row.label, LABEL_COLUMN - 1).padEnd(LABEL_COLUMN);
+  const label = padToWidth(
+    truncateText(row.label, LABEL_COLUMN - 1),
+    LABEL_COLUMN,
+  );
   // The scope column is reserved whenever the row has a value, so values line up
   // across item rows and the group rows that point at a screen.
   const reserveScope = row.hint !== undefined || row.value !== undefined;
   const hint = reserveScope
-    ? truncateText(row.hint ?? "", SCOPE_COLUMN).padEnd(SCOPE_COLUMN)
+    ? padToWidth(truncateText(row.hint ?? "", SCOPE_COLUMN), SCOPE_COLUMN)
     : "";
   const key = row.key === undefined ? "" : `  ${row.key}`;
   const available = Math.max(
@@ -683,6 +693,24 @@ function PageRowLine({
 function firstSelectable(rows: readonly PageRow[]): number {
   const index = rows.findIndex((row) => row.kind === "item" && !row.disabled);
   return index < 0 ? 0 : index;
+}
+
+/**
+ * Where a screen's cursor opens.
+ *
+ * A page that names an opening row (`PageBody.initialCursor`) gets that row,
+ * clamped to the nearest selectable one so a stale preference cannot point the
+ * cursor at prose; a page that does not opens on its first selectable row, the
+ * pre-T-10 behaviour every settings screen expects.
+ */
+function seatCursor(
+  rows: readonly PageRow[],
+  preference: ((rows: readonly PageRow[]) => number) | undefined,
+): number {
+  const preferred = preference?.(rows) ?? -1;
+  return preferred >= 0
+    ? clampSelectableRow(rows, preferred)
+    : firstSelectable(rows);
 }
 
 /**

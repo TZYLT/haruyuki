@@ -526,6 +526,48 @@ describe("the multi-line page's pointer", () => {
     }
   });
 
+  test("a wide label keeps its value cells on the row when the pointer adds the hover fill", async () => {
+    // The label cell is padded to `LABEL_COLUMN` terminal columns. Padding by
+    // UTF-16 code units instead would make a CJK title ~14 columns wider than
+    // its cell; the hover background, filled to the nominal row width, then
+    // pushed the value past the band and wrapped it onto a second line.
+    const page = mountInkTty(
+      <ChromeHeightContext.Provider value={8}>
+        <PageFrame
+          view={{ ...DEFAULT_PAGE_PROPS, conversationId: "M6 shell" }}
+          body={{
+            title: "Overview",
+            rows: [
+              { kind: "item", id: "alpha", label: "Alpha", value: "3 convs" },
+              {
+                kind: "item",
+                id: "cjk",
+                label: "中午好，你可以啥也不记得吗",
+                hint: "5m ago",
+                value: "created 5m ago",
+                lines: ["  last user words", "  last agent words", ""],
+              },
+            ],
+          }}
+        />
+      </ChromeHeightContext.Provider>,
+      { columns: 80, rows: 24 },
+    );
+    try {
+      // The cursor opens on Alpha, so the second item is hovered, not focused:
+      // the background is what the pointer adds, and what used to wrap the row.
+      await page.press(moveTo(2, screenRowOf(await page.rows(), "中午好")));
+      const rows = await page.rows();
+      const title = rows.findIndex((row) => row.includes("中午好"));
+      expect(title).toBeGreaterThanOrEqual(0);
+      expect(rows[title]).toContain("created 5m ago");
+      expect(rows[title + 1]).toContain("last user words");
+      expect(rows[title + 2]).toContain("last agent words");
+    } finally {
+      page.stop();
+    }
+  });
+
   test("in a scrolled window the marker row is not a target and clicks stay in step with ↑↓", async () => {
     // W-01's registration: the measured block includes the `↑ N more` marker, so
     // without `firstRow` every pointer row answered the item above it. On this

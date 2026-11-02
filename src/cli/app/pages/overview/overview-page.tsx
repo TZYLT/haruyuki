@@ -38,6 +38,8 @@ import {
 import {
   buildAgentRows,
   buildConversationRows,
+  NEW_AGENT_ROW_ID,
+  NEW_SESSION_ROW_ID,
   overviewRowTarget,
 } from "./overview-rows";
 import type { OverviewSnapshot } from "./overview-types";
@@ -533,13 +535,38 @@ export function OverviewPage(view: AppViewProps) {
       : [BLANK_ROW, ...built];
   };
 
+  // The three states the cursor has to be seated in: the first read, a failed
+  // read (one note, no entries) and the list itself.
+  const dataState = failed ? "failed" : snapshot === null ? "loading" : "ready";
+
   const body: PageBody = {
     title: "Agents",
-    // One screen per level: entering a conversation list starts its cursor at
-    // the top and returns the scroll offset, and coming back starts the agent
-    // list at its own first row.
+    // One screen per level: entering a conversation list starts its cursor on
+    // that level's first entry and returns the scroll offset, and coming back
+    // starts the agent list at its own first entry.
+    //
+    // The data readiness is part of the screen identity: the first frame is the
+    // loading note, and the cursor can only be seated on a real entry once the
+    // snapshot has painted. Without this the list would keep the cursor the
+    // loading state chose (row 0) instead of opening on the newest entry.
     screen:
-      level.kind === "agents" ? "agents" : `conversations:${level.agentId}`,
+      level.kind === "agents"
+        ? `agents:${dataState}`
+        : `conversations:${level.agentId}:${dataState}`,
+    // Both levels open on their first *entry*, not on the fixed `New Agent` /
+    // `New Session` action above it (user report, 2026-11-03): a reflexive
+    // Enter on the `+` page used to open a creation form or `/new`, which is
+    // the one row here a user is least likely to mean by accident. An empty
+    // level has only the New row, and the frame falls back to it.
+    initialCursor: (rows) => {
+      const entry = rows.findIndex(
+        (row) =>
+          row.kind === "item" &&
+          row.id !== NEW_AGENT_ROW_ID &&
+          row.id !== NEW_SESSION_ROW_ID,
+      );
+      return entry < 0 ? 0 : entry;
+    },
     rows: (geometry) => rowsFor(geometry.width),
   };
 

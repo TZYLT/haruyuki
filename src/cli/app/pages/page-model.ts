@@ -104,6 +104,19 @@ export type PageBody = {
    */
   screen?: string;
   /**
+   * Where the cursor opens on a screen (T-10 follow-up).
+   *
+   * Returns a row index, or a negative number to mean "the first selectable
+   * row" (the default). A page whose first selectable row is a *creation*
+   * action — the overview's `New Agent` / `New Session` — opens on the first
+   * real entry instead, so a reflexive `Enter` cannot create something the user
+   * did not ask for. The callback runs when a screen is entered (and when the
+   * page changes `screen` because its data landed), never on every render: it
+   * reads the rows handed to it, and the index is clamped to the nearest
+   * selectable row.
+   */
+  initialCursor?: (rows: readonly PageRow[]) => number;
+  /**
    * Rows to draw, or a function that builds them from the room available.
    *
    * A function because the Usage screens lay themselves out to the terminal
