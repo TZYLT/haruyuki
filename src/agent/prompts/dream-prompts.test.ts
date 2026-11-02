@@ -1,11 +1,15 @@
 /**
- * Dream prompt contract (F-06 M3 / 46-6-Fix-A W10).
+ * Dream prompt contract (F-06 M3 / 46-6-Fix-A W10; T-09 P2 anchor update).
  *
  * The five working manuals are model-facing contract text. Their fixed `## `
  * headings are a code anchor as much as prose — `dream-run-prompt.ts` slices
- * later turns on `## 本轮执行` and `## 检查清单` — and their line budgets keep
+ * later turns on `## This turn` and `## Checklist` — and their line budgets keep
  * the first turn of a run at the size the design measured (250–370 lines). The
  * placeholders are filled by the harness, never by the manual.
+ *
+ * The report template inside `manual-shared.md` keeps its original headings
+ * (mostly Chinese, inside a fenced block); they are pinned as written and are
+ * not part of the manual-heading English rework.
  *
  * The retired run-level templates (`dream-task.md`, `dream-tiers.md`) were
  * folded into `manual-shared.md` / the tier manuals in W11 and are deleted;
@@ -17,6 +21,26 @@ import manualTask from "@/agent/prompts/dream/manual-task.md";
 import manualThink from "@/agent/prompts/dream/manual-think.md";
 import manualTidy from "@/agent/prompts/dream/manual-tidy.md";
 import manualWander from "@/agent/prompts/dream/manual-wander.md";
+
+const TIER_NAMES = ["tidy", "think", "task", "wander"] as const;
+type TierName = (typeof TIER_NAMES)[number];
+
+const TIER_MANUALS: Record<TierName, string> = {
+  tidy: manualTidy,
+  think: manualThink,
+  task: manualTask,
+  wander: manualWander,
+};
+
+const DREAM_MANUALS: Record<string, string> = {
+  shared: manualShared,
+  ...TIER_MANUALS,
+};
+
+/** Markdown wraps model-facing prose; match it as one line. */
+function flatten(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
 
 describe("dream shared manual · run-wide rules", () => {
   test("the run is one hidden conversation, one tier per turn", () => {
@@ -65,27 +89,56 @@ function manualLineCount(text: string): number {
   return text.replace(/\n$/, "").split("\n").length;
 }
 
-const TIER_MANUAL_ANCHORS = [
-  "## 目标与边界",
-  "## 工作分级（各档自己的名字）",
-  "## 工作流（S1…S5 或等价）",
-  "## 检查清单",
-  "## 常见陷阱",
-  "## 示例",
-  "## 本轮执行",
-] as const;
-
-const TIER_MANUALS: Record<string, string> = {
-  tidy: manualTidy,
-  think: manualThink,
-  task: manualTask,
-  wander: manualWander,
+/**
+ * The tier manuals' fixed `## ` headings, in document order. The first two are
+ * shared by every tier; the workflow heading names the tier's own steps, and
+ * think has one extra section before the checklist.
+ */
+const TIER_MANUAL_ANCHORS: Record<TierName, readonly string[]> = {
+  tidy: [
+    "## Goal and boundaries",
+    "## Work levels",
+    "## Workflow (S0–S4 or equivalent)",
+    "## Checklist",
+    "## Common traps",
+    "## Example",
+    "## This turn",
+  ],
+  think: [
+    "## Goal and boundaries",
+    "## Work levels",
+    "## Workflow (S0–S7 or equivalent)",
+    "## Voice and closing",
+    "## Checklist",
+    "## Common traps",
+    "## Example",
+    "## This turn",
+  ],
+  task: [
+    "## Goal and boundaries",
+    "## Work levels",
+    "## Workflow (S0–S5 or equivalent)",
+    "## Checklist",
+    "## Common traps",
+    "## Example",
+    "## This turn",
+  ],
+  wander: [
+    "## Goal and boundaries",
+    "## Work levels",
+    "## Workflow (S0–S5 or equivalent)",
+    "## Checklist",
+    "## Common traps",
+    "## Example",
+    "## This turn",
+  ],
 };
 
 describe("dream tier manuals", () => {
-  for (const [tier, text] of Object.entries(TIER_MANUALS)) {
+  for (const tier of TIER_NAMES) {
+    const text = TIER_MANUALS[tier];
     test(`${tier}: every fixed section anchor is present once and in order`, () => {
-      const positions = TIER_MANUAL_ANCHORS.map((anchor) => {
+      const positions = TIER_MANUAL_ANCHORS[tier].map((anchor) => {
         expect(text.split(anchor).length - 1).toBe(1);
         return text.indexOf(anchor);
       });
@@ -97,13 +150,26 @@ describe("dream tier manuals", () => {
     });
   }
 
+  test("every tier manual carries both later-turn anchors exactly once", () => {
+    for (const tier of TIER_NAMES) {
+      const text = TIER_MANUALS[tier];
+      for (const anchor of ["## This turn", "## Checklist"]) {
+        expect({ tier, anchor, count: text.split(anchor).length - 1 }).toEqual({
+          tier,
+          anchor,
+          count: 1,
+        });
+      }
+    }
+  });
+
   test("the line budgets match the design", () => {
-    expect(manualLineCount(manualShared)).toBeGreaterThanOrEqual(100);
-    expect(manualLineCount(manualShared)).toBeLessThanOrEqual(140);
+    expect(manualLineCount(manualShared)).toBeGreaterThanOrEqual(125);
+    expect(manualLineCount(manualShared)).toBeLessThanOrEqual(170);
     expect(manualLineCount(manualTidy)).toBeGreaterThanOrEqual(120);
-    expect(manualLineCount(manualTidy)).toBeLessThanOrEqual(180);
+    expect(manualLineCount(manualTidy)).toBeLessThanOrEqual(190);
     expect(manualLineCount(manualThink)).toBeGreaterThanOrEqual(100);
-    expect(manualLineCount(manualThink)).toBeLessThanOrEqual(160);
+    expect(manualLineCount(manualThink)).toBeLessThanOrEqual(170);
     expect(manualLineCount(manualTask)).toBeGreaterThanOrEqual(85);
     expect(manualLineCount(manualTask)).toBeLessThanOrEqual(125);
     expect(manualLineCount(manualWander)).toBeGreaterThanOrEqual(85);
@@ -114,14 +180,14 @@ describe("dream tier manuals", () => {
 describe("dream shared manual", () => {
   test("carries its own section anchors", () => {
     for (const anchor of [
-      "## 你是谁、这次 run 是什么",
-      "## 无人值守的硬规矩",
-      "## 工具面",
-      "## 提交规范",
-      "## 报告模板",
-      "## 什么时候停",
-      "## 质量自检总则",
-      "## 跨 tier 的常见陷阱",
+      "## Who you are and what this run is",
+      "## Hard rules for an unattended run",
+      "## Tool surface",
+      "## Commit rules",
+      "## Report template",
+      "## When to stop",
+      "## Self-check basics",
+      "## Cross-tier traps",
     ]) {
       expect(manualShared.split(anchor).length - 1).toBe(1);
     }
@@ -142,8 +208,14 @@ describe("dream shared manual", () => {
     ]);
   });
 
-  test("carries the report template's nine sections", () => {
-    for (const heading of [
+  test("keeps the report template's nine headings verbatim, in order", () => {
+    // The template is the one place that stays in its original language; it is
+    // pinned as written so a formatting rewrite cannot silently change the
+    // report the harness commits.
+    const match = /```markdown\n([\s\S]*?)```/.exec(manualShared);
+    expect(match).not.toBeNull();
+    const template = match?.[1] ?? "";
+    const headings = [
       "## 概览",
       "## 工作流与结果",
       "## 改动",
@@ -153,9 +225,12 @@ describe("dream shared manual", () => {
       "## Parked ideas",
       "## Notes 回应",
       "## 遗留与风险",
-    ]) {
-      expect(manualShared).toContain(heading);
-    }
+    ];
+    const positions = headings.map((heading) => {
+      expect(template).toContain(heading);
+      return template.indexOf(heading);
+    });
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
   });
 
   test("the commit prefix belongs to the harness, not to the reason", () => {
@@ -172,6 +247,7 @@ describe("dream shared manual", () => {
       "This manual is in English; that is not a reason to",
     );
     expect(manualShared).toContain("write English into memory");
+    expect(manualShared).toContain("Do not mix languages inside one file");
     // 2. Persona: one identity, first person.
     expect(manualShared).toContain("first person");
     expect(manualShared).toContain("same identity, same persona");
@@ -182,6 +258,51 @@ describe("dream shared manual", () => {
     expect(manualShared).toContain(
       "refuse, write down why, and wait for the user",
     );
+  });
+
+  test("the English-slug naming rule is a soft rule that yields to the user", () => {
+    const flat = flatten(manualShared);
+    expect(flat).toContain("English ASCII slug by default — a soft rule");
+    expect(flat).toContain(
+      "a naming requirement from the user or the project wins",
+    );
+    expect(flat).toContain(
+      "Body text, headings and `description` follow the user's working language",
+    );
+    expect(flat).toContain("A file that already exists keeps the name it has");
+  });
+});
+
+/**
+ * Retired state markers from the old think/wander templates. The report
+ * template's own vocabulary is not covered here; this is the memory-content
+ * marking scheme the rewrite removed.
+ */
+const RETIRED_DREAM_MARKERS = /梦游猜想|【事实】|【未解】|置信度|DoD/;
+
+describe("dream manuals · retired vocabulary", () => {
+  test("no retired state marker survives in any dream manual", () => {
+    const offenders = Object.entries(DREAM_MANUALS)
+      .filter(([, text]) => RETIRED_DREAM_MARKERS.test(text))
+      .map(([name]) => name);
+    expect(offenders).toEqual([]);
+  });
+
+  test("the old three-state pins are gone", () => {
+    const retiredPins = [
+      "事实",
+      "猜想",
+      "未解",
+      "置信度",
+      "梦游数据总结",
+      "## 需要商讨",
+    ];
+    const offenders = Object.entries(DREAM_MANUALS).flatMap(([name, text]) =>
+      retiredPins
+        .filter((pin) => text.includes(pin))
+        .map((pin) => `${name}: ${pin}`),
+    );
+    expect(offenders).toEqual([]);
   });
 });
 
@@ -210,20 +331,46 @@ describe("tidy manual", () => {
 });
 
 describe("think manual", () => {
-  test("keeps the three states, the confidence rule and the user-only channel", () => {
+  test("opens C's scale and subject: event, timeline, people, whole timeline", () => {
+    // The synthesis volume is deliberately unbounded in subject and scale; the
+    // four cases are the user's approved wording and must survive verbatim.
+    const flat = flatten(manualThink);
     for (const pin of [
-      "事实",
-      "猜想",
-      "未解",
-      "置信度",
+      "an expanded reflection on one event",
+      "a summarized timeline",
+      "an organizing of relationships among people",
+      "the perspective of the whole timeline and the people in it",
+    ]) {
+      expect(flat).toContain(pin);
+    }
+  });
+
+  test("replaces state tags with the modality of the source", () => {
+    const flat = flatten(manualThink);
+    for (const pin of [
+      "Do not tag lines as fact, conjecture or unresolved",
+      "do not write confidence scores",
+      "*modality of the source*",
+      "A quote of someone's opinion stays an opinion",
+    ]) {
+      expect(flat).toContain(pin);
+    }
+  });
+
+  test("keeps the user-only conversation channel and its caps", () => {
+    for (const pin of [
       'roles: ["user"]',
-      "≤200",
-      "≤10k",
-      "梦游数据总结",
-      "## 需要商讨",
+      "≤200 messages and ≤10k tokens",
+      "Strip automatic synthesis",
     ]) {
       expect(manualThink).toContain(pin);
     }
+  });
+
+  test("allows a run with no output", () => {
+    expect(flatten(manualThink)).toContain(
+      "writing nothing is the correct output",
+    );
   });
 });
 

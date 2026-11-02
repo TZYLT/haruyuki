@@ -7,8 +7,8 @@
  * - the three generated permission sections (the manuals never claim a tool
  *   surface of their own),
  * - the first turn: shared manual + run facts + whole tier manual + budget,
- * - the later turns: only the tier's execution/checklist sections, the previous
- *   report excerpt, a one-line permission reminder and the budget,
+ * - the later turns: only the tier's `## This turn` / `## Checklist` sections,
+ *   the previous report excerpt, a one-line permission reminder and the budget,
  * - the seed is injected in the first turn and never repeated,
  * - a missing anchor degrades to the whole manual instead of failing.
  */
@@ -19,6 +19,7 @@ import {
   buildFirstDreamTurnPrompt,
   buildNextDreamTurnPrompt,
   DREAM_FULL_TIER_MANUAL_MAX_LINES,
+  DREAM_LATER_TURN_SECTIONS,
   DREAM_PREVIOUS_REPORT_MAX_LINES,
   type DreamPromptRunInfo,
   extractSections,
@@ -184,7 +185,7 @@ describe("dream shared manual", () => {
     expect(text).not.toContain("{{");
     expect(text).toContain("## Permissions in this run");
     expect(text).toContain("note-run-seed-x");
-    expect(text).toContain("## 报告模板");
+    expect(text).toContain("## Report template");
   });
 
   test("a missing seed degrades to one explanatory line, not an empty block", () => {
@@ -198,37 +199,46 @@ describe("dream shared manual", () => {
       const manual = renderTierManual(tier);
       expect(manual.startsWith("# ")).toBe(true);
       expect(manual).toContain(`# ${tier} — dream work manual`);
-      expect(manual).toContain("## 本轮执行");
+      expect(manual).toContain("## This turn");
     }
   });
 });
 
 describe("extractSections", () => {
+  test("the later-turn anchors are the manuals' English headings, verbatim", () => {
+    expect(DREAM_LATER_TURN_SECTIONS).toEqual(["This turn", "Checklist"]);
+    for (const tier of TIERS) {
+      for (const anchor of DREAM_LATER_TURN_SECTIONS) {
+        expect(renderTierManual(tier).split(`## ${anchor}`).length - 1).toBe(1);
+      }
+    }
+  });
+
   const sample = [
     "# sample manual",
-    "## 目标与边界",
+    "## Goal and boundaries",
     "goals",
-    "## 检查清单",
+    "## Checklist",
     "check one",
-    "## 示例",
+    "## Example",
     "example",
-    "## 本轮执行",
+    "## This turn",
     "do the work",
     "",
   ].join("\n");
 
   test("returns exactly the requested sections, headings included", () => {
-    const text = extractSections(sample, ["本轮执行", "检查清单"]);
-    expect(text).toContain("## 本轮执行");
+    const text = extractSections(sample, ["This turn", "Checklist"]);
+    expect(text).toContain("## This turn");
     expect(text).toContain("do the work");
-    expect(text).toContain("## 检查清单");
+    expect(text).toContain("## Checklist");
     expect(text).toContain("check one");
-    expect(text).not.toContain("## 示例");
-    expect(text).not.toContain("## 目标与边界");
+    expect(text).not.toContain("## Example");
+    expect(text).not.toContain("## Goal and boundaries");
   });
 
   test("a missing anchor sends the whole text instead of failing", () => {
-    const text = extractSections(sample, ["本轮执行", "不存在的章节"]);
+    const text = extractSections(sample, ["This turn", "No such section"]);
     expect(text).toBe(sample.trim());
   });
 });
@@ -246,9 +256,9 @@ describe("first turn", () => {
     expect(prompt).toContain("tiers planned, in this order: 1. tidy, 2. think");
     expect(prompt).toContain("**one tier only**: tidy (tier 1 of 2)");
     // The whole tier manual, including sections later turns drop.
-    expect(prompt).toContain("## 目标与边界");
-    expect(prompt).toContain("## 示例");
-    expect(prompt).toContain("## 本轮执行");
+    expect(prompt).toContain("## Goal and boundaries");
+    expect(prompt).toContain("## Example");
+    expect(prompt).toContain("## This turn");
     expect(prompt).toContain("budget state: 0 of 10000 budget tokens used");
   });
 
@@ -269,20 +279,26 @@ describe("first turn", () => {
 });
 
 describe("later turns", () => {
-  test("carry the tier's execution/checklist sections, not the whole manual", () => {
+  test("carry only the tier's This turn/Checklist sections, not the whole manual", () => {
     const prompt = nextPrompt("acceptEdits", "think");
     expect(prompt.startsWith("<dream_run>")).toBe(true);
     expect(prompt.endsWith("</dream_run>")).toBe(true);
     expect(prompt).toContain("Dream run run-1, continuing");
     expect(prompt).toContain("**think** (tier 2 of 2)");
-    expect(prompt).toContain("## 本轮执行");
-    expect(prompt).toContain("## 检查清单");
-    // Sliced out: the manual's examples and goals stay in the first message.
-    expect(prompt).not.toContain("## 示例");
-    expect(prompt).not.toContain("## 目标与边界");
-    // The shared manual is not re-sent.
-    expect(prompt).not.toContain("## 报告模板");
-    expect(prompt).not.toContain("## 无人值守的硬规矩");
+    expect(prompt).toContain("## This turn");
+    expect(prompt).toContain("## Checklist");
+    // The sliced sections' own prose is present ...
+    expect(prompt).toContain("This turn you handle **think only**");
+    expect(prompt).toContain("Does each claim say something the records");
+    // ... while the manual's other sections stay in the first message.
+    expect(prompt).not.toContain("## Goal and boundaries");
+    expect(prompt).not.toContain("## Work levels");
+    expect(prompt).not.toContain("## Voice and closing");
+    expect(prompt).not.toContain("## Common traps");
+    expect(prompt).not.toContain("## Example");
+    // The shared manual is not re-sent either.
+    expect(prompt).not.toContain("## Report template");
+    expect(prompt).not.toContain("## Hard rules for an unattended run");
   });
 
   test("the seed rides in the first turn and is never repeated", () => {

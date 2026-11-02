@@ -74,6 +74,8 @@ When memory is the main task, inspect Git status and read the current files befo
 
 Memory Markdown files must start with YAML frontmatter containing a non-empty `description:` field. Preserve existing frontmatter and discovery links. The MemFS pre-commit hook validates frontmatter and prevents changes to protected `read_only` files. Skill `SKILL.md` files use their own skill frontmatter format.
 
+Name a new memory file with an English ASCII slug by default — a soft rule, so a naming requirement from the user or the project wins, and an existing file keeps its name. Body text, headings and the `description` follow the user's working language, or the target file's main language when it already has one.
+
 Review the diff, stage only the intended files, and commit only those paths, so anything else already staged in the checkout stays out of your commit. Preserve unrelated changes and protected read-only files. Commit with the identity the harness already configured for the repository — do not pass `--author`:
 
 ```bash

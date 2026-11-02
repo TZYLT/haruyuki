@@ -8,7 +8,7 @@
  *   `{{run_seed}}` filled, a `## This turn` fact block, the whole tier manual,
  *   and the budget line;
  * - **later turns** — a short `<dream_run>` block: the tier manual's
- *   `## 本轮执行` + `## 检查清单` sections (the whole manual when it is short
+ *   `## This turn` + `## Checklist` sections (the whole manual when it is short
  *   enough), an excerpt of the previous tier's report, a one-line permission
  *   reminder, the budget line and any crossed-threshold reminders.
  *
@@ -32,10 +32,16 @@ import type { DreamRunStatus, DreamTier } from "@/types/dream-run-metadata";
 import { debugWarn } from "@/utils/debug";
 import type { DreamBudgetTracker } from "./dream-budget";
 
-/** The manual sections a later turn re-sends (design §5.3.3). */
+/**
+ * The manual sections a later turn re-sends (design §5.3.3).
+ *
+ * These are the tier manuals' English `## ` headings, verbatim: the manuals are
+ * model-facing text with English headings, and the slicer matches on the
+ * heading text after `## `.
+ */
 export const DREAM_LATER_TURN_SECTIONS: readonly string[] = [
-  "本轮执行",
-  "检查清单",
+  "This turn",
+  "Checklist",
 ];
 
 /**

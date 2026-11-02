@@ -32,6 +32,8 @@ Validation enforces these; the rest of the layout is your judgment.
 
 Nothing else is mandated — no filenames, no file count, no minimum depth. Root `persona.md` is unvalidated but your system prompt points at it as the core of your identity: keep it, and write it once you have an identity worth stating.
 
+**Naming and language are conventions, not validation.** A new memory file gets an English ASCII slug by default — a soft rule, so a naming requirement from the user or the project wins, and a file that already exists keeps the name it has. Body text, headings and `description` follow the user's working language, or the target file's main language when it already has one.
+
 **Budget**: keep root under ~10% of your context window (~15-20k tokens). When it crowds that, move detail into an indexed child directory and leave a link — don't delete it.
 
 ## Structure
