@@ -33,6 +33,11 @@ I (the developer) have tried my best to follow the licence terms the original pr
 oversights are inevitable given my limited ability. If this project infringes your rights, please do
 contact me so we can resolve it.
 
+2026.11: Because of my health, development has slowed and the project is now maintenance-first. I
+still handle issues, but feature work — and therefore breaking changes — arrives more slowly, so
+downstream users can keep following the project without much churn. Thank you for understanding, and
+contributions are still welcome.
+
 ## 1. What this project is
 
 **Haruyuki is a local-first, cost-conscious companion agent runtime — a heavily modified fork of `letta-code`.**
@@ -223,7 +228,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
-| `0.5.1` | - | **TUI display and operation pass I**: dream status line, multi-level command completion, picker mouse support, settings gaps, usage and sidebar figures, the `+` overview page, startup guidance and console-font protection. |
+| `0.5.1` | + | **TUI display and operation pass**: some TUI operations improved, conversation-switching tabs and command completion added, and known issues fixed along the way. |
 | `0.5.0` | + | **Dreaming**: The agent organizes its memories during idle time to maintain a stable and tidy memory library. Please use this experimental functions with caution. |
 | `0.4.5` | + | **Resident scheduling**: The entire scheduling task system has been rewritten to automatically launch scheduled tasks when the software is not running, ensuring that timed tasks can truly execute on schedule, provided the computer remains powered on. |
 | `0.4.4` | + | **Compaction rework**: Enable automatic processing of abstracts and topic tags before compression, making topic-inspired compression truly practical and providing queries for topics and corresponding original texts. |
@@ -341,3 +346,6 @@ called "dreaming"). Upstream code is licensed under Apache-2.0, and this fork is
 attribution and technical identifiers, this project has no relationship with upstream.
 
 Friend links: [an unofficial Haruyuki desktop client for macOS](https://github.com/QianXiquq/haruyuki-desktop) — please support it.
+
+Once again, thank you to every user and developer for your support and trust. I am sorry for whatever
+the project still gets wrong, and thank you for bearing with me.
