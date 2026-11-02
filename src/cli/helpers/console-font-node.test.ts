@@ -276,12 +276,32 @@ describe("openConsoleFontHelperPort", () => {
 
   test("no ready line within the startup timeout fails the port", async () => {
     const { spawnImpl, helper } = createFakeSpawn({ ready: false });
+    const failures: string[] = [];
     const port = await openConsoleFontHelperPort({
       spawnImpl,
       startupTimeoutMs: 5,
+      onFailure: (reason) => failures.push(reason),
     });
 
     expect(port).toBeNull();
+    expect(helper.killed).toBe(true);
+    expect(failures).toEqual(["ready-timeout"]);
+  });
+
+  test("a helper that cannot attach reports the attach reason (R-08.4)", async () => {
+    const { spawnImpl, helper } = createFakeSpawn({ ready: false });
+    const failures: string[] = [];
+    const portPromise = openConsoleFontHelperPort({
+      spawnImpl,
+      startupTimeoutMs: 100,
+      onFailure: (reason) => failures.push(reason),
+    });
+    // What the helper writes when `AttachConsole` fails: a ready line that says
+    // no, then exit 1.
+    helper.stdout.write('{"ok":false,"op":"ready","error":"attach"}\r\n');
+
+    expect(await portPromise).toBeNull();
+    expect(failures[0]).toBe("attach");
     expect(helper.killed).toBe(true);
   });
 

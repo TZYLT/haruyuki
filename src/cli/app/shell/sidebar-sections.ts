@@ -1,10 +1,22 @@
 // src/cli/app/shell/sidebar-sections.ts
 
 import type { TurnStatsSnapshot } from "@/agent/stats";
-import { truncateToWidth } from "@/cli/display/statusline/formatting";
+import {
+  truncateToWidth,
+  visibleWidth,
+} from "@/cli/display/statusline/formatting";
 import { formatCompact } from "@/cli/helpers/format";
-import { formatCost } from "@/cli/helpers/usage-format";
-import type { UsageContextBreakdown } from "@/utils/usage-context";
+import {
+  formatCost,
+  formatEstimatedCompact,
+  formatEstimatedPercent,
+  formatRate,
+} from "@/cli/helpers/usage-format";
+import {
+  CONTEXT_SYSTEM_LABEL,
+  contextShareDenominator,
+  type UsageContextBreakdown,
+} from "@/utils/usage-context";
 
 /**
  * The sidebar's geometry, and the rule that keeps it inside the band.
@@ -367,6 +379,76 @@ export type SidebarSectionDefinition = {
   } | null;
 };
 
+/**
+ * The Usage section's label column (R-06.1 / Q-20).
+ *
+ * Fixed rather than measured from the rows: the values must not shift when a
+ * label changes, and the spec's example (`hit    1.2k (26.1%)`) starts the value
+ * in column 8. `today` is the longest label, so it leaves two spaces and the
+ * shorter labels four — a left-aligned label column and a left-aligned value
+ * column, which is what the user asked for.
+ */
+export const USAGE_LABEL_COLUMN = 7;
+
+/**
+ * One row's two columns, with the estimated share moved to its own line when the
+ * content is too narrow (R-06.5 / Q-29).
+ *
+ * The share is the wrap unit because it is the one part of a row that can leave
+ * the line without changing what the row says: `hit 1.2k` is still the hit count,
+ * and the percentage reappears under the value column instead of being truncated
+ * away. Nothing else is ever split.
+ */
+function rowWithWrappedShare(
+  head: string,
+  share: string | null,
+  indent: string,
+  width: number,
+): string[] {
+  if (share === null) return [head];
+  const full = `${head} ${share}`;
+  return visibleWidth(full) <= width ? [full] : [head, `${indent}${share}`];
+}
+
+/**
+ * The context composition rows: `sys+mem  ~8k (~10%)` and its siblings.
+ *
+ * The label/value gap is two spaces rather than a fixed column (R-06.2's
+ * example), and the value is marked `~` because it was estimated from bytes. The
+ * share divides by the provider-reported occupancy — the same denominator the
+ * Usage screen uses (R-05.6 / R-06.2, `contextShareDenominator`) — so the three
+ * shares need not add up to 100%; the leftover is the estimate error the `~`
+ * admits.
+ */
+function contextComponentLines(
+  breakdown: UsageContextBreakdown,
+  usedContextTokens: number | null,
+  width: number,
+): string[] {
+  const denominator = contextShareDenominator(
+    breakdown,
+    usedContextTokens ?? undefined,
+  );
+  const rows: Array<readonly [string, number]> = [
+    [CONTEXT_SYSTEM_LABEL, breakdown.system],
+    ["tools", breakdown.tools],
+    ["chat", breakdown.messages],
+  ];
+  return rows.flatMap(([label, tokens]) => {
+    const head = `${label}  ${formatEstimatedCompact(tokens)}`;
+    const share =
+      denominator > 0
+        ? `(${formatEstimatedPercent(tokens / denominator)})`
+        : null;
+    return rowWithWrappedShare(
+      head,
+      share,
+      " ".repeat(visibleWidth(label) + 2),
+      width,
+    );
+  });
+}
+
 function contextSection(projection: SidebarProjection) {
   const used = projection.usedContextTokens;
   const limit = projection.contextWindowSize;
@@ -377,18 +459,19 @@ function contextSection(projection: SidebarProjection) {
   // The split the section exists for: what stands in front of the conversation
   // (system prompt and tool definitions) versus the transcript itself. It comes
   // from the last request the backend assembled, so every part is a measurement
-  // of that request, not a subtraction of the live number. The two leader parts
-  // get a row each: `sys 31k · tools 4k` on 22 content columns of a folded rail
-  // reads as one number, and the split is the whole point of the row.
+  // of that request, not a subtraction of the live number. The components get a
+  // row each with their estimated share (R-06.2).
   const breakdown = projection.contextBreakdown;
   // Plain text, no bar: the rail's job is the numbers, and a glyph bar on a
   // 28-column line would spend a third of the width saying what `62%` says.
   return {
     detail: [
+      // The provider-reported total stays unmarked; only estimates carry `~`
+      // (R-06.3).
       `ctx ${percent === null ? "—" : `${percent}%`} · ${hasUsage ? formatCompact(used as number) : "—"} / ${limit === null ? "—" : formatCompact(limit)}`,
-      `sys ${breakdown ? formatCompact(breakdown.system) : "—"}`,
-      `tools ${breakdown ? formatCompact(breakdown.tools) : "—"}`,
-      `chat ${breakdown ? formatCompact(breakdown.messages) : "—"}`,
+      ...(breakdown
+        ? contextComponentLines(breakdown, used, projection.width)
+        : [`${CONTEXT_SYSTEM_LABEL}  —`, "tools  —", "chat  —"]),
       `reasoning ${formatCompact(projection.reasoningTokens)}`,
     ],
     summary: `ctx ${percent === null ? "—" : `${percent}%`}`,
@@ -407,12 +490,6 @@ function turnSection(projection: SidebarProjection) {
   };
 }
 
-/** ` (95.4%)`, or nothing when the day had no input to divide by. */
-function hitRateLabel(rate: number | undefined): string {
-  if (rate === undefined || !Number.isFinite(rate)) return "";
-  return ` (${(rate * 100).toFixed(1)}%)`;
-}
-
 function usageSection(projection: SidebarProjection) {
   const today = projection.today;
   if (!today) {
@@ -422,14 +499,47 @@ function usageSection(projection: SidebarProjection) {
   // `miss` are the two input prices (hit first, with its share of input), `out`
   // is what the model produced, `cost` the day's total. A `—` cost is "nothing
   // priced today", which is not the same statement as free.
+  //
+  // R-06.1: the labels and the values are two left-aligned columns. The share is
+  // two decimals like the Usage screen (R-06.4), not the one decimal the rail
+  // used to print.
+  const hitShare =
+    today.hitRate === undefined || !Number.isFinite(today.hitRate)
+      ? null
+      : `(${formatRate(today.hitRate)})`;
+  const rows: Array<{
+    label: string;
+    value: string;
+    share: string | null;
+  }> = [
+    {
+      label: "today",
+      value: `${formatCompact(today.tokens)} tok`,
+      share: null,
+    },
+    {
+      label: "hit",
+      value: formatCompact(today.cacheReadTokens),
+      share: hitShare,
+    },
+    {
+      label: "miss",
+      value: formatCompact(today.uncachedTokens),
+      share: null,
+    },
+    { label: "out", value: formatCompact(today.outputTokens), share: null },
+    { label: "cost", value: formatCost(today.costUsd), share: null },
+  ];
+  const indent = " ".repeat(USAGE_LABEL_COLUMN);
   return {
-    detail: [
-      `today ${formatCompact(today.tokens)} tok`,
-      `hit ${formatCompact(today.cacheReadTokens)}${hitRateLabel(today.hitRate)}`,
-      `miss ${formatCompact(today.uncachedTokens)}`,
-      `out ${formatCompact(today.outputTokens)}`,
-      `cost ${formatCost(today.costUsd)}`,
-    ],
+    detail: rows.flatMap((row) =>
+      rowWithWrappedShare(
+        `${row.label.padEnd(USAGE_LABEL_COLUMN)}${row.value}`,
+        row.share,
+        indent,
+        projection.width,
+      ),
+    ),
     summary: `today ${formatCompact(today.tokens)} tok`,
   };
 }

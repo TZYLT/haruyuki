@@ -142,9 +142,11 @@ describe("ContextSidebar", () => {
     const frame = mount(24);
     try {
       const text = (await frame.rows()).join("\n");
-      expect(text).toContain("sys 8k");
-      expect(text).toContain("tools 31k");
-      expect(text).toContain("chat 23k");
+      // R-06.2/R-06.6: `sys+mem`, the estimate marked `~`, and the share derived
+      // from it against the provider-reported occupancy (10% of 84k).
+      expect(text).toContain("sys+mem  ~8k (~10%)");
+      expect(text).toContain("tools  ~31k (~37%)");
+      expect(text).toContain("chat  ~23k (~27%)");
       // The two leader parts no longer share a row.
       expect(text).not.toContain("sys 8k · tools 31k");
     } finally {
@@ -177,11 +179,11 @@ describe("ContextSidebar", () => {
     });
     try {
       const text = await frame.text();
-      expect(text).toContain("today 26k tok");
-      expect(text).toContain("hit 1.2k (26.1%)");
-      expect(text).toContain("miss 3.4k");
-      expect(text).toContain("out 1.2k");
-      expect(text).toContain("cost $ 0.12");
+      expect(text).toContain("today  26k tok");
+      expect(text).toContain("hit    1.2k (26.09%)");
+      expect(text).toContain("miss   3.4k");
+      expect(text).toContain("out    1.2k");
+      expect(text).toContain("cost   $ 0.12");
       expect(text).not.toContain("ledger pending");
       // The cache-fill bucket is an input price; it is not the output row.
       expect(text).not.toContain("write");
@@ -189,6 +191,56 @@ describe("ContextSidebar", () => {
       frame.stop();
     }
   });
+
+  test.each([22, 24, 30])(
+    "at %i content columns the rail keeps two left-aligned columns",
+    async (content) => {
+      // The block is the content plus `│ `.
+      const block = content + 2;
+      // 22 is the narrowest rail that can be drawn (24-column block less `│ `),
+      // 30 the widest (Q-50: 18 is unreachable, the pure function covers it).
+      const frame = mount(30, block, {
+        today: {
+          tokens: 26_400,
+          turns: 1,
+          cacheReadTokens: 1_200,
+          uncachedTokens: 3_400,
+          outputTokens: 540,
+          hitRate: 1_200 / 4_600,
+          costUsd: 0.12,
+        },
+      });
+      try {
+        const rows = await frame.rows();
+        for (const row of rows) {
+          expect(visibleWidth(row)).toBeLessThanOrEqual(block);
+        }
+        // Every Usage value starts in the same column: `│ ` + the 7-column label
+        // cell (R-06.1). `today` leaves two spaces, `hit` four.
+        const values: Array<[string, string]> = [
+          ["today", "26k tok"],
+          ["hit", "1.2k (26.09%)"],
+          ["miss", "3.4k"],
+          ["out", "540"],
+          ["cost", "$ 0.12"],
+        ];
+        for (const [label, value] of values) {
+          const row = rows.find((candidate) =>
+            candidate.startsWith(`│ ${label.padEnd(7)}`),
+          );
+          expect(row).toBeDefined();
+          expect(row?.slice(2 + 7)).toBe(value);
+        }
+        // The context shares fit at these widths and wrap nowhere.
+        const text = rows.join("\n");
+        expect(text).toContain("sys+mem  ~8k (~10%)");
+        expect(text).toContain("tools  ~31k (~37%)");
+        expect(text).toContain("chat  ~23k (~27%)");
+      } finally {
+        frame.stop();
+      }
+    },
+  );
 });
 
 describe("sidebarProjectionFrom", () => {

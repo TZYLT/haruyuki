@@ -355,6 +355,15 @@ export interface OpenConsoleFontHelperPortOptions {
   attachPid?: number;
   /** One-line diagnostics; the runtime passes `debugLog`. */
   log?: (message: string) => void;
+  /**
+   * Called once with a short reason when the helper cannot be used (R-08.4).
+   *
+   * The runtime turns this into the `/config console-font` reason, so a helper
+   * that never attached to this console does not read as "the console does not
+   * answer". A helper that failed to attach reports `"attach"`; the codes are
+   * deliberately short and stable, unlike the verbose log line.
+   */
+  onFailure?: (reason: string) => void;
   startupTimeoutMs?: number;
   requestTimeoutMs?: number;
 }
@@ -411,6 +420,7 @@ export async function openConsoleFontHelperPort(
 ): Promise<ConsoleFontPort | null> {
   const env = options.env ?? process.env;
   const log = options.log ?? (() => {});
+  const onFailure = options.onFailure;
   const spawnImpl = options.spawnImpl ?? spawn;
   const startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
   const requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
@@ -432,12 +442,14 @@ export async function openConsoleFontHelperPort(
     }) as unknown as HelperChild;
   } catch (error) {
     log(`helper did not spawn: ${String(error)}`);
+    onFailure?.("spawn");
     return null;
   }
 
   if (child.stdout === null || child.stdin === null) {
     log("helper spawned without pipes");
     child.kill();
+    onFailure?.("no-pipes");
     return null;
   }
 
@@ -449,6 +461,28 @@ export async function openConsoleFontHelperPort(
 
   let dead = false;
   let faces: readonly string[] | null = null;
+  /**
+   * The helper's own reason when it refuses to become ready — `"attach"` when it
+   * could not join this console, `"add-type"` when its Win32 binding failed.
+   *
+   * Kept rather than folded into the generic "did not report ready": the attach
+   * failure is what `/config console-font` has to show (R-08.4).
+   */
+  let readyFailure: string | null = null;
+  let reportedFailure: string | null = null;
+  /**
+   * Report the first failure only: later ones are usually its consequence.
+   *
+   * `attach` wins over anything already reported, because a helper that failed to
+   * attach then exited reports "helper exited (1)" and that consequence must not
+   * hide the cause the user needs to read.
+   */
+  const reportFailure = (reason: string): void => {
+    if (reportedFailure === "attach") return;
+    if (reportedFailure !== null && reason !== "attach") return;
+    reportedFailure = reason;
+    onFailure?.(reason);
+  };
   let pending: {
     resolve: (reply: ConsoleFontHelperReply | null) => void;
     timer: ReturnType<typeof setTimeout>;
@@ -481,6 +515,9 @@ export async function openConsoleFontHelperPort(
     log(
       `${reason}${stderrTail === "" ? "" : `: ${stderrTail.trim().slice(-300)}`}`,
     );
+    // While the helper is still starting, the ready line (or its timeout) owns
+    // the reason and an exit is its consequence; a mid-session death reports here.
+    if (startup === null) reportFailure(reason);
     settle(null);
     // A helper that stopped answering may still be alive; nothing is going to read
     // its pipes again, so do not leave it behind.
@@ -497,7 +534,14 @@ export async function openConsoleFontHelperPort(
       const reply = parseConsoleFontHelperReply(line);
       if (reply === null) return;
       if (reply.op === "ready") {
-        if (reply.ok) faces = reply.faces ?? [];
+        if (reply.ok) {
+          faces = reply.faces ?? [];
+        } else {
+          readyFailure = reply.error ?? "ready-failed";
+          // Report as soon as the helper refuses, so an exit line that follows
+          // cannot replace the cause with its consequence.
+          reportFailure(readyFailure);
+        }
         if (startup !== null) {
           clearTimeout(startup.timer);
           const { resolve } = startup;
@@ -565,6 +609,7 @@ export async function openConsoleFontHelperPort(
     };
   });
   if (ready === null) {
+    reportFailure(readyFailure ?? "ready-timeout");
     fail("helper did not report ready");
     try {
       child.kill();

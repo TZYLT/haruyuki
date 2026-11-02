@@ -1,4 +1,5 @@
 import { loadSettings } from "@/settings";
+import { setConsoleRepairHandler } from "@/utils/console-repair-signal";
 import { debugLog } from "@/utils/debug";
 import {
   type ConsoleFont,
@@ -8,6 +9,7 @@ import {
   type ConsoleFontTarget,
   chooseConsoleFace,
   consoleFontTargetFor,
+  consoleFontUnavailableReason,
   DEFAULT_CONSOLE_FONT,
   parseConsoleFontMode,
   startConsoleFontGuard,
@@ -231,8 +233,13 @@ async function openBunConsoleFontPort(): Promise<ConsoleFontPort | null> {
 /**
  * Open the console's font port for this runtime, or `null` when this console cannot
  * be programmed.
+ *
+ * `onHelperFailure` carries the helper's short failure code back so the runtime can
+ * tell "the helper never attached" from "the console does not answer" (R-08.4).
  */
-async function openConsoleFontPort(): Promise<ConsoleFontPort | null> {
+async function openConsoleFontPort(
+  onHelperFailure?: (reason: string) => void,
+): Promise<ConsoleFontPort | null> {
   if (typeof Bun !== "undefined") {
     return openBunConsoleFontPort();
   }
@@ -240,6 +247,7 @@ async function openConsoleFontPort(): Promise<ConsoleFontPort | null> {
   // which is what makes its `CONOUT$` the window the user is looking at.
   return openConsoleFontHelperPort({
     log: (message: string) => debugLog("console-font", message),
+    onFailure: onHelperFailure,
   });
 }
 
@@ -327,9 +335,15 @@ export async function startConsoleFontGuardRuntime(): Promise<void> {
     return;
   }
 
-  const port = await openConsoleFontPort();
+  let helperFailure: string | null = null;
+  const rememberHelperFailure = (reason: string): void => {
+    // `attach` is the specific cause; a later "helper exited (1)" is its
+    // consequence, so the specific reason must not be overwritten by it.
+    if (helperFailure === null || reason === "attach") helperFailure = reason;
+  };
+  const port = await openConsoleFontPort(rememberHelperFailure);
   if (port === null) {
-    state.reason = "the console does not answer";
+    state.reason = consoleFontUnavailableReason(helperFailure);
     debugLog("console-font", `guard not armed: ${state.reason}`);
     return;
   }
@@ -382,11 +396,20 @@ export async function startConsoleFontGuardRuntime(): Promise<void> {
           );
           return;
         }
+        if (event.kind === "repair-deferred") {
+          // The warning R-08.3 asks for: the guard is still armed, and this is
+          // how long it waits before trying again.
+          debugLog(
+            "console-font",
+            `${event.failures} consecutive repair failure(s); next attempt in ${event.retryInMs}ms`,
+          );
+          return;
+        }
         if (event.kind === "not-taken") {
           // conhost accepted the call and drew something else: on a CJK-only console
           // a Western face is substituted. Worth one line per attempt — it is the
-          // only record of what the console decided.
-          state.reason = `the console draws ${event.observed.face} instead of ${event.target.face}`;
+          // only record of what the console decided. The guard stays armed and
+          // retries with backoff, so this is a warning, not a shutdown reason.
           debugLog(
             "console-font",
             `asked for ${event.target.face} ${event.target.cellHeight}, console drew ${event.observed.face} ${event.observed.cellWidth}x${event.observed.cellHeight}`,
@@ -394,6 +417,7 @@ export async function startConsoleFontGuardRuntime(): Promise<void> {
           return;
         }
         state.reason = "the console stopped answering";
+        setConsoleRepairHandler(null);
         debugLog("console-font", `guard stopping: ${state.reason}`);
       },
     });
@@ -403,6 +427,15 @@ export async function startConsoleFontGuardRuntime(): Promise<void> {
     debugLog("console-font", `guard not armed: ${String(error)}`);
     return;
   }
+  // R-08.2: the guard's `check` is the handler the shell runner's post-spawn
+  // signal calls. Registering it here — and only once the guard is armed, not
+  // already stopped by its first reading — keeps a request from a tools spawn
+  // from reaching a guard that is not running.
+  if (state.reason === null) {
+    setConsoleRepairHandler(() => {
+      void state.guard?.check();
+    });
+  }
   debugLog(
     "console-font",
     `guard armed (mode=${typeof mode === "object" ? mode.pinnedFace : mode}, every ${CHECK_INTERVAL_MS}ms)`,
@@ -411,6 +444,7 @@ export async function startConsoleFontGuardRuntime(): Promise<void> {
 
 /** Apply a new mode at runtime, which is what `/console-font` does after saving. */
 export async function restartConsoleFontGuardRuntime(): Promise<void> {
+  setConsoleRepairHandler(null);
   state.guard?.stop();
   state.guard = null;
   state.reason = null;
@@ -421,6 +455,7 @@ export async function restartConsoleFontGuardRuntime(): Promise<void> {
 }
 
 export function stopConsoleFontGuardRuntime(): void {
+  setConsoleRepairHandler(null);
   state.guard?.stop();
   state.guard = null;
   state.reason = "off";
@@ -447,6 +482,7 @@ export function getConsoleFontGuardStatus(): ConsoleFontGuardStatus {
 
 /** Test seam: drop the module's guard so a test can arm a fresh one. */
 export function resetConsoleFontGuardForTests(): void {
+  setConsoleRepairHandler(null);
   state.guard?.stop();
   state.guard = null;
   state.mode = "auto";

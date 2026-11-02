@@ -330,3 +330,40 @@ export function buildShellLaunchers(
       )
     : unixLaunchers(commandToRun, login);
 }
+
+/**
+ * The Windows shells whose **pipeline** spawn must open its own hidden console.
+ *
+ * Both spellings are listed because the resolved launcher is an absolute path
+ * (`C:\Windows\...\powershell.exe`) while a PATH launcher is the bare name.
+ */
+const WINDOWS_SHELL_EXECUTABLES = new Set([
+  "pwsh",
+  "pwsh.exe",
+  "powershell",
+  "powershell.exe",
+  "cmd",
+  "cmd.exe",
+]);
+
+/**
+ * Whether a pipeline spawn of `executable` has to pass `windowsHide` (R-08.1).
+ *
+ * On Windows a piped child shares the parent's console, and starting Windows
+ * PowerShell 5.1 in a console re-applies console properties and can drop the
+ * window to the raster font (measured in `cli/helpers/console-font.ts`). Asking
+ * for `windowsHide` gives the child a console nobody looks at, so starting the
+ * shell does not touch the TUI's window. Only the pipeline path does this: the
+ * interactive PTY path must keep sharing the console, and non-shell children
+ * (`node`, `taskkill`) were never implicated.
+ *
+ * `platform` is injectable so the rule can be pinned by a test on any host.
+ */
+export function needsHiddenWindowsConsole(
+  executable: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform !== "win32") return false;
+  const basename = executable.split(/[\\/]/).pop() ?? "";
+  return WINDOWS_SHELL_EXECUTABLES.has(basename.toLowerCase());
+}

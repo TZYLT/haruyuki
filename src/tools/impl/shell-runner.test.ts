@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
+import { PassThrough } from "node:stream";
 import {
   __testSetBackend,
   type Backend,
@@ -11,6 +13,9 @@ import {
   spawnWithLauncher,
   startShellProcess,
 } from "@/tools/impl/shell-runner";
+import { setConsoleRepairHandler } from "@/utils/console-repair-signal";
+
+type SpawnFunction = typeof import("node:child_process").spawn;
 
 // Bun on Windows blocks the first `stdio: "inherit"` spawn in a process for about
 // 3.3s — measured here at 3 221 / 3 224 / 3 276 / 3 358 ms, against ~30ms for
@@ -296,4 +301,129 @@ describe("shared shell process", () => {
     const descendantPid = Number(output.match(/descendant:(\d+)/)?.[1]);
     expectProcessExited(descendantPid);
   }, 20_000);
+});
+
+/** A spawned child stand-in: pipes both ways, no process. */
+class FakeSpawnedChild extends EventEmitter {
+  pid = 4242;
+  readonly stdin = new PassThrough();
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+  killed = false;
+
+  kill(): boolean {
+    this.killed = true;
+    return true;
+  }
+}
+
+/** Start a pipeline process whose `spawn` is captured instead of executed. */
+function startWithCapturedSpawn(launcher: string[]): {
+  child: FakeSpawnedChild;
+  spawnOptions: Array<Record<string, unknown>>;
+  running: ReturnType<typeof startShellProcess>;
+} {
+  const child = new FakeSpawnedChild();
+  const spawnOptions: Array<Record<string, unknown>> = [];
+  const spawnImpl = ((
+    _file: string,
+    _args: string[],
+    options: Record<string, unknown>,
+  ) => {
+    spawnOptions.push(options);
+    return child;
+  }) as unknown as SpawnFunction;
+  const running = startShellProcess(launcher, {
+    cwd: process.cwd(),
+    env: process.env,
+    timeoutMs: 0,
+    spawnImpl,
+  });
+  return { child, spawnOptions, running };
+}
+
+describe("pipeline spawn and the console-font guard (T-08)", () => {
+  test.skipIf(process.platform !== "win32")(
+    "a piped Windows shell asks for its own hidden console (R-08.1)",
+    async () => {
+      const { child, spawnOptions, running } = startWithCapturedSpawn([
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "-NoProfile",
+        "-Command",
+        "exit 0",
+      ]);
+
+      child.emit("close", 0);
+      expect(await running.completion).toEqual({
+        stdout: "",
+        stderr: "",
+        exitCode: 0,
+      });
+      expect(spawnOptions[0]?.windowsHide).toBe(true);
+    },
+  );
+
+  test("a piped non-shell child keeps the default console behaviour", async () => {
+    // R-08.1 names only pwsh/powershell/cmd; a node child must not silently
+    // gain a flag that changes how its console behaves.
+    const { child, spawnOptions, running } = startWithCapturedSpawn([
+      process.execPath,
+      "-e",
+      "0",
+    ]);
+
+    child.emit("close", 0);
+    await running.completion;
+    expect(spawnOptions[0]?.windowsHide).toBeUndefined();
+  });
+
+  test("a finished spawn asks the guard for one repair check (R-08.2)", async () => {
+    let checks = 0;
+    setConsoleRepairHandler(() => {
+      checks += 1;
+    });
+    try {
+      const running = startShellProcess([process.execPath, "-e", "0"], {
+        cwd: process.cwd(),
+        env: process.env,
+        timeoutMs: 0,
+      });
+
+      await running.completion;
+      expect(checks).toBe(1);
+    } finally {
+      setConsoleRepairHandler(null);
+    }
+  });
+
+  test("a spawn that never ran asks for no repair check", async () => {
+    // Nothing started, so nothing can have flipped the font: the signal is tied
+    // to a process ending, not to a spawn attempt failing.
+    let checks = 0;
+    setConsoleRepairHandler(() => {
+      checks += 1;
+    });
+    try {
+      const child = new FakeSpawnedChild();
+      const spawnImpl = (() => child) as unknown as SpawnFunction;
+      const running = startShellProcess(
+        ["/definitely/not/a/shell", "-c", "x"],
+        {
+          cwd: process.cwd(),
+          env: process.env,
+          timeoutMs: 0,
+          spawnImpl,
+        },
+      );
+
+      child.emit(
+        "error",
+        Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
+      );
+      await expect(running.completion).rejects.toThrow();
+      expect(checks).toBe(0);
+    } finally {
+      setConsoleRepairHandler(null);
+    }
+  });
 });

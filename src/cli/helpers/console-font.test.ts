@@ -6,9 +6,11 @@ import {
   type ConsoleFontTarget,
   chooseConsoleFace,
   consoleFontTargetFor,
+  consoleFontUnavailableReason,
   DEFAULT_CONSOLE_FONT,
   isRasterConsoleFont,
   parseConsoleFontMode,
+  REPAIR_BACKOFF_BASE_MS,
   startConsoleFontGuard,
 } from "@/cli/helpers/console-font";
 
@@ -403,43 +405,70 @@ describe("startConsoleFontGuard", () => {
     expect(fake.applied).toEqual([]);
   });
 
-  test("a substituted face ends the guard instead of flickering forever", async () => {
-    // A CJK-only console accepts `Consolas` and keeps drawing 宋体. Without the
-    // read-back this would rewrite the same rejected face every tick.
+  test("a substituted face is retried with backoff instead of every tick", async () => {
+    // A CJK-only console accepts `Consolas` and keeps drawing 宋体. Without a
+    // read-back this would rewrite the same rejected face every tick; without the
+    // old stop-after-two it must not disarm either (R-08.3) — it waits longer.
     const fake = createFakeConsole(SIMSUN_16);
     fake.substitute(SIMSUN_16);
     const timer = createFakeTimer();
     const events: ConsoleFontGuardEvent[] = [];
+    let clock = 0;
     await startConsoleFontGuard({
       port: fake.port,
       mode: { pinnedFace: "Consolas" },
       intervalMs: 250,
+      now: () => clock,
       setIntervalImpl: timer.setIntervalImpl,
       clearIntervalImpl: timer.clearIntervalImpl,
       onEvent: (event) => events.push(event),
     });
 
-    expect(events.at(-1)?.kind).toBe("not-taken");
-    await timer.tick();
-    await timer.tick();
-    await timer.tick();
+    // The first check already asked for Consolas and the console kept drawing 宋体.
+    expect(events.at(-1)?.kind).toBe("repair-deferred");
+    expect(fake.applied).toHaveLength(1);
 
+    // Inside the first backoff window nothing is written again.
+    clock = REPAIR_BACKOFF_BASE_MS - 1;
+    await timer.tick();
+    expect(fake.applied).toHaveLength(1);
+
+    // At the deadline it tries again; the next window is twice as long.
+    clock = REPAIR_BACKOFF_BASE_MS;
+    await timer.tick();
     expect(fake.applied).toHaveLength(2);
+    clock = REPAIR_BACKOFF_BASE_MS * 3 - 1;
+    await timer.tick();
+    expect(fake.applied).toHaveLength(2);
+    clock = REPAIR_BACKOFF_BASE_MS * 3;
+    await timer.tick();
+    expect(fake.applied).toHaveLength(3);
+
     expect(events.filter((event) => event.kind === "not-taken")).toHaveLength(
-      2,
+      3,
     );
-    expect(timer.clears()).toBe(1);
+    const deferred = events.filter((event) => event.kind === "repair-deferred");
+    expect(deferred.at(-1)).toEqual({
+      kind: "repair-deferred",
+      target: { face: "Consolas", cellHeight: 18, weight: 400 },
+      failures: 3,
+      retryInMs: 4_000,
+    });
+    // Still armed: a refusal never clears the timer any more.
+    expect(timer.clears()).toBe(0);
   });
 
-  test("two refused repairs end the polling", async () => {
+  test("refused repairs back off, stay armed, and reset after a success", async () => {
     const fake = createFakeConsole(CONSOLAS_18);
     const timer = createFakeTimer();
     const events: ConsoleFontGuardEvent[] = [];
     fake.refuse(true);
+    let clock = 0;
     await startConsoleFontGuard({
       port: fake.port,
       mode: "auto",
       intervalMs: 250,
+      now: () => clock,
       setIntervalImpl: timer.setIntervalImpl,
       clearIntervalImpl: timer.clearIntervalImpl,
       onEvent: (event) => events.push(event),
@@ -449,14 +478,51 @@ describe("startConsoleFontGuard", () => {
     // until something changes.
     expect(fake.applied).toHaveLength(0);
     fake.show(RASTER_12);
-    await timer.tick();
-    await timer.tick();
-    await timer.tick();
 
-    expect(fake.applied).toHaveLength(2);
+    clock = REPAIR_BACKOFF_BASE_MS;
+    await timer.tick();
+    expect(fake.applied).toHaveLength(1);
     expect(
       events.filter((event) => event.kind === "repair-failed"),
-    ).toHaveLength(2);
-    expect(timer.clears()).toBe(1);
+    ).toHaveLength(1);
+
+    // Mid-window: no write. At the second deadline: the next attempt.
+    clock = REPAIR_BACKOFF_BASE_MS + 250;
+    await timer.tick();
+    expect(fake.applied).toHaveLength(1);
+    clock = REPAIR_BACKOFF_BASE_MS * 2;
+    await timer.tick();
+    expect(fake.applied).toHaveLength(2);
+    expect(timer.clears()).toBe(0);
+
+    // A success clears the streak, so a later flip is retried from the base delay.
+    fake.refuse(false);
+    clock = REPAIR_BACKOFF_BASE_MS * 4;
+    await timer.tick();
+    expect(fake.applied).toHaveLength(3);
+    expect(events.at(-1)?.kind).toBe("repaired");
+
+    fake.show(RASTER_12);
+    fake.refuse(true);
+    clock = REPAIR_BACKOFF_BASE_MS * 4 + 250;
+    await timer.tick();
+    expect(fake.applied).toHaveLength(4);
+  });
+});
+
+describe("consoleFontUnavailableReason", () => {
+  test("names the helper's attach failure instead of blaming the console", () => {
+    expect(consoleFontUnavailableReason("attach")).toBe(
+      "the console helper could not attach to this console",
+    );
+    expect(consoleFontUnavailableReason(null)).toBe(
+      "the console does not answer",
+    );
+    expect(consoleFontUnavailableReason("")).toBe(
+      "the console does not answer",
+    );
+    expect(consoleFontUnavailableReason("spawn")).toBe(
+      "the console helper failed: spawn",
+    );
   });
 });

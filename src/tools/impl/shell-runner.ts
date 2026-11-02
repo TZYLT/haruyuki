@@ -1,12 +1,14 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { isUsableDirectory } from "@/helpers/usable-directory";
+import { requestConsoleRepairCheck } from "@/utils/console-repair-signal";
 import { wrapManagedWorkloadLauncher } from "@/utils/systemd-workload-scope";
 import { noteExpectedWorktreeForLauncher } from "@/websocket/listener/worktree-ownership";
 import {
   createGitHubPullRequestOutputTracker,
   type ShellSourceCommand,
 } from "./github-pull-request-tracker.js";
+import { needsHiddenWindowsConsole } from "./shell-launchers.js";
 
 export class ShellExecutionError extends Error {
   code?: string;
@@ -29,6 +31,14 @@ export type ShellSpawnOptions = {
   tty?: boolean;
   /** Disable when the caller already keeps its own bounded output buffer. */
   captureOutput?: boolean;
+  /**
+   * Test seam: the implementation the **pipeline** spawn calls.
+   *
+   * `windowsHide` is an argument to `spawn`, not something the child can report,
+   * so the Windows pipeline rule is pinned by capturing the options a fake spawn
+   * receives. Production omits this and gets the real `node:child_process.spawn`.
+   */
+  spawnImpl?: typeof spawn;
 };
 
 export interface ShellProcessHandle {
@@ -224,13 +234,22 @@ function spawnPipeProcess(
     throw new ShellExecutionError("Executable is required");
   }
 
-  const childProcess: ChildProcess = spawn(executable, args, {
-    cwd: options.cwd,
-    env: options.env,
-    shell: false,
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: process.platform !== "win32",
-  });
+  const childProcess: ChildProcess = (options.spawnImpl ?? spawn)(
+    executable,
+    args,
+    {
+      cwd: options.cwd,
+      env: options.env,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
+      // R-08.1: a piped Windows shell shares this console, and starting Windows
+      // PowerShell 5.1 in a console is what flips the window to the raster font.
+      // Its own hidden console keeps that start-up off the TUI's window. Only
+      // the pipeline path asks for it; the PTY path must keep the shared console.
+      ...(needsHiddenWindowsConsole(executable) ? { windowsHide: true } : {}),
+    },
+  );
 
   childProcess.stdout?.on("data", (chunk: Buffer) => {
     events.output(chunk, "stdout");
@@ -469,6 +488,12 @@ export function startShellProcess(
       cleanup();
       flushOutputDecoders();
       void pullRequestTracker?.finish();
+      // R-08.2: the child that just ran may have flipped this console's font on
+      // start-up (Windows PowerShell 5.1 does). Ask the armed guard to check now
+      // instead of waiting for its next poll, which shrinks the flipped window to
+      // near zero. `utils/console-repair-signal.ts` is a leaf so `tools/` never
+      // imports `cli/`; with no handler armed this is a no-op.
+      requestConsoleRepairCheck();
       const stdout = Buffer.concat(stdoutChunks).toString("utf8");
       const stderr = Buffer.concat(stderrChunks).toString("utf8");
       if (timedOut) {

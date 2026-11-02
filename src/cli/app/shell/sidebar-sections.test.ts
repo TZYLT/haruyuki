@@ -13,6 +13,7 @@ import {
   sidebarGeometry,
   sidebarWidth,
   transcriptColumns,
+  USAGE_LABEL_COLUMN,
 } from "./sidebar-sections";
 
 function section(id: string, detailRows = 2): SidebarSectionSpec {
@@ -248,11 +249,11 @@ describe("buildSidebarSections", () => {
       (item) => item.id === "context",
     );
     // Four parts, each a measurement of the last request. System and tools get
-    // a row each: the split is the point, and `sys 31k · tools 4k` on a narrow
-    // rail reads as a single number.
-    expect(context?.detail[1]).toBe("sys 8k");
-    expect(context?.detail[2]).toBe("tools 31k");
-    expect(context?.detail[3]).toBe("chat 23k");
+    // a row each: the split is the point, and an estimate carries `~`, as does
+    // the share derived from it (R-06.2 / R-05.4).
+    expect(context?.detail[1]).toBe("sys+mem  ~8k (~10%)");
+    expect(context?.detail[2]).toBe("tools  ~31k (~37%)");
+    expect(context?.detail[3]).toBe("chat  ~23k (~27%)");
     expect(context?.detail[4]).toBe("reasoning 800");
   });
 
@@ -260,9 +261,9 @@ describe("buildSidebarSections", () => {
     const context = buildSidebarSections(
       projection({ contextBreakdown: null }),
     ).find((item) => item.id === "context");
-    expect(context?.detail[1]).toBe("sys —");
-    expect(context?.detail[2]).toBe("tools —");
-    expect(context?.detail[3]).toBe("chat —");
+    expect(context?.detail[1]).toBe("sys+mem  —");
+    expect(context?.detail[2]).toBe("tools  —");
+    expect(context?.detail[3]).toBe("chat  —");
   });
 
   test("the Turn section reads the turn projection, not the session", () => {
@@ -337,16 +338,47 @@ describe("buildSidebarSections", () => {
         },
       }),
     ).find((item) => item.id === "usage");
-    // Hit above miss, one decimal on the share; the output row reads the day's
-    // completion count, not the cache-fill bucket.
+    // Hit above miss, two decimals on the share (R-06.4), and both columns
+    // left-aligned: the label cell is fixed and every value starts in column 8
+    // (R-06.1). The output row reads the day's completion count, not the
+    // cache-fill bucket.
     expect(wired?.detail).toEqual([
-      "today 26k tok",
-      "hit 1.2k (26.1%)",
-      "miss 3.4k",
-      "out 540",
-      "cost $ 0.12",
+      "today  26k tok",
+      "hit    1.2k (26.09%)",
+      "miss   3.4k",
+      "out    540",
+      "cost   $ 0.12",
     ]);
     expect(wired?.summary).toBe("today 26k tok");
+  });
+
+  test("the Usage values share one left-aligned column (R-06.1)", () => {
+    const usage = buildSidebarSections(
+      projection({
+        today: {
+          tokens: 26_400,
+          turns: 1,
+          cacheReadTokens: 1_200,
+          uncachedTokens: 3_400,
+          outputTokens: 540,
+          hitRate: 1_200 / 4_600,
+          costUsd: 0.12,
+        },
+      }),
+    ).find((item) => item.id === "usage");
+
+    const columns = (usage?.detail ?? []).map((line) =>
+      line.slice(0, USAGE_LABEL_COLUMN).trim(),
+    );
+    expect(columns).toEqual(["today", "hit", "miss", "out", "cost"]);
+    for (const line of usage?.detail ?? []) {
+      // A left-aligned label column, then the value at the same column every row.
+      expect(line[USAGE_LABEL_COLUMN]).not.toBe(" ");
+    }
+    // `today` leaves two spaces, `hit` four — the fixed cell, not one measured
+    // per frame.
+    expect(usage?.detail[0]?.startsWith("today  26k")).toBe(true);
+    expect(usage?.detail[1]?.startsWith("hit    1.2k")).toBe(true);
   });
 
   test("a day with no input has no hit rate to print, not a zero percent", () => {
@@ -361,8 +393,8 @@ describe("buildSidebarSections", () => {
         },
       }),
     ).find((item) => item.id === "usage");
-    expect(usage?.detail[1]).toBe("hit 0");
-    expect(usage?.detail[2]).toBe("miss 0");
+    expect(usage?.detail[1]).toBe("hit    0");
+    expect(usage?.detail[2]).toBe("miss   0");
   });
 
   test("an unpriced day shows a dash, not a free turn", () => {
@@ -378,7 +410,7 @@ describe("buildSidebarSections", () => {
         },
       }),
     ).find((item) => item.id === "usage");
-    expect(usage?.detail[4]).toBe("cost —");
+    expect(usage?.detail[4]).toBe("cost   —");
   });
 
   test("a sub-cent day is not rounded into a false free", () => {
@@ -395,7 +427,42 @@ describe("buildSidebarSections", () => {
         },
       }),
     ).find((item) => item.id === "usage");
-    expect(usage?.detail[4]).toBe("cost $ <0.01");
+    expect(usage?.detail[4]).toBe("cost   $ <0.01");
+  });
+
+  test("a share that does not fit wraps under the value column (Q-29)", () => {
+    const today = {
+      tokens: 787_776,
+      turns: 9,
+      cacheReadTokens: 123_456,
+      uncachedTokens: 654_321,
+      outputTokens: 77_777,
+      hitRate: 0.1588,
+      costUsd: 12.34,
+    };
+    // 18 content columns is unreachable from the rail (Q-50) but is the pure
+    // function's floor: the row must not lose its percentage there.
+    const narrow = buildSidebarSections(projection({ width: 18, today }));
+    const usage = narrow.find((item) => item.id === "usage");
+    expect(usage?.detail).toContain("hit    123k");
+    expect(usage?.detail).toContain("       (15.88%)");
+    expect(usage?.detail).toHaveLength(6);
+
+    const context = narrow.find((item) => item.id === "context");
+    expect(context?.detail).toContain("sys+mem  ~8k");
+    expect(context?.detail).toContain("         (~10%)");
+
+    for (const line of [...(usage?.detail ?? []), ...(context?.detail ?? [])]) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(18);
+    }
+
+    // 22 content columns is the narrowest rail that can actually be drawn: every
+    // row stays one line there, so the rail does not grow taller when it narrows.
+    const reachable = buildSidebarSections(
+      projection({ width: 22, today }),
+    ).find((item) => item.id === "usage");
+    expect(reachable?.detail).toHaveLength(5);
+    expect(reachable?.detail[1]).toBe("hit    123k (15.88%)");
   });
 
   test("memfs says what is missing, and counts bytes rather than megabytes", () => {

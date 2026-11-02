@@ -119,9 +119,9 @@ export const DEFAULT_CONSOLE_FONT = {
  *
  * The console can only draw a fixed-pitch TrueType face, and a face the machine
  * does not have cannot be applied — conhost answers the call and keeps drawing
- * something else, which the guard would then log as `not-taken` twice and stop
- * over. Choosing from the inventory the console reports is the difference between
- * "hold Consolas" and "hold a font that exists".
+ * something else, which the guard would then log as `not-taken` and retry with a
+ * growing delay. Choosing from the inventory the console reports is the
+ * difference between "hold Consolas" and "hold a font that exists".
  *
  * The CJK-capable monospace faces come last on purpose: `新宋体` is the face the
  * console already falls back to, and its small-size bitmaps are the artifact being
@@ -190,6 +190,17 @@ export type ConsoleFontGuardEvent =
   | { kind: "repair-failed"; target: ConsoleFontTarget }
   /** The console accepted the call and drew a different face (substitution). */
   | { kind: "not-taken"; target: ConsoleFontTarget; observed: ConsoleFont }
+  /**
+   * A refused repair is not the end: the guard stays armed and waits out a
+   * growing delay (R-08.3). This is the warning that the next attempt is
+   * deferred, so the log says "still trying" instead of silently going quiet.
+   */
+  | {
+      kind: "repair-deferred";
+      target: ConsoleFontTarget;
+      failures: number;
+      retryInMs: number;
+    }
   | { kind: "unavailable" };
 
 export interface ConsoleFontGuard {
@@ -213,12 +224,34 @@ export interface ConsoleFontGuardOptions {
   onEvent?: (event: ConsoleFontGuardEvent) => void;
   /** Poll interval in milliseconds; `0` checks once and arms no timer. */
   intervalMs?: number;
+  /**
+   * Clock for the repair backoff. Injectable so a test can drive the schedule
+   * without waiting on real seconds.
+   */
+  now?: () => number;
+  /**
+   * First retry delay after a refused repair; doubles per consecutive failure up
+   * to `backoffMaxMs` (R-08.3).
+   */
+  backoffBaseMs?: number;
+  /** The cap on the growing retry delay. */
+  backoffMaxMs?: number;
   setIntervalImpl?: typeof setInterval;
   clearIntervalImpl?: typeof clearInterval;
 }
 
-/** How many refusals in a row end the polling. */
-const MAX_REPAIR_FAILURES = 2;
+/** First retry delay after a refused repair; doubles per consecutive failure. */
+export const REPAIR_BACKOFF_BASE_MS = 1_000;
+
+/**
+ * The longest a refused repair waits before it is tried again.
+ *
+ * A failure must not disarm the guard (R-08.3): the console may accept the next
+ * attempt — another program can release it, or the user can change the window's
+ * properties — and a decommissioned guard would then be exactly the silent
+ * "font changed and stayed changed" the feature exists to prevent.
+ */
+export const REPAIR_BACKOFF_MAX_MS = 30_000;
 
 /** Whether this reading is the raster fallback rather than a scalable face. */
 export function isRasterConsoleFont(
@@ -271,6 +304,26 @@ export function parseConsoleFontMode(value: unknown): ConsoleFontMode {
   return { pinnedFace: trimmed };
 }
 
+/**
+ * The `/config console-font` reason when no port could be opened (R-08.4).
+ *
+ * The Node runtime reaches Win32 through a PowerShell helper, and its failure to
+ * attach to this console is the one case worth naming: "the console does not
+ * answer" would describe a console that refuses the calls, not a helper that
+ * never joined it. Every other helper failure keeps its own message.
+ */
+export function consoleFontUnavailableReason(
+  helperFailure: string | null,
+): string {
+  if (helperFailure === null || helperFailure === "") {
+    return "the console does not answer";
+  }
+  if (helperFailure === "attach") {
+    return "the console helper could not attach to this console";
+  }
+  return `the console helper failed: ${helperFailure}`;
+}
+
 /** The face to write back, or `null` when the guard is off. */
 export function consoleFontTargetFor(
   mode: ConsoleFontMode,
@@ -315,8 +368,11 @@ export function consoleFontTargetFor(
  * Every write is **verified with a second reading**. conhost may accept the call and
  * draw something else — a CJK-only console substitutes `宋体` for a Western face —
  * and without the check the guard would rewrite the same rejected font every tick:
- * a flicker forever, and a repair that exists only to fight itself. Two rejections
- * end the polling with a logged reason, which is the honest outcome.
+ * a flicker forever, and a repair that exists only to fight itself. A refusal or a
+ * substitution is therefore retried with a **growing delay** (R-08.3), and the
+ * guard stays armed: one bad moment must not leave the window in the raster font
+ * for the rest of the session. It ends only when the mode changes or the console
+ * stops answering.
  *
  * A console that does not answer (a ConPTY host, a redirected stdout) ends the guard
  * on the first reading instead of spawning a timer that can never do anything.
@@ -333,12 +389,16 @@ export async function startConsoleFontGuard(
     defaultFace,
     onEvent,
     intervalMs = 0,
+    now = Date.now,
+    backoffBaseMs = REPAIR_BACKOFF_BASE_MS,
+    backoffMaxMs = REPAIR_BACKOFF_MAX_MS,
     setIntervalImpl = setInterval,
     clearIntervalImpl = clearInterval,
   } = options;
 
   let baseline: ConsoleFont | null = null;
-  let refusals = 0;
+  let failures = 0;
+  let retryAt = 0;
   let stopped = mode === "off";
   let checking = false;
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -353,8 +413,29 @@ export async function startConsoleFontGuard(
     port.close?.();
   };
 
+  /**
+   * Count a refused repair and schedule the next attempt with exponential backoff.
+   *
+   * The write is not repeated on the next tick: a console that just refused it
+   * will refuse it again 250 ms later, and a guard that rewrote it every tick is
+   * a flicker that fights itself. The delay doubles per consecutive failure up to
+   * the cap, and any check that finds the target face in place clears the count
+   * (see `check`), so a recovered console is back on the fast poll immediately.
+   */
+  const deferRepair = (target: ConsoleFontTarget): void => {
+    failures += 1;
+    const retryInMs = Math.min(
+      backoffMaxMs,
+      backoffBaseMs * 2 ** Math.min(failures - 1, 30),
+    );
+    retryAt = now() + retryInMs;
+    onEvent?.({ kind: "repair-deferred", target, failures, retryInMs });
+  };
+
   const check = async (): Promise<void> => {
     if (stopped || checking) return;
+    // Still waiting out the last refusal.
+    if (now() < retryAt) return;
     checking = true;
     try {
       const current = await port.read();
@@ -378,13 +459,18 @@ export async function startConsoleFontGuard(
 
       const holding =
         current.face === target.face && !isRasterConsoleFont(current);
-      if (holding) return;
+      if (holding) {
+        // The console is where it should be again: whatever failed before is no
+        // longer a live streak, so a future flip gets the fast first retry.
+        failures = 0;
+        retryAt = 0;
+        return;
+      }
 
       if (!(await port.apply(target))) {
         if (stopped) return;
-        refusals += 1;
         onEvent?.({ kind: "repair-failed", target });
-        if (refusals >= MAX_REPAIR_FAILURES) stop();
+        deferRepair(target);
         return;
       }
 
@@ -396,13 +482,13 @@ export async function startConsoleFontGuard(
         return;
       }
       if (observed.face !== target.face) {
-        refusals += 1;
         onEvent?.({ kind: "not-taken", target, observed });
-        if (refusals >= MAX_REPAIR_FAILURES) stop();
+        deferRepair(target);
         return;
       }
 
-      refusals = 0;
+      failures = 0;
+      retryAt = 0;
       onEvent?.({ kind: "repaired", before: current, target });
     } catch {
       // A port that *throws* is a port that cannot answer: a helper process that
