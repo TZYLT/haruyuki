@@ -52,6 +52,7 @@ import { ToolsetSelector } from "@/cli/components/ToolsetSelector";
 import { isTopicOverlay, TopicOverlays } from "@/cli/components/TopicOverlays";
 import { WindowTitlePicker } from "@/cli/components/WindowTitlePicker";
 import { WorktreeDiffSelector } from "@/cli/components/WorktreeDiffSelector";
+import { EmbeddingStatusRow } from "@/cli/display/product-status/EmbeddingStatusRow";
 import { type Buffers, type Line, toLines } from "@/cli/helpers/accumulator";
 import { backfillBuffers } from "@/cli/helpers/backfill";
 import {
@@ -489,6 +490,8 @@ export function AppView(props: AppViewRenderProps) {
 
             {/* The shell's toast band; the append shell reserves no rows for one. */}
             {props.aboveInput && <props.aboveInput />}
+            {/* D6: the embedding status row; it paints nothing while the feature is off. */}
+            <EmbeddingStatusRow width={chromeColumns} />
             {/* Input row - always mounted to preserve state */}
             <Box marginTop={1}>
               <Input

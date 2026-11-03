@@ -750,6 +750,16 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           return { submitted: true };
         }
 
+        // D6: `/recall embedding …` runs through D4's handler, with the settings
+        // page as its first-run seam (the action module owns the branch).
+        if (/^\/recall\s+embedding(?:\s|$)/.test(trimmed)) {
+          const { runEmbeddingSubmitCommand } = await import(
+            "@/cli/commands/embedding-submit"
+          );
+          await runEmbeddingSubmitCommand(trimmed, commandScope, commandRunner);
+          return { submitted: true };
+        }
+
         // Special handling for /toolset command - opens selector
         if (trimmed === "/toolset") {
           openOverlay(

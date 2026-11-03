@@ -13,6 +13,7 @@ import { loadPreloadedSkills } from "@/agent/preloaded-skills";
 import { subscribeReflectionRunFinished } from "@/agent/reflection-run";
 import { formatReflectionRunFinishedNotification } from "@/agent/reflection-run-notification";
 import { shouldLaunchThroughListener } from "@/agent/subagents/subagent-launcher";
+import { applyEmbeddingSetupFlags } from "@/cli/commands/embedding-flags";
 import { buildHeadlessSenderReminder } from "@/headless-message-sender";
 import { createHeadlessResponseState } from "@/headless-response-state";
 import { getTerminalTelemetrySurface, telemetry } from "@/telemetry";
@@ -1322,6 +1323,22 @@ export async function handleHeadlessCommand(
         `Failed to init secrets: ${error instanceof Error ? error.message : String(error)}`,
       ),
     );
+  }
+
+  // D6: the non-interactive first-run path for vector recall (48-1 §7.1). A bad
+  // flag combination is refused before anything writes; enabling without a
+  // backend choice prints the copy-paste setup instead of writing an index with
+  // no model. The receipt goes to stderr because stdout carries the protocol.
+  const embeddingFlags = await applyEmbeddingSetupFlags(values, {
+    agentId: agent.id,
+    conversationId: null,
+  });
+  if (!embeddingFlags.ok) {
+    console.error(`Error: ${embeddingFlags.error}`);
+    process.exit(1);
+  }
+  if (embeddingFlags.receipt.length > 0) {
+    console.error(embeddingFlags.receipt);
   }
 
   // Apply --system flag after memfs sync so isMemfsEnabled() is up to date.

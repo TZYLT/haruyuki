@@ -29,6 +29,7 @@
  */
 
 import type { DreamCommandScope } from "@/agent/reflection-runs";
+import type { EmbeddingBuildStateSnapshot } from "@/backend/local/embedding-build-state";
 import { saveEmbeddingApiKey } from "@/cli/app/pages/settings/embedding-secrets";
 import {
   EmbeddingSettingsError,
@@ -38,11 +39,20 @@ import {
   validateEmbeddingSettingsPatch,
 } from "@/cli/app/pages/settings/embedding-settings";
 import type { EmbeddingSetupFlags } from "@/cli/args";
+import {
+  formatEmbeddingBuildSnapshotLines,
+  formatEmbeddingMetricsLines,
+  formatEmbeddingStoredCalibrationLine,
+} from "@/cli/commands/embedding-status";
 import { embeddingSetCommand } from "@/cli/helpers/settings-deep-link";
 import {
   type ResolvedEmbeddingSettings,
   readEmbeddingSettings,
 } from "@/recall-settings";
+import {
+  type EmbeddingMetricsSnapshot,
+  embeddingMetrics,
+} from "@/reminders/embedding-metrics";
 import { settingsManager } from "@/settings-manager";
 import type {
   EmbeddingBuildMode,
@@ -372,6 +382,12 @@ export interface EmbeddingRuntimeStatus {
   ready: boolean;
   space: EmbeddingRuntimeSpace | null;
   build: EmbeddingRuntimeBuildProgress | null;
+  /**
+   * A2's raw build-state projection (`state.json`), when the runtime can read
+   * it. Used for the extra coverage/rate/skipped lines only while {@link build}
+   * is absent, so the same progress is never printed twice.
+   */
+  buildSnapshot?: EmbeddingBuildStateSnapshot | null;
   calibration: EmbeddingRuntimeCalibration | null;
   /** Endpoint queries leave the machine (non-loopback base URL). */
   egress: boolean;
@@ -445,6 +461,12 @@ export interface EmbeddingCommandDeps {
   saveApiKey?: (value: string, agentId: string | null) => Promise<unknown>;
   /** Environment for `--recall-embedding-api-key-env`; defaults to `process.env`. */
   env?: Record<string, string | undefined>;
+  /**
+   * The process-wide recall telemetry (`embedding-metrics`); defaults to the
+   * shared recorder, because the turn path and this command live in one
+   * process.
+   */
+  readMetrics?: () => EmbeddingMetricsSnapshot | null;
 }
 
 interface ResolvedDeps {
@@ -455,6 +477,7 @@ interface ResolvedDeps {
   openSetup: ((commandInput: string) => boolean) | null;
   saveApiKey: (value: string, agentId: string | null) => Promise<unknown>;
   env: Record<string, string | undefined>;
+  readMetrics: () => EmbeddingMetricsSnapshot | null;
 }
 
 function readRawSettingsRecord(): Record<string, unknown> {
@@ -477,6 +500,11 @@ function resolveDeps(deps: EmbeddingCommandDeps): ResolvedDeps {
       deps.saveApiKey ??
       ((value, agentId) => saveEmbeddingApiKey(value, agentId ?? undefined)),
     env: deps.env ?? process.env,
+    // The process-wide recorder is the status face's source by default: the turn
+    // path and this command share one process, so a round the turn recorded is
+    // exactly what status should show. An injected reader still wins (tests,
+    // and a future per-agent recorder).
+    readMetrics: deps.readMetrics ?? (() => embeddingMetrics.snapshot()),
   };
 }
 
@@ -598,6 +626,7 @@ function formatStatus(
   configured: boolean,
   runtime: EmbeddingRuntimeStatus | null,
   runtimeNote: "not-wired" | "no-agent" | null,
+  metrics: EmbeddingMetricsSnapshot | null,
 ): string {
   const lines: string[] = [];
   const enabled = settings.enabled ? "on" : "off";
@@ -625,25 +654,35 @@ function formatStatus(
   );
   if (runtimeNote === "not-wired") {
     lines.push(`Space: ${RUNTIME_UNAVAILABLE.status}`);
+    lines.push(...formatEmbeddingStoredCalibrationLine(settings.calibration));
   } else if (runtimeNote === "no-agent") {
     lines.push(
       "Space: pass --agent <id> to inspect the index (or run this in a session).",
     );
+    lines.push(...formatEmbeddingStoredCalibrationLine(settings.calibration));
   } else if (runtime !== null) {
     if (runtime.space !== null) lines.push(formatSpace(runtime.space));
     else lines.push("Space: not built yet — run /recall embedding build");
     if (runtime.build !== null) lines.push(formatBuild(runtime.build));
-    else lines.push("Build: idle — run /recall embedding build");
+    else if (runtime.buildSnapshot) {
+      lines.push(...formatEmbeddingBuildSnapshotLines(runtime.buildSnapshot));
+    } else lines.push("Build: idle — run /recall embedding build");
     if (runtime.calibration !== null) {
       lines.push(formatCalibration(runtime.calibration));
     } else {
-      lines.push("Calibration: not measured yet");
+      const stored = formatEmbeddingStoredCalibrationLine(settings.calibration);
+      lines.push(
+        ...(stored.length > 0 ? stored : ["Calibration: not measured yet"]),
+      );
     }
     lines.push(
       `Ready: ${runtime.ready ? "yes, queries can use the index" : "no, the next query falls back to lexical recall"}`,
     );
     if (runtime.failure !== null) lines.push(`Failure: ${runtime.failure}`);
   }
+  // D6's two-arm counters, after the configuration lines: they answer "did the
+  // vector arm do anything" (S-04), which the settings cannot.
+  lines.push(...formatEmbeddingMetricsLines(metrics));
   if (!settings.enabled && configured) {
     lines.push("Next: /recall embedding on to enable it.");
   } else if (!configured) {
@@ -702,15 +741,16 @@ async function runStatus(
   const settings = deps.readSettings();
   const configured = isEmbeddingConfigured(deps.readRawSettings);
   const runtime = deps.runtime;
+  const metrics = deps.readMetrics();
   if (runtime?.readStatus === undefined) {
-    return formatStatus(settings, configured, null, "not-wired");
+    return formatStatus(settings, configured, null, "not-wired", metrics);
   }
   const runtimeScopeValue = runtimeScope(scope);
   if (runtimeScopeValue === null) {
-    return formatStatus(settings, configured, null, "no-agent");
+    return formatStatus(settings, configured, null, "no-agent", metrics);
   }
   const status = await runtime.readStatus(runtimeScopeValue);
-  return formatStatus(settings, configured, status, null);
+  return formatStatus(settings, configured, status, null, metrics);
 }
 
 async function runBuild(
