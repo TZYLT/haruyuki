@@ -1,25 +1,37 @@
 import { describe, expect, test } from "bun:test";
 import {
+  applyInstructionPrefix,
   assertHiddenStateShape,
+  assertModelVectorDimensions,
   chunkItems,
   countSequenceTokens,
   DEFAULT_BATCH_MAX_SIZE,
   DEFAULT_BATCH_MAX_TOKENS,
   decodeVectorBase64,
+  type EmbeddingModelFeaturizeSpec,
   encodeVectorBase64,
   FeaturizeError,
+  featurizeText,
   flattenVectors,
   l2Normalize,
+  maskedClsPool,
+  maskedLastTokenPool,
   maskedMeanPool,
   padTokenBatch,
   planTokenBatches,
   poolBatch,
+  poolModelBatch,
+  poolSequence,
   resolveAttentionMask,
+  resolveFeaturizeSpec,
+  resolveModelInputNames,
+  resolveTokenTypeIds,
   sliceVector,
   sumSequenceTokens,
   type TokenizedSequence,
   truncateSequence,
 } from "./featurize";
+import { getBuiltinModelManifest } from "./model-manifest";
 
 function norm(vector: Float32Array): number {
   let total = 0;
@@ -428,5 +440,211 @@ describe("determinism", () => {
         })[0] ?? [],
       );
     expect(run()).toEqual(run());
+  });
+});
+
+describe("token_type_ids (BGE has them, XLM-R/Qwen do not)", () => {
+  test("defaults to zeros and preserves supplied segment ids", () => {
+    expect(resolveTokenTypeIds({ inputIds: [1, 2, 3] })).toEqual([0, 0, 0]);
+    expect(
+      resolveTokenTypeIds({ inputIds: [1, 2], tokenTypeIds: [0, 1] }),
+    ).toEqual([0, 1]);
+  });
+
+  test("rejects a length mismatch or an invalid segment id", () => {
+    expect(() =>
+      resolveTokenTypeIds({ inputIds: [1, 2], tokenTypeIds: [0] }),
+    ).toThrow(/token type ids/);
+    expect(() =>
+      resolveTokenTypeIds({ inputIds: [1], tokenTypeIds: [-1] }),
+    ).toThrow(/non-negative integer/);
+    expect(() =>
+      resolveTokenTypeIds({ inputIds: [1], tokenTypeIds: [0.5] }),
+    ).toThrow(FeaturizeError);
+  });
+
+  test("truncation keeps segment ids aligned", () => {
+    expect(
+      truncateSequence({ inputIds: [1, 2, 3], tokenTypeIds: [0, 1, 1] }, 2),
+    ).toEqual({ inputIds: [1, 2], tokenTypeIds: [0, 1] });
+  });
+
+  test("padding emits segment ids only when present, with zero padding", () => {
+    const without = padTokenBatch([{ inputIds: [5, 6] }, { inputIds: [7] }], 0);
+    expect(without.tokenTypeIds).toBeUndefined();
+    const withIds = padTokenBatch(
+      [{ inputIds: [5, 6], tokenTypeIds: [0, 1] }, { inputIds: [7] }],
+      0,
+    );
+    expect(Array.from(withIds.tokenTypeIds ?? [])).toEqual([0, 1, 0, 0]);
+    expect(Array.from(withIds.attentionMask)).toEqual([1, 1, 1, 0]);
+    const forced = padTokenBatch([{ inputIds: [1] }], 9, {
+      includeTokenTypeIds: true,
+    });
+    expect(Array.from(forced.tokenTypeIds ?? [])).toEqual([0]);
+  });
+});
+
+describe("pooling strategies", () => {
+  const hidden = Float32Array.from([1, 2, 3, 4, 5, 6]); // 2 tokens x dim 3.
+
+  test("CLS takes the first token and refuses a masked first token", () => {
+    expectVectorClose(
+      maskedClsPool(hidden, { tokens: 2, dim: 3, mask: [1, 1] }),
+      [1, 2, 3],
+    );
+    expect(() =>
+      maskedClsPool(hidden, { tokens: 2, dim: 3, mask: [0, 1] }),
+    ).toThrow(/first token/);
+  });
+
+  test("last-token pool takes the last unmasked token", () => {
+    expectVectorClose(
+      maskedLastTokenPool(hidden, { tokens: 2, dim: 3, mask: [1, 1] }),
+      [4, 5, 6],
+    );
+    expectVectorClose(
+      maskedLastTokenPool(Float32Array.from([1, 2, 3, 999, 999, 999]), {
+        tokens: 2,
+        dim: 3,
+        mask: [1, 0],
+      }),
+      [1, 2, 3],
+    );
+    expect(() =>
+      maskedLastTokenPool(hidden, { tokens: 2, dim: 3, mask: [0, 0] }),
+    ).toThrow(/unmasked token/);
+  });
+
+  test("poolSequence and poolBatch dispatch by the declared strategy", () => {
+    const options = {
+      hidden,
+      sequences: 1,
+      tokens: 2,
+      dim: 3,
+      masks: [[1, 1]],
+    };
+    const mean = poolBatch(options)[0] ?? [];
+    const cls = poolBatch({ ...options, pooling: "cls" })[0] ?? [];
+    const last = poolBatch({ ...options, pooling: "last" })[0] ?? [];
+    expect(Array.from(cls)).toEqual(
+      Array.from(l2Normalize(Float32Array.from([1, 2, 3]))),
+    );
+    expect(Array.from(last)).toEqual(
+      Array.from(l2Normalize(Float32Array.from([4, 5, 6]))),
+    );
+    expect(Array.from(mean)).not.toEqual(Array.from(cls));
+    expectVectorClose(
+      poolSequence(hidden, { tokens: 2, dim: 3, mask: [1, 1], pooling: "cls" }),
+      [1, 2, 3],
+    );
+    expect(() => poolBatch({ ...options, pooling: "median" as never })).toThrow(
+      /Unknown pooling strategy/,
+    );
+  });
+});
+
+describe("model manifest bridge (three families)", () => {
+  const bge = getBuiltinModelManifest("bge-small-zh-v1.5");
+  const m3 = getBuiltinModelManifest("bge-m3");
+  const qwen = getBuiltinModelManifest("qwen3-embedding-0.6b");
+
+  test("resolves inputs, pooling, dimensions and max tokens per family", () => {
+    const bgeSpec = resolveFeaturizeSpec(bge);
+    expect(bgeSpec.pooling).toBe("mean");
+    expect(bgeSpec.dimensions).toBe(512);
+    expect(bgeSpec.maxTokens).toBe(512);
+    expect(resolveModelInputNames(bgeSpec.inputNames).tokenTypeIds).toBe(
+      "token_type_ids",
+    );
+    const m3Spec = resolveFeaturizeSpec(m3);
+    expect(m3Spec.pooling).toBe("cls");
+    expect(m3Spec.dimensions).toBe(1_024);
+    expect(m3Spec.maxTokens).toBe(8_192);
+    expect(resolveModelInputNames(m3Spec.inputNames).tokenTypeIds).toBeNull();
+    const qwenSpec = resolveFeaturizeSpec(qwen);
+    expect(qwenSpec.pooling).toBe("last");
+    expect(qwenSpec.dimensions).toBe(1_024);
+    expect(qwenSpec.maxTokens).toBe(32_768);
+    expect(resolveModelInputNames(qwenSpec.inputNames).tokenTypeIds).toBeNull();
+  });
+
+  test("query/document instruction prefixes follow the manifest", () => {
+    expect(
+      featurizeText("为什么", resolveFeaturizeSpec(bge), "query"),
+    ).toStartWith("为这个句子");
+    expect(featurizeText("正文", resolveFeaturizeSpec(bge), "document")).toBe(
+      "正文",
+    );
+    expect(featurizeText("为什么", resolveFeaturizeSpec(m3), "query")).toBe(
+      "为什么",
+    );
+    const qwenSpec = resolveFeaturizeSpec(qwen);
+    expect(featurizeText("why", qwenSpec, "query")).toStartWith("Instruct:");
+    expect(featurizeText("why", qwenSpec, "document")).toBe("why");
+    expect(() => featurizeText("", qwenSpec, "query")).toThrow(/empty/);
+  });
+
+  test("the same hidden state pools differently per family", () => {
+    const hidden = Float32Array.from([1, 2, 3, 4, 5, 6]);
+    const options = {
+      hidden,
+      sequences: 1,
+      tokens: 2,
+      dim: 3,
+      masks: [[1, 1]],
+    };
+    const spec = (
+      pooling: "mean" | "cls" | "last",
+    ): EmbeddingModelFeaturizeSpec => ({
+      inputNames: ["input_ids", "attention_mask"],
+      pooling,
+      dimensions: 3,
+      maxTokens: 8,
+      queryInstruction: null,
+      documentInstruction: null,
+    });
+    const mean = poolModelBatch({ ...options, spec: spec("mean") })[0] ?? [];
+    const cls = poolModelBatch({ ...options, spec: spec("cls") })[0] ?? [];
+    const last = poolModelBatch({ ...options, spec: spec("last") })[0] ?? [];
+    expect(Array.from(cls)).toEqual(
+      Array.from(l2Normalize(Float32Array.from([1, 2, 3]))),
+    );
+    expect(Array.from(last)).toEqual(
+      Array.from(l2Normalize(Float32Array.from([4, 5, 6]))),
+    );
+    expect(Array.from(mean)).not.toEqual(Array.from(cls));
+    expect(Array.from(mean)).not.toEqual(Array.from(last));
+  });
+
+  test("rejects input names or dimensions the model cannot feed", () => {
+    expect(() =>
+      resolveModelInputNames(["input_ids", "attention_mask", "pixel_values"]),
+    ).toThrow(/Unsupported model input/);
+    expect(() =>
+      resolveModelInputNames(["input_ids", "input_ids", "attention_mask"]),
+    ).toThrow(/more than once/);
+    expect(() => resolveModelInputNames(["input_ids"])).toThrow(
+      /input_ids and attention_mask/,
+    );
+    expect(() => resolveModelInputNames([])).toThrow(FeaturizeError);
+    const spec = resolveFeaturizeSpec(bge);
+    expect(() =>
+      assertModelVectorDimensions(new Float32Array(512), spec),
+    ).not.toThrow();
+    expect(() =>
+      assertModelVectorDimensions(new Float32Array(1_024), spec),
+    ).toThrow(/512-dimensional/);
+    expect(() =>
+      poolModelBatch({
+        hidden: Float32Array.from([1, 2, 3, 1, 2, 3]),
+        sequences: 1,
+        tokens: 2,
+        dim: 3,
+        masks: [[1, 1]],
+        spec: { ...spec, dimensions: 4 },
+      }),
+    ).toThrow(/4-dimensional/);
+    expect(() => applyInstructionPrefix("x", { kind: "query" })).not.toThrow();
   });
 });

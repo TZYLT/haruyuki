@@ -9,7 +9,9 @@
  * 1. **Mask-weighted mean pooling** — pad positions must not contribute, so the
  *    attention mask is the pooling weight (48-1 §6.4). A mask whose weights sum
  *    to zero has no defined mean and is rejected rather than silently returned
- *    as a zero vector.
+ *    as a zero vector. `bge-m3` and `Qwen3-Embedding` do not use mean pooling
+ *    (C8): {@link EmbeddingModelPooling} adds CLS (first token) and
+ *    last-unmasked-token strategies, selected by the model manifest.
  * 2. **L2 normalization** — the index stores one vector per chunk and retrieval
  *    is an inner product, which equals cosine only for unit vectors (48-1
  *    §6.4/§6.3). A zero-norm row cannot be normalized; after normalization the
@@ -38,6 +40,13 @@
  */
 
 import { Buffer } from "node:buffer";
+import type { EmbeddingModelManifest } from "./model-manifest";
+
+/**
+ * Token pooling a model's embedding head expects (48-1 §6.4, C8): `mean`
+ * (bge-small, C3 parity-tested), `cls` (bge-m3) or `last` (Qwen3-Embedding).
+ */
+export type EmbeddingModelPooling = "mean" | "cls" | "last";
 
 /** Default cap on sequences packed into one inference batch. */
 export const DEFAULT_BATCH_MAX_SIZE = 8;
@@ -73,8 +82,8 @@ export class FeaturizeError extends Error {
 
 /**
  * One tokenized text as handed over by a tokenizer adapter. `attentionMask`
- * defaults to all ones; `tokenTypeIds` is optional because the BGE models do not
- * take segment ids.
+ * defaults to all ones; `tokenTypeIds` is optional because only some models take
+ * segment ids (BGE does, XLM-R/`bge-m3` and Qwen do not — 48-1 §5.4, C8).
  */
 export interface TokenizedSequence {
   readonly inputIds: readonly number[];
@@ -101,6 +110,8 @@ export interface PooledBatchOptions {
   readonly dim: number;
   /** One mask per sequence, each `tokens` long. */
   readonly masks: readonly (readonly number[])[];
+  /** Pooling strategy; defaults to mask-weighted mean (C3 behaviour). */
+  readonly pooling?: EmbeddingModelPooling;
 }
 
 /** Options for {@link planTokenBatches}. */
@@ -164,6 +175,31 @@ export function countSequenceTokens(sequence: TokenizedSequence): number {
     "A tokenized sequence must contain at least one token",
   );
   return sequence.inputIds.length;
+}
+
+/**
+ * Resolve the segment ids for one sequence. Absent ids become all zeros (the
+ * neutral segment for graphs without a `token_type_ids` input).
+ */
+export function resolveTokenTypeIds(sequence: TokenizedSequence): number[] {
+  const tokenCount = countSequenceTokens(sequence);
+  const ids = sequence.tokenTypeIds;
+  if (ids === undefined) return Array.from({ length: tokenCount }, () => 0);
+  if (ids.length !== tokenCount) {
+    throw new FeaturizeError(
+      "invalid-argument",
+      `The token type ids have ${ids.length} entries for ${tokenCount} input ids.`,
+    );
+  }
+  return ids.map((id, token) => {
+    if (!Number.isInteger(id) || id < 0) {
+      throw new FeaturizeError(
+        "invalid-argument",
+        `Token type id ${token} is not a non-negative integer.`,
+      );
+    }
+    return id;
+  });
 }
 
 /**
@@ -243,13 +279,138 @@ export function maskedMeanPool(
 ): Float32Array {
   const tokens = assertPositiveInteger(options.tokens, "tokens");
   const dim = assertPositiveInteger(options.dim, "dim");
+  assertHiddenLength(hidden, tokens, dim);
+  return poolRow(hidden, 0, tokens, dim, options.mask);
+}
+
+function assertHiddenLength(
+  hidden: Float32Array,
+  tokens: number,
+  dim: number,
+): void {
   if (hidden.length !== tokens * dim) {
     throw new FeaturizeError(
       "invalid-shape",
       `Expected ${tokens * dim} hidden values for ${tokens} tokens x ${dim} dimensions, received ${hidden.length}.`,
     );
   }
-  return poolRow(hidden, 0, tokens, dim, options.mask);
+}
+
+function maskedTokenRow(
+  hidden: Float32Array,
+  rowOffset: number,
+  tokens: number,
+  dim: number,
+  mask: readonly number[],
+  which: "first" | "last",
+): Float32Array {
+  if (mask.length !== tokens) {
+    throw new FeaturizeError(
+      "invalid-mask",
+      `The attention mask has ${mask.length} entries for ${tokens} tokens.`,
+    );
+  }
+  let token: number;
+  if (which === "first") {
+    if (!((mask[0] ?? 0) > 0)) {
+      throw new FeaturizeError(
+        "invalid-mask",
+        "CLS pooling needs a non-zero weight on the first token.",
+      );
+    }
+    token = 0;
+  } else {
+    token = -1;
+    for (let index = 0; index < tokens; index += 1) {
+      if ((mask[index] ?? 0) > 0) token = index;
+    }
+    if (token < 0) {
+      throw new FeaturizeError(
+        "invalid-mask",
+        "Last-token pooling needs at least one unmasked token.",
+      );
+    }
+  }
+  const pooled = new Float32Array(dim);
+  const base = rowOffset + token * dim;
+  for (let axis = 0; axis < dim; axis += 1) {
+    pooled[axis] = assertFinite(
+      hidden[base + axis] ?? 0,
+      `Hidden state at token ${token}, axis ${axis}`,
+    );
+  }
+  return pooled;
+}
+
+/** CLS pooling: the hidden state of the first token (bge-m3 dense retrieval). */
+export function maskedClsPool(
+  hidden: Float32Array,
+  options: MaskedPoolOptions,
+): Float32Array {
+  const tokens = assertPositiveInteger(options.tokens, "tokens");
+  const dim = assertPositiveInteger(options.dim, "dim");
+  assertHiddenLength(hidden, tokens, dim);
+  return maskedTokenRow(hidden, 0, tokens, dim, options.mask, "first");
+}
+
+/**
+ * Last-token pooling: the hidden state of the last unmasked token, the EOS
+ * position Qwen3-Embedding is trained to pool (C8).
+ */
+export function maskedLastTokenPool(
+  hidden: Float32Array,
+  options: MaskedPoolOptions,
+): Float32Array {
+  const tokens = assertPositiveInteger(options.tokens, "tokens");
+  const dim = assertPositiveInteger(options.dim, "dim");
+  assertHiddenLength(hidden, tokens, dim);
+  return maskedTokenRow(hidden, 0, tokens, dim, options.mask, "last");
+}
+
+/** Options for {@link poolSequence}: one sequence plus its pooling strategy. */
+export interface SequencePoolOptions extends MaskedPoolOptions {
+  readonly pooling: EmbeddingModelPooling;
+}
+
+function poolRowWithStrategy(
+  hidden: Float32Array,
+  rowOffset: number,
+  tokens: number,
+  dim: number,
+  mask: readonly number[],
+  pooling: EmbeddingModelPooling,
+): Float32Array {
+  switch (pooling) {
+    case "mean":
+      return poolRow(hidden, rowOffset, tokens, dim, mask);
+    case "cls":
+      return maskedTokenRow(hidden, rowOffset, tokens, dim, mask, "first");
+    case "last":
+      return maskedTokenRow(hidden, rowOffset, tokens, dim, mask, "last");
+    default:
+      throw new FeaturizeError(
+        "invalid-argument",
+        `Unknown pooling strategy ${JSON.stringify(pooling)}.`,
+      );
+  }
+}
+
+/** Pool one sequence with the model's strategy (still not L2-normalized). */
+export function poolSequence(
+  hidden: Float32Array,
+  options: SequencePoolOptions,
+): Float32Array {
+  const tokens = assertPositiveInteger(options.tokens, "tokens");
+  const dim = assertPositiveInteger(options.dim, "dim");
+  assertHiddenLength(hidden, tokens, dim);
+  return poolRowWithStrategy(
+    hidden,
+    0,
+    tokens,
+    dim,
+    options.mask,
+    options.pooling,
+  );
 }
 
 /**
@@ -306,6 +467,7 @@ export function poolBatch(options: PooledBatchOptions): Float32Array[] {
     );
   }
   const vectors: Float32Array[] = [];
+  const pooling = options.pooling ?? "mean";
   for (let sequence = 0; sequence < sequences; sequence += 1) {
     const mask = options.masks[sequence];
     if (mask === undefined) {
@@ -314,12 +476,13 @@ export function poolBatch(options: PooledBatchOptions): Float32Array[] {
         `Missing attention mask for sequence ${sequence}.`,
       );
     }
-    const pooled = poolRow(
+    const pooled = poolRowWithStrategy(
       options.hidden,
       sequence * tokens * dim,
       tokens,
       dim,
       mask,
+      pooling,
     );
     vectors.push(l2Normalize(pooled));
   }
@@ -529,6 +692,11 @@ export interface PaddedTokenBatch {
   readonly inputIds: Int32Array;
   /** Row-major `[sequences, tokens]` 0/1 attention mask. */
   readonly attentionMask: Int32Array;
+  /**
+   * Row-major `[sequences, tokens]` segment ids, present only when the model
+   * takes `token_type_ids` (BGE) or the caller asks. Padding is `0`.
+   */
+  readonly tokenTypeIds?: Int32Array;
   /** One mask per sequence, padded to `tokens` with zeros. */
   readonly masks: readonly number[][];
   readonly sequences: number;
@@ -538,15 +706,21 @@ export interface PaddedTokenBatch {
   readonly tokenTotal: number;
 }
 
+/** Options for {@link padTokenBatch}. */
+export interface PadTokenBatchOptions {
+  /** Emit `tokenTypeIds` even when no sequence supplied segment ids. */
+  readonly includeTokenTypeIds?: boolean;
+}
+
 /**
- * Pad tokenized sequences into one int32 batch. Pooling later multiplies by the
- * mask, so a pad position can never contribute; pad ids are only there to keep
- * the tensor rectangular. This is pure arithmetic on purpose: the worker tests
- * can assert masking without a model.
+ * Pad tokenized sequences into one int32 batch. Pooling multiplies by the mask,
+ * so a pad position can never contribute; pad ids only keep the tensor
+ * rectangular. Pure arithmetic on purpose, so tests need no model.
  */
 export function padTokenBatch(
   sequences: readonly TokenizedSequence[],
   padTokenId = 0,
+  options: PadTokenBatchOptions = {},
 ): PaddedTokenBatch {
   const rows = sequences.length;
   if (rows === 0) {
@@ -565,8 +739,14 @@ export function padTokenBatch(
   for (const sequence of sequences) {
     tokens = Math.max(tokens, countSequenceTokens(sequence));
   }
+  const includeTokenTypeIds =
+    options.includeTokenTypeIds === true ||
+    sequences.some((sequence) => sequence.tokenTypeIds !== undefined);
   const inputIds = new Int32Array(rows * tokens);
   const attentionMask = new Int32Array(rows * tokens);
+  const tokenTypeIds = includeTokenTypeIds
+    ? new Int32Array(rows * tokens)
+    : undefined;
   const masks: number[][] = [];
   let tokenTotal = 0;
   for (let row = 0; row < rows; row += 1) {
@@ -574,6 +754,9 @@ export function padTokenBatch(
     if (sequence === undefined) continue;
     const ids = sequence.inputIds;
     const mask = resolveAttentionMask(sequence);
+    const segmentIds = includeTokenTypeIds
+      ? resolveTokenTypeIds(sequence)
+      : undefined;
     const paddedMask = new Array<number>(tokens).fill(0);
     for (let token = 0; token < tokens; token += 1) {
       const index = row * tokens + token;
@@ -584,6 +767,9 @@ export function padTokenBatch(
       inputIds[index] = ids[token] ?? padTokenId;
       const weight = mask[token] ?? 1;
       attentionMask[index] = weight > 0 ? 1 : 0;
+      if (segmentIds !== undefined && tokenTypeIds !== undefined) {
+        tokenTypeIds[index] = segmentIds[token] ?? 0;
+      }
       paddedMask[token] = weight;
     }
     masks.push(paddedMask);
@@ -592,6 +778,7 @@ export function padTokenBatch(
   return {
     inputIds,
     attentionMask,
+    ...(tokenTypeIds === undefined ? {} : { tokenTypeIds }),
     masks,
     sequences: rows,
     tokens,
@@ -626,4 +813,188 @@ export function assertHiddenStateShape(
       `The model returned ${hidden.length} values, expected ${expected}.`,
     );
   }
+}
+
+// Model-manifest bridge (C8): inputs, instruction prefixes and dimensions
+// ---------------------------------------------------------------------------
+
+/** Manifest fields the featurizer needs; onnxruntime is not involved. */
+export type EmbeddingFeaturizeManifest = Pick<
+  EmbeddingModelManifest,
+  | "inputNames"
+  | "pooling"
+  | "dimensions"
+  | "maxTokens"
+  | "queryInstruction"
+  | "documentInstruction"
+>;
+
+/** Everything one model family's featurization needs, validated once. */
+export interface EmbeddingModelFeaturizeSpec {
+  readonly inputNames: readonly string[];
+  readonly pooling: EmbeddingModelPooling;
+  readonly dimensions: number;
+  readonly maxTokens: number;
+  readonly queryInstruction: string | null;
+  readonly documentInstruction: string | null;
+}
+
+/** ONNX feed names resolved from a manifest's `inputNames`. */
+export interface ResolvedModelInputNames {
+  readonly inputIds: string;
+  readonly attentionMask: string;
+  /** `null` when the model's graph has no `token_type_ids` input. */
+  readonly tokenTypeIds: string | null;
+}
+
+const KNOWN_MODEL_INPUT_NAMES = new Set([
+  "input_ids",
+  "attention_mask",
+  "token_type_ids",
+]);
+
+const KNOWN_POOLING_STRATEGIES = new Set<EmbeddingModelPooling>([
+  "mean",
+  "cls",
+  "last",
+]);
+
+/**
+ * Resolve a manifest's ONNX input names: only the three transformer inputs the
+ * featurizer can supply are accepted, so the worker never leaves one unfed.
+ */
+export function resolveModelInputNames(
+  inputNames: readonly string[],
+): ResolvedModelInputNames {
+  if (!Array.isArray(inputNames) || inputNames.length === 0) {
+    throw new FeaturizeError(
+      "invalid-argument",
+      "A model manifest must declare at least one ONNX input name.",
+    );
+  }
+  const seen = new Set<string>();
+  for (const name of inputNames) {
+    if (!KNOWN_MODEL_INPUT_NAMES.has(name)) {
+      throw new FeaturizeError(
+        "invalid-argument",
+        `Unsupported model input name ${JSON.stringify(name)}.`,
+      );
+    }
+    if (seen.has(name)) {
+      throw new FeaturizeError(
+        "invalid-argument",
+        `Model input ${name} is declared more than once.`,
+      );
+    }
+    seen.add(name);
+  }
+  if (!seen.has("input_ids") || !seen.has("attention_mask")) {
+    throw new FeaturizeError(
+      "invalid-argument",
+      "A model manifest must declare input_ids and attention_mask.",
+    );
+  }
+  return {
+    inputIds: "input_ids",
+    attentionMask: "attention_mask",
+    tokenTypeIds: seen.has("token_type_ids") ? "token_type_ids" : null,
+  };
+} /** Validate a manifest entry once and derive the featurization spec from it. */
+export function resolveFeaturizeSpec(
+  manifest: EmbeddingFeaturizeManifest,
+): EmbeddingModelFeaturizeSpec {
+  resolveModelInputNames(manifest.inputNames);
+  if (!KNOWN_POOLING_STRATEGIES.has(manifest.pooling)) {
+    throw new FeaturizeError(
+      "invalid-argument",
+      `Unsupported pooling strategy ${JSON.stringify(manifest.pooling)}.`,
+    );
+  }
+  assertPositiveInteger(manifest.dimensions, "dimensions");
+  assertPositiveInteger(manifest.maxTokens, "maxTokens");
+  return {
+    inputNames: Object.freeze([...manifest.inputNames]),
+    pooling: manifest.pooling,
+    dimensions: manifest.dimensions,
+    maxTokens: manifest.maxTokens,
+    queryInstruction: manifest.queryInstruction,
+    documentInstruction: manifest.documentInstruction,
+  };
+}
+
+/** Which side of the retrieval the text is (O-07: the prefix differs). */
+export type EmbeddingTextKind = "query" | "document";
+
+/** Options for {@link applyInstructionPrefix}. */
+export interface InstructionPrefixOptions {
+  readonly kind: EmbeddingTextKind;
+  readonly queryInstruction?: string | null;
+  readonly documentInstruction?: string | null;
+}
+
+/**
+ * Prefix one text with the model's instruction for its side. A `null`/empty
+ * instruction is a no-op (bge-m3); the Qwen instruct format is just prepended.
+ * Empty text is refused so an instruction alone is never embedded.
+ */
+export function applyInstructionPrefix(
+  text: string,
+  options: InstructionPrefixOptions,
+): string {
+  if (typeof text !== "string" || text.length === 0) {
+    throw new FeaturizeError(
+      "invalid-argument",
+      "Cannot featurize empty text.",
+    );
+  }
+  const instruction =
+    options.kind === "query"
+      ? options.queryInstruction
+      : options.documentInstruction;
+  if (instruction === undefined || instruction === null || instruction === "") {
+    return text;
+  }
+  return `${instruction}${text}`;
+}
+
+/** Query-side or document-side text for a model: prefix plus the raw text. */
+export function featurizeText(
+  text: string,
+  spec: EmbeddingModelFeaturizeSpec,
+  kind: EmbeddingTextKind,
+): string {
+  return applyInstructionPrefix(text, {
+    kind,
+    queryInstruction: spec.queryInstruction,
+    documentInstruction: spec.documentInstruction,
+  });
+}
+
+/** Reject a vector whose width disagrees with the model's declared dimension. */
+export function assertModelVectorDimensions(
+  vector: Float32Array,
+  spec: Pick<EmbeddingModelFeaturizeSpec, "dimensions">,
+): void {
+  const dimensions = assertPositiveInteger(spec.dimensions, "dimensions");
+  if (vector.length !== dimensions) {
+    throw new FeaturizeError(
+      "invalid-shape",
+      `Model expects ${dimensions}-dimensional vectors, received ${vector.length}.`,
+    );
+  }
+}
+
+/**
+ * Pool a batch with the model's declared strategy and validate the width.
+ */
+export function poolModelBatch(
+  options: PooledBatchOptions & { readonly spec: EmbeddingModelFeaturizeSpec },
+): Float32Array[] {
+  const { spec, ...poolOptions } = options;
+  const vectors = poolBatch({
+    ...poolOptions,
+    pooling: poolOptions.pooling ?? spec.pooling,
+  });
+  for (const vector of vectors) assertModelVectorDimensions(vector, spec);
+  return vectors;
 }

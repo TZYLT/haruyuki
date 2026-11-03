@@ -21,9 +21,11 @@
  * **Why sha256 may be `null`.** A manifest entry whose digest is not available
  * carries `sha256: null` together with `integrityPinned: false`; the manifest
  * never invents a digest. `model-download.ts` refuses to fetch an unpinned model
- * unless the caller explicitly accepts size-only verification, so "download but
- * cannot verify" never becomes a silent default (48-1 §6.4: the download
- * requirement is sha256). Pinning digests is a one-line manifest edit.
+ * unless the caller explicitly accepts size-only verification (48-1 §6.4).
+ *
+ * **C8 additions.** `bge-m3` and `Qwen3-Embedding-0.6B` (48-1 R-23) are declared
+ * below; no per-file size or sha256 was verified for either, so those fields stay
+ * `null`, `integrityPinned` is `false`, and the default fetch path refuses them.
  *
  * **Where the built-in numbers come from (2026-11-04).** The sizes and the q8
  * weights' sha256 were read from the Hugging Face model-file metadata JSON for
@@ -55,19 +57,37 @@ export const defaultModelId = "bge-small-zh-v1.5";
 /** Highest embedding dimension any built-in model currently produces. */
 export const EMBEDDING_MODEL_MAX_DIMENSIONS = 1_024;
 
+/** Quantisation of one shipped ONNX graph. */
+export type EmbeddingModelQuantization = "q8" | "fp32";
+
+/**
+ * Token pooling strategy: mask-weighted mean (bge-small, C3 parity), CLS
+ * (bge-m3 dense retrieval) or the last unmasked token (Qwen3-Embedding).
+ */
+export type EmbeddingModelPooling = "mean" | "cls" | "last";
+
 /** Pattern for a model id: one safe path segment (it becomes a directory). */
 const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** A sha256 digest is 64 lowercase hex characters. */
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 
+/** Pooling strategies a manifest may declare; see {@link EmbeddingModelPooling}. */
+const POOLING_STRATEGIES: ReadonlySet<string> = new Set([
+  "mean",
+  "cls",
+  "last",
+]);
+
+/** Quantisations a manifest may declare; see {@link EmbeddingModelQuantization}. */
+const QUANTIZATIONS: ReadonlySet<string> = new Set(["q8", "fp32"]);
+
 /** Placeholders understood by a source URL template. */
 const URL_TEMPLATE_PLACEHOLDER = /\{(repo|path|file|package|version)\}/g;
 
 /**
- * How the weight files are fetched. `hf` is a Hugging Face-style resolve URL
- * (hf-mirror, huggingface.co, ModelScope); `npm` is an unpkg-style package file
- * URL kept for a future npm-hosted copy of the weights.
+ * How the weight files are fetched: `hf` is a Hugging Face-style resolve URL
+ * (hf-mirror, huggingface.co, ModelScope); `npm` is an unpkg-style package URL.
  */
 export type EmbeddingModelSourceKind = "hf" | "npm";
 
@@ -78,8 +98,8 @@ export interface EmbeddingModelSource {
   readonly kind: EmbeddingModelSourceKind;
   /**
    * URL template with `{repo}`, `{path}`, `{file}`, `{package}` and `{version}`
-   * placeholders; `{path}` is mandatory. Must resolve to https (or http on a
-   * loopback host, so a local mirror/test server can be used).
+   * placeholders; `{path}` is mandatory and the result must be https (or http
+   * on a loopback host).
    */
   readonly urlTemplate: string;
   /** npm package name; required when `kind` is `"npm"`. */
@@ -101,9 +121,8 @@ export interface EmbeddingModelFile {
   /** Lowercase hex sha256 when known; `null` when not pinned. */
   readonly sha256: string | null;
   /**
-   * The download URL the size/hash were recorded from, when a value is pinned.
-   * Documentation only: `buildModelFileUrl` derives the per-source URL at
-   * download time, but the table keeps its provenance searchable.
+   * The download URL the size/hash were recorded from, when a value is pinned
+   * (documentation only; `buildModelFileUrl` derives the per-source URL).
    */
   readonly sourceUrl?: string;
   /** Optional files may be missing without failing the install. */
@@ -138,8 +157,8 @@ export interface EmbeddingModelManifest {
   readonly maxTokens: number;
   /** ONNX input names in the order the featurizer feeds them. */
   readonly inputNames: readonly string[];
-  /** Pooling strategy; fixed to mask-weighted mean pooling (48-1 §6.4). */
-  readonly pooling: "mean";
+  /** Pooling strategy the model's embedding head expects (48-1 §6.4). */
+  readonly pooling: EmbeddingModelPooling;
   /** Vectors are L2-normalised and compared by inner product. */
   readonly normalize: true;
   /** Query-side instruction, appended to the query text only (O-07). */
@@ -151,11 +170,15 @@ export interface EmbeddingModelManifest {
   /** Sources in fallback order (§6.4: hf-mirror → HF → ModelScope). */
   readonly sources: readonly EmbeddingModelSource[];
   /** Quantisation of the shipped ONNX graph. */
-  readonly quantization: "q8" | "fp32";
+  readonly quantization: EmbeddingModelQuantization;
   /**
-   * True only when every required file carries a sha256. A `false` manifest is
-   * still usable with an explicit size-only opt-in, but the default fetch path
-   * refuses it rather than silently weakening integrity verification.
+   * Quantisation variants the manifest knows exist for this model; the file set
+   * declared above is the {@link quantization} one, and the list must include it.
+   */
+  readonly variants?: readonly EmbeddingModelQuantization[];
+  /**
+   * True only when every required file carries a sha256; a `false` manifest is
+   * still usable with an explicit size-only opt-in but the default path refuses.
    */
   readonly integrityPinned: boolean;
   /** Free-form notes surfaced in status output / the deviation record. */
@@ -254,6 +277,24 @@ SOFTWARE.
 `,
 };
 
+/** MIT terms for `BAAI/bge-m3`; the Xenova ONNX conversion keeps them. */
+export const BGE_M3_LICENSE: EmbeddingModelLicense = {
+  ...BGE_ZH_LICENSE,
+  notice:
+    "MIT. Weights are downloaded, never shipped in the npm package; attribution: BAAI/bge-m3.",
+};
+
+/** Apache-2.0 terms of `Qwen/Qwen3-Embedding-0.6B` (48-1 §5.2/§6.4). */
+export const QWEN3_EMBEDDING_LICENSE: EmbeddingModelLicense = {
+  id: "Apache-2.0",
+  name: "Apache License 2.0",
+  url: "https://www.apache.org/licenses/LICENSE-2.0",
+  redistributable: true,
+  notice:
+    "Apache-2.0. Weights are downloaded, never shipped in the npm package; attribution: Qwen/Qwen3-Embedding-0.6B.",
+  text: null,
+};
+
 /**
  * Source templates. Kept as named values so a manifest and a test refer to the
  * same template instead of duplicating URL syntax. The npm template is present
@@ -283,20 +324,42 @@ export const EMBEDDING_MODEL_SOURCES = {
   },
 } as const satisfies Record<string, EmbeddingModelSource>;
 
+/** Fallback order every built-in model declares (§6.4: mirror first). */
+const BUILTIN_MODEL_SOURCES: readonly EmbeddingModelSource[] = [
+  EMBEDDING_MODEL_SOURCES.hfMirror,
+  EMBEDDING_MODEL_SOURCES.huggingface,
+  EMBEDDING_MODEL_SOURCES.modelscope,
+];
+
 /**
- * `bge-small-zh-v1.5` (512d, MIT). The ONNX repository is `Xenova/…`, the
- * conversion the 48-2 reconnaissance measured and the one transformers.js uses;
- * `config.json`, `tokenizer.json`, `tokenizer_config.json` and the q8 graph are
- * the four files the child process needs.
- *
- * Sizes and the q8 sha256 are the 2026-11-04 hf-mirror metadata values (see the
- * module header). The three JSON files are non-LFS, so their sha256 is `null`
- * and `integrityPinned` stays `false` — see {@link getModelIntegrityStatus}.
+ * One required file plus its hf-mirror provenance URL; `null` bytes/sha256 mean
+ * never verified (48-2 O-17), which forces `integrityPinned: false`.
  */
+function modelFile(
+  path: string,
+  repository: string,
+  bytes: number | null,
+  sha256: string | null,
+): EmbeddingModelFile {
+  return {
+    path,
+    bytes,
+    sha256,
+    sourceUrl: `https://hf-mirror.com/${repository}/resolve/main/${path}`,
+  };
+}
+
+/**
+ * `bge-small-zh-v1.5` (512d, MIT). The ONNX repository is the `Xenova/…`
+ * conversion the 48-2 reconnaissance measured; sizes and the q8 sha256 are the
+ * 2026-11-04 hf-mirror metadata values and the three JSON files stay `null`.
+ */
+const BGE_SMALL_ZH_REPOSITORY = "Xenova/bge-small-zh-v1.5";
+
 const BGE_SMALL_ZH_MANIFEST: EmbeddingModelManifest = {
   id: defaultModelId,
   displayName: "bge-small-zh-v1.5 (q8)",
-  repository: "Xenova/bge-small-zh-v1.5",
+  repository: BGE_SMALL_ZH_REPOSITORY,
   dimensions: 512,
   maxTokens: 512,
   inputNames: ["input_ids", "attention_mask", "token_type_ids"],
@@ -306,47 +369,89 @@ const BGE_SMALL_ZH_MANIFEST: EmbeddingModelManifest = {
   documentInstruction: null,
   license: BGE_ZH_LICENSE,
   files: [
-    {
-      path: "config.json",
-      bytes: 716,
-      sha256: null,
-      sourceUrl:
-        "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/config.json",
-    },
-    {
-      path: "tokenizer.json",
-      bytes: 439_125,
-      sha256: null,
-      sourceUrl:
-        "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/tokenizer.json",
-    },
-    {
-      path: "tokenizer_config.json",
-      bytes: 367,
-      sha256: null,
-      sourceUrl:
-        "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/tokenizer_config.json",
-    },
-    {
-      path: "onnx/model_quantized.onnx",
-      bytes: 24_010_842,
-      sha256:
-        "15b717c382bcb518ba457b93ea6850ede7f4f1cd8937454aa06972366cd19bcc",
-      sourceUrl:
-        "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model_quantized.onnx",
-    },
+    modelFile("config.json", BGE_SMALL_ZH_REPOSITORY, 716, null),
+    modelFile("tokenizer.json", BGE_SMALL_ZH_REPOSITORY, 439_125, null),
+    modelFile("tokenizer_config.json", BGE_SMALL_ZH_REPOSITORY, 367, null),
+    modelFile(
+      "onnx/model_quantized.onnx",
+      BGE_SMALL_ZH_REPOSITORY,
+      24_010_842,
+      "15b717c382bcb518ba457b93ea6850ede7f4f1cd8937454aa06972366cd19bcc",
+    ),
   ],
-  sources: [
-    EMBEDDING_MODEL_SOURCES.hfMirror,
-    EMBEDDING_MODEL_SOURCES.huggingface,
-    EMBEDDING_MODEL_SOURCES.modelscope,
-  ],
+  sources: BUILTIN_MODEL_SOURCES,
   quantization: "q8",
+  variants: ["q8", "fp32"],
   integrityPinned: false,
   notes: [
     "Sizes and the q8 sha256 read from https://hf-mirror.com/api/models/Xenova/bge-small-zh-v1.5?blobs=true on 2026-11-04; no weights were downloaded.",
     "config.json/tokenizer.json/tokenizer_config.json are non-LFS blobs, so that API exposes no sha256; they stay null until pinned (ModelScope lists a Sha256, or record a manual import's computed hash).",
     "ModelScope mirrors this repo; hf-mirror and ModelScope serve the same LFS object for onnx/model_quantized.onnx.",
+  ],
+};
+
+/** The four-file set every built-in ONNX conversion installs (48-2 §4.4). */
+const MODEL_FILE_PATHS = [
+  "config.json",
+  "tokenizer.json",
+  "tokenizer_config.json",
+  "onnx/model_quantized.onnx",
+] as const;
+
+/** `bge-m3` (1024d, MIT): `Xenova/bge-m3` ONNX conversion (XLM-R inputs only),
+ * CLS pooling; the 48-2 reconnaissance read no per-file size or digest. */
+const BGE_M3_MANIFEST: EmbeddingModelManifest = {
+  id: "bge-m3",
+  displayName: "bge-m3 (q8)",
+  repository: "Xenova/bge-m3",
+  dimensions: 1_024,
+  maxTokens: 8_192,
+  inputNames: ["input_ids", "attention_mask"],
+  pooling: "cls",
+  normalize: true,
+  queryInstruction: null,
+  documentInstruction: null,
+  license: BGE_M3_LICENSE,
+  files: MODEL_FILE_PATHS.map((path) =>
+    modelFile(path, "Xenova/bge-m3", null, null),
+  ),
+  sources: BUILTIN_MODEL_SOURCES,
+  quantization: "q8",
+  variants: ["q8"],
+  integrityPinned: false,
+  notes: [
+    "C8 reconnaissance loaded Xenova/bge-m3 (1024d, XLM-R, ~560MB cache) but read no per-file bytes or sha256, so every pinned field is null (48-2 O-17); G17 external `.onnx_data` weights must be part of the pinned set.",
+  ],
+};
+
+/**
+ * `Qwen3-Embedding-0.6B` (1024d, Apache-2.0; experimental/manual in 48-1 §5.2:
+ * 613MB weights plus ~2.09GB external data). The `onnx-community` conversion and
+ * its file set are unverified (O-17), so the entry is unpinned. Queries use the
+ * model card's instruct prefix, documents none, pooling is the last token.
+ */
+const QWEN3_EMBEDDING_MANIFEST: EmbeddingModelManifest = {
+  id: "qwen3-embedding-0.6b",
+  displayName: "Qwen3-Embedding-0.6B (q8, experimental)",
+  repository: "onnx-community/Qwen3-Embedding-0.6B-ONNX",
+  dimensions: 1_024,
+  maxTokens: 32_768,
+  inputNames: ["input_ids", "attention_mask"],
+  pooling: "last",
+  normalize: true,
+  queryInstruction:
+    "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+  documentInstruction: null,
+  license: QWEN3_EMBEDDING_LICENSE,
+  files: MODEL_FILE_PATHS.map((path) =>
+    modelFile(path, "onnx-community/Qwen3-Embedding-0.6B-ONNX", null, null),
+  ),
+  sources: BUILTIN_MODEL_SOURCES,
+  quantization: "q8",
+  variants: ["q8"],
+  integrityPinned: false,
+  notes: [
+    "O-17 left the Qwen3 ONNX conversion repository and file set unverified; the upstream card is Qwen/Qwen3-Embedding-0.6B (Apache-2.0) and the 2.09GB `.onnx_data` sidecar (G17) must join the pinned set before enabling.",
   ],
 };
 
@@ -357,17 +462,17 @@ const BGE_SMALL_ZH_MANIFEST: EmbeddingModelManifest = {
  */
 export const BUILTIN_EMBEDDING_MODELS: readonly EmbeddingModelManifest[] = [
   BGE_SMALL_ZH_MANIFEST,
+  BGE_M3_MANIFEST,
+  QWEN3_EMBEDDING_MANIFEST,
 ];
-
 /** Model ids available in this build. */
 export function listBuiltinModelIds(): string[] {
   return BUILTIN_EMBEDDING_MODELS.map((manifest) => manifest.id);
 }
 
 /**
- * Look up a built-in manifest. An unknown id lists the ids this build knows so a
- * settings typo produces an actionable message; C8 additions appear there
- * automatically.
+ * Look up a built-in manifest. An unknown id lists the ids this build knows so
+ * a settings typo produces an actionable message.
  */
 export function getBuiltinModelManifest(
   modelId: string = defaultModelId,
@@ -427,11 +532,28 @@ export function validateModelManifest(
       { modelId: manifest.id, field: "inputNames" },
     );
   }
-  if (manifest.pooling !== "mean" || manifest.normalize !== true) {
+  if (
+    !POOLING_STRATEGIES.has(manifest.pooling) ||
+    manifest.normalize !== true
+  ) {
     throw new EmbeddingModelManifestError(
       "invalid-field",
-      `Model ${manifest.id} must use mean pooling and normalisation (48-1 §6.4).`,
+      `Model ${manifest.id} declares an unsupported pooling strategy or does not normalise (48-1 §6.4).`,
       { modelId: manifest.id, field: "pooling" },
+    );
+  }
+  const variants = manifest.variants ?? [manifest.quantization];
+  if (
+    !QUANTIZATIONS.has(manifest.quantization) ||
+    variants.length === 0 ||
+    new Set(variants).size !== variants.length ||
+    variants.some((variant) => !QUANTIZATIONS.has(variant)) ||
+    !variants.includes(manifest.quantization)
+  ) {
+    throw new EmbeddingModelManifestError(
+      "invalid-field",
+      `Model ${manifest.id} must declare a known quantization and a duplicate-free variants list that includes it.`,
+      { modelId: manifest.id, field: "variants" },
     );
   }
   validateLicense(manifest.license, manifest.id);

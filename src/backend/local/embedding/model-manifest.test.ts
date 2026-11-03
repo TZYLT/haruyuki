@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   assertSafeModelRelativePath,
+  BGE_M3_LICENSE,
   BGE_ZH_LICENSE,
   BUILTIN_EMBEDDING_MODELS,
   buildModelFileUrl,
@@ -16,6 +17,7 @@ import {
   getModelIntegrityStatus,
   getModelLicenseInfo,
   listBuiltinModelIds,
+  QWEN3_EMBEDDING_LICENSE,
   resolveModelFileAt,
   resolveModelFiles,
   validateModelManifest,
@@ -78,12 +80,16 @@ function pinnedManifest(
 }
 
 describe("built-in model table", () => {
-  test("defaultModelId is the D3 settings default and the table lists it", () => {
+  test("defaultModelId is the first entry and the table lists all three models", () => {
     expect(defaultModelId).toBe("bge-small-zh-v1.5");
-    expect(listBuiltinModelIds()).toEqual([defaultModelId]);
-    expect(BUILTIN_EMBEDDING_MODELS.map((entry) => entry.id)).toEqual([
+    expect(listBuiltinModelIds()).toEqual([
       defaultModelId,
+      "bge-m3",
+      "qwen3-embedding-0.6b",
     ]);
+    expect(BUILTIN_EMBEDDING_MODELS.map((entry) => entry.id)).toEqual(
+      listBuiltinModelIds(),
+    );
   });
 
   test("bge-small-zh-v1.5 describes a 512-dim q8 BERT encoder", () => {
@@ -176,6 +182,103 @@ describe("built-in model table", () => {
       expect(manifestError.kind).toBe("unknown-model");
       expect(manifestError.message).toContain("bge-small-zh-v1.5");
     }
+  });
+});
+
+describe("built-in model table: C8 additions", () => {
+  test("bge-m3 declares a 1024-dim CLS encoder with no instruction prefix", () => {
+    const manifest = getBuiltinModelManifest("bge-m3");
+    expect(manifest.repository).toBe("Xenova/bge-m3");
+    expect(manifest.dimensions).toBe(1_024);
+    expect(manifest.maxTokens).toBe(8_192);
+    expect(manifest.inputNames).toEqual(["input_ids", "attention_mask"]);
+    expect(manifest.pooling).toBe("cls");
+    expect(manifest.queryInstruction).toBeNull();
+    expect(manifest.documentInstruction).toBeNull();
+    expect(manifest.quantization).toBe("q8");
+    expect(manifest.variants).toEqual(["q8"]);
+    expect(manifest.integrityPinned).toBe(false);
+    expect(manifest.license.id).toBe("MIT");
+    expect(manifest.license.notice).toContain("BAAI/bge-m3");
+    expect(manifest.notes?.join(" ")).toContain("O-17");
+  });
+
+  test("Qwen3-Embedding is 1024-dim, last-token pooled and instruct-prefixed", () => {
+    const manifest = getBuiltinModelManifest("qwen3-embedding-0.6b");
+    expect(manifest.repository).toBe(
+      "onnx-community/Qwen3-Embedding-0.6B-ONNX",
+    );
+    expect(manifest.dimensions).toBe(1_024);
+    expect(manifest.maxTokens).toBe(32_768);
+    expect(manifest.inputNames).toEqual(["input_ids", "attention_mask"]);
+    expect(manifest.pooling).toBe("last");
+    expect(manifest.queryInstruction).toContain("Instruct:");
+    expect(manifest.queryInstruction).toContain("Query:");
+    expect(manifest.documentInstruction).toBeNull();
+    expect(manifest.quantization).toBe("q8");
+    expect(manifest.variants).toEqual(["q8"]);
+    expect(manifest.integrityPinned).toBe(false);
+    expect(manifest.license.id).toBe("Apache-2.0");
+    expect(manifest.license.text).toBeNull();
+    expect(manifest.notes?.join(" ")).toContain("O-17");
+  });
+
+  test("unpinned models never invent a size or digest and still validate", () => {
+    for (const modelId of ["bge-m3", "qwen3-embedding-0.6b"]) {
+      const manifest = getBuiltinModelManifest(modelId);
+      expect(manifest.integrityPinned).toBe(false);
+      for (const file of manifest.files) {
+        expect(file.bytes).toBeNull();
+        expect(file.sha256).toBeNull();
+        expect(file.sourceUrl).toStartWith(
+          `https://hf-mirror.com/${manifest.repository}/`,
+        );
+      }
+      const status = getModelIntegrityStatus(manifest);
+      expect(status.integrity).toBe("unverified");
+      expect(status.missingSha256).toEqual(
+        manifest.files.map((file) => file.path),
+      );
+      expect(status.missingBytes).toEqual(status.missingSha256);
+      // Declared data is still well-formed and resolvable without any download.
+      expect(validateModelManifest(manifest)).toBe(manifest);
+      const resolved = resolveModelFiles(modelId, {
+        modelDir: makeTempDir("hryk-model-c8-"),
+      });
+      expect(resolved.modelPath.endsWith(".onnx")).toBe(true);
+      expect(resolved.tokenizerPath.endsWith("tokenizer.json")).toBe(true);
+    }
+  });
+
+  test("licences come from the locked 48-1 table, not the network", () => {
+    expect(getModelLicenseInfo("bge-m3").id).toBe("MIT");
+    expect(BGE_M3_LICENSE.redistributable).toBe(true);
+    expect(BGE_M3_LICENSE.text).toBe(BGE_ZH_LICENSE.text);
+    expect(getModelLicenseInfo("qwen3-embedding-0.6b").id).toBe("Apache-2.0");
+    expect(QWEN3_EMBEDDING_LICENSE.url).toBe(
+      "https://www.apache.org/licenses/LICENSE-2.0",
+    );
+    expect(QWEN3_EMBEDDING_LICENSE.notice).toContain(
+      "Qwen/Qwen3-Embedding-0.6B",
+    );
+  });
+
+  test("validates pooling strategies and quant variants", () => {
+    validateModelManifest(pinnedManifest({ pooling: "cls" }));
+    validateModelManifest(pinnedManifest({ pooling: "last" }));
+    expect(() =>
+      validateModelManifest(pinnedManifest({ pooling: "average" as never })),
+    ).toThrow(/pooling/);
+    validateModelManifest(pinnedManifest({ variants: ["fp32"] }));
+    expect(() =>
+      validateModelManifest(pinnedManifest({ variants: [] })),
+    ).toThrow(/variants/);
+    expect(() =>
+      validateModelManifest(pinnedManifest({ variants: ["q8"] })),
+    ).toThrow(/variants/);
+    expect(() =>
+      validateModelManifest(pinnedManifest({ variants: ["fp32", "fp32"] })),
+    ).toThrow(/variants/);
   });
 });
 
