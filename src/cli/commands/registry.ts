@@ -713,8 +713,11 @@ export const commands: Record<string, Command> = {
     handler: (args, scope) => handleTopicsCommand(args, scope),
   },
   "/recall": {
-    desc: "Configure passive recall of earlier conversations and memory",
-    args: "[setting] [value]",
+    desc: "Configure passive recall of earlier conversations and memory (and vector recall)",
+    // The embedding group is dispatched by this same command (`/recall
+    // embedding …`, feature ③); the hint names it so the catalog does not stop
+    // short of the spellings the completion table offers.
+    args: "[setting] [value] | embedding <on|off|status|build|cancel|reset|setup>",
     order: 15.4,
     handler: (args, scope) => handleRecallCommand(args, scope),
   },

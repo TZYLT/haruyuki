@@ -170,6 +170,174 @@ export const TOPIC_COMMAND_SPECS = [
   },
 ] as const satisfies readonly SubcommandSpec[];
 
+// ── /recall ─────────────────────────────────────────────────────────
+
+/**
+ * `/recall embedding`'s words (48-1 §7.1, 48-2 §4.9 D4).
+ *
+ * The seven entrances are the requirement's command face; the ten tuning rows
+ * are the setters D3's settings deep links fall back to
+ * (`/recall embedding <knob> <value>`), so a fallback command printed by the
+ * settings page is offered by completion too.
+ */
+export const EMBEDDING_COMMAND_SPECS = [
+  { name: "on", desc: "Enable vector recall; first run opens setup" },
+  { name: "off", desc: "Disable vector recall; stored vectors stay on disk" },
+  {
+    name: "status",
+    desc: "Backend, space, coverage, calibration and build state",
+  },
+  {
+    name: "build",
+    args: "[--full]",
+    desc: "Build or refresh the vector index",
+    textArg: true,
+  },
+  {
+    name: "cancel",
+    desc: "Stop a running build; finished chunks stay",
+  },
+  {
+    name: "reset",
+    args: "[--all|--model <id>] [--confirm]",
+    desc: "Delete stored vector spaces (previews, then --confirm)",
+    textArg: true,
+  },
+  { name: "setup", desc: "Re-run first-run setup with the current values" },
+  {
+    name: "weight",
+    args: "<0..1>",
+    desc: "Vector-arm weight (0 = lexical only)",
+    textArg: true,
+  },
+  {
+    name: "depth",
+    args: "<n>",
+    desc: "Candidates per arm",
+    textArg: true,
+  },
+  {
+    name: "chunk",
+    args: "<tokens>",
+    desc: "Target chunk window",
+    textArg: true,
+  },
+  {
+    name: "chunk-max",
+    args: "<tokens>",
+    desc: "Hard chunk ceiling",
+    textArg: true,
+  },
+  {
+    name: "chunk-overlap",
+    args: "<tokens>",
+    desc: "Chunk overlap",
+    textArg: true,
+  },
+  {
+    name: "max-chunks",
+    args: "<n>",
+    desc: "Chunks embedded per message cap",
+    textArg: true,
+  },
+  {
+    name: "threads",
+    args: "<n>",
+    desc: "Encode/build threads (0 = automatic)",
+    textArg: true,
+  },
+  {
+    name: "gpu",
+    args: "auto|off|index-only",
+    desc: "GPU role",
+    options: ["auto", "off", "index-only"],
+  },
+  {
+    name: "quant",
+    args: "float32|int8",
+    desc: "Vector precision",
+    options: ["float32", "int8"],
+  },
+  {
+    name: "spaces",
+    args: "<n>",
+    desc: "Model spaces kept on disk",
+    textArg: true,
+  },
+] as const satisfies readonly SubcommandSpec[];
+
+/**
+ * `/recall`'s full table (O-04: complete the whole command, not just the new
+ * part). The thirteen feature-② words come from `parseRecallCommand`; the
+ * embedding branch owns everything below its row.
+ */
+export const RECALL_COMMAND_SPECS = [
+  { name: "status", desc: "What passive recall is doing right now" },
+  { name: "on", desc: "Switch passive recall on (also clears the breaker)" },
+  { name: "off", desc: "Switch passive recall off" },
+  { name: "build", desc: "Build the transcript index" },
+  {
+    name: "now",
+    args: "<query>",
+    desc: "Run a search and show the passages",
+    textArg: true,
+  },
+  {
+    name: "timeout",
+    args: "<ms>",
+    desc: "Wall-clock budget (0 = no limit)",
+    textArg: true,
+  },
+  {
+    name: "dedup",
+    args: "<turns>",
+    desc: "How long a passage stays suppressed",
+    textArg: true,
+  },
+  {
+    name: "limit",
+    args: "<n>",
+    desc: "Passages injected per turn",
+    textArg: true,
+  },
+  {
+    name: "excerpt",
+    args: "<lines>",
+    desc: "Memory context around a hit",
+    textArg: true,
+  },
+  {
+    name: "chars",
+    args: "<per> [total]",
+    desc: "Per-passage and total character budget",
+    textArg: true,
+  },
+  {
+    name: "ratio",
+    args: "<0..1>",
+    desc: "Relative score floor",
+    textArg: true,
+  },
+  {
+    name: "diversity",
+    args: "none|file|split",
+    desc: "How the slots are shared out",
+    options: ["none", "file", "split"],
+  },
+  {
+    name: "display",
+    args: "silent|summary|full",
+    desc: "How much of an injected block the transcript shows",
+    options: ["silent", "summary", "full"],
+  },
+  {
+    name: "embedding",
+    args: "[command]",
+    desc: "Vector recall: on, off, status, build, cancel, reset, setup, tuning",
+    children: EMBEDDING_COMMAND_SPECS,
+  },
+] as const satisfies readonly SubcommandSpec[];
+
 // ── Lookup ──────────────────────────────────────────────────────────
 
 /** The hand-written tables, keyed by the command token (including the slash). */
@@ -179,6 +347,7 @@ export const COMMAND_SPECS: Readonly<
   "/dream": DREAM_COMMAND_SPECS,
   "/schedule": SCHEDULE_COMMAND_SPECS,
   "/topic": TOPIC_COMMAND_SPECS,
+  "/recall": RECALL_COMMAND_SPECS,
 };
 
 function toSubcommandSpec(sub: HubSubcommand): SubcommandSpec {

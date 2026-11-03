@@ -331,6 +331,55 @@ export const CLI_FLAG_CATALOG = {
       description: "Sleeptime step-count interval (positive integer)",
     },
   },
+  // Feature ③ (48-1 §7.1, 48-2 §4.9 D4): non-interactive first configuration.
+  // The API key itself is never a flag — the flag names the environment
+  // variable, and `commands/embedding.ts` reads and stores the value.
+  "recall-embedding": {
+    parser: { type: "string" },
+    mode: "both",
+    help: {
+      argLabel: "<on|off>",
+      description: "Enable or disable vector recall (feature ③)",
+      continuationLines: [
+        "First enable needs a backend: --recall-embedding-backend builtin",
+      ],
+    },
+  },
+  "recall-embedding-backend": {
+    parser: { type: "string" },
+    mode: "both",
+    help: {
+      argLabel: "<builtin|endpoint>",
+      description: "Where query vectors come from",
+    },
+  },
+  "recall-embedding-model": {
+    parser: { type: "string" },
+    mode: "both",
+    help: {
+      argLabel: "<id>",
+      description: "Embedding model id (default bge-small-zh-v1.5)",
+    },
+  },
+  "recall-embedding-endpoint": {
+    parser: { type: "string" },
+    mode: "both",
+    help: {
+      argLabel: "<url>",
+      description: "OpenAI/Ollama-compatible embedding endpoint base URL",
+    },
+  },
+  "recall-embedding-api-key-env": {
+    parser: { type: "string" },
+    mode: "both",
+    help: {
+      argLabel: "<ENV>",
+      description: "Environment variable holding the endpoint API key",
+      continuationLines: [
+        "The key is read from the environment; it never goes on the command line",
+      ],
+    },
+  },
   "max-turns": { parser: { type: "string" }, mode: "headless" },
 } as const satisfies Record<string, CliFlagDefinition>;
 
@@ -486,4 +535,117 @@ export function extractBackendFlag(args: string[]): {
   }
 
   return { backend, args: filtered };
+}
+
+// ── Feature ③ non-interactive first configuration (48-1 §7.1, D4) ────
+
+/** The flags that configure vector recall before a session starts. */
+export const EMBEDDING_SETUP_FLAG_NAMES = [
+  "recall-embedding",
+  "recall-embedding-backend",
+  "recall-embedding-model",
+  "recall-embedding-endpoint",
+  "recall-embedding-api-key-env",
+] as const;
+
+export type EmbeddingSetupFlagName =
+  (typeof EMBEDDING_SETUP_FLAG_NAMES)[number];
+
+export type EmbeddingSetupBackend = "builtin" | "endpoint";
+
+/** The validated flags, still unapplied: `applyEmbeddingCliFlags` writes them. */
+export interface EmbeddingSetupFlags {
+  enabled?: boolean;
+  backend?: EmbeddingSetupBackend;
+  model?: string;
+  endpoint?: string;
+  apiKeyEnv?: string;
+}
+
+export type EmbeddingSetupFlagParse =
+  | { flags: EmbeddingSetupFlags }
+  | { error: string };
+
+const EMBEDDING_API_KEY_ENV_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Validate the five embedding flags without touching settings.
+ *
+ * Cross-field rules are checked here because a mistyped combination (a key
+ * variable with no endpoint, an endpoint on the builtin backend) must fail
+ * before anything writes — the reply names the flag to fix, and the shell never
+ * has to guess which half of the pair was meant.
+ */
+export function parseEmbeddingSetupFlags(
+  values: Pick<CliParsedValues, EmbeddingSetupFlagName>,
+): EmbeddingSetupFlagParse {
+  const flags: EmbeddingSetupFlags = {};
+
+  const enabled = values["recall-embedding"];
+  if (enabled !== undefined) {
+    if (enabled === "on") flags.enabled = true;
+    else if (enabled === "off") flags.enabled = false;
+    else {
+      return {
+        error: `--recall-embedding must be on or off (got "${enabled}").`,
+      };
+    }
+  }
+
+  const backend = values["recall-embedding-backend"];
+  if (backend !== undefined) {
+    if (backend !== "builtin" && backend !== "endpoint") {
+      return {
+        error: `--recall-embedding-backend must be builtin or endpoint (got "${backend}").`,
+      };
+    }
+    flags.backend = backend;
+  }
+
+  const model = values["recall-embedding-model"];
+  if (model !== undefined) {
+    const trimmed = model.trim();
+    if (trimmed.length === 0) {
+      return { error: "--recall-embedding-model needs a model id." };
+    }
+    flags.model = trimmed;
+  }
+
+  const endpoint = values["recall-embedding-endpoint"];
+  if (endpoint !== undefined) {
+    const trimmed = endpoint.trim();
+    if (trimmed.length === 0) {
+      return { error: "--recall-embedding-endpoint needs a URL." };
+    }
+    if (!/^https?:\/\//i.test(trimmed)) {
+      return { error: "--recall-embedding-endpoint needs an http(s) URL." };
+    }
+    flags.endpoint = trimmed;
+  }
+
+  const apiKeyEnv = values["recall-embedding-api-key-env"];
+  if (apiKeyEnv !== undefined) {
+    const trimmed = apiKeyEnv.trim();
+    if (!EMBEDDING_API_KEY_ENV_PATTERN.test(trimmed)) {
+      return {
+        error: `--recall-embedding-api-key-env must name an environment variable (got "${apiKeyEnv}").`,
+      };
+    }
+    flags.apiKeyEnv = trimmed;
+  }
+
+  if (flags.apiKeyEnv !== undefined && flags.endpoint === undefined) {
+    return {
+      error:
+        "--recall-embedding-api-key-env only applies to an endpoint: add --recall-embedding-endpoint <url>.",
+    };
+  }
+  if (flags.endpoint !== undefined && flags.backend === "builtin") {
+    return {
+      error:
+        "--recall-embedding-endpoint is for the endpoint backend; drop --recall-embedding-backend builtin.",
+    };
+  }
+
+  return { flags };
 }

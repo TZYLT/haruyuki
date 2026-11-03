@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   CLI_FLAG_CATALOG,
   CLI_OPTIONS,
+  EMBEDDING_SETUP_FLAG_NAMES,
   extractBackendFlag,
   parseBackendModeFlag,
   parseCliArgs,
+  parseEmbeddingSetupFlags,
   preprocessCliArgs,
   renderCliOptionsHelp,
 } from "@/cli/args";
@@ -288,5 +290,99 @@ describe("shared CLI arg schema", () => {
       true,
     );
     expect(parsed.values.conversation).toBe("conv-123");
+  });
+});
+
+describe("feature ③ non-interactive first configuration flags", () => {
+  test("the five flags parse in strict mode and stay distinct from --embedding", () => {
+    const parsed = parseCliArgs(
+      preprocessCliArgs([
+        "node",
+        "script",
+        "-p",
+        "hello",
+        "--recall-embedding",
+        "on",
+        "--recall-embedding-backend",
+        "builtin",
+        "--recall-embedding-model",
+        "bge-small-zh-v1.5",
+        "--embedding",
+        "text-embedding-3-small",
+      ]),
+      true,
+    );
+    expect(parsed.values["recall-embedding"]).toBe("on");
+    expect(parsed.values["recall-embedding-backend"]).toBe("builtin");
+    expect(parsed.values["recall-embedding-model"]).toBe("bge-small-zh-v1.5");
+    // The agent-model flag keeps its own meaning; the new flags carry the
+    // `recall-` prefix precisely so the two cannot collide.
+    expect(parsed.values.embedding).toBe("text-embedding-3-small");
+  });
+
+  test("parses a complete set of flags into an unapplied patch", () => {
+    const parse = parseEmbeddingSetupFlags({
+      "recall-embedding": "off",
+      "recall-embedding-backend": "endpoint",
+      "recall-embedding-model": " text-embedding-3-small ",
+      "recall-embedding-endpoint": " https://api.example.com/v1 ",
+      "recall-embedding-api-key-env": "MY_EMBEDDING_KEY",
+    });
+    expect(parse).toEqual({
+      flags: {
+        enabled: false,
+        backend: "endpoint",
+        model: "text-embedding-3-small",
+        endpoint: "https://api.example.com/v1",
+        apiKeyEnv: "MY_EMBEDDING_KEY",
+      },
+    });
+  });
+
+  test("no flag at all is an empty patch, not an error", () => {
+    expect(parseEmbeddingSetupFlags({})).toEqual({ flags: {} });
+  });
+
+  test("refuses values it cannot use before anything is written", () => {
+    const failures: Array<Record<string, string>> = [
+      { "recall-embedding": "yes" },
+      { "recall-embedding-backend": "local" },
+      { "recall-embedding-model": "   " },
+      { "recall-embedding-endpoint": "" },
+      { "recall-embedding-endpoint": "ftp://example.com" },
+      { "recall-embedding-api-key-env": "BAD-NAME" },
+      { "recall-embedding-api-key-env": "MY_KEY" },
+      {
+        "recall-embedding-backend": "builtin",
+        "recall-embedding-endpoint": "https://api.example.com/v1",
+      },
+    ];
+    for (const values of failures) {
+      expect({
+        values,
+        result: parseEmbeddingSetupFlags(values),
+      }).toMatchObject({ values, result: { error: expect.any(String) } });
+    }
+  });
+
+  test("the key flag only ever names an environment variable", () => {
+    // A pasted credential must be rejected by shape rather than stored or
+    // echoed: only an identifier-shaped name is accepted.
+    const parse = parseEmbeddingSetupFlags({
+      "recall-embedding-endpoint": "https://api.example.com/v1",
+      "recall-embedding-api-key-env": "sk-live-1234",
+    });
+    expect(parse).toMatchObject({
+      error: expect.stringContaining("environment"),
+    });
+  });
+
+  test("the generated help lists every new flag", () => {
+    const help = renderCliOptionsHelp();
+    for (const flag of EMBEDDING_SETUP_FLAG_NAMES) {
+      expect(help).toContain(`--${flag}`);
+    }
+    expect(help).toContain("--recall-embedding-api-key-env <ENV>");
+    expect(help).toContain("never goes on the command line");
   });
 });

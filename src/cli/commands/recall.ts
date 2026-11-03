@@ -14,6 +14,10 @@ import type { DreamCommandScope } from "@/agent/reflection-runs";
 import { type Backend, getBackend } from "@/backend";
 import { LocalBackend } from "@/backend/local/local-backend";
 import { buildRecallCorpus } from "@/backend/local/recall-build";
+import {
+  type EmbeddingCommandDeps,
+  handleEmbeddingCommand,
+} from "@/cli/commands/embedding";
 import { setRecallDisplay } from "@/cli/components/transcript-display-state";
 import {
   formatRecallSettingsLine,
@@ -53,6 +57,7 @@ export const RECALL_COMMAND_USAGE = [
   "  /recall ratio <0..1>          relative score floor",
   "  /recall diversity <mode>      none | file | split",
   "  /recall display <tier>        silent | summary | full",
+  "  /recall embedding <command>   vector recall: on, off, status, build, cancel, reset, setup",
 ].join("\n");
 
 export type RecallCommand =
@@ -61,6 +66,12 @@ export type RecallCommand =
   | { kind: "status" }
   | { kind: "build" }
   | { kind: "probe"; query: string }
+  /**
+   * `/recall embedding …` (feature ③): parsed here so the two command groups
+   * share one dispatcher, then handed to `cli/commands/embedding.ts` whole. The
+   * sub-parser owns every spelling after `embedding`.
+   */
+  | { kind: "embedding"; args: string[] }
   /** Value changes; `label` names the knob in the receipt. */
   | { kind: "set"; label: string; updates: Partial<Settings> }
   /** `/recall on` also clears the breaker (《26》§6.6: manual recovery only). */
@@ -215,6 +226,10 @@ export function parseRecallCommand(args: string[]): RecallCommand {
           }
         : error("`/recall display` needs one of: silent, summary, full.");
     }
+    case "embedding":
+      // No validation here: `parseEmbeddingCommand` owns that vocabulary and
+      // reports its own errors, so this dispatcher only splits the command.
+      return { kind: "embedding", args: rest };
     case "chars": {
       const perEntry = parseRecallCount(rest[0]);
       if (perEntry === null) {
@@ -262,6 +277,12 @@ export { RECALL_LOCAL_ONLY, RECALL_PROBE_NEEDS_AGENT };
 
 export interface RecallCommandDeps {
   backend?: Backend;
+  /**
+   * Feature ③'s seams, passed through to `handleEmbeddingCommand`. The TUI and
+   * the CLI subcommand both leave this empty; integration (and tests) inject a
+   * runtime fake here rather than growing this module's surface.
+   */
+  embedding?: EmbeddingCommandDeps;
 }
 
 function requireSettings(): string | null {
@@ -314,6 +335,13 @@ export async function handleRecallCommand(
   if (command.kind === "usage") return RECALL_COMMAND_USAGE;
   if (command.kind === "error") {
     return `${command.message}\n\n${RECALL_COMMAND_USAGE}`;
+  }
+
+  // Feature ③ is settings- and runtime-scoped rather than store-scoped, so it
+  // never waits on the local-backend check below: `/recall embedding off` must
+  // work even when the agent's store is unreadable.
+  if (command.kind === "embedding") {
+    return handleEmbeddingCommand(command.args, scope, deps.embedding ?? {});
   }
 
   if (

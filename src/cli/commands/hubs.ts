@@ -139,7 +139,9 @@ export const HUBS: Record<string, HubDefinition> = {
     subcommands: [
       {
         name: "recall",
-        args: "[setting] [value]",
+        // D4's embedding branch lives under this command: name it here so the
+        // hub's own arg hint does not stop short of the spelling it rewrites to.
+        args: "[setting] [value] | embedding <on|off|status|build|cancel|reset|setup>",
         desc: "Configure passive recall of earlier conversations",
         command: "/recall",
       },
