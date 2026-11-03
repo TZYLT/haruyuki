@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SCHEDULE_FILE_VERSION } from "@/cron/cron-types";
 import {
   assertSnapshotStoreVersion,
   preparePackagedSchedules,
@@ -55,20 +56,27 @@ function writeHomeFile(appHome: string, name: string, value: unknown): void {
   );
 }
 
-test("assertSnapshotStoreVersion accepts v1, v2 and the pre-versioned form", () => {
+test("assertSnapshotStoreVersion accepts every supported version and the pre-versioned form", () => {
   expect(() =>
     assertSnapshotStoreVersion({}, "schedules.json", "x"),
   ).not.toThrow();
-  expect(() =>
-    assertSnapshotStoreVersion({ version: 1 }, "crons.json", "x"),
-  ).not.toThrow();
-  expect(() =>
-    assertSnapshotStoreVersion({ version: 2 }, "schedules.json", "x"),
-  ).not.toThrow();
+  for (const version of [1, 2, SCHEDULE_FILE_VERSION]) {
+    expect(() =>
+      assertSnapshotStoreVersion({ version }, "schedules.json", "x"),
+    ).not.toThrow();
+  }
 });
 
 test("assertSnapshotStoreVersion refuses newer and malformed versions", () => {
-  for (const version of [3, 99, 0, -1, 1.5, "3", null]) {
+  for (const version of [
+    SCHEDULE_FILE_VERSION + 1,
+    99,
+    0,
+    -1,
+    1.5,
+    `${SCHEDULE_FILE_VERSION}`,
+    null,
+  ]) {
     expect(() =>
       assertSnapshotStoreVersion({ version }, "schedules.json", "store.json"),
     ).toThrow(SnapshotError);

@@ -2,7 +2,7 @@
  * Export scope: the one table that decides what goes into a package, plus the
  * traversal that turns it into entries.
  *
- * `SCOPE_RULES` is the contract: 26 include rows and 22 exclude rows. The home
+ * `SCOPE_RULES` is the contract: 26 include rows and 23 exclude rows. The home
  * and storage trees follow the requirement doc's appendix B line by line
  * (docs/44-2 §5.3 A/B + appendix B; docs/45-2 §2.4). The project tree does NOT:
  * the user ruled on 2026-10-26 that the narrow §5.3 C list wins over appendix B's
@@ -230,7 +230,7 @@ export const SCOPE_RULES: ScopeRule[] = [
     reason: "settings tokens, agent secrets and channel credentials",
   },
 
-  // E. exclusions (22 rows)
+  // E. exclusions (23 rows)
   {
     pattern: "local-backend/agents/*.topics.json",
     scope: "local-backend",
@@ -312,6 +312,14 @@ export const SCOPE_RULES: ScopeRule[] = [
     include: false,
     reason:
       "our own pre-import backups; excluding them keeps a package from nesting inside the next",
+  },
+  // `recall-vectors/` resolves through appHomePath (every `home/` row does), and
+  // is a rebuildable derivative like the caches above, so it never travels.
+  {
+    pattern: "home/recall-vectors/**",
+    scope: "home",
+    include: false,
+    reason: "derived vector index cache (recall-vectors/), rebuilt on demand",
   },
   {
     pattern: "home/crons.v1.json",
@@ -437,7 +445,7 @@ export interface CollectEntriesOptions {
 /**
  * The exclude rows, in table order, as manifest-shaped exclusions. This is what
  * `buildManifest` uses when the caller has nothing better: the rule table is the
- * contract, so it is recorded in full (22 entries) whether or not each path
+ * contract, so it is recorded in full (23 entries) whether or not each path
  * exists on this machine.
  */
 export function scopeExclusions(): SnapshotExclusion[] {

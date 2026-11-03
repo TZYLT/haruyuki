@@ -265,6 +265,11 @@ const EXPECTED_EXCLUDE: readonly ExpectedRule[] = [
       "our own pre-import backups; excluding them keeps a package from nesting inside the next",
   },
   {
+    pattern: "home/recall-vectors/**",
+    scope: "home",
+    reason: "derived vector index cache (recall-vectors/), rebuilt on demand",
+  },
+  {
     pattern: "home/crons.v1.json",
     scope: "home",
     reason:
@@ -335,13 +340,13 @@ test("SCOPE_RULES: the 26 include rules, asserted one by one", () => {
   assertRuleTable(EXPECTED_INCLUDE, true);
 });
 
-test("SCOPE_RULES: the 22 exclude rules, asserted one by one", () => {
+test("SCOPE_RULES: the 23 exclude rules, asserted one by one", () => {
   assertRuleTable(EXPECTED_EXCLUDE, false);
 });
 
-test("SCOPE_RULES: 48 unique rows, each filed under its own scope", () => {
-  expect(SCOPE_RULES).toHaveLength(48);
-  expect(new Set(SCOPE_RULES.map((rule) => rule.pattern)).size).toBe(48);
+test("SCOPE_RULES: 49 unique rows, each filed under its own scope", () => {
+  expect(SCOPE_RULES).toHaveLength(49);
+  expect(new Set(SCOPE_RULES.map((rule) => rule.pattern)).size).toBe(49);
   for (const rule of SCOPE_RULES) {
     const prefix = rule.scope === "secrets" ? "secrets.json" : rule.scope;
     expect(
@@ -352,9 +357,9 @@ test("SCOPE_RULES: 48 unique rows, each filed under its own scope", () => {
   }
 });
 
-test("scopeExclusions: the 22 exclude rows in table order", () => {
+test("scopeExclusions: the 23 exclude rows in table order", () => {
   const exclusions = scopeExclusions();
-  expect(exclusions).toHaveLength(22);
+  expect(exclusions).toHaveLength(23);
   expect(exclusions).toEqual(
     SCOPE_RULES.filter((rule) => !rule.include).map((rule) => ({
       path: rule.pattern,
@@ -461,6 +466,7 @@ function createFixture(): Fixture {
     [APP_SUBDIRS.plans, "plan.md"],
     [APP_SUBDIRS.worktrees, join("wt-a", "draft.md")],
     ["backups", "pre-import.hryk"],
+    ["recall-vectors", "a/current.json"],
   ];
   for (const [directory, file] of excludedHome) {
     writeFileAt(appHome, join(directory, file), "excluded");
@@ -812,6 +818,22 @@ test("collectEntries: projects/ and backups/ never enter the package", async () 
   expect(found.some((path) => path === "home/backups/pre-import.hryk")).toBe(
     false,
   );
+});
+
+test("collectEntries: recall-vectors is excluded (exclude wins over include)", async () => {
+  const fixture = createFixture();
+  const found = paths(
+    await collectAll(fixture.roots, { project: fixture.project }),
+  );
+  // The rule is an exclusion, so the walk never yields the derived cache even
+  // though its home siblings are carried; `include: false` is the final word.
+  expect(found.some((path) => path.startsWith("home/recall-vectors"))).toBe(
+    false,
+  );
+  expect(
+    SCOPE_RULES.find((rule) => rule.pattern === "home/recall-vectors/**")
+      ?.include,
+  ).toBe(false);
 });
 
 test("collectEntries: the project tree carries the six narrow items only", async () => {

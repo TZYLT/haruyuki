@@ -316,7 +316,7 @@ async function seedSourceMachine(): Promise<SeededMachine> {
   literalsToClean.push(join(literalBase, "transcripts"));
 
   // Two excluded trees that really exist, so the export report has evidence of
-  // what the walk skipped; the manifest carries the 22-rule table instead.
+  // what the walk skipped; the manifest carries the 23-rule table instead.
   writeFileAt(sourceHome, join("logs", "skipped.log"), "debug\n");
   writeFileAt(sourceHome, join("cache", "derived.bin"), "cache\n");
 
@@ -557,7 +557,7 @@ test("export then import restores the same data under a second set of roots", as
   expect(imported.notRemapped.length).toBeGreaterThanOrEqual(3);
   // The import report carries the manifest's rule table, so a reader can see
   // what a restore leaves alone without opening the package.
-  expect(imported.excluded).toHaveLength(22);
+  expect(imported.excluded).toHaveLength(23);
 
   // ── settings: restored, token written back, bucket key rewritten ──
   const restoredSettings = readJsonAt(targetHome, "settings.json");
@@ -716,7 +716,7 @@ test("a pre-F-05 package with only crons.json imports and migrates on first read
 
   expect(imported.ok).toBe(true);
   expect(imported.code).toBe("ok");
-  expect(imported.excluded).toHaveLength(22);
+  expect(imported.excluded).toHaveLength(23);
   // The old package lands the old file; the import invents no v2 store.
   expect(existsAt(targetHome, "crons.json")).toBe(true);
   expect(existsAt(targetHome, "schedules.json")).toBe(false);

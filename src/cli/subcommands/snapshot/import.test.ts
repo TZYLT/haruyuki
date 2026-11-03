@@ -343,7 +343,7 @@ test("restores a valid package and fills the report contract", async () => {
   expect(report.counts.files).toBe(dirs.length + files.length + 1);
   expect(report.counts.bytes).toBeGreaterThan(0);
   expect(report.byScope?.home?.files).toBe(5);
-  expect(report.excluded).toHaveLength(22);
+  expect(report.excluded).toHaveLength(23);
   expect(report.remapped).toEqual([]);
   expect(report.failedSecrets).toEqual([]);
   expect(report.migrations).toEqual([]);
