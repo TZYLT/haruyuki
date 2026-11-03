@@ -19,8 +19,14 @@
  * of retrying a broken file 68 times per round. The entry is retried as soon as
  * the pointer changes, and `invalidateEmbeddingIndex` forces it immediately.
  *
- * Layer: `backend/local/`. Imports only `embedding-format.ts`; no `cli/`,
- * `websocket/`, `reminders/` or `agent/` imports.
+ * C9 adds a second resident map for `int8` generations
+ * ({@link loadEmbeddingQuantIndex}): one entry per unit and mode, so
+ * `int8-rescore` can hold the float32 originals while `int8-only` does not. The
+ * f32 path is unchanged; the two readers refuse each other's quant rather than
+ * mixing encodings.
+ *
+ * Layer: `backend/local/`. Imports only same-directory B2/C9 modules; no
+ * `cli/`, `websocket/`, `reminders/` or `agent/` imports.
  */
 
 import {
@@ -33,6 +39,14 @@ import {
   readEmbeddingIndexPointer,
   statEmbeddingIndexPointer,
 } from "./embedding-format";
+import {
+  checkEmbeddingQuantSpace,
+  type EmbeddingQuantMode,
+} from "./embedding-quant";
+import {
+  type EmbeddingQuantIndexSnapshot,
+  readEmbeddingQuantIndex,
+} from "./embedding-quant-format";
 
 /**
  * Fields the caller requires the loaded space to match. Expectations are a
@@ -73,6 +87,25 @@ export type EmbeddingIndexLoadResult =
       detail?: string;
     };
 
+/** Outcome of {@link loadEmbeddingQuantIndex}. */
+export type EmbeddingQuantLoadResult =
+  | {
+      ok: true;
+      index: EmbeddingQuantIndexSnapshot;
+      /** `hit` = pointer signature unchanged, `loaded` = read from disk. */
+      status: "hit" | "loaded";
+      /** Mode actually served; `int8-rescore` only when originals are resident. */
+      mode: EmbeddingQuantMode;
+      /** True when exact float32 rescore cannot run from this snapshot. */
+      rescoreUnavailable: boolean;
+    }
+  | {
+      ok: false;
+      status: "unusable";
+      problem: EmbeddingIndexProblem;
+      detail?: string;
+    };
+
 /** Cheap health check; does not load vectors. */
 export type EmbeddingIndexStatResult =
   | {
@@ -98,6 +131,12 @@ export type EmbeddingIndexCacheStats = {
   reloads: number;
   /** Calls that returned `unusable`. */
   unusable: number;
+  /** Resident int8 snapshots, one per unit/mode pair. */
+  quantEntries: number;
+  quantHits: number;
+  quantMisses: number;
+  quantReloads: number;
+  quantUnusable: number;
 };
 
 type Signature = { size: number; mtimeMs: number; ctimeMs: number };
@@ -115,12 +154,34 @@ type CacheEntry =
       detail?: string;
     };
 
+type QuantCacheEntry =
+  | {
+      status: "ready";
+      signature: Signature;
+      index: EmbeddingQuantIndexSnapshot;
+      mode: EmbeddingQuantMode;
+      rescoreUnavailable: boolean;
+    }
+  | {
+      status: "unusable";
+      signature: Signature;
+      problem: EmbeddingIndexProblem;
+      detail?: string;
+    };
+
 const cache = new Map<string, CacheEntry>();
+const quantCache = new Map<string, QuantCacheEntry>();
 const counters = {
   hits: 0,
   misses: 0,
   reloads: 0,
   unusable: 0,
+};
+const quantCounters = {
+  quantHits: 0,
+  quantMisses: 0,
+  quantReloads: 0,
+  quantUnusable: 0,
 };
 
 /**
@@ -218,7 +279,140 @@ export function loadEmbeddingIndex(
 }
 
 /**
- * The resident snapshot for a unit, without touching the disk. `undefined` when
+ * Loads one int8 generation, reusing the resident snapshot while the pointer is
+ * unchanged. The cache keeps one entry per unit and mode: `int8-rescore` holds
+ * the float32 originals for exact re-ranking, `int8-only` does not decode them
+ * (they cost 4× the codes) and reports `rescoreUnavailable`.
+ *
+ * An int8 generation is a different on-disk encoding, not a different space:
+ * the caller's expectation (quant/dimensions/model/agent/space) is still checked
+ * and a mismatch returns `unusable`, so a quant switch falls back to lexical
+ * recall instead of scoring against the wrong geometry.
+ */
+export function loadEmbeddingQuantIndex(
+  unitDir: string,
+  options: {
+    /** Default `int8-rescore`; falls back to int8-only when nothing is stored. */
+    mode?: EmbeddingQuantMode;
+    expectation?: EmbeddingIndexExpectation;
+  } = {},
+): EmbeddingQuantLoadResult {
+  const requestedMode: EmbeddingQuantMode = options.mode ?? "int8-rescore";
+  const key = quantCacheKey(unitDir, requestedMode);
+  const stat = statEmbeddingIndexPointer(unitDir);
+  const resident = quantCache.get(key);
+  if (!stat.ok) {
+    quantCache.delete(key);
+    quantCounters.quantUnusable += 1;
+    return {
+      ok: false,
+      status: "unusable",
+      problem: "missing",
+      detail: `no readable ${EMBEDDING_INDEX_FILE_NAMES.current} in ${unitDir}`,
+    };
+  }
+  if (
+    resident !== undefined &&
+    sameSignature(resident.signature, stat.signature)
+  ) {
+    quantCounters.quantHits += 1;
+    touchQuant(key, resident);
+    if (resident.status === "unusable") return quantUnusableResult(resident);
+    if (
+      options.expectation !== undefined &&
+      checkEmbeddingQuantSpace(resident.index.meta, options.expectation) !==
+        undefined
+    ) {
+      quantCounters.quantUnusable += 1;
+      return {
+        ok: false,
+        status: "unusable",
+        problem: "expectation-mismatch",
+        detail: "resident generation does not match the requested space",
+      };
+    }
+    return {
+      ok: true,
+      index: resident.index,
+      status: "hit",
+      mode: resident.mode,
+      rescoreUnavailable: resident.rescoreUnavailable,
+    };
+  }
+
+  quantCounters.quantMisses += 1;
+  quantCounters.quantReloads += 1;
+  const pointerResult = readEmbeddingIndexPointer(unitDir);
+  if (!pointerResult.ok) {
+    return storeQuantUnusable(
+      key,
+      stat.signature,
+      pointerResult.problem,
+      pointerResult.detail,
+    );
+  }
+  const readResult = readEmbeddingQuantIndex(unitDir, {
+    pointer: pointerResult.pointer,
+    includeFloat32: requestedMode === "int8-rescore",
+  });
+  if (!readResult.ok) {
+    return storeQuantUnusable(
+      key,
+      pointerResult.signature,
+      readResult.problem,
+      readResult.detail,
+    );
+  }
+  // A caller-scoped expectation is not cached as unusable: the same generation
+  // can be valid for the expectation the next caller passes.
+  if (
+    options.expectation !== undefined &&
+    checkEmbeddingQuantSpace(readResult.snapshot.meta, options.expectation) !==
+      undefined
+  ) {
+    quantCounters.quantUnusable += 1;
+    return {
+      ok: false,
+      status: "unusable",
+      problem: "expectation-mismatch",
+      detail: "generation does not match the requested space",
+    };
+  }
+  const snapshot = readResult.snapshot;
+  storeQuant(key, {
+    status: "ready",
+    signature: pointerResult.signature,
+    index: snapshot,
+    mode: snapshot.mode,
+    rescoreUnavailable: snapshot.rescoreUnavailable,
+  });
+  return {
+    ok: true,
+    index: snapshot,
+    status: "loaded",
+    mode: snapshot.mode,
+    rescoreUnavailable: snapshot.rescoreUnavailable,
+  };
+}
+
+/**
+ * The resident int8 snapshot for a unit/mode, without touching the disk.
+ * `undefined` when never loaded, invalidated, or cached as unusable.
+ */
+export function peekEmbeddingQuantIndex(
+  unitDir: string,
+  mode: EmbeddingQuantMode = "int8-rescore",
+): EmbeddingQuantIndexSnapshot | undefined {
+  const entry = quantCache.get(quantCacheKey(unitDir, mode));
+  return entry?.status === "ready" ? entry.index : undefined;
+}
+
+/** Drops one unit's int8 snapshots (all modes) from the cache. */
+export function invalidateEmbeddingQuantIndex(unitDir: string): boolean {
+  return dropQuantEntries(unitDir);
+}
+
+/** The resident snapshot for a unit, without touching the disk. `undefined` when
  * the unit was never loaded, was invalidated, or is cached as unusable.
  */
 export function peekEmbeddingIndex(
@@ -245,14 +439,20 @@ export function statEmbeddingIndex(unitDir: string): EmbeddingIndexStatResult {
   };
 }
 
-/** Drops one unit from the cache (for example after it was rebuilt/removed). */
+/**
+ * Drops one unit from both caches (for example after it was rebuilt/removed).
+ * Returns whether any resident entry existed.
+ */
 export function invalidateEmbeddingIndex(unitDir: string): boolean {
-  return cache.delete(unitDir);
+  const droppedFloat32 = cache.delete(unitDir);
+  const droppedInt8 = dropQuantEntries(unitDir);
+  return droppedFloat32 || droppedInt8;
 }
 
 /** Drops every resident unit; a space switch or a full rebuild calls this. */
 export function invalidateAllEmbeddingIndexes(): void {
   cache.clear();
+  quantCache.clear();
 }
 
 /** Clears the hit/miss counters; tests call this between cases. */
@@ -261,11 +461,20 @@ export function resetEmbeddingIndexCacheStats(): void {
   counters.misses = 0;
   counters.reloads = 0;
   counters.unusable = 0;
+  quantCounters.quantHits = 0;
+  quantCounters.quantMisses = 0;
+  quantCounters.quantReloads = 0;
+  quantCounters.quantUnusable = 0;
 }
 
 /** Current cache size and counters. */
 export function getEmbeddingIndexCacheStats(): EmbeddingIndexCacheStats {
-  return { entries: cache.size, ...counters };
+  return {
+    entries: cache.size,
+    ...counters,
+    quantEntries: quantCache.size,
+    ...quantCounters,
+  };
 }
 
 function storeUnusable(
@@ -310,6 +519,76 @@ function store(unitDir: string, entry: CacheEntry): void {
 function touch(unitDir: string, entry: CacheEntry): void {
   cache.delete(unitDir);
   cache.set(unitDir, entry);
+}
+
+function storeQuantUnusable(
+  key: string,
+  signature: Signature,
+  problem: EmbeddingIndexProblem,
+  detail?: string,
+): EmbeddingQuantLoadResult {
+  quantCounters.quantUnusable += 1;
+  storeQuant(key, {
+    status: "unusable",
+    signature,
+    problem,
+    ...(detail === undefined ? {} : { detail }),
+  });
+  return {
+    ok: false,
+    status: "unusable",
+    problem,
+    ...(detail === undefined ? {} : { detail }),
+  };
+}
+
+function quantUnusableResult(
+  entry: Extract<QuantCacheEntry, { status: "unusable" }>,
+): EmbeddingQuantLoadResult {
+  quantCounters.quantUnusable += 1;
+  return {
+    ok: false,
+    status: "unusable",
+    problem: entry.problem,
+    ...(entry.detail === undefined ? {} : { detail: entry.detail }),
+  };
+}
+
+/** One int8 entry per unit and mode, so an int8-only load never evicts a
+ * rescore-capable one merely because the caller switched profiles. */
+function quantCacheKey(unitDir: string, mode: EmbeddingQuantMode): string {
+  return `${unitDir}\u0000${mode}`;
+}
+
+function dropQuantEntries(unitDir: string): boolean {
+  const prefix = `${unitDir}\u0000`;
+  let removed = false;
+  for (const key of quantCache.keys()) {
+    if (key.startsWith(prefix)) {
+      quantCache.delete(key);
+      removed = true;
+    }
+  }
+  return removed;
+}
+
+function storeQuant(key: string, entry: QuantCacheEntry): void {
+  quantCache.delete(key);
+  quantCache.set(key, entry);
+  evictLeastRecentlyUsedQuant();
+}
+
+function touchQuant(key: string, entry: QuantCacheEntry): void {
+  quantCache.delete(key);
+  quantCache.set(key, entry);
+}
+
+function evictLeastRecentlyUsedQuant(): void {
+  while (quantCache.size > EMBEDDING_INDEX_CACHE_MAX_ENTRIES) {
+    const oldest = quantCache.keys().next();
+    if (oldest.done) return;
+    quantCache.delete(oldest.value);
+  }
 }
 
 function evictLeastRecentlyUsed(): void {
