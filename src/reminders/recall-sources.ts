@@ -1,8 +1,17 @@
 import { join } from "node:path";
+import {
+  buildEmbeddingChunkPlan,
+  type EmbeddingChunk,
+} from "@/backend/local/embedding-chunk";
+import { hashEmbeddingText } from "@/backend/local/embedding-format";
+import type { EmbeddingSearchHit } from "@/backend/local/embedding-search";
 import { searchMemoryFiles } from "@/backend/local/memory-search";
 import type { RecallMessageText } from "@/backend/local/recall-index";
 import { loadRecallCorpus } from "@/backend/local/recall-index";
 import {
+  clipInjectionText,
+  lineSpanWithinParent,
+  memoryVectorExcerpt,
   readRecallMessageTexts,
   transcriptRecallSnippet,
 } from "@/backend/local/recall-snippets";
@@ -239,4 +248,404 @@ export function buildRecallSources(
   input: RecallSourceInput,
 ): RecallSourcePort[] {
   return [transcriptSource(input), memorySource(input)];
+}
+
+// ---------------------------------------------------------------------------
+// Vector-hit injection mapping (feature 48, package B4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Characters of the matched parent a vector transcript hit injects (48-1 R-33).
+ * The window is centred on the chunk's `focusChar`, so it is the same 300
+ * characters no matter which chunk of a long message matched.
+ */
+export const VECTOR_INJECTION_FOCUS_CHARS = 300;
+
+/**
+ * Characters a vector transcript hit may spend on one neighbour: the previous
+ * user message, or — when there is none — the next assistant message
+ * (48-1 §6.7). The injected text is focus + neighbour, and only the *text* is
+ * capped by these two numbers; the role labels are paid out of the hard cap.
+ */
+export const VECTOR_INJECTION_NEIGHBOR_CHARS = 100;
+
+/** Hard cap for one injected vector entry, transcript or memory (48-1 R-33). */
+export const VECTOR_INJECTION_MAX_CHARS = 400;
+
+const VECTOR_ROLE_LABELS = { user: "用户", assistant: "助手" } as const;
+
+/**
+ * A vector-arm candidate.
+ *
+ * `arm` is what lets the service keep the two arms distinct without learning
+ * which ports exist; `focusChar`/`chunkIndex` are kept for diagnostics and for
+ * E2's display, and are not read by the orchestrator. The rest is exactly
+ * {@link RecallCandidate}: `source` stays `transcript|memory`, so the fingerprint
+ * is the lexical one and dedup/RRF keys do not change (48-2 §4.3).
+ */
+export type RecallVectorCandidate = RecallCandidate & {
+  arm: "vector";
+  /** Original UTF-16 offset of the matched chunk's prose midpoint. */
+  focusChar: number;
+  /** Parent-local chunk index that produced the hit. */
+  chunkIndex: number;
+};
+
+/**
+ * What the caller hands back for a hit: the parent unit's *current* text.
+ *
+ * A parent is one transcript message or one memory paragraph, and `text` is the
+ * exact text B1 chunked, so replaying the chunker reproduces the stored
+ * `textHash`. Memory parents additionally carry the whole document: the title
+ * prefix needs the heading above the paragraph, and the reported line numbers
+ * have to be file-absolute the way `memory-search` reports them.
+ */
+export type RecallVectorParent = {
+  text: string;
+  /** Memory parents only: every line of the source document. */
+  lines?: readonly string[];
+  /** Memory parents only: 1-based first line of `text` inside `lines`. */
+  startLine?: number;
+};
+
+/** Reads one parent's current text; `undefined` means it no longer exists. */
+export type RecallVectorParentReader = (
+  parentId: string,
+) => RecallVectorParent | undefined;
+
+/**
+ * Re-derives the matched chunk from the parent's current text and checks it
+ * against the stored record.
+ *
+ * The hash is the load-bearing check (48-2 §4.3: “注入前用 `textHash` 校验原文
+ * 漂移；失败**丢候选不猜**”). It covers the embedded text, which is what the
+ * vector scored; the offsets are checked too because a drift that only moves
+ * characters *between* prose runs (an edited fenced code block) leaves the hash
+ * intact while making `focusChar` point somewhere else. A candidate whose window
+ * cannot be placed exactly is dropped.
+ */
+export function verifyVectorHitText(
+  parentText: string,
+  hit: EmbeddingSearchHit,
+): boolean {
+  return matchVectorChunk(parentText, hit) !== undefined;
+}
+
+function matchVectorChunk(
+  parentText: string,
+  hit: EmbeddingSearchHit,
+): EmbeddingChunk | undefined {
+  if (parentText.length === 0) return undefined;
+  const plan = buildEmbeddingChunkPlan({
+    parentId: hit.parentId,
+    text: parentText,
+  });
+  const chunk = plan.chunks.find(
+    (entry) => entry.chunkIndex === hit.chunkIndex,
+  );
+  if (chunk === undefined) return undefined;
+  if (
+    chunk.startChar !== hit.startChar ||
+    chunk.endChar !== hit.endChar ||
+    chunk.focusChar !== hit.focusChar
+  ) {
+    return undefined;
+  }
+  if (hashEmbeddingText(chunk.text) !== hit.textHash) return undefined;
+  return chunk;
+}
+
+/**
+ * The `focusChars`-wide window of original text centred on `focusChar`.
+ *
+ * Original text, not the embedded text: fenced code inside the window is
+ * injected as-is (48-1 §6.2 item 5: “注入原文保持不变”). The window is shifted
+ * rather than shortened at either end, so it always has the full width unless
+ * the parent is shorter than that.
+ */
+export function vectorFocusWindow(
+  text: string,
+  focusChar: number,
+  focusChars: number = VECTOR_INJECTION_FOCUS_CHARS,
+): string {
+  const max = Number.isFinite(focusChars)
+    ? Math.max(1, Math.trunc(focusChars))
+    : VECTOR_INJECTION_FOCUS_CHARS;
+  if (text.length <= max) return text;
+  const focus = Number.isFinite(focusChar)
+    ? Math.max(0, Math.min(Math.trunc(focusChar), text.length))
+    : 0;
+  let start = Math.max(0, focus - Math.floor(max / 2));
+  if (start + max > text.length) start = text.length - max;
+  let end = start + max;
+  // Never start on a low surrogate or end on a high one: the window is cut out
+  // of the message verbatim and must stay valid UTF-16.
+  const first = text.charCodeAt(start);
+  if (start > 0 && first >= 0xdc00 && first <= 0xdfff) start += 1;
+  const last = text.charCodeAt(end - 1);
+  if (end < text.length && last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return text.slice(start, end);
+}
+
+type TranscriptNeighbor = {
+  role: keyof typeof VECTOR_ROLE_LABELS;
+  text: string;
+};
+
+/**
+ * The neighbour a vector transcript hit injects.
+ *
+ * Previous user first, then next assistant (48-1 §6.7): the user turn is the
+ * question the passage is an answer to, so it is worth more than the following
+ * answer when a long message has neighbours on both sides.
+ */
+function vectorNeighbor(
+  messages: readonly RecallMessageText[],
+  hitIndex: number,
+): TranscriptNeighbor | undefined {
+  for (let cursor = hitIndex - 1; cursor >= 0; cursor -= 1) {
+    const message = messages[cursor];
+    if (message?.role === "user") {
+      return { role: "user", text: message.text };
+    }
+  }
+  for (let cursor = hitIndex + 1; cursor < messages.length; cursor += 1) {
+    const message = messages[cursor];
+    if (message?.role === "assistant") {
+      return { role: "assistant", text: message.text };
+    }
+  }
+  return undefined;
+}
+
+/** The tail of `value`, used for the previous-user neighbour closest to the hit. */
+function clipInjectionTail(value: string, maxCharacters: number): string {
+  const max = Math.max(0, Math.trunc(maxCharacters));
+  if (value.length <= max) return value;
+  let start = value.length - max;
+  const first = value.charCodeAt(start);
+  if (first >= 0xdc00 && first <= 0xdfff) start += 1;
+  return value.slice(start);
+}
+
+/**
+ * Focus + neighbour, labels included, capped at {@link VECTOR_INJECTION_MAX_CHARS}.
+ *
+ * The focus block is the hit message's role label plus the 300-character window.
+ * Whatever room is left after it pays for the separator, the neighbour's label
+ * and the neighbour text; a previous user message contributes its *tail* (the
+ * part nearest the hit), a next assistant message its head. If the leftover
+ * budget cannot hold at least one character, the neighbour is dropped rather
+ * than emitted as a dangling label.
+ */
+function transcriptVectorText(input: {
+  parentText: string;
+  focusChar: number;
+  role: keyof typeof VECTOR_ROLE_LABELS;
+  neighbor: TranscriptNeighbor | undefined;
+}): string {
+  const focusBlock = `${VECTOR_ROLE_LABELS[input.role]}：${vectorFocusWindow(
+    input.parentText,
+    input.focusChar,
+  )}`;
+  const focusText = clipInjectionText(focusBlock, VECTOR_INJECTION_MAX_CHARS);
+  const neighbor = input.neighbor;
+  if (neighbor === undefined) return focusText;
+  const separator = "\n\n";
+  const neighborLabel = VECTOR_ROLE_LABELS[neighbor.role];
+  const remaining =
+    VECTOR_INJECTION_MAX_CHARS -
+    focusText.length -
+    separator.length -
+    neighborLabel.length -
+    "：".length;
+  if (remaining < 1) return focusText;
+  const neighborText =
+    neighbor.role === "user"
+      ? clipInjectionTail(neighbor.text, remaining)
+      : clipInjectionText(neighbor.text, remaining);
+  return `${focusText}${separator}${neighborLabel}：${neighborText}`;
+}
+
+/**
+ * Maps one B2 transcript hit to an injectable candidate, or drops it.
+ *
+ * Drops, never guesses: a hit whose parent is gone, whose text drifted, or whose
+ * message the transcript no longer has cannot be rendered faithfully, and a
+ * wrong injection is worse than a missed recall (48-2 §4.3).
+ */
+export function buildTranscriptVectorCandidate(input: {
+  hit: EmbeddingSearchHit;
+  /** The hit conversation's directory key, as the lexical arm reports it. */
+  conversationKey: string;
+  messages: readonly RecallMessageText[];
+  readParent: RecallVectorParentReader;
+}): RecallVectorCandidate | undefined {
+  const messageIndex = input.messages.findIndex(
+    (message) => message.id === input.hit.parentId,
+  );
+  if (messageIndex === -1) return undefined;
+  const parent = input.readParent(input.hit.parentId);
+  if (parent === undefined || parent.text.length === 0) return undefined;
+  if (!verifyVectorHitText(parent.text, input.hit)) return undefined;
+  const message = input.messages[messageIndex];
+  if (message === undefined) return undefined;
+  return {
+    source: "transcript",
+    fingerprint: `transcript:${input.conversationKey}:${input.hit.parentId}`,
+    file: input.conversationKey,
+    conversationKey: input.conversationKey,
+    messageId: input.hit.parentId,
+    timestamp: message.ts,
+    text: transcriptVectorText({
+      parentText: parent.text,
+      focusChar: input.hit.focusChar,
+      role: message.role,
+      neighbor: vectorNeighbor(input.messages, messageIndex),
+    }),
+    score: input.hit.score,
+    arm: "vector",
+    focusChar: input.hit.focusChar,
+    chunkIndex: input.hit.chunkIndex,
+  };
+}
+
+/**
+ * Maps one B2 memory hit to an injectable candidate, or drops it.
+ *
+ * Memory injection keeps the lexical “best line ± `excerptLines`” window
+ * (48-1 §6.2): the hit line comes from the chunk's `focusChar` (48-2 §4.3) and
+ * the window is the file's lines, so it matches what the lexical arm reports for
+ * the same passage. The title prefix is added on top of that window and counted
+ * inside the 400-character budget.
+ *
+ * The stored `parentLineSpan`, when present, is checked against the current
+ * document layout as well: it is what proves the paragraph has not moved, and a
+ * shifted hit must not be injected at the old line numbers.
+ */
+export function buildMemoryVectorCandidate(input: {
+  hit: EmbeddingSearchHit;
+  /** Workspace-relative memory path; the unit's `fileKey` is derived from it. */
+  file: string;
+  readParent: RecallVectorParentReader;
+  excerptLines?: number;
+  includeTitlePrefix?: boolean;
+  maxCharacters?: number;
+}): RecallVectorCandidate | undefined {
+  const parent = input.readParent(input.hit.parentId);
+  if (
+    parent === undefined ||
+    parent.lines === undefined ||
+    parent.startLine === undefined
+  ) {
+    return undefined;
+  }
+  const chunk = matchVectorChunk(parent.text, input.hit);
+  if (chunk === undefined) return undefined;
+  const storedSpan = input.hit.parentLineSpan;
+  if (storedSpan !== undefined) {
+    const expectedSpan = lineSpanWithinParent({
+      parentText: parent.text,
+      startChar: chunk.startChar,
+      endChar: chunk.endChar,
+      parentStartLine: parent.startLine,
+    });
+    if (
+      expectedSpan.startLine !== storedSpan.startLine ||
+      expectedSpan.endLine !== storedSpan.endLine
+    ) {
+      return undefined;
+    }
+  }
+  const excerpt = memoryVectorExcerpt({
+    path: input.file,
+    parentText: parent.text,
+    parentStartLine: parent.startLine,
+    lines: parent.lines,
+    focusChar: input.hit.focusChar,
+    ...(input.excerptLines === undefined
+      ? {}
+      : { excerptLines: input.excerptLines }),
+    ...(input.includeTitlePrefix === undefined
+      ? {}
+      : { includeTitlePrefix: input.includeTitlePrefix }),
+    maxCharacters: input.maxCharacters ?? VECTOR_INJECTION_MAX_CHARS,
+  });
+  return {
+    source: "memory",
+    fingerprint: `memory:${input.file}`,
+    file: input.file,
+    startLine: excerpt.startLine,
+    endLine: excerpt.endLine,
+    text: excerpt.text,
+    score: input.hit.score,
+    arm: "vector",
+    focusChar: input.hit.focusChar,
+    chunkIndex: input.hit.chunkIndex,
+  };
+}
+
+/** Batch form of {@link buildTranscriptVectorCandidate}; order is preserved. */
+export function buildTranscriptVectorCandidates(input: {
+  hits: readonly EmbeddingSearchHit[];
+  conversationKey: string;
+  messages: readonly RecallMessageText[];
+  readParent: RecallVectorParentReader;
+}): RecallVectorCandidate[] {
+  const candidates: RecallVectorCandidate[] = [];
+  for (const hit of input.hits) {
+    const candidate = buildTranscriptVectorCandidate({
+      hit,
+      conversationKey: input.conversationKey,
+      messages: input.messages,
+      readParent: input.readParent,
+    });
+    if (candidate !== undefined) candidates.push(candidate);
+  }
+  return candidates;
+}
+
+/** Batch form of {@link buildMemoryVectorCandidate}; order is preserved. */
+export function buildMemoryVectorCandidates(input: {
+  hits: readonly EmbeddingSearchHit[];
+  file: string;
+  readParent: RecallVectorParentReader;
+  excerptLines?: number;
+  includeTitlePrefix?: boolean;
+  maxCharacters?: number;
+}): RecallVectorCandidate[] {
+  const candidates: RecallVectorCandidate[] = [];
+  for (const hit of input.hits) {
+    const candidate = buildMemoryVectorCandidate({
+      hit,
+      file: input.file,
+      readParent: input.readParent,
+      ...(input.excerptLines === undefined
+        ? {}
+        : { excerptLines: input.excerptLines }),
+      ...(input.includeTitlePrefix === undefined
+        ? {}
+        : { includeTitlePrefix: input.includeTitlePrefix }),
+      ...(input.maxCharacters === undefined
+        ? {}
+        : { maxCharacters: input.maxCharacters }),
+    });
+    if (candidate !== undefined) candidates.push(candidate);
+  }
+  return candidates;
+}
+
+/**
+ * Reader for transcript parents built from an already-read message list.
+ *
+ * E2 reads a conversation once per search; this keeps the callback free of
+ * repeated file reads and gives the mapper the same texts the chunker saw.
+ */
+export function createTranscriptVectorParentReader(
+  messages: readonly RecallMessageText[],
+): RecallVectorParentReader {
+  const byId = new Map<string, RecallVectorParent>(
+    messages.map((message) => [message.id, { text: message.text }]),
+  );
+  return (parentId) => byId.get(parentId);
 }
