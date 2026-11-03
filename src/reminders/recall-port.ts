@@ -161,6 +161,17 @@ export type RecallCandidate = {
   /** The injectable text, already carrying its context. */
   text: string;
   score: number;
+  /**
+   * The arm that produced the hit. Letting the candidate carry it is what keeps
+   * the two arms distinguishable after {@link searchRecallPhases} flattens their
+   * candidates into one array (fusion needs the split back). Absent on candidates
+   * the lexical sources produce.
+   */
+  arm?: RecallArm;
+  /** Vector arm only: original UTF-16 offset of the matched chunk's midpoint. */
+  focusChar?: number;
+  /** Vector arm only: parent-local chunk index that produced the hit. */
+  chunkIndex?: number;
 };
 
 export type RecallSourceStatus =
