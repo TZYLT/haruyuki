@@ -105,10 +105,12 @@ describe("the schema", () => {
     // 32 writable + 13 read-only at P3; F-06 M4 added 15 writable dream knobs
     // and one read-only setup row; T-04 added 12 rows (one writable
     // `listenerEnvName`, eleven read-only gap rows, ten of them with a jump).
+    // Feature 48 (48-2 D3) added the 16-row vector-recall group: 14 writable
+    // knobs plus the read-only API-key presence and calibration summary rows.
     // Changing this list is fine; changing the number without a docs update is
     // what this test is for.
-    expect(SETTINGS_ITEMS.filter((item) => item.editable)).toHaveLength(48);
-    expect(SETTINGS_ITEMS).toHaveLength(73);
+    expect(SETTINGS_ITEMS.filter((item) => item.editable)).toHaveLength(62);
+    expect(SETTINGS_ITEMS).toHaveLength(89);
   });
 
   test("T-04's twelve gap rows are present with their scope and owner", () => {

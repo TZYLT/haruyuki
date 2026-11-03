@@ -29,6 +29,10 @@ import {
   DREAM_SETTINGS_ITEMS,
 } from "./dream-settings-schema";
 import {
+  EMBEDDING_SETTINGS_GROUPS,
+  EMBEDDING_SETTINGS_ITEMS,
+} from "./embedding-settings-schema";
+import {
   SETTINGS_GAPS_GROUPS,
   SETTINGS_GAPS_ITEMS,
 } from "./settings-gaps-schema";
@@ -150,6 +154,7 @@ const EXPERIMENT_IDS: readonly ExperimentId[] = [
 export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
   { id: "topic", section: "context", label: "Topic & pressure" },
   { id: "recall", section: "memory", label: "Passive recall" },
+  ...EMBEDDING_SETTINGS_GROUPS,
   { id: "reflection", section: "memory", label: "Reflection" },
   DREAM_SETTINGS_GROUP,
   ...SETTINGS_GAPS_GROUPS,
@@ -530,6 +535,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
     },
   },
   ...DREAM_SETTINGS_ITEMS,
+  ...EMBEDDING_SETTINGS_ITEMS,
   {
     id: "memfs",
     section: "memory",
