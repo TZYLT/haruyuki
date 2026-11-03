@@ -16,6 +16,22 @@
 export type RecallSourceId = "transcript" | "memory";
 
 /**
+ * Which retrieval arm a source belongs to.
+ *
+ * A turn runs the lexical arm first and only then the vector arm. The split is
+ * not cosmetic: the turn's `timedOut` is the *lexical* arm's verdict, frozen at
+ * the boundary between the two (`recall-service.ts`), because the vector arm is
+ * allowed to run past the budget and degrade instead of surfacing as a timeout.
+ * A timeout is what the breaker counts (`recall-runtime.ts`), so a slow encoder
+ * folding its own overrun into it would switch the feature off after three turns
+ * that did recall something.
+ *
+ * The vector arm itself lands with the encoder; this package only gives the port
+ * enough information for the service to sequence the two phases.
+ */
+export type RecallArm = "lexical" | "vector";
+
+/**
  * How the K slots are shared out.
  *
  * - `none`: pure score order. The default, because the user could not predict
@@ -93,8 +109,18 @@ export const RECALL_DEFAULTS: RecallOptions = {
   timeoutMs: 1000,
 };
 
-/** The query, already reduced to terms. Sources never see the raw sentence. */
+/** The query: parsed terms for the lexical arm, the raw sentence for the vector arm. */
 export type RecallQueryTerms = {
+  /**
+   * The turn's verbatim user input.
+   *
+   * The lexical arm does not read it — BM25 works from `terms`/`phrases`, the
+   * same words the index was tokenized with. The vector arm needs the sentence
+   * itself, because encoding a bag of n-gram windows would throw away the syntax
+   * the model was trained on, so the text travels alongside rather than being
+   * reconstructed from the terms.
+   */
+  rawText: string;
   terms: readonly string[];
   phrases: readonly string[];
 };
@@ -167,7 +193,19 @@ export type RecallSourceOutcome = {
 /** What the orchestrator consumes from a source. */
 export type RecallSourcePort = {
   readonly id: RecallSourceId;
-  search(request: RecallSourceRequest): RecallSourceOutcome;
+  /**
+   * The arm this source belongs to, so the service can sequence the phases
+   * without knowing which sources exist (`buildRecallSources` stays the only
+   * place that decides that).
+   */
+  readonly arm: RecallArm;
+  /**
+   * Asynchronous because the vector arm awaits an encoder — an IPC round trip to
+   * the worker or an HTTP call to an endpoint. The lexical sources keep a
+   * synchronous body inside the promise: they never await, so their budget is
+   * still the cooperative checkpoints (`recall-deadline.ts`), not this signature.
+   */
+  search(request: RecallSourceRequest): Promise<RecallSourceOutcome>;
 };
 
 /**

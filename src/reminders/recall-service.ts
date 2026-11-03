@@ -1,12 +1,19 @@
 import { getLocalBackendMemoryFilesystemRoot } from "@/backend/local/paths";
-import { createRecallDeadline, type RecallDeadline } from "./recall-deadline";
+import {
+  createRecallDeadline,
+  freezeRecallDeadline,
+  type RecallDeadline,
+} from "./recall-deadline";
 import { selectRecallEntries } from "./recall-orchestrator";
 import {
   RECALL_DEFAULTS,
+  type RecallArm,
   type RecallBackendPort,
   type RecallCandidate,
   type RecallDecision,
   type RecallOptions,
+  type RecallQueryTerms,
+  type RecallScope,
   type RecallSourceDiagnostic,
   type RecallSourcePort,
 } from "./recall-port";
@@ -121,6 +128,65 @@ function emptyDiagnostics(
   return { threshold, candidates, sources };
 }
 
+/**
+ * One turn's search, as the two phases the deadline treats differently.
+ *
+ * The sequencing is the point, so it has its own function: the lexical arm runs
+ * against the turn's budget and its verdict is frozen the moment it ends; the
+ * vector arm then runs and may degrade on its own. `timedOut` is therefore the
+ * lexical arm's verdict only — the vector arm's overrun is reported as a
+ * `degraded` diagnostic and must never become a timeout, because `timedOut` is
+ * what trips the breaker (`recall-runtime.ts`).
+ *
+ * Exported so the phase boundary is testable without the store behind
+ * `runRecall`: both arms are ordinary ports, and a fixture can drive them
+ * directly.
+ */
+export async function searchRecallPhases(
+  sources: readonly RecallSourcePort[],
+  query: RecallQueryTerms,
+  scope: RecallScope,
+  deadline: RecallDeadline,
+): Promise<{
+  candidates: RecallCandidate[];
+  diagnostics: RecallSourceDiagnostic[];
+  timedOut: boolean;
+}> {
+  const candidates: RecallCandidate[] = [];
+  const diagnostics: RecallSourceDiagnostic[] = [];
+
+  const searchArm = async (arm: RecallArm): Promise<void> => {
+    for (const source of sources) {
+      if (source.arm !== arm) continue;
+      // One guard per source: a source that throws contributes no candidates and
+      // one diagnostic, and the turn continues (invariant I7).
+      try {
+        const result = await source.search({ terms: query, scope });
+        candidates.push(...result.candidates);
+        diagnostics.push(result.diagnostic);
+      } catch (error) {
+        diagnostics.push({
+          source: source.id,
+          status: "failed",
+          candidates: 0,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  };
+
+  // Phase 1 — lexical. Its bodies never await, so the cooperative checkpoints
+  // inside them are still the only thing bounding this phase.
+  await searchArm("lexical");
+  // The phase boundary: from here the turn's verdict is fixed.
+  const timedOut = freezeRecallDeadline(deadline).expired();
+  // Phase 2 — vector. Empty until the encoder and its source land; the structure
+  // is here so wiring that arm is additive.
+  await searchArm("vector");
+
+  return { candidates, diagnostics, timedOut };
+}
+
 export async function runRecall(
   request: RecallRequest,
 ): Promise<RecallDecision> {
@@ -201,31 +267,15 @@ export async function runRecall(
     };
   }
 
-  const candidates: RecallCandidate[] = [];
-  const diagnostics: RecallSourceDiagnostic[] = [];
-  for (const source of sources) {
-    // The source already contains its own failure, so this catch only covers the
-    // scope assembly above it. Two layers because the cost of being wrong is the
-    // user's message not being sent.
-    try {
-      const result = source.search({
-        terms: query,
-        scope: {
-          agentId: request.agentId,
-          currentConversationId: request.conversationId,
-        },
-      });
-      candidates.push(...result.candidates);
-      diagnostics.push(result.diagnostic);
-    } catch (error) {
-      diagnostics.push({
-        source: source.id,
-        status: "failed",
-        candidates: 0,
-        reason: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
+  const { candidates, diagnostics, timedOut } = await searchRecallPhases(
+    sources,
+    query,
+    {
+      agentId: request.agentId,
+      currentConversationId: request.conversationId,
+    },
+    deadline,
+  );
 
   const selection = selectRecallEntries({
     candidates,
@@ -297,7 +347,7 @@ export async function runRecall(
     decision = { entries: [], status: "no-match", diagnostics: settled };
   }
 
-  if (!deadline.expired()) return decision;
+  if (!timedOut) return decision;
   return {
     ...decision,
     timedOut: true,

@@ -92,7 +92,8 @@ function failed(source: RecallSourceId, error: unknown): RecallSourceOutcome {
 function transcriptSource(input: RecallSourceInput): RecallSourcePort {
   return {
     id: "transcript",
-    search(request): RecallSourceOutcome {
+    arm: "lexical",
+    async search(request) {
       try {
         const corpus = loadRecallCorpus(input.storageDir, {
           agentId: request.scope.agentId,
@@ -186,7 +187,8 @@ function transcriptSource(input: RecallSourceInput): RecallSourcePort {
 function memorySource(input: RecallSourceInput): RecallSourcePort {
   return {
     id: "memory",
-    search(request): RecallSourceOutcome {
+    arm: "lexical",
+    async search(request) {
       try {
         const result = searchMemoryFiles(
           input.memoryDir,

@@ -9,6 +9,13 @@
  *   websocket/listener/ must not import from  backend/api/client  or  backend/api/conversations
  *   telemetry/          must not import from  cli/  agent/  websocket/  or  tools/
  *   usage/              must not import from  cli/  or  websocket/
+ *   backend/local/embedding*  must not import from  reminders/  cli/  websocket/  or  agent/
+ *
+ * A rule names its files either by `layer` (a directory under src/) or, when only
+ * a slice of a layer is constrained, by `glob` (patterns relative to the repo
+ * root). The embedding rule uses the glob form: `backend/` as a whole legitimately
+ * imports from `agent/` (`local-backend.ts`, `memory-search.ts`, …), so the leaf
+ * constraint belongs to the embedding modules alone.
  *
  * Plus one whitelist-style rule (batch ⑧): production code must not import the
  * modules that exist only to reach Letta Cloud. Unlike the rules above, that one
@@ -29,7 +36,8 @@ const rootDir = process.cwd();
 const srcDir = join(rootDir, "src");
 
 /**
- * Each rule: files under `layer` must not contain an import from any of `forbidden`.
+ * Each rule: files under `layer` (or matching `glob`, relative to the repo root)
+ * must not contain an import from any of `forbidden`.
  * `description` is shown on violation.
  */
 const RULES = [
@@ -92,6 +100,20 @@ const RULES = [
     description:
       "usage/ persists numbers and aggregates them — it must not import cli/ or websocket/, so the ledger stays readable from the app-server and from tests without a TUI",
   },
+  {
+    // The two forms are one rule: `embedding-*.ts` beside `memory-search` and the
+    // `embedding/` runtime subdirectory. They are a leaf: the port they plug into
+    // is `reminders/`'s, so importing the orchestrator, the TUI, the listener or
+    // the agent domain back into them would invert the dependency the feature is
+    // built on (48-1 §8.3, 48-2 §11.12).
+    glob: [
+      "src/backend/local/embedding*.{ts,tsx}",
+      "src/backend/local/embedding/**/*.{ts,tsx}",
+    ],
+    forbidden: ["reminders", "cli", "websocket", "agent"],
+    description:
+      "backend/local/embedding* is a leaf — it must not import from reminders/, cli/, websocket/, or agent/",
+  },
 ];
 
 // Matches: import ... from "@/forbidden/..." (static imports only)
@@ -102,7 +124,7 @@ function buildPattern(forbidden) {
 let violations = 0;
 
 for (const rule of RULES) {
-  const files = await glob(`src/${rule.layer}/**/*.{ts,tsx}`, {
+  const files = await glob(rule.glob ?? `src/${rule.layer}/**/*.{ts,tsx}`, {
     cwd: rootDir,
     ignore: ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts"],
   });

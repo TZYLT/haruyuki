@@ -39,3 +39,19 @@ export function createRecallDeadline(
     expired: () => expiresAt !== 0 && now() >= expiresAt,
   };
 }
+
+/**
+ * A copy of `deadline` whose verdict is the one it reports at the moment of the
+ * call; the copy never moves again.
+ *
+ * The turn has two phases (`recall-service.ts`): the lexical sources run first,
+ * then the vector arm. Only the lexical half is bounded by the turn's budget —
+ * the vector arm degrades on its own so a slow encoder cannot flip `timedOut`,
+ * which is the flag the breaker counts (`recall-runtime.ts`). Freezing at the
+ * boundary is what keeps that split true: the verdict cannot be changed
+ * afterwards by a clock that ran out during the second phase.
+ */
+export function freezeRecallDeadline(deadline: RecallDeadline): RecallDeadline {
+  const expired = deadline.expired();
+  return { timeoutMs: deadline.timeoutMs, expired: () => expired };
+}

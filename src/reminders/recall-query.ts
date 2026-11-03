@@ -191,9 +191,17 @@ export function recallQueryTerms(
   flush();
 
   if (sawUnclosedQuote) {
-    return { terms: capTerms(termsForSegment(text), options), phrases: [] };
+    return {
+      rawText: text,
+      terms: capTerms(termsForSegment(text), options),
+      phrases: [],
+    };
   }
-  return { terms: capTerms(terms, options), phrases: [...new Set(phrases)] };
+  return {
+    rawText: text,
+    terms: capTerms(terms, options),
+    phrases: [...new Set(phrases)],
+  };
 }
 
 /**
