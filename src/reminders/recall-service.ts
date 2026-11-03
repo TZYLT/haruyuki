@@ -75,6 +75,8 @@ export type RecallRequest = {
   queryOptions?: Partial<RecallQueryOptions>;
   /** Defaults to on; `false` keeps the transcript source only. */
   memoryEnabled?: boolean;
+  /** The vector arm when the host has one; injected, as the encoder lives above this layer. */
+  vectorSource?: RecallSourcePort;
   /**
    * An already-started budget. Omitted by the turn path, which lets
    * `options.timeoutMs` define one; supplied by callers that want to share a
@@ -254,10 +256,14 @@ export async function runRecall(
     // A source switched off by the caller is not a degradation: it is left out
     // entirely rather than reported as unavailable, which is reserved for "the source
     // exists but could not be searched".
+    const all =
+      request.vectorSource === undefined
+        ? built
+        : [...built, request.vectorSource];
     sources =
       request.memoryEnabled === false
-        ? built.filter((source) => source.id !== "memory")
-        : built;
+        ? all.filter((source) => source.id !== "memory")
+        : all;
   } catch (error) {
     return {
       entries: [],

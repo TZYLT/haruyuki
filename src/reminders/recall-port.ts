@@ -16,6 +16,17 @@
 export type RecallSourceId = "transcript" | "memory";
 
 /**
+ * The id of a recall port.
+ *
+ * A lexical source is one corpus, so its id is also its candidates' `source`.
+ * The vector arm (feature 48) covers both corpora in one port — the same
+ * `search()` returns transcript and memory candidates — so it needs an id that
+ * is neither. Candidates still carry `source: transcript|memory`, which is what
+ * dedup, selection and RRF key on; only the port's diagnostics learn `"vector"`.
+ */
+export type RecallPortId = RecallSourceId | "vector";
+
+/**
  * Which retrieval arm a source belongs to.
  *
  * A turn runs the lexical arm first and only then the vector arm. The split is
@@ -189,7 +200,7 @@ export type RecallSourceStatus =
   | "degraded";
 
 export type RecallSourceDiagnostic = {
-  source: RecallSourceId;
+  source: RecallPortId;
   status: RecallSourceStatus;
   /** Candidates the source produced, after its own scope filtering. */
   candidates: number;
@@ -203,7 +214,7 @@ export type RecallSourceOutcome = {
 
 /** What the orchestrator consumes from a source. */
 export type RecallSourcePort = {
-  readonly id: RecallSourceId;
+  readonly id: RecallPortId;
   /**
    * The arm this source belongs to, so the service can sequence the phases
    * without knowing which sources exist (`buildRecallSources` stays the only
