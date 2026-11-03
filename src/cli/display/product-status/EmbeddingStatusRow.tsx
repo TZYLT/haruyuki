@@ -23,6 +23,7 @@
 import chalk from "chalk";
 import { Box, Text } from "ink";
 import { memo, useEffect, useState } from "react";
+import { readEmbeddingBuildStatusSnapshot } from "@/cli/hooks/use-embedding-build-status";
 import { readEmbeddingSettings } from "@/recall-settings";
 import { embeddingMetrics } from "@/reminders/embedding-metrics";
 import {
@@ -81,6 +82,33 @@ function sameSnapshot(
 ): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
+
+/**
+ * A stable `readSnapshot` for the shell, one per agent.
+ *
+ * The row owns a 2 s poll and re-arms it when `readSnapshot`'s identity
+ * changes, so the view must hand it a function that survives re-renders — an
+ * inline arrow would reset the interval on every streamed frame and the build
+ * progress would never paint. The factory memoizes by agent id and prefers the
+ * A5 projection (settings + live build) when that knows the agent, falling back
+ * to the settings/metrics read for hosts that have no build projection yet.
+ */
+export function embeddingProductStatusReader(
+  agentId: string | null | undefined,
+): () => EmbeddingProductStatusSnapshot {
+  const key = agentId ?? "";
+  const existing = readersByAgent.get(key);
+  if (existing !== undefined) return existing;
+  const reader = (): EmbeddingProductStatusSnapshot => {
+    const build =
+      key.length === 0 ? null : readEmbeddingBuildStatusSnapshot(key);
+    return build ?? readEmbeddingProductStatus();
+  };
+  readersByAgent.set(key, reader);
+  return reader;
+}
+
+const readersByAgent = new Map<string, () => EmbeddingProductStatusSnapshot>();
 
 export const EmbeddingStatusRow = memo(function EmbeddingStatusRow({
   width,
