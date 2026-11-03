@@ -79,6 +79,7 @@ export type ActiveOverlay =
   | "message-history"
   | "hidden-sessions"
   | "dream-wizard"
+  | "embedding-wizard"
   | "topic-search"
   | "topic-blocks"
   | "topic-context"

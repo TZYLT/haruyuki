@@ -24,6 +24,10 @@ import {
   DreamWizard,
   dreamWizardCompletedText,
 } from "@/cli/components/DreamWizard";
+import {
+  EmbeddingWizard,
+  embeddingWizardCompletedText,
+} from "@/cli/components/EmbeddingWizard";
 import { ExperimentSelector } from "@/cli/components/ExperimentSelector";
 import { FeedbackDialog } from "@/cli/components/FeedbackDialog";
 import { Input } from "@/cli/components/InputRich";
@@ -676,6 +680,21 @@ export function AppView(props: AppViewRenderProps) {
                 onCompleted={() =>
                   completeOverlay("dream-wizard")?.finish(
                     dreamWizardCompletedText(),
+                  )
+                }
+              />
+            )}
+
+            {/* D5: the first-run vector-recall setup wizard, raised by
+                `/recall embedding on|setup` before any embedding setting is
+                written. It owns its keys and writes once on the final step. */}
+            {activeOverlay === "embedding-wizard" && (
+              <EmbeddingWizard
+                agentId={agentId}
+                onClose={closeOverlay}
+                onCompleted={(receipt) =>
+                  completeOverlay("embedding-wizard")?.finish(
+                    receipt ?? embeddingWizardCompletedText(),
                   )
                 }
               />

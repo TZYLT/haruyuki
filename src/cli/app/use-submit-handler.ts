@@ -750,13 +750,21 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           return { submitted: true };
         }
 
-        // D6: `/recall embedding …` runs through D4's handler, with the settings
-        // page as its first-run seam (the action module owns the branch).
+        // D6: `/recall embedding …` runs through D4's handler. D5 supplies the
+        // setup face: a first-run `on`/`setup` raises the wizard overlay.
         if (/^\/recall\s+embedding(?:\s|$)/.test(trimmed)) {
           const { runEmbeddingSubmitCommand } = await import(
             "@/cli/commands/embedding-submit"
           );
-          await runEmbeddingSubmitCommand(trimmed, commandScope, commandRunner);
+          const { embeddingWizardSetupOpener } = await import(
+            "@/cli/app/embedding-wizard-overlay"
+          );
+          await runEmbeddingSubmitCommand(
+            trimmed,
+            commandScope,
+            commandRunner,
+            { openSetup: embeddingWizardSetupOpener(openOverlay) },
+          );
           return { submitted: true };
         }
 
