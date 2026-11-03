@@ -4,6 +4,8 @@ import { Box, type DOMElement } from "ink";
 import { useRef } from "react";
 import type { AppViewProps } from "@/cli/app/AppView";
 import { PageFrame } from "@/cli/app/pages/page-frame";
+import type { SettingsKind } from "@/cli/app/pages/settings/settings-model";
+import { settingItemById } from "@/cli/app/pages/settings/settings-schema";
 import {
   type Crumb,
   crumbText,
@@ -94,6 +96,20 @@ function SettingsHeader({
   );
 }
 
+/**
+ * What the inline editor paints over its value.
+ *
+ * Only a `secret` row is typed blind (the embedding endpoint API key): the mask
+ * is the `PasteAwareTextInput.mask` the overlay's text view already forwards, so
+ * the editor keeps its caret and paste channel, and the real value still reaches
+ * the row's writer.
+ */
+export function settingsEditorMask(
+  kind: SettingsKind | undefined,
+): string | undefined {
+  return kind === "secret" ? "*" : undefined;
+}
+
 function SettingsEditor({
   editor,
   onChange,
@@ -132,12 +148,18 @@ function SettingsEditor({
     },
   ]);
 
+  const kind =
+    editor.target.kind === "setting"
+      ? settingItemById(editor.target.itemId)?.kind
+      : undefined;
+
   return (
     <Box flexDirection="row">
       <Text color={colors.selector.itemHighlighted}>{`${editor.label}: `}</Text>
       <OverlayTextField
         value={editor.draft}
         onChange={onChange}
+        mask={settingsEditorMask(kind)}
         marker={null}
         focus
       />

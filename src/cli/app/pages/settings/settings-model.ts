@@ -43,7 +43,7 @@ export type SettingsSectionId =
   | "tools"
   | "integrations";
 
-export type SettingsKind = "toggle" | "select" | "number" | "text";
+export type SettingsKind = "toggle" | "select" | "number" | "text" | "secret";
 
 export type SettingsOption = {
   value: string;
