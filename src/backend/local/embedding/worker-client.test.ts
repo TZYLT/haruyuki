@@ -5,11 +5,16 @@ import { join } from "node:path";
 import { decodeVectorBase64 } from "./featurize";
 import {
   EmbeddingWorkerClient,
-  type EmbeddingWorkerClientError,
   type EmbeddingWorkerClientOptions,
-  type EmbeddingWorkerExit,
-  type EmbeddingWorkerProcessHandle,
 } from "./worker-client";
+import type {
+  EmbeddingWorkerExit,
+  EmbeddingWorkerProcessHandle,
+} from "./worker-process";
+import type {
+  EmbeddingWorkerClientError,
+  EmbeddingWorkerRestartEvent,
+} from "./worker-watchdog";
 
 /**
  * Fake worker: a plain CommonJS script executed with `process.execPath`, so the
@@ -19,9 +24,23 @@ import {
 const FAKE_WORKER_SOURCE = String.raw`
 "use strict";
 const readline = require("node:readline");
+const fs = require("node:fs");
 const { Buffer } = require("node:buffer");
 
 const mode = process.argv[2] || "ok";
+const statePath = process.env.FAKE_WORKER_STATE_FILE || "";
+
+function firstRun() {
+  if (!statePath) return true;
+  if (fs.existsSync(statePath)) return false;
+  fs.writeFileSync(statePath, "seen");
+  return true;
+}
+
+function crash(code) {
+  process.stderr.write("fake worker crash " + code + "\n");
+  process.exit(code);
+}
 
 function writeFrame(frame, then) {
   const line = JSON.stringify(frame) + "\n";
@@ -96,6 +115,7 @@ function start() {
       return;
     }
     if (frame.type === "cancel") {
+      if (mode === "ignore-cancel") return;
       writeFrame({
         type: "result",
         id: frame.id,
@@ -132,8 +152,13 @@ function resultFor(frame) {
 
 function handleEmbed(frame) {
   if (mode === "crash-on-embed") {
-    process.stderr.write("embed crash\n");
-    process.exit(7);
+    crash(7);
+  }
+  if (mode === "crash-once" && firstRun()) {
+    crash(7);
+  }
+  if (mode === "always-crash") {
+    crash(9);
   }
   if (mode === "error-frame") {
     writeFrame({
@@ -148,6 +173,7 @@ function handleEmbed(frame) {
     return;
   }
   if (mode === "ignore-embed") return;
+  if (mode === "ignore-cancel") return;
   const result = resultFor(frame);
   if (mode === "delayed-order") {
     pendingDelayed.push(result);
@@ -173,6 +199,12 @@ if (mode === "crash-before-ready") {
   process.exit(3);
 } else if (mode === "no-ready") {
   setInterval(() => {}, 1000);
+} else if (mode === "no-ready-once") {
+  if (firstRun()) setInterval(() => {}, 1000);
+  else {
+    writeFrame(readyFrame());
+    start();
+  }
 } else if (mode === "split-lines") {
   const line = JSON.stringify(readyFrame()) + "\n";
   process.stdout.write(line.slice(0, 12));
@@ -190,6 +222,11 @@ writeFileSync(workerPath, FAKE_WORKER_SOURCE, "utf8");
 
 const clients: EmbeddingWorkerClient[] = [];
 
+/**
+ * C3 clients keep the watchdog out of the way by default (`restart: false`), so
+ * the existing failure tests observe the raw exit semantics. C7 tests opt into
+ * a fast explicit policy with `createRestartClient`.
+ */
 function createClient(
   mode = "ok",
   options: Partial<EmbeddingWorkerClientOptions> = {},
@@ -202,17 +239,63 @@ function createClient(
     embedTimeoutMs: 5_000,
     controlTimeoutMs: 5_000,
     killGraceMs: 500,
+    restart: false,
     ...options,
   });
   clients.push(client);
   return client;
 }
 
-async function disposeAll(): Promise<void> {
-  for (const client of clients.splice(0)) {
-    client.dispose();
-    await client.waitForExit(2_000);
+/** Fast backoff (20/40 ms) so the bounded-restart tests stay quick. */
+function createRestartClient(
+  mode = "ok",
+  options: Partial<EmbeddingWorkerClientOptions> = {},
+): EmbeddingWorkerClient {
+  return createClient(mode, {
+    restart: { maxRestarts: 2, baseDelayMs: 20, maxDelayMs: 40 },
+    ...options,
+  });
+}
+
+let stateFileSequence = 0;
+
+/** Cross-process flag file for the "crash/no-ready on the first process" modes. */
+function newStateFile(): string {
+  stateFileSequence += 1;
+  return join(workerDir, `state-${process.pid}-${stateFileSequence}.txt`);
+}
+
+function workerEnv(stateFile: string): NodeJS.ProcessEnv {
+  return { ...process.env, FAKE_WORKER_STATE_FILE: stateFile };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) {
+      throw new Error("Timed out waiting for the worker state.");
+    }
+    await sleep(10);
   }
+}
+
+async function disposeAll(): Promise<void> {
+  const active = clients.splice(0);
+  for (const client of active) client.dispose();
+  // Clients that never spawned have no exit to wait for; waiting on them
+  // would only burn the hook timeout.
+  await Promise.all(
+    active.map((client) =>
+      client.pid === undefined ? null : client.waitForExit(1_000),
+    ),
+  );
 }
 
 afterAll(async () => {
@@ -447,7 +530,7 @@ describe("EmbeddingWorkerClient: failure handling", () => {
     await expect(client.embed(["a"])).rejects.toMatchObject({ code: "exited" });
     const exit = await client.waitForExit(2_000);
     expect(exit?.code).toBe(7);
-    expect(client.stderrTail()).toContain("embed crash");
+    expect(client.stderrTail()).toContain("fake worker crash 7");
     expect(client.isRunning).toBe(false);
   });
 
@@ -657,11 +740,239 @@ describe("EmbeddingWorkerClient: injected spawner", () => {
       workerPath: "silent-worker.js",
       spawn: () => handle,
       handshakeTimeoutMs: 100,
+      restart: false,
     });
     clients.push(client);
     await expect(client.start()).rejects.toMatchObject({
       code: "handshake-timeout",
     });
     expect(killed).toBe(true);
+  });
+});
+
+async function initWorker(client: EmbeddingWorkerClient): Promise<void> {
+  await client.init({
+    runtimeDir: "/r",
+    modelPath: "/m",
+    tokenizerPath: "/t",
+  });
+}
+
+describe("EmbeddingWorkerClient: C7 watchdog and restart budget", () => {
+  test("restarts a crashed worker once and reports a typed reason", async () => {
+    const client = createRestartClient("crash-once", {
+      env: workerEnv(newStateFile()),
+    });
+    const events: EmbeddingWorkerRestartEvent[] = [];
+    client.onRestart((event) => events.push(event));
+    await client.start();
+    await initWorker(client);
+    await expect(client.embed(["a"])).rejects.toMatchObject({ code: "exited" });
+    await waitForCondition(() => client.isRunning);
+    expect(client.restartCount).toBe(1);
+    expect(client.lastFailure?.reason).toBe("crash-exit");
+    expect(client.lastFailure?.retriable).toBe(true);
+    expect(client.canRetry).toBe(true);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      reason: "crash-exit",
+      attempt: 1,
+      delayMs: 20,
+      canRetry: true,
+    });
+    const output = await client.embed(["b"]);
+    expect(output.vectors.length).toBe(1);
+    await client.shutdown();
+    expect(client.isRunning).toBe(false);
+  });
+
+  test("stops after two automatic restarts (no retry storm)", async () => {
+    const client = createRestartClient("always-crash");
+    const events: EmbeddingWorkerRestartEvent[] = [];
+    client.onRestart((event) => events.push(event));
+    await client.start();
+    await initWorker(client);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(client.embed(["a"])).rejects.toMatchObject({
+        code: "exited",
+      });
+      if (attempt < 2) await waitForCondition(() => client.isRunning);
+    }
+    await sleep(150);
+    expect(events.map((event) => event.attempt)).toEqual([1, 2]);
+    expect(client.restartCount).toBe(2);
+    expect(client.isRunning).toBe(false);
+    expect(client.canRetry).toBe(false);
+    expect(client.lastFailure?.reason).toBe("crash-exit");
+  });
+
+  test("never restarts a spawn failure (missing entry)", async () => {
+    const client = new EmbeddingWorkerClient({
+      workerPath: "missing-worker.js",
+      spawn: () => {
+        throw new Error("ENOENT: no such file");
+      },
+      restart: { maxRestarts: 2, baseDelayMs: 20, maxDelayMs: 40 },
+    });
+    clients.push(client);
+    const events: EmbeddingWorkerRestartEvent[] = [];
+    client.onRestart((event) => events.push(event));
+    await expect(client.start()).rejects.toMatchObject({
+      code: "spawn-failed",
+    });
+    await sleep(80);
+    expect(client.restartCount).toBe(0);
+    expect(events).toHaveLength(0);
+    expect(client.lastFailure?.reason).toBe("spawn-failed");
+    expect(client.canRetry).toBe(false);
+  });
+
+  test("does not restart a protocol desync", async () => {
+    const client = createRestartClient("ok", { protocolVersion: 2 });
+    const events: EmbeddingWorkerRestartEvent[] = [];
+    client.onRestart((event) => events.push(event));
+    await expect(client.start()).rejects.toMatchObject({ code: "protocol" });
+    await client.waitForExit(2_000);
+    await sleep(80);
+    expect(client.restartCount).toBe(0);
+    expect(events).toHaveLength(0);
+    expect(client.canRetry).toBe(false);
+  });
+
+  test("retries a handshake timeout", async () => {
+    const client = createRestartClient("no-ready-once", {
+      env: workerEnv(newStateFile()),
+      handshakeTimeoutMs: 150,
+    });
+    const events: EmbeddingWorkerRestartEvent[] = [];
+    client.onRestart((event) => events.push(event));
+    await expect(client.start()).rejects.toMatchObject({
+      code: "handshake-timeout",
+    });
+    await waitForCondition(() => client.isRunning);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      reason: "handshake-timeout",
+      attempt: 1,
+    });
+    expect(client.restartCount).toBe(1);
+    await client.shutdown();
+  });
+
+  test("SIGKILLs a worker that ignores cancel and drains pending requests", async () => {
+    const client = createClient("ignore-cancel", { controlTimeoutMs: 200 });
+    await client.start();
+    await initWorker(client);
+    // Attach the rejection handler immediately: the worker may be reaped
+    // before the cancel rejection is awaited, and Bun flags unhandled ones.
+    const pending = client
+      .embed(["a"])
+      .catch((error: EmbeddingWorkerClientError) => error);
+    await expect(
+      client.cancel({ requestId: 1, timeoutMs: 100 }),
+    ).rejects.toMatchObject({ code: "request-timeout" });
+    expect(await pending).toMatchObject({ code: "exited" });
+    expect(client.pendingRequestCount).toBe(0);
+    expect(client.isRunning).toBe(false);
+    expect(await client.waitForExit(2_000)).not.toBeNull();
+  });
+
+  test("rejects every pending request when the worker crashes", async () => {
+    const client = createClient("crash-on-embed");
+    await client.start();
+    await initWorker(client);
+    const first = client
+      .embed(["a"])
+      .catch((error: EmbeddingWorkerClientError) => error);
+    const second = client
+      .embed(["bb"])
+      .catch((error: EmbeddingWorkerClientError) => error);
+    const [firstError, secondError] = await Promise.all([first, second]);
+    expect(firstError).toMatchObject({ code: "exited" });
+    expect(secondError).toMatchObject({ code: "exited" });
+    expect(client.pendingRequestCount).toBe(0);
+    await client.waitForExit(2_000);
+  });
+
+  test("uses a wider timeout tier for the cold first start", async () => {
+    const cold = new EmbeddingWorkerClient({
+      workerPath: "unused-worker.js",
+      restart: false,
+    });
+    clients.push(cold);
+    expect(cold.timeouts.firstStart).toBe(true);
+    expect(cold.timeouts.handshakeTimeoutMs).toBeGreaterThan(15_000);
+    expect(cold.timeouts.initTimeoutMs).toBeGreaterThan(120_000);
+    cold.dispose();
+
+    const warm = createClient();
+    await warm.start();
+    await initWorker(warm);
+    expect(warm.timeouts.firstStart).toBe(false);
+    expect(warm.timeouts.handshakeTimeoutMs).toBe(5_000);
+    await warm.shutdown();
+  });
+
+  test("applies the wider first-start handshake timeout to the process", async () => {
+    let killed = false;
+    let settleExit: (exit: EmbeddingWorkerExit) => void = () => {};
+    const exited = new Promise<EmbeddingWorkerExit>((resolve) => {
+      settleExit = resolve;
+    });
+    const handle: EmbeddingWorkerProcessHandle = {
+      pid: 4_321,
+      stdout: neverStream(),
+      stderr: emptyStream(),
+      write(): void {},
+      kill(): void {
+        killed = true;
+        settleExit({ code: null, signal: "SIGKILL" });
+      },
+      exited,
+    };
+    const client = new EmbeddingWorkerClient({
+      workerPath: "slow-first-start.js",
+      spawn: () => handle,
+      handshakeTimeoutMs: 120,
+      firstStartHandshakeTimeoutMs: 450,
+      restart: false,
+    });
+    clients.push(client);
+    const startedAt = Date.now();
+    await expect(client.start()).rejects.toMatchObject({
+      code: "handshake-timeout",
+    });
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(350);
+    expect(killed).toBe(true);
+  });
+
+  test("dispose cancels a scheduled restart", async () => {
+    const client = createRestartClient("crash-on-embed");
+    const events: EmbeddingWorkerRestartEvent[] = [];
+    client.onRestart((event) => events.push(event));
+    await client.start();
+    await initWorker(client);
+    await expect(client.embed(["a"])).rejects.toMatchObject({ code: "exited" });
+    expect(client.canRetry).toBe(true);
+    client.dispose();
+    await sleep(120);
+    expect(client.restartCount).toBe(0);
+    expect(events).toHaveLength(1);
+    expect(client.isRunning).toBe(false);
+  });
+
+  test("enables the bounded restart policy by default", () => {
+    const enabled = new EmbeddingWorkerClient({
+      workerPath: "unused-worker.js",
+    });
+    clients.push(enabled);
+    expect(enabled.canRetry).toBe(true);
+    expect(enabled.restartCount).toBe(0);
+    const disabled = new EmbeddingWorkerClient({
+      workerPath: "unused-worker.js",
+      restart: false,
+    });
+    clients.push(disabled);
+    expect(disabled.canRetry).toBe(false);
   });
 });

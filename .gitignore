@@ -40,6 +40,8 @@ haruyuki.js
 haruyuki.js.map
 image-resize-worker.js
 image-resize-worker.js.map
+embedding-worker.js
+embedding-worker.js.map
 /skills/
 .DS_Store
 

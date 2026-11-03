@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { EMBEDDING_WORKER_BUNDLE_FILENAME } from "./src/backend/local/embedding/worker-entry-path.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -167,6 +168,30 @@ await Bun.build({
   // version's JS can otherwise resolve another version's @img binding from
   // an ancestor node_modules directory at runtime.
   external: ["sharp", "@janhapke/sharp-electron"],
+});
+
+// Embedding worker (C7): a separate Node-targeted entry, same shape as
+// image-resize-worker.js. The ONNX runtime and tokenizer live in the
+// downloaded runtime cache and are loaded from there by absolute path at run
+// time, so they must never be inlined into the shipped worker: keep them
+// external so a future static import cannot pull a native module into the
+// tarball. The file name is shared with `worker-entry-path.ts` and the
+// `package.json` `files` entry.
+await Bun.build({
+  entrypoints: ["./src/backend/local/embedding/worker-entry.ts"],
+  outdir: ".",
+  target: "node",
+  format: "esm",
+  minify: false,
+  sourcemap: "external",
+  naming: {
+    entry: EMBEDDING_WORKER_BUNDLE_FILENAME,
+  },
+  external: [
+    "onnxruntime-node",
+    "onnxruntime-common",
+    "@huggingface/tokenizers",
+  ],
 });
 
 // Add shebang to output file

@@ -1,15 +1,15 @@
 /**
- * Main-process client for the embedding worker (C3), and the seam C7 builds the
- * watchdog/restart policy on.
+ * Main-process client for the embedding worker (C3), and the seam C7's
+ * watchdog/restart policy is built on.
  *
  * **Why a child process at all.** See `worker-entry.ts`: the native runtime must
  * not be loaded in the TUI process (48-1 §5.4). This module is the only place
  * that knows how to launch it. The command is always `process.execPath` and the
- * script path is supplied by the caller — under Bun (source checkout) that is
- * `worker-entry.ts`, under Node (published bundle) it is the built
- * `embedding-worker.js`. Nothing here imports the worker module at runtime, so
- * the main process keeps zero native dependencies; the worker's response types
- * are imported with `import type` only.
+ * script path is supplied by the caller — `worker-entry-path.ts` owns the
+ * bundled-vs-source rule that picks `embedding-worker.js` (Node package) or
+ * `worker-entry.ts` (Bun source). Nothing here imports the worker module at
+ * runtime, so the main process keeps zero native dependencies; the worker's
+ * response types are imported with `import type` only.
  *
  * **Framing.** JSON Lines each way: one JSON object per line, request ids
  * correlate replies. The reader joins arbitrarily split chunks (including a
@@ -18,34 +18,49 @@
  * as a worker crash: pending requests fail and the process is killed, because
  * continuing after a desync means guessing which request a reply belongs to.
  *
- * **Failure semantics.** Every pending request is rejected exactly once, with a
- * typed `EmbeddingWorkerClientError`:
+ * **Failure semantics (C7).** Every pending request is rejected exactly once,
+ * with a typed `EmbeddingWorkerClientError`:
  * - `spawn-failed` / `handshake-timeout` — the worker never got to `ready`;
  * - `exited` — the worker died (message carries the exit code/signal and its
- *   stderr tail); this is the signal C7 restarts on;
+ *   stderr tail);
  * - `request-timeout` — a reply never arrived (the request may still be
  *   executing; the caller decides whether to kill);
  * - `worker-error` — the worker answered with an error frame (its `workerCode`
  *   is preserved);
  * - `protocol`, `not-running`, `disposed`, `aborted`.
+ * `worker-watchdog.ts` classifies each failure (crash vs. terminal), and only a
+ * retriable one may consume the bounded restart budget: non-zero exit/crash
+ * signal or a handshake timeout, at most twice, with exponential backoff.
+ * Shutdown/dispose/public `kill` are intentional stops and never restart.
+ *
+ * **Timeout tiers.** A first start is cold (antivirus may scan the downloaded
+ * runtime), so the first handshake/init use wider windows than a warm restart;
+ * `timeouts` exposes the tier in force, and the defaults cover the measured
+ * 3.3 s first spawn / 32.4 s m3 first load (48-2 §4.4) without waiting forever.
  *
  * **Injection.** `spawn` is injectable so failure paths (spawn error, silent
  * worker, handshake timeout) are deterministic in tests without relying on a
  * child's timing. The happy paths use a real fake worker script spawned via
  * `process.execPath`, so framing and exit handling are exercised for real.
  *
- * Layer: `backend/local/`. Imports `node:` builtins, `./featurize` and
- * `./worker-entry` types; no `cli/`, `websocket/`, `reminders/` or `agent/`.
+ * Layer: `backend/local/`. Imports `node:` builtins, `./featurize`,
+ * `./worker-protocol`, `./worker-process` and `./worker-watchdog`; no `cli/`,
+ * `websocket/`, `reminders/` or `agent/`.
  */
 
-import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { decodeVectorBase64 } from "./featurize";
+import {
+  describeEmbeddingWorkerExit,
+  type EmbeddingWorkerExit,
+  type EmbeddingWorkerProcessHandle,
+  type EmbeddingWorkerSpawner,
+  spawnEmbeddingWorkerProcess,
+} from "./worker-process";
 import {
   EMBEDDING_WORKER_PROTOCOL_VERSION,
   type EmbeddingWorkerCancelResult,
   type EmbeddingWorkerEmbedResult,
-  type EmbeddingWorkerErrorCode,
   type EmbeddingWorkerErrorFrame,
   type EmbeddingWorkerFrame,
   type EmbeddingWorkerInitOptions,
@@ -56,21 +71,18 @@ import {
   type EmbeddingWorkerStats,
   parseEmbeddingWorkerFrame,
 } from "./worker-protocol";
-
-/** Default time allowed for the `ready` handshake (native load happens after). */
-export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000;
-
-/** Default time allowed for `init` (first load can take >30 s on m3 models). */
-export const DEFAULT_INIT_TIMEOUT_MS = 120_000;
-
-/** Default time allowed for one `embed` request. */
-export const DEFAULT_EMBED_TIMEOUT_MS = 120_000;
-
-/** Default time allowed for cancel/stats/shutdown replies. */
-export const DEFAULT_CONTROL_TIMEOUT_MS = 10_000;
-
-/** Grace before a SIGKILL after SIGTERM during shutdown. */
-export const DEFAULT_KILL_GRACE_MS = 2_000;
+import {
+  classifyEmbeddingWorkerFailure,
+  DEFAULT_EMBEDDING_WORKER_CONTROL_TIMEOUT_MS,
+  DEFAULT_EMBEDDING_WORKER_EMBED_TIMEOUT_MS,
+  DEFAULT_EMBEDDING_WORKER_KILL_GRACE_MS,
+  EmbeddingWorkerClientError,
+  type EmbeddingWorkerFailureClassification,
+  type EmbeddingWorkerRestartEvent,
+  type EmbeddingWorkerTimeoutTier,
+  EmbeddingWorkerWatchdog,
+  resolveEmbeddingWorkerTimeoutTier,
+} from "./worker-watchdog";
 
 /** Upper bound on one inbound frame, in characters. */
 const MAX_FRAME_CHARS = 8 * 1024 * 1024;
@@ -78,124 +90,15 @@ const MAX_FRAME_CHARS = 8 * 1024 * 1024;
 /** How much worker stderr is retained for error messages. */
 const MAX_STDERR_CHARS = 8_192;
 
-/** How the process ended. `error` is set when the spawn itself failed. */
-export interface EmbeddingWorkerExit {
-  readonly code: number | null;
-  readonly signal: string | null;
-  readonly error?: Error;
-}
+export type * from "./worker-client-types";
 
-/**
- * Minimal normalized handle over a spawned child. The default implementation
- * wraps `node:child_process`; tests may inject any object with the same shape.
- */
-export interface EmbeddingWorkerProcessHandle {
-  readonly pid: number | undefined;
-  readonly stdout: AsyncIterable<string | Uint8Array>;
-  readonly stderr: AsyncIterable<string | Uint8Array>;
-  write(line: string): void;
-  kill(signal?: "SIGTERM" | "SIGKILL"): void;
-  readonly exited: Promise<EmbeddingWorkerExit>;
-}
-
-/** Environment/working directory for the spawned worker. */
-export interface EmbeddingWorkerSpawnOptions {
-  readonly env?: NodeJS.ProcessEnv;
-  readonly cwd?: string;
-}
-
-/** Injectable process spawner (`process.execPath` + worker path by default). */
-export type EmbeddingWorkerSpawner = (
-  command: string,
-  args: readonly string[],
-  options: EmbeddingWorkerSpawnOptions,
-) => EmbeddingWorkerProcessHandle;
-
-/** Why a client call failed. */
-export type EmbeddingWorkerClientErrorCode =
-  | "aborted"
-  | "disposed"
-  | "exited"
-  | "handshake-timeout"
-  | "invalid-argument"
-  | "not-running"
-  | "protocol"
-  | "request-timeout"
-  | "spawn-failed"
-  | "worker-error";
-
-/** Typed client failure; `code` is stable API. */
-export class EmbeddingWorkerClientError extends Error {
-  readonly code: EmbeddingWorkerClientErrorCode;
-  /** The worker's own error code, for `code === "worker-error"`. */
-  readonly workerCode: EmbeddingWorkerErrorCode | undefined;
-  /** Exit details, for `code === "exited"`. */
-  readonly exit: EmbeddingWorkerExit | undefined;
-  /** Request id the failure belongs to, when known. */
-  readonly requestId: number | undefined;
-
-  constructor(
-    code: EmbeddingWorkerClientErrorCode,
-    message: string,
-    options: {
-      workerCode?: EmbeddingWorkerErrorCode;
-      exit?: EmbeddingWorkerExit;
-      requestId?: number;
-      cause?: unknown;
-    } = {},
-  ) {
-    super(message, { cause: options.cause });
-    this.name = "EmbeddingWorkerClientError";
-    this.code = code;
-    this.workerCode = options.workerCode;
-    this.exit = options.exit;
-    this.requestId = options.requestId;
-  }
-}
-
-/** Options for {@link EmbeddingWorkerClient}. */
-export interface EmbeddingWorkerClientOptions {
-  /** Path of the worker script (source `.ts` or bundled `.js`). */
-  readonly workerPath: string;
-  /** Extra argv entries after the worker path. */
-  readonly args?: readonly string[];
-  /** Override the executable; defaults to `process.execPath`. */
-  readonly execPath?: string;
-  readonly env?: NodeJS.ProcessEnv;
-  readonly cwd?: string;
-  readonly spawn?: EmbeddingWorkerSpawner;
-  readonly handshakeTimeoutMs?: number;
-  readonly initTimeoutMs?: number;
-  readonly embedTimeoutMs?: number;
-  readonly controlTimeoutMs?: number;
-  readonly killGraceMs?: number;
-  readonly protocolVersion?: number;
-}
-
-export interface EmbeddingWorkerEmbedOptions {
-  readonly signal?: AbortSignal;
-  readonly timeoutMs?: number;
-}
-
-/** A decoded embed reply: vectors are `null` where cancellation stopped work. */
-export interface EmbeddingWorkerEmbedOutput {
-  readonly vectors: readonly (Float32Array | null)[];
-  readonly dim: number;
-  readonly cancelled: boolean;
-  readonly texts: number;
-  readonly tokens: number;
-  readonly batches: number;
-  readonly elapsedMs: number;
-}
-
-/** Options for {@link EmbeddingWorkerClient.embedBatched}. */
-export interface EmbeddingWorkerEmbedBatchedOptions
-  extends EmbeddingWorkerEmbedOptions {
-  /** Texts per request (the worker sub-batches further by token budget). */
-  readonly batchSize?: number;
-  /** Called after each request with the number of completed texts. */
-  readonly onProgress?: (completed: number, total: number) => void;
-}
+import type {
+  EmbeddingWorkerCancelOptions,
+  EmbeddingWorkerClientOptions,
+  EmbeddingWorkerEmbedBatchedOptions,
+  EmbeddingWorkerEmbedOptions,
+  EmbeddingWorkerEmbedOutput,
+} from "./worker-client-types";
 
 interface PendingRequest {
   readonly id: number;
@@ -218,68 +121,9 @@ function isPositiveInteger(value: unknown): value is number {
 }
 
 /**
- * Spawn the worker via `process.execPath`. Kept exported (rather than hidden)
- * so C7 can reuse the exact same process shape for its own diagnostics, and so
- * tests can assert the default handle's error handling.
- */
-export function spawnEmbeddingWorkerProcess(
-  command: string,
-  args: readonly string[],
-  options: EmbeddingWorkerSpawnOptions,
-): EmbeddingWorkerProcessHandle {
-  const child = spawn(command, [...args], {
-    shell: false,
-    stdio: ["pipe", "pipe", "pipe"],
-    windowsHide: true,
-    ...(options.env === undefined ? {} : { env: options.env }),
-    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-  });
-  const stdout = child.stdout;
-  const stderr = child.stderr;
-  const stdin = child.stdin;
-  if (stdout === null || stderr === null || stdin === null) {
-    throw new Error("The embedding worker was spawned without piped stdio.");
-  }
-  let stdinError: Error | null = null;
-  stdin.on("error", (error: Error) => {
-    stdinError = error;
-  });
-  const exited = new Promise<EmbeddingWorkerExit>((resolveExit) => {
-    let settled = false;
-    const settle = (value: EmbeddingWorkerExit): void => {
-      if (settled) return;
-      settled = true;
-      resolveExit(value);
-    };
-    child.on("exit", (code, signal) => {
-      settle({ code, signal: signal ?? null });
-    });
-    child.on("error", (error) => {
-      settle({ code: null, signal: null, error });
-    });
-  });
-  return {
-    pid: child.pid,
-    stdout,
-    stderr,
-    write(line: string): void {
-      if (stdinError !== null) throw stdinError;
-      stdin.write(line);
-    },
-    kill(signal: "SIGTERM" | "SIGKILL" = "SIGKILL"): void {
-      try {
-        child.kill(signal);
-      } catch {
-        // The process may already be gone; the exit promise is the truth.
-      }
-    },
-    exited,
-  };
-}
-
-/**
  * Main-process side of the JSON Lines protocol. One client owns one worker
- * process; creating a new client is the restart primitive (C7).
+ * process; the watchdog restarts that process in place (bounded) after a
+ * crash, so callers do not need to recreate the client for transient crashes.
  */
 export class EmbeddingWorkerClient {
   private readonly workerPath: string;
@@ -288,12 +132,13 @@ export class EmbeddingWorkerClient {
   private readonly env: NodeJS.ProcessEnv | undefined;
   private readonly cwd: string | undefined;
   private readonly spawnWorker: EmbeddingWorkerSpawner;
-  private readonly handshakeTimeoutMs: number;
-  private readonly initTimeoutMs: number;
+  private readonly firstStartTimeouts: EmbeddingWorkerTimeoutTier;
+  private readonly steadyTimeouts: EmbeddingWorkerTimeoutTier;
   private readonly embedTimeoutMs: number;
   private readonly controlTimeoutMs: number;
   private readonly killGraceMs: number;
   private readonly protocolVersion: number;
+  private readonly watchdog: EmbeddingWorkerWatchdog;
 
   private child: EmbeddingWorkerProcessHandle | null = null;
   private state: "idle" | "starting" | "ready" | "stopped" = "idle";
@@ -306,7 +151,7 @@ export class EmbeddingWorkerClient {
 
   private readonly pending = new Map<number, PendingRequest>();
   private nextRequestId = 1;
-  private readonly decoder = new StringDecoder("utf8");
+  private decoder = new StringDecoder("utf8");
   private stdoutBuffer = "";
   private stderrBuffer = "";
 
@@ -319,6 +164,9 @@ export class EmbeddingWorkerClient {
   private disposed = false;
   private lastProtocolError: string | null = null;
   private lastWorkerError: EmbeddingWorkerErrorFrame["error"] | null = null;
+  private startFailure: EmbeddingWorkerClientError | null = null;
+  private hasInitialized = false;
+  private intentionalStop = false;
 
   constructor(options: EmbeddingWorkerClientOptions) {
     this.workerPath = options.workerPath;
@@ -327,15 +175,29 @@ export class EmbeddingWorkerClient {
     this.env = options.env;
     this.cwd = options.cwd;
     this.spawnWorker = options.spawn ?? spawnEmbeddingWorkerProcess;
-    this.handshakeTimeoutMs =
-      options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
-    this.initTimeoutMs = options.initTimeoutMs ?? DEFAULT_INIT_TIMEOUT_MS;
-    this.embedTimeoutMs = options.embedTimeoutMs ?? DEFAULT_EMBED_TIMEOUT_MS;
+    this.firstStartTimeouts = resolveEmbeddingWorkerTimeoutTier({
+      firstStart: true,
+      handshakeTimeoutMs: options.handshakeTimeoutMs,
+      initTimeoutMs: options.initTimeoutMs,
+      firstStartHandshakeTimeoutMs: options.firstStartHandshakeTimeoutMs,
+      firstStartInitTimeoutMs: options.firstStartInitTimeoutMs,
+    });
+    this.steadyTimeouts = resolveEmbeddingWorkerTimeoutTier({
+      firstStart: false,
+      handshakeTimeoutMs: options.handshakeTimeoutMs,
+      initTimeoutMs: options.initTimeoutMs,
+      firstStartHandshakeTimeoutMs: options.firstStartHandshakeTimeoutMs,
+      firstStartInitTimeoutMs: options.firstStartInitTimeoutMs,
+    });
+    this.embedTimeoutMs =
+      options.embedTimeoutMs ?? DEFAULT_EMBEDDING_WORKER_EMBED_TIMEOUT_MS;
     this.controlTimeoutMs =
-      options.controlTimeoutMs ?? DEFAULT_CONTROL_TIMEOUT_MS;
-    this.killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
+      options.controlTimeoutMs ?? DEFAULT_EMBEDDING_WORKER_CONTROL_TIMEOUT_MS;
+    this.killGraceMs =
+      options.killGraceMs ?? DEFAULT_EMBEDDING_WORKER_KILL_GRACE_MS;
     this.protocolVersion =
       options.protocolVersion ?? EMBEDDING_WORKER_PROTOCOL_VERSION;
+    this.watchdog = new EmbeddingWorkerWatchdog({ restart: options.restart });
   }
 
   /** OS pid once spawned (also useful for orphan detection). */
@@ -367,6 +229,31 @@ export class EmbeddingWorkerClient {
     return this.exitInfo;
   }
 
+  /** Timeouts the next spawn/init would use; the first start is wider. */
+  get timeouts(): EmbeddingWorkerTimeoutTier {
+    return this.hasInitialized ? this.steadyTimeouts : this.firstStartTimeouts;
+  }
+
+  /** Automatic restarts performed so far (the first spawn is not one). */
+  get restartCount(): number {
+    return this.watchdog.restartCount;
+  }
+
+  /** Typed classification of the last failure the watchdog saw. */
+  get lastFailure(): EmbeddingWorkerFailureClassification | null {
+    return this.watchdog.lastFailure;
+  }
+
+  /** Whether the watchdog may still restart this worker automatically. */
+  get canRetry(): boolean {
+    return this.watchdog.canRetry;
+  }
+
+  /** Pending requests; the crash path must drain this to zero. */
+  get pendingRequestCount(): number {
+    return this.pending.size;
+  }
+
   /** Tail of the worker's stderr (diagnostics only; never credentials). */
   stderrTail(limit = MAX_STDERR_CHARS): string {
     return this.stderrBuffer.slice(-limit).trim();
@@ -380,28 +267,56 @@ export class EmbeddingWorkerClient {
     };
   }
 
+  /** Subscribe to watchdog restart decisions (typed reason + canRetry). */
+  onRestart(
+    listener: (event: EmbeddingWorkerRestartEvent) => void,
+  ): () => void {
+    return this.watchdog.onRestart(listener);
+  }
+
   /**
-   * Spawn the worker and wait for its `ready` frame. Idempotent: concurrent or
-   * repeated calls share one attempt. A failed start leaves the client stopped;
-   * the caller creates a new client to retry.
+   * Spawn the worker and wait for its `ready` frame. Concurrent calls share one
+   * attempt. A failed attempt leaves the client stopped; the watchdog may then
+   * schedule a bounded automatic restart, and an explicit call starts a new
+   * attempt immediately (the first spawn of a client is not a restart).
    */
   start(): Promise<EmbeddingWorkerReadyFrame> {
     if (this.readyFrame !== null) return Promise.resolve(this.readyFrame);
-    if (this.startPromise === null)
-      this.startPromise = this.spawnAndHandshake();
-    return this.startPromise;
+    if (this.startPromise !== null) return this.startPromise;
+    if (this.disposed) {
+      return Promise.reject(
+        new EmbeddingWorkerClientError(
+          "disposed",
+          "The embedding worker client was disposed.",
+        ),
+      );
+    }
+    this.watchdog.cancel();
+    const attempt = this.spawnAndHandshake();
+    this.startPromise = attempt;
+    attempt
+      .finally(() => {
+        if (this.startPromise === attempt) this.startPromise = null;
+      })
+      .catch(() => {
+        // The rejection is surfaced through `attempt`; this branch only frees
+        // the shared slot so a later explicit/automatic start can retry.
+      });
+    return attempt;
   }
 
   /** Load the runtime/tokenizer and create the session (may take >30 s). */
   async init(
     options: EmbeddingWorkerInitOptions,
-    timeoutMs = this.initTimeoutMs,
+    timeoutMs?: number,
   ): Promise<EmbeddingWorkerInitResult> {
-    return await this.request<EmbeddingWorkerInitResult>(
+    const result = await this.request<EmbeddingWorkerInitResult>(
       "init",
       { ...options },
-      timeoutMs,
+      timeoutMs ?? this.timeouts.initTimeoutMs,
     );
+    this.hasInitialized = true;
+    return result;
   }
 
   /**
@@ -497,15 +412,31 @@ export class EmbeddingWorkerClient {
     };
   }
 
-  /** Ask the worker to stop at the next batch boundary. */
+  /**
+   * Ask the worker to stop at the next batch boundary. When the cancel reply
+   * never arrives, C7's fallback reaps the worker (SIGKILL) because a native
+   * embed cannot be preempted and a stuck worker must not stay alive.
+   */
   async cancel(
-    options: { requestId?: number; timeoutMs?: number } = {},
+    options: EmbeddingWorkerCancelOptions = {},
   ): Promise<EmbeddingWorkerCancelResult> {
-    return await this.request<EmbeddingWorkerCancelResult>(
-      "cancel",
-      options.requestId === undefined ? {} : { requestId: options.requestId },
-      options.timeoutMs ?? this.controlTimeoutMs,
-    );
+    const timeoutMs = options.timeoutMs ?? this.controlTimeoutMs;
+    try {
+      return await this.request<EmbeddingWorkerCancelResult>(
+        "cancel",
+        options.requestId === undefined ? {} : { requestId: options.requestId },
+        timeoutMs,
+      );
+    } catch (error) {
+      if (
+        options.killIfUnresponsive !== false &&
+        error instanceof EmbeddingWorkerClientError &&
+        (error.code === "request-timeout" || error.code === "not-running")
+      ) {
+        await this.reapWorker();
+      }
+      throw error;
+    }
   }
 
   /** Counters/throughput for calibration and the status surface. */
@@ -518,9 +449,11 @@ export class EmbeddingWorkerClient {
   /**
    * Graceful shutdown: ask for a `shutdown` result, wait for exit, and SIGKILL
    * only if the process outlives the grace window. Safe to call twice and after
-   * the process already exited.
+   * the process already exited. An intentional stop never auto-restarts.
    */
   async shutdown(options: { timeoutMs?: number } = {}): Promise<void> {
+    this.intentionalStop = true;
+    this.watchdog.cancel();
     if (this.child === null || this.exitInfo !== null) {
       this.state = "stopped";
       return;
@@ -536,27 +469,36 @@ export class EmbeddingWorkerClient {
       // An exiting worker may close stdout before its reply is read.
     }
     const exit = await this.waitForExit(timeoutMs + this.killGraceMs);
-    if (exit === null) {
-      this.kill("SIGKILL");
-      await this.waitForExit(this.killGraceMs);
+    if (exit !== null) return;
+    this.killChild("SIGKILL");
+    const killed = await this.waitForExit(this.killGraceMs);
+    if (killed === null && this.exitInfo === null) {
+      // The process did not report exit after SIGKILL: release every waiter
+      // instead of leaving a zombie handle that callers wait on forever.
+      this.handleExit({ code: null, signal: "SIGKILL" });
     }
   }
 
-  /** Send SIGTERM/SIGKILL (C7 restart policy owns when to call this). */
+  /** Send SIGTERM/SIGKILL and treat the stop as intentional (no restart). */
   kill(signal: "SIGTERM" | "SIGKILL" = "SIGKILL"): void {
-    this.child?.kill(signal);
+    this.intentionalStop = true;
+    this.watchdog.cancel();
+    this.killChild(signal);
   }
 
   /** Reject everything pending, kill the process, and stop accepting requests. */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.intentionalStop = true;
+    this.watchdog.cancel();
+    this.watchdog.dispose();
     const error = new EmbeddingWorkerClientError(
       "disposed",
       "The embedding worker client was disposed.",
     );
     this.rejectAllPending(error);
-    if (this.exitInfo === null) this.kill("SIGKILL");
+    if (this.exitInfo === null) this.killChild("SIGKILL");
     this.state = "stopped";
   }
 
@@ -589,7 +531,17 @@ export class EmbeddingWorkerClient {
         "The embedding worker client was disposed.",
       );
     }
+    this.startFailure = null;
+    this.intentionalStop = false;
+    this.exitHandled = false;
+    this.exitInfo = null;
+    this.readyFrame = null;
+    this.stdoutBuffer = "";
+    this.stderrBuffer = "";
+    this.decoder = new StringDecoder("utf8");
+    this.watchdog.noteSpawn();
     this.state = "starting";
+    const timeouts = this.timeouts;
     let child: EmbeddingWorkerProcessHandle;
     try {
       child = this.spawnWorker(this.execPath, [this.workerPath, ...this.args], {
@@ -598,20 +550,23 @@ export class EmbeddingWorkerClient {
       });
     } catch (error) {
       this.state = "stopped";
-      throw new EmbeddingWorkerClientError(
+      const failure = new EmbeddingWorkerClientError(
         "spawn-failed",
         `Could not spawn the embedding worker: ${
           error instanceof Error ? error.message : String(error)
         }`,
         { cause: error },
       );
+      this.startFailure = failure;
+      this.reportFailure(failure);
+      throw failure;
     }
     this.child = child;
     void this.pumpStdout(child);
     void this.pumpStderr(child);
     void child.exited
-      .then((exit) => this.handleExit(exit))
-      .catch(() => this.handleExit({ code: null, signal: null }));
+      .then((exit) => this.handleExit(exit, child))
+      .catch(() => this.handleExit({ code: null, signal: null }, child));
 
     const handshake = new Promise<EmbeddingWorkerReadyFrame>(
       (resolveReady, rejectReady) => {
@@ -619,19 +574,33 @@ export class EmbeddingWorkerClient {
       },
     );
     const timer = setTimeout(() => {
-      this.failHandshake(
-        new EmbeddingWorkerClientError(
-          "handshake-timeout",
-          `The embedding worker did not report ready within ${this.handshakeTimeoutMs} ms.`,
-        ),
+      const failure = classifyEmbeddingWorkerFailure("handshake-timeout");
+      const error = new EmbeddingWorkerClientError(
+        "handshake-timeout",
+        `The embedding worker did not report ready within ${timeouts.handshakeTimeoutMs} ms.`,
+        {
+          reason: failure.reason,
+          canRetry: this.watchdog.canRetryFailure(failure),
+        },
       );
-      this.kill("SIGKILL");
-    }, this.handshakeTimeoutMs);
+      this.startFailure = error;
+      this.failHandshake(error);
+      this.killChild("SIGKILL");
+    }, timeouts.handshakeTimeoutMs);
     try {
       return await handshake;
     } catch (error) {
       this.state = "stopped";
-      throw error;
+      const failure =
+        error instanceof EmbeddingWorkerClientError
+          ? error
+          : new EmbeddingWorkerClientError(
+              "handshake-timeout",
+              error instanceof Error ? error.message : String(error),
+              { cause: error },
+            );
+      this.reportFailure(failure);
+      throw failure;
     } finally {
       clearTimeout(timer);
       this.readyWaiter = null;
@@ -654,6 +623,7 @@ export class EmbeddingWorkerClient {
       return;
     }
     this.readyFrame = frame;
+    this.startFailure = null;
     this.state = "ready";
     const waiter = this.readyWaiter;
     this.readyWaiter = null;
@@ -663,6 +633,7 @@ export class EmbeddingWorkerClient {
   private async pumpStdout(child: EmbeddingWorkerProcessHandle): Promise<void> {
     try {
       for await (const chunk of child.stdout) {
+        if (this.child !== child) return;
         this.stdoutBuffer +=
           typeof chunk === "string"
             ? chunk
@@ -677,6 +648,7 @@ export class EmbeddingWorkerClient {
   private async pumpStderr(child: EmbeddingWorkerProcessHandle): Promise<void> {
     try {
       for await (const chunk of child.stderr) {
+        if (this.child !== child) return;
         const text =
           typeof chunk === "string"
             ? chunk
@@ -745,6 +717,8 @@ export class EmbeddingWorkerClient {
       new EmbeddingWorkerClientError("worker-error", frame.error.message, {
         workerCode: frame.error.code,
         requestId: frame.id,
+        reason: "worker-error",
+        canRetry: false,
       }),
     );
   }
@@ -753,32 +727,56 @@ export class EmbeddingWorkerClient {
   private failProtocol(message: string): void {
     if (this.lastProtocolError !== null) return;
     this.lastProtocolError = message;
-    const error = new EmbeddingWorkerClientError("protocol", message);
+    const error = new EmbeddingWorkerClientError("protocol", message, {
+      reason: "protocol",
+      canRetry: false,
+    });
+    this.startFailure = error;
     this.failHandshake(error);
     this.rejectAllPending(error);
-    this.kill("SIGKILL");
+    this.killChild("SIGKILL");
   }
 
-  private handleExit(exit: EmbeddingWorkerExit): void {
+  private handleExit(
+    exit: EmbeddingWorkerExit,
+    child?: EmbeddingWorkerProcessHandle,
+  ): void {
+    // A killed/replaced child may report its exit after a restart spawned the
+    // next process; that stale exit must not mark the new worker stopped.
+    if (child !== undefined && child !== this.child) return;
     if (this.exitHandled) return;
     this.exitHandled = true;
     this.exitInfo = exit;
+    this.readyFrame = null;
     this.state = "stopped";
-    const details = describeExit(exit);
+    const startFailure = this.startFailure;
+    this.startFailure = null;
+    const details = describeEmbeddingWorkerExit(exit);
     const stderr = this.stderrTail(2_048);
     const message = stderr.length > 0 ? `${details}\n${stderr}` : details;
-    this.failHandshake(
-      new EmbeddingWorkerClientError(
-        exit.error === undefined ? "exited" : "spawn-failed",
-        `The embedding worker ${exit.error === undefined ? "exited" : "failed to start"}: ${message}`,
-        { exit, ...(exit.error === undefined ? {} : { cause: exit.error }) },
-      ),
+    const code =
+      startFailure?.code ??
+      (exit.error === undefined ? "exited" : "spawn-failed");
+    const failure = classifyEmbeddingWorkerFailure(code, exit);
+    const canRetry = this.watchdog.canRetryFailure(failure);
+    const failureError = new EmbeddingWorkerClientError(
+      exit.error === undefined ? "exited" : "spawn-failed",
+      `The embedding worker ${
+        exit.error === undefined ? "exited" : "failed to start"
+      }: ${message}`,
+      {
+        exit,
+        reason: failure.reason,
+        canRetry,
+        ...(exit.error === undefined ? {} : { cause: exit.error }),
+      },
     );
+    this.failHandshake(failureError);
     this.rejectAllPending(
       new EmbeddingWorkerClientError(
         "exited",
         `The embedding worker exited before answering: ${message}`,
-        { exit },
+        { exit, reason: failure.reason, canRetry },
       ),
     );
     for (const waiter of [...this.exitWaiters]) waiter(exit);
@@ -790,6 +788,43 @@ export class EmbeddingWorkerClient {
         // A listener must not break cleanup for the others.
       }
     }
+    if (this.disposed || this.intentionalStop) return;
+    this.watchdog.reportFailure(failure, failureError, () => {
+      this.attemptRestart();
+    });
+  }
+
+  private reportFailure(error: EmbeddingWorkerClientError): void {
+    const failure = classifyEmbeddingWorkerFailure(error.code, error.exit);
+    this.watchdog.reportFailure(failure, error, () => {
+      this.attemptRestart();
+    });
+  }
+
+  private attemptRestart(): void {
+    if (this.disposed || this.intentionalStop) return;
+    void this.start().catch(() => {
+      // The failed attempt reports itself; the watchdog either schedules the
+      // next bounded restart or stops at the budget.
+    });
+  }
+
+  /**
+   * C7 SIGKILL fallback after an unresponsive cancel: reap the worker and
+   * release every waiter even if the process handle never reports exit.
+   */
+  private async reapWorker(): Promise<void> {
+    const child = this.child;
+    if (child === null || this.exitInfo !== null) return;
+    this.killChild("SIGKILL");
+    const exit = await this.waitForExit(this.killGraceMs);
+    if (exit === null && this.exitInfo === null && this.child === child) {
+      this.handleExit({ code: null, signal: "SIGKILL" }, child);
+    }
+  }
+
+  private killChild(signal: "SIGTERM" | "SIGKILL"): void {
+    this.child?.kill(signal);
   }
 
   private rejectAllPending(error: Error): void {
@@ -940,10 +975,4 @@ export class EmbeddingWorkerClient {
       elapsedMs: typeof result.elapsedMs === "number" ? result.elapsedMs : 0,
     };
   }
-}
-
-function describeExit(exit: EmbeddingWorkerExit): string {
-  if (exit.error !== undefined) return exit.error.message;
-  if (exit.signal !== null) return `was killed by ${exit.signal}`;
-  return `exited with code ${String(exit.code)}`;
 }

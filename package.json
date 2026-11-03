@@ -37,6 +37,7 @@
     "THIRD-PARTY-NOTICES.md",
     "haruyuki.js",
     "image-resize-worker.js",
+    "embedding-worker.js",
     "assets/tutor-profile.png",
     "scripts",
     "!scripts/.haruyuki",
