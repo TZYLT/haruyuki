@@ -28,6 +28,7 @@ import { handleCompactionProtocolCommand } from "./commands/compaction";
 import { handleConnectProvidersCommand } from "./commands/connect-providers";
 import { handleCronProtocolCommand } from "./commands/cron";
 import { handleDreamProtocolCommand } from "./commands/dream";
+import { handleEmbeddingProtocolCommand } from "./commands/embedding";
 import { handleGitBranchCommand } from "./commands/git-branches";
 import { handleMemfsSyncedMemoryProtocolCommand } from "./commands/memory-command-sync";
 import { handleModelToolsetCommand } from "./commands/model-toolset";
@@ -702,6 +703,16 @@ export function createListenerMessageHandler(
 
       if (
         handleCronProtocolCommand(parsed, {
+          socket,
+          safeSocketSend,
+          runDetachedListenerTask,
+        })
+      ) {
+        return;
+      }
+
+      if (
+        handleEmbeddingProtocolCommand(parsed, {
           socket,
           safeSocketSend,
           runDetachedListenerTask,

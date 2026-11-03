@@ -43,6 +43,7 @@ import {
   shouldEmitDeviceStatus,
 } from "./device-status-cache";
 import { buildDeviceToolsetStatus } from "./device-toolset-status";
+import { getEmbeddingDeviceSummary } from "./embedding-device-status";
 import { SUPPORTED_REMOTE_COMMANDS } from "./listener-constants";
 import { listListenerModCommands } from "./mod-command-registry";
 import { enqueueOutboundFrame } from "./outbound-wire";
@@ -200,6 +201,7 @@ export function buildDeviceStatus(
       should_doctor: false,
       reflection_settings: null,
       dream: null,
+      embedding: null,
       supported_commands: FROZEN_SUPPORTED_COMMANDS,
     };
   }
@@ -278,6 +280,9 @@ export function buildDeviceStatus(
     // the switch and a live run without a second `dream_status` round-trip.
     // Cached per agent in `device-status-cache` — this path runs on every turn.
     dream: getDreamDeviceSummary(agentId),
+    // R-26: the embedding build summary rides the same broadcast (D2 owns the
+    // 5s TTL/dedup); `null` until A5 feeds it through the provider.
+    embedding: getEmbeddingDeviceSummary(agentId),
   };
 }
 export function buildLoopStatus(
