@@ -363,7 +363,7 @@ export async function runExport(
  * The walk's evidence callbacks are the only sources for the report:
  * `onWarning` collects symlink/case observations and `onExcluded` the paths the
  * walk really skipped on this machine. The latter is NOT the manifest's
- * `excluded`, which is the 22-rule table (docs/46-2 §1.7 rule 4).
+ * `excluded`, which is the 23-rule table (docs/46-2 §1.7 rule 4).
  */
 async function collectScope(
   roots: ScopeRoots,
