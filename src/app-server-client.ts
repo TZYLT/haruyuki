@@ -6,6 +6,7 @@ export * from "./app-server-client-shared";
 export type { AppServerInfoResponseMessage } from "./types/app-server-info";
 export { isAppServerInfoResponseMessage } from "./types/app-server-info";
 
+import { AppServerClientFamilies } from "./app-server-client-families";
 import type {
   AppServerChannel,
   AppServerClientOptions,
@@ -34,17 +35,10 @@ import {
   resolveAppServerUrl,
   waitForSocketOpen,
 } from "./app-server-client-shared";
-
 import type {
   AbortMessageCommand,
   AbortMessageResponseMessage,
   AppServerInfoResponseMessage,
-  CompactionCancelCommand,
-  CompactionCancelResponseMessage,
-  CompactionCommitCommand,
-  CompactionCommitResponseMessage,
-  CompactionPrepareCommand,
-  CompactionPrepareResponseMessage,
   ConversationCompactCommand,
   ConversationCompactResponseMessage,
   ConversationDeleteCommand,
@@ -55,38 +49,6 @@ import type {
   ConversationMessagesListResponseMessage,
   ConversationRetrieveCommand,
   ConversationRetrieveResponseMessage,
-  CronAddCommand,
-  CronAddResponseMessage,
-  CronDeleteAllCommand,
-  CronDeleteAllResponseMessage,
-  CronDeleteCommand,
-  CronDeleteResponseMessage,
-  CronGetCommand,
-  CronGetResponseMessage,
-  CronListCommand,
-  CronListResponseMessage,
-  CronPauseCommand,
-  CronPauseResponseMessage,
-  CronResumeCommand,
-  CronResumeResponseMessage,
-  CronRunsCommand,
-  CronRunsResponseMessage,
-  CronTriggerCommand,
-  CronTriggerResponseMessage,
-  CronUpdateCommand,
-  CronUpdateResponseMessage,
-  DreamNoteAppendCommand,
-  DreamNoteAppendResponseMessage,
-  DreamNoteRemoveCommand,
-  DreamNoteRemoveResponseMessage,
-  DreamNotesListCommand,
-  DreamNotesListResponseMessage,
-  DreamRunCommand,
-  DreamRunResponseMessage,
-  DreamStatusCommand,
-  DreamStatusResponseMessage,
-  GetDreamSettingsCommand,
-  GetDreamSettingsResponseMessage,
   InputAcceptedResponseMessage,
   InputCommand,
   LaunchSubagentCommand,
@@ -99,39 +61,18 @@ import type {
   RuntimeExternalToolsUpdateResponseMessage,
   RuntimeStartCommand,
   RuntimeStartResponseMessage,
-  SetDreamSettingsCommand,
-  SetDreamSettingsResponseMessage,
   SyncCommand,
   SyncResponseMessage,
-  UsageAggregateCommand,
-  UsageAggregateResponseMessage,
   WsProtocolCommand,
   WsProtocolMessage,
 } from "./types/app-server-protocol";
-
-/**
- * Command body accepted by the additive family wrappers: the wrapper adds the
- * discriminant and derives the request id, so callers pass only the payload.
- */
-type CommandBody<T extends { type: string }> = Omit<
-  T,
-  "type" | "request_id"
-> & {
-  request_id?: string;
-};
-
-/** Family-wrapper options; `requestCommand` derives the response predicate. */
-type CommandOptions<T extends WsProtocolMessage> = Omit<
-  AppServerRequestOptions<T>,
-  "predicate"
->;
 
 export type {
   CompactionTopicBlock,
   CompactionTopicReport,
 } from "./types/app-server-protocol";
 
-export class AppServerClient {
+export class AppServerClient extends AppServerClientFamilies {
   readonly socket: AppServerSocketLike;
   /** @deprecated Alias for socket. */
   readonly control: AppServerSocketLike;
@@ -148,6 +89,7 @@ export class AppServerClient {
   private nextRequestNumber = 0;
 
   constructor(options: AppServerClientOptions) {
+    super();
     const WebSocket = options.WebSocket ?? getGlobalWebSocket();
     if (!WebSocket) {
       throw new Error("No WebSocket implementation available");
@@ -634,241 +576,6 @@ export class AppServerClient {
         predicate: (message): message is ConversationCompactResponseMessage =>
           message.type === "conversation_compact_response",
       },
-    );
-  }
-
-  // ── M5-A additive families: cron, dream, compaction, usage ─────────
-  // Each wrapper only names the discriminant and its response type;
-  // `requestCommand` owns request-id allocation and response correlation.
-
-  cronList(
-    command: CommandBody<CronListCommand> = {},
-    options: CommandOptions<CronListResponseMessage> = {},
-  ): Promise<CronListResponseMessage> {
-    return this.requestCommand<CronListResponseMessage>(
-      { type: "cron_list", ...command },
-      "cron_list_response",
-      options,
-    );
-  }
-
-  cronGet(
-    command: CommandBody<CronGetCommand>,
-    options: CommandOptions<CronGetResponseMessage> = {},
-  ): Promise<CronGetResponseMessage> {
-    return this.requestCommand<CronGetResponseMessage>(
-      { type: "cron_get", ...command },
-      "cron_get_response",
-      options,
-    );
-  }
-
-  cronAdd(
-    command: CommandBody<CronAddCommand>,
-    options: CommandOptions<CronAddResponseMessage> = {},
-  ): Promise<CronAddResponseMessage> {
-    return this.requestCommand<CronAddResponseMessage>(
-      { type: "cron_add", ...command },
-      "cron_add_response",
-      options,
-    );
-  }
-
-  cronUpdate(
-    command: CommandBody<CronUpdateCommand>,
-    options: CommandOptions<CronUpdateResponseMessage> = {},
-  ): Promise<CronUpdateResponseMessage> {
-    return this.requestCommand<CronUpdateResponseMessage>(
-      { type: "cron_update", ...command },
-      "cron_update_response",
-      options,
-    );
-  }
-
-  cronDelete(
-    command: CommandBody<CronDeleteCommand>,
-    options: CommandOptions<CronDeleteResponseMessage> = {},
-  ): Promise<CronDeleteResponseMessage> {
-    return this.requestCommand<CronDeleteResponseMessage>(
-      { type: "cron_delete", ...command },
-      "cron_delete_response",
-      options,
-    );
-  }
-
-  cronDeleteAll(
-    command: CommandBody<CronDeleteAllCommand>,
-    options: CommandOptions<CronDeleteAllResponseMessage> = {},
-  ): Promise<CronDeleteAllResponseMessage> {
-    return this.requestCommand<CronDeleteAllResponseMessage>(
-      { type: "cron_delete_all", ...command },
-      "cron_delete_all_response",
-      options,
-    );
-  }
-
-  cronRuns(
-    command: CommandBody<CronRunsCommand>,
-    options: CommandOptions<CronRunsResponseMessage> = {},
-  ): Promise<CronRunsResponseMessage> {
-    return this.requestCommand<CronRunsResponseMessage>(
-      { type: "cron_runs", ...command },
-      "cron_runs_response",
-      options,
-    );
-  }
-
-  cronTrigger(
-    command: CommandBody<CronTriggerCommand>,
-    options: CommandOptions<CronTriggerResponseMessage> = {},
-  ): Promise<CronTriggerResponseMessage> {
-    return this.requestCommand<CronTriggerResponseMessage>(
-      { type: "cron_trigger", ...command },
-      "cron_trigger_response",
-      options,
-    );
-  }
-
-  cronPause(
-    command: CommandBody<CronPauseCommand>,
-    options: CommandOptions<CronPauseResponseMessage> = {},
-  ): Promise<CronPauseResponseMessage> {
-    return this.requestCommand<CronPauseResponseMessage>(
-      { type: "cron_pause", ...command },
-      "cron_pause_response",
-      options,
-    );
-  }
-
-  cronResume(
-    command: CommandBody<CronResumeCommand>,
-    options: CommandOptions<CronResumeResponseMessage> = {},
-  ): Promise<CronResumeResponseMessage> {
-    return this.requestCommand<CronResumeResponseMessage>(
-      { type: "cron_resume", ...command },
-      "cron_resume_response",
-      options,
-    );
-  }
-
-  dreamStatus(
-    command: CommandBody<DreamStatusCommand>,
-    options: CommandOptions<DreamStatusResponseMessage> = {},
-  ): Promise<DreamStatusResponseMessage> {
-    return this.requestCommand<DreamStatusResponseMessage>(
-      { type: "dream_status", ...command },
-      "dream_status_response",
-      options,
-    );
-  }
-
-  dreamRun(
-    command: CommandBody<DreamRunCommand>,
-    options: CommandOptions<DreamRunResponseMessage> = {},
-  ): Promise<DreamRunResponseMessage> {
-    return this.requestCommand<DreamRunResponseMessage>(
-      { type: "dream_run", ...command },
-      "dream_run_response",
-      options,
-    );
-  }
-
-  getDreamSettings(
-    command: CommandBody<GetDreamSettingsCommand>,
-    options: CommandOptions<GetDreamSettingsResponseMessage> = {},
-  ): Promise<GetDreamSettingsResponseMessage> {
-    return this.requestCommand<GetDreamSettingsResponseMessage>(
-      { type: "get_dream_settings", ...command },
-      "get_dream_settings_response",
-      options,
-    );
-  }
-
-  setDreamSettings(
-    command: CommandBody<SetDreamSettingsCommand>,
-    options: CommandOptions<SetDreamSettingsResponseMessage> = {},
-  ): Promise<SetDreamSettingsResponseMessage> {
-    return this.requestCommand<SetDreamSettingsResponseMessage>(
-      { type: "set_dream_settings", ...command },
-      "set_dream_settings_response",
-      options,
-    );
-  }
-
-  dreamNoteAppend(
-    command: CommandBody<DreamNoteAppendCommand>,
-    options: CommandOptions<DreamNoteAppendResponseMessage> = {},
-  ): Promise<DreamNoteAppendResponseMessage> {
-    return this.requestCommand<DreamNoteAppendResponseMessage>(
-      { type: "dream_note_append", ...command },
-      "dream_note_append_response",
-      options,
-    );
-  }
-
-  dreamNotesList(
-    command: CommandBody<DreamNotesListCommand>,
-    options: CommandOptions<DreamNotesListResponseMessage> = {},
-  ): Promise<DreamNotesListResponseMessage> {
-    return this.requestCommand<DreamNotesListResponseMessage>(
-      { type: "dream_notes_list", ...command },
-      "dream_notes_list_response",
-      options,
-    );
-  }
-
-  dreamNoteRemove(
-    command: CommandBody<DreamNoteRemoveCommand>,
-    options: CommandOptions<DreamNoteRemoveResponseMessage> = {},
-  ): Promise<DreamNoteRemoveResponseMessage> {
-    return this.requestCommand<DreamNoteRemoveResponseMessage>(
-      { type: "dream_note_remove", ...command },
-      "dream_note_remove_response",
-      options,
-    );
-  }
-
-  compactionPrepare(
-    command: CommandBody<CompactionPrepareCommand>,
-    options: CommandOptions<CompactionPrepareResponseMessage> = {},
-  ): Promise<CompactionPrepareResponseMessage> {
-    return this.requestCommand<CompactionPrepareResponseMessage>(
-      { type: "compaction_prepare", ...command },
-      "compaction_prepare_response",
-      options,
-    );
-  }
-
-  compactionCommit(
-    command: CommandBody<CompactionCommitCommand>,
-    options: CommandOptions<CompactionCommitResponseMessage> = {},
-  ): Promise<CompactionCommitResponseMessage> {
-    return this.requestCommand<CompactionCommitResponseMessage>(
-      { type: "compaction_commit", ...command },
-      "compaction_commit_response",
-      options,
-    );
-  }
-
-  compactionCancel(
-    command: CommandBody<CompactionCancelCommand>,
-    options: CommandOptions<CompactionCancelResponseMessage> = {},
-  ): Promise<CompactionCancelResponseMessage> {
-    return this.requestCommand<CompactionCancelResponseMessage>(
-      { type: "compaction_cancel", ...command },
-      "compaction_cancel_response",
-      options,
-    );
-  }
-
-  usageAggregate(
-    command: CommandBody<UsageAggregateCommand>,
-    options: CommandOptions<UsageAggregateResponseMessage> = {},
-  ): Promise<UsageAggregateResponseMessage> {
-    return this.requestCommand<UsageAggregateResponseMessage>(
-      { type: "usage_aggregate", ...command },
-      "usage_aggregate_response",
-      options,
     );
   }
 

@@ -138,6 +138,16 @@ import {
   isSetDreamSettingsCommand,
 } from "./dream-protocol-inbound";
 import {
+  isEmbeddingBuildCommand,
+  isEmbeddingCalibrateCommand,
+  isEmbeddingCancelCommand,
+  isEmbeddingConfigureCommand,
+  isEmbeddingDisableCommand,
+  isEmbeddingEnableCommand,
+  isEmbeddingResetCommand,
+  isEmbeddingStatusCommand,
+} from "./embedding-protocol-inbound";
+import {
   getInputToolSelectionError,
   isClientToolsetConfig,
 } from "./input-tool-selection";
@@ -2117,6 +2127,14 @@ export function parseServerMessage(
       isDreamNoteAppendCommand(parsed) ||
       isDreamNotesListCommand(parsed) ||
       isDreamNoteRemoveCommand(parsed) ||
+      isEmbeddingStatusCommand(parsed) ||
+      isEmbeddingConfigureCommand(parsed) ||
+      isEmbeddingEnableCommand(parsed) ||
+      isEmbeddingDisableCommand(parsed) ||
+      isEmbeddingBuildCommand(parsed) ||
+      isEmbeddingCancelCommand(parsed) ||
+      isEmbeddingResetCommand(parsed) ||
+      isEmbeddingCalibrateCommand(parsed) ||
       isCompactionPrepareCommand(parsed) ||
       isCompactionCommitCommand(parsed) ||
       isCompactionCancelCommand(parsed) ||

@@ -104,6 +104,23 @@ export type AppServerCommandBody = {
   > & { request_id?: string };
 }[WsProtocolCommand["type"]];
 
+/**
+ * Command body accepted by the additive family wrappers: the wrapper adds the
+ * discriminant and derives the request id, so callers pass only the payload.
+ */
+export type AppServerFamilyCommandBody<T extends { type: string }> = Omit<
+  T,
+  "type" | "request_id"
+> & {
+  request_id?: string;
+};
+
+/** Family-wrapper options; `requestCommand` derives the response predicate. */
+export type AppServerFamilyCommandOptions<T extends WsProtocolMessage> = Omit<
+  AppServerRequestOptions<T>,
+  "predicate"
+>;
+
 export type AppServerRequestCommandWithId = AppServerRequestCommand & {
   request_id: string;
 };

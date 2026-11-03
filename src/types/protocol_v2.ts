@@ -74,6 +74,7 @@ import type {
   SetDreamSettingsCommand,
   SetDreamSettingsResponseMessage,
 } from "./dream-protocol";
+import type * as EmbeddingProtocol from "./embedding-protocol";
 import type {
   ExternalToolCallRequestMessage,
   ExternalToolCallResponseCommand,
@@ -128,6 +129,7 @@ export type * from "./channel-account-protocol";
 export type * from "./compaction-protocol";
 export type * from "./cwd-protocol";
 export type * from "./dream-protocol";
+export type * from "./embedding-protocol";
 export type * from "./external-tool-protocol";
 export type * from "./loop-status-protocol";
 export type * from "./runtime-scope";
@@ -461,6 +463,8 @@ export interface DeviceStatus {
   reflection_settings: ReflectionSettingsSnapshot | null;
   /** F-06 dream summary; omitted by builds that have no dream subsystem. */
   dream?: DreamDeviceSummary | null;
+  /** R-26 embedding progress; omitted by builds with no embedding subsystem. */
+  embedding?: EmbeddingProtocol.EmbeddingDeviceSummary | null;
   /** Remote slash command IDs this letta-code version can handle via `execute_command`. */
   supported_commands: string[];
   /**
@@ -2549,6 +2553,14 @@ export type WsProtocolCommand =
   | CompactionPrepareCommand
   | CompactionCommitCommand
   | CompactionCancelCommand
+  | EmbeddingProtocol.EmbeddingStatusCommand
+  | EmbeddingProtocol.EmbeddingConfigureCommand
+  | EmbeddingProtocol.EmbeddingEnableCommand
+  | EmbeddingProtocol.EmbeddingDisableCommand
+  | EmbeddingProtocol.EmbeddingBuildCommand
+  | EmbeddingProtocol.EmbeddingCancelCommand
+  | EmbeddingProtocol.EmbeddingResetCommand
+  | EmbeddingProtocol.EmbeddingCalibrateCommand
   | UsageAggregateCommand;
 
 export type WsProtocolCommandType = WsProtocolCommand["type"];
@@ -2666,6 +2678,14 @@ export type WsProtocolMessage =
   | CompactionCommitResponseMessage
   | CompactionCancelResponseMessage
   | UsageAggregateResponseMessage
+  | EmbeddingProtocol.EmbeddingStatusResponseMessage
+  | EmbeddingProtocol.EmbeddingConfigureResponseMessage
+  | EmbeddingProtocol.EmbeddingEnableResponseMessage
+  | EmbeddingProtocol.EmbeddingDisableResponseMessage
+  | EmbeddingProtocol.EmbeddingBuildResponseMessage
+  | EmbeddingProtocol.EmbeddingCancelResponseMessage
+  | EmbeddingProtocol.EmbeddingResetResponseMessage
+  | EmbeddingProtocol.EmbeddingCalibrateResponseMessage
   | SubagentProtocol.LaunchSubagentResponse;
 
 export type WsProtocolMessageType = WsProtocolMessage["type"];

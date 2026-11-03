@@ -13,6 +13,7 @@ import {
   type AppServerSocketOptions,
   createAppServerClient,
 } from "./app-server-client";
+import type { EmbeddingConfigurePatch } from "./types/app-server-protocol";
 
 type Listener = (event: unknown) => void;
 
@@ -574,6 +575,120 @@ describe("correlation isolation", () => {
     };
     socket.receive(matching);
     expect(await pending).toMatchObject(matching);
+    client.close();
+  });
+});
+
+describe("embedding family helpers", () => {
+  test("every embedding wrapper sends its discriminant and correlates its response", async () => {
+    await expectFamilyCorrelation([
+      {
+        name: "embeddingStatus",
+        expectedType: "embedding_status",
+        responseType: "embedding_status_response",
+        invoke: (client) => client.embeddingStatus({ runtime }),
+      },
+      {
+        name: "embeddingConfigure",
+        expectedType: "embedding_configure",
+        responseType: "embedding_configure_response",
+        invoke: (client) =>
+          client.embeddingConfigure({
+            runtime,
+            patch: { enabled: true, weight: 0.5 },
+          }),
+      },
+      {
+        name: "embeddingEnable",
+        expectedType: "embedding_enable",
+        responseType: "embedding_enable_response",
+        invoke: (client) => client.embeddingEnable({ runtime }),
+      },
+      {
+        name: "embeddingDisable",
+        expectedType: "embedding_disable",
+        responseType: "embedding_disable_response",
+        invoke: (client) => client.embeddingDisable({ runtime }),
+      },
+      {
+        name: "embeddingBuild",
+        expectedType: "embedding_build",
+        responseType: "embedding_build_response",
+        invoke: (client) =>
+          client.embeddingBuild({
+            runtime,
+            mode: "full",
+            keep_after_exit: true,
+          }),
+      },
+      {
+        name: "embeddingCancel",
+        expectedType: "embedding_cancel",
+        responseType: "embedding_cancel_response",
+        invoke: (client) =>
+          client.embeddingCancel({ runtime, build_id: "build-1" }),
+      },
+      {
+        name: "embeddingReset",
+        expectedType: "embedding_reset",
+        responseType: "embedding_reset_response",
+        invoke: (client) => client.embeddingReset({ runtime, scope: "index" }),
+      },
+      {
+        name: "embeddingCalibrate",
+        expectedType: "embedding_calibrate",
+        responseType: "embedding_calibrate_response",
+        invoke: (client) =>
+          client.embeddingCalibrate({ runtime, persist: false }),
+      },
+    ]);
+  });
+
+  test("embeddingConfigure forwards the patch, api_key included, and resolves the snapshot", async () => {
+    const { client, socket } = createFakeClient();
+    const patch: EmbeddingConfigurePatch = {
+      enabled: true,
+      backend: "endpoint",
+      endpoint: {
+        kind: "openai",
+        base_url: "https://api.example.com/v1",
+        model: "text-embedding-3-small",
+        dimensions: 1536,
+      },
+      // O-18: the write-only credential travels on the request only.
+      api_key: "sk-test",
+    };
+    const pending = client.embeddingConfigure({ runtime, patch });
+    const sent = sentCommand(socket);
+    expect(sent).toMatchObject({
+      type: "embedding_configure",
+      runtime,
+      patch,
+    });
+    const response = {
+      type: "embedding_configure_response",
+      request_id: sent.request_id,
+      success: true,
+      settings: null,
+      requires_rebuild: true,
+    };
+    socket.receive(response);
+    expect(await pending).toMatchObject(response);
+    client.close();
+  });
+
+  test("embeddingReset resolves the removed-space count and rebuild flag", async () => {
+    const { client, socket } = createFakeClient();
+    const pending = client.embeddingReset({ runtime, scope: "all" });
+    const response = {
+      type: "embedding_reset_response",
+      request_id: sentCommand(socket).request_id,
+      success: true,
+      removed_spaces: 2,
+      requires_rebuild: true,
+    };
+    socket.receive(response);
+    expect(await pending).toMatchObject(response);
     client.close();
   });
 });
