@@ -1,3 +1,4 @@
+import { readEmbeddingBuildStatusSnapshot } from "@/cli/hooks/use-embedding-build-status";
 import type { EmbeddingDeviceSummary } from "@/types/embedding-protocol";
 
 /**
@@ -90,6 +91,55 @@ export function getEmbeddingDeviceSummary(
   });
   return deduped;
 }
+
+/**
+ * A5's provider: project the current build status into D1's wire shape.
+ *
+ * Synchronous on purpose — D2's `getEmbeddingDeviceSummary` is called from the
+ * `device_status` broadcast, which must not await a `state.json` read. The A5
+ * cache answers immediately and refreshes itself at ≤0.5 Hz in the background
+ * (`readEmbeddingBuildStatusSnapshot`), so the first emission after a cold
+ * start can be `null` and the next one (inside the 5 s TTL) carries the build.
+ *
+ * Only a live or recently finished build is reported: a disabled feature or an
+ * idle space returns `null`, so `device_status` omits the field entirely. No
+ * timer is started here — the polling cadence belongs to the A5 hook; a
+ * listener-only process gets its refresh from this call itself.
+ */
+export function readEmbeddingBuildDeviceSummary(
+  agentId: string,
+): EmbeddingDeviceSummary | null {
+  const status = readEmbeddingBuildStatusSnapshot(agentId);
+  if (status === null) return null;
+  const build = status.build;
+  if (build === null || build === undefined) return null;
+  const running = build.state === "running" || build.state === "cancelling";
+  const summary: EmbeddingDeviceSummary = {
+    enabled: status.enabled,
+    state: build.state,
+    space_id: status.spaceId,
+    model: status.model,
+  };
+  if (running) {
+    if (build.progress !== null && build.progress !== undefined) {
+      summary.progress = build.progress;
+    }
+    if (build.processedChunks !== undefined) {
+      summary.processed_chunks = build.processedChunks;
+    }
+    if (build.totalChunks !== undefined) {
+      summary.total_chunks = build.totalChunks;
+    }
+    summary.eta_ms = build.etaMs ?? null;
+  }
+  if (build.state === "failed") summary.failure = build.error ?? null;
+  return summary;
+}
+
+// A5 wiring (48-2 §3.1/§4.9): the real projection replaces the null reader.
+// Tests and alternate hosts may still override or clear it through
+// `setEmbeddingDeviceSummaryProvider`; TTL/dedup remain D2's.
+setEmbeddingDeviceSummaryProvider(readEmbeddingBuildDeviceSummary);
 
 /** Drop every cached summary; used by tests after changing the provider. */
 export function resetEmbeddingDeviceSummaryCache(): void {
