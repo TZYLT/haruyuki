@@ -1,9 +1,20 @@
 import { getLocalBackendMemoryFilesystemRoot } from "@/backend/local/paths";
 import {
+  type EmbeddingDegradeReason,
+  embeddingMetrics,
+} from "./embedding-metrics";
+import {
   createRecallDeadline,
   freezeRecallDeadline,
   type RecallDeadline,
 } from "./recall-deadline";
+import {
+  fuseRecallCandidates,
+  RECALL_FUSION_DEFAULTS,
+  type RecallFusedCandidate,
+  type RecallFusionOptions,
+  type RecallFusionResult,
+} from "./recall-fusion";
 import { selectRecallEntries } from "./recall-orchestrator";
 import {
   RECALL_DEFAULTS,
@@ -11,6 +22,7 @@ import {
   type RecallBackendPort,
   type RecallCandidate,
   type RecallDecision,
+  type RecallEntry,
   type RecallOptions,
   type RecallQueryTerms,
   type RecallScope,
@@ -23,6 +35,7 @@ import {
   recallQueryTerms,
 } from "./recall-query";
 import { buildRecallSources } from "./recall-sources";
+import { partitionRecallCandidates } from "./recall-vector-source";
 
 /**
  * The recall turn: assemble the scope, ask both sources, choose, record.
@@ -78,6 +91,20 @@ export type RecallRequest = {
   /** The vector arm when the host has one; injected, as the encoder lives above this layer. */
   vectorSource?: RecallSourcePort;
   /**
+   * The two-arm fusion tunables: `w_vector`, `k`, the relative ratio and the
+   * per-arm depth.
+   *
+   * Supplied by the host from the D3 settings (`recallEmbeddingWeight`,
+   * `recallEmbeddingCandidateDepth`) — this layer reads no settings, so a
+   * fixture can assert a weight without a settings file. Omitted entirely means
+   * {@link RECALL_FUSION_DEFAULTS}: 0.5:0.5 at `k = 60`, top × 0.35.
+   *
+   * Ignored on the lexical-only path (no vector source, an arm that produced
+   * nothing, or `vectorWeight: 0`): that path keeps the pre-fusion behaviour
+   * bit for bit, so the vector arm can never perturb a turn it did not serve.
+   */
+  fusion?: RecallFusionOptions;
+  /**
    * An already-started budget. Omitted by the turn path, which lets
    * `options.timeoutMs` define one; supplied by callers that want to share a
    * budget — and by tests, which cannot make `Date.now` advance inside one
@@ -130,6 +157,248 @@ function emptyDiagnostics(
   return { threshold, candidates, sources };
 }
 
+/** Monotonic clock for the round's telemetry; it never decides anything. */
+function nowMs(): number {
+  return performance.now();
+}
+
+type RecallArmPartition = {
+  lexical: RecallCandidate[];
+  vector: RecallCandidate[];
+};
+
+/** The merged list the selector runs on, plus what the merge looked like. */
+type FusedRecallCandidates = RecallArmPartition & {
+  /** Fused candidates when both arms contributed, else the untouched flat list. */
+  candidates: readonly RecallCandidate[];
+  /** `null` on the lexical-only path, which is kept bit for bit. */
+  fusion: RecallFusionResult | null;
+  /** Wall-clock spent in the merge; `0` when it was skipped. */
+  fusionMs: number;
+  /** The relative floor the selector will apply (the fusion ratio when it ran). */
+  minScoreRatio: number;
+  /** The per-arm depth the merge enforced. */
+  candidateDepth: number;
+};
+
+/**
+ * One arm weight, clamped the way `fuseRecallCandidates` clamps it.
+ *
+ * Read here as well because the service has to decide *whether* to fuse, and
+ * `0` means "lexical only" — not "fuse and let the vector scores vanish".
+ */
+function resolveVectorWeight(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return RECALL_FUSION_DEFAULTS.vectorWeight;
+  }
+  return Math.min(1, Math.max(0, value));
+}
+
+function resolveCandidateDepth(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return RECALL_FUSION_DEFAULTS.candidateDepth;
+  }
+  return Math.max(1, Math.trunc(value));
+}
+
+/**
+ * Replace the first arm's text with the vector arm's when both found the unit.
+ *
+ * RRF keys on `fingerprint`, so a two-arm hit is one entry — but the two arms
+ * render the *same* unit differently: the lexical arm truncates from the head of
+ * the message/excerpt, while B4's vector window is centred on the matched chunk
+ * (focus 300 + one neighbour, ≤400) and carries the memory title prefix
+ * (48-2 §4.3, R-33). When both arms agree the unit is relevant, the hit-centred
+ * window is the better context, so the merged entry keeps the vector arm's text
+ * and the line span that text was cut from. Lexical-only entries (and every
+ * turn without a vector arm) keep the lexical text untouched.
+ */
+function preferVectorText(
+  fused: readonly RecallFusedCandidate[],
+  vector: readonly RecallCandidate[],
+): RecallFusedCandidate[] {
+  const byFingerprint = new Map(
+    vector.map((candidate) => [candidate.fingerprint, candidate]),
+  );
+  return fused.map((candidate) => {
+    if (!candidate.arms.includes("vector")) return candidate;
+    const vectorCandidate = byFingerprint.get(candidate.fingerprint);
+    if (vectorCandidate === undefined) return candidate;
+    return {
+      ...candidate,
+      text: vectorCandidate.text,
+      ...(vectorCandidate.startLine === undefined
+        ? {}
+        : { startLine: vectorCandidate.startLine }),
+      ...(vectorCandidate.endLine === undefined
+        ? {}
+        : { endLine: vectorCandidate.endLine }),
+      ...(vectorCandidate.focusChar === undefined
+        ? {}
+        : { focusChar: vectorCandidate.focusChar }),
+      ...(vectorCandidate.chunkIndex === undefined
+        ? {}
+        : { chunkIndex: vectorCandidate.chunkIndex }),
+    };
+  });
+}
+
+/**
+ * Split the flat two-phase list back into arms and fuse it.
+ *
+ * Three fallbacks keep the lexical-only path *bit for bit* the pre-fusion one:
+ * no vector source ran, the vector arm produced no candidate (missing index, a
+ * spent budget, an encoder that cannot answer — 48-1 §6.9 says fall back to
+ * lexical), or the user set `vectorWeight: 0` (lexical only). In those cases the
+ * original list is returned unchanged, so `entries`, `threshold`, status and the
+ * candidate count are exactly what feature ② produced.
+ */
+function fuseRecallArms(
+  candidates: readonly RecallCandidate[],
+  options: RecallFusionOptions | undefined,
+  selectorRatio: number,
+): FusedRecallCandidates {
+  const partition = partitionRecallCandidates(candidates);
+  const vectorWeight = resolveVectorWeight(options?.vectorWeight);
+  const candidateDepth = resolveCandidateDepth(options?.candidateDepth);
+  const requestedRatio = options?.minScoreRatio;
+  const minScoreRatio =
+    requestedRatio === undefined || !Number.isFinite(requestedRatio)
+      ? selectorRatio
+      : Math.max(0, requestedRatio);
+  if (partition.vector.length === 0) {
+    // Nothing from the vector arm: the flat list is already lexical-only.
+    return {
+      ...partition,
+      candidates,
+      fusion: null,
+      fusionMs: 0,
+      minScoreRatio: selectorRatio,
+      candidateDepth,
+    };
+  }
+  if (!(vectorWeight > 0)) {
+    // `vectorWeight: 0` means "lexical only". Drop the arm's candidates instead
+    // of letting them through unfused, or the setting would not mean anything.
+    return {
+      ...partition,
+      candidates: partition.lexical,
+      fusion: null,
+      fusionMs: 0,
+      minScoreRatio: selectorRatio,
+      candidateDepth,
+    };
+  }
+  const startedAt = nowMs();
+  const fusion = fuseRecallCandidates(
+    { lexical: partition.lexical, vector: partition.vector },
+    {
+      vectorWeight,
+      minScoreRatio,
+      ...(options?.k === undefined ? {} : { k: options.k }),
+      candidateDepth,
+    },
+  );
+  return {
+    ...partition,
+    candidates: preferVectorText(fusion.candidates, partition.vector),
+    fusion,
+    fusionMs: Math.max(0, nowMs() - startedAt),
+    minScoreRatio,
+    candidateDepth,
+  };
+}
+
+function degradeReasonFor(
+  status: RecallSourceDiagnostic["status"],
+): EmbeddingDegradeReason | undefined {
+  switch (status) {
+    case "degraded":
+      return "degraded";
+    case "unavailable":
+      return "unavailable";
+    case "failed":
+      return "failed";
+    case "empty":
+      return "empty";
+    case "searched":
+      return undefined;
+  }
+}
+
+/**
+ * Record this round's numbers for D6's status face (48-1 §7.5).
+ *
+ * One call, on the way out, after the selection is final. It reads only counts
+ * (arm candidates, merged/injected totals, degrade codes, timings) — never
+ * passage text — and never feeds back into the decision. A degraded vector arm
+ * is recorded as a degrade reason and nothing else: it is not a timeout, so the
+ * breaker in `recall-runtime.ts` (which reads `timedOut`/`status` only) is
+ * untouched by this function.
+ *
+ * Chunk-level counts (`chunks.hits`) are not visible at this layer: E2/B2 report
+ * parent hits after aggregation, so only `parents` is recorded and the
+ * pre-aggregation hit count stays `0`.
+ */
+function recordRecallMetrics(input: {
+  fused: FusedRecallCandidates;
+  diagnostics: readonly RecallSourceDiagnostic[];
+  entries: readonly RecallEntry[];
+  timings: { lexicalMs: number; vectorMs: number; totalMs: number };
+}): void {
+  const fusedResult = input.fused.fusion;
+  const armsByFingerprint = new Map<string, readonly RecallArm[]>();
+  if (fusedResult !== null) {
+    for (const candidate of fusedResult.candidates) {
+      armsByFingerprint.set(candidate.fingerprint, candidate.arms);
+    }
+  }
+  const injectedByArm = (arm: RecallArm): number =>
+    input.entries.filter((entry) => {
+      const arms = armsByFingerprint.get(entry.fingerprint);
+      // Without a merge every injected entry came from the lexical arm.
+      return arms === undefined ? arm === "lexical" : arms.includes(arm);
+    }).length;
+  const degrade: EmbeddingDegradeReason[] = [];
+  for (const diagnostic of input.diagnostics) {
+    if (diagnostic.source !== "vector") continue;
+    const reason = degradeReasonFor(diagnostic.status);
+    if (reason !== undefined) degrade.push(reason);
+  }
+  const depth = input.fused.candidateDepth;
+  embeddingMetrics.record({
+    lexical: {
+      candidates: input.fused.lexical.length,
+      injected: injectedByArm("lexical"),
+    },
+    vector: {
+      candidates: input.fused.vector.length,
+      injected: injectedByArm("vector"),
+    },
+    chunks: { parents: input.fused.vector.length },
+    bothArms:
+      fusedResult === null
+        ? 0
+        : fusedResult.candidates.filter(
+            (candidate) => candidate.arms.length > 1,
+          ).length,
+    fusedIn:
+      fusedResult === null
+        ? 0
+        : Math.min(input.fused.lexical.length, depth) +
+          Math.min(input.fused.vector.length, depth),
+    fusedOut: fusedResult === null ? 0 : fusedResult.candidates.length,
+    injected: input.entries.length,
+    degrade,
+    timings: {
+      lexicalMs: input.timings.lexicalMs,
+      vectorMs: input.timings.vectorMs,
+      fusionMs: input.fused.fusionMs,
+      totalMs: input.timings.totalMs,
+    },
+  });
+}
+
 /**
  * One turn's search, as the two phases the deadline treats differently.
  *
@@ -153,6 +422,12 @@ export async function searchRecallPhases(
   candidates: RecallCandidate[];
   diagnostics: RecallSourceDiagnostic[];
   timedOut: boolean;
+  /**
+   * Wall-clock per arm, for D6's per-round telemetry (48-1 §7.5). Recorded,
+   * never read: no policy decision depends on it, so a fake clock cannot change
+   * what a turn does.
+   */
+  timings: { lexicalMs: number; vectorMs: number };
 }> {
   const candidates: RecallCandidate[] = [];
   const diagnostics: RecallSourceDiagnostic[] = [];
@@ -179,19 +454,29 @@ export async function searchRecallPhases(
 
   // Phase 1 — lexical. Its bodies never await, so the cooperative checkpoints
   // inside them are still the only thing bounding this phase.
+  const lexicalStartedAt = nowMs();
   await searchArm("lexical");
+  const lexicalMs = Math.max(0, nowMs() - lexicalStartedAt);
   // The phase boundary: from here the turn's verdict is fixed.
   const timedOut = freezeRecallDeadline(deadline).expired();
   // Phase 2 — vector. Empty until the encoder and its source land; the structure
   // is here so wiring that arm is additive.
+  const vectorStartedAt = nowMs();
   await searchArm("vector");
+  const vectorMs = Math.max(0, nowMs() - vectorStartedAt);
 
-  return { candidates, diagnostics, timedOut };
+  return {
+    candidates,
+    diagnostics,
+    timedOut,
+    timings: { lexicalMs, vectorMs },
+  };
 }
 
 export async function runRecall(
   request: RecallRequest,
 ): Promise<RecallDecision> {
+  const turnStartedAt = nowMs();
   const options = resolveOptions(request.options);
   const query = recallQueryTerms(request.userText, {
     ...RECALL_QUERY_DEFAULTS,
@@ -273,20 +558,33 @@ export async function runRecall(
     };
   }
 
-  const { candidates, diagnostics, timedOut } = await searchRecallPhases(
-    sources,
-    query,
-    {
-      agentId: request.agentId,
-      currentConversationId: request.conversationId,
-    },
-    deadline,
+  const { candidates, diagnostics, timedOut, timings } =
+    await searchRecallPhases(
+      sources,
+      query,
+      {
+        agentId: request.agentId,
+        currentConversationId: request.conversationId,
+      },
+      deadline,
+    );
+
+  // E3: the two flat arms become one list here, and from this point on the
+  // existing selector/dedup path runs on fused scores. On the lexical-only path
+  // (see `fuseRecallArms`) `fused.candidates` *is* the pre-fusion list, so a turn
+  // without a usable vector arm is byte-for-byte what feature ② produced.
+  const fused = fuseRecallArms(
+    candidates,
+    request.fusion,
+    options.minScoreRatio,
   );
 
   const selection = selectRecallEntries({
-    candidates,
+    candidates: fused.candidates,
     limit: options.limit,
-    minScoreRatio: options.minScoreRatio,
+    // The fusion layer's ratio is the same relative floor, now applied to RRF
+    // scores; fall back to the ② setting when no fusion options were supplied.
+    minScoreRatio: fused.minScoreRatio,
     diversity: options.diversity,
     excerptCharacters: options.excerptCharacters,
     totalCharacters: options.totalCharacters,
@@ -307,9 +605,21 @@ export async function runRecall(
     });
   }
 
+  // D6 telemetry: one call, after the round is final. It observes counts and
+  // never feeds back into the decision.
+  recordRecallMetrics({
+    fused,
+    diagnostics,
+    entries: selection.entries,
+    timings: {
+      ...timings,
+      totalMs: Math.max(0, nowMs() - turnStartedAt),
+    },
+  });
+
   const settled = emptyDiagnostics(
     selection.threshold,
-    candidates.length,
+    fused.candidates.length,
     diagnostics,
   );
   // The status cascade answers "what did the turn produce"; the deadline flag
@@ -342,7 +652,10 @@ export async function runRecall(
       reason: diagnostics[0]?.reason,
       diagnostics: settled,
     };
-  } else if (candidates.length > 0 && selection.deduped === candidates.length) {
+  } else if (
+    fused.candidates.length > 0 &&
+    selection.deduped === fused.candidates.length
+  ) {
     decision = {
       entries: [],
       status: "suppressed",
