@@ -1237,6 +1237,25 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
+## 6. 运行时下载的第三方内容（不随 npm 包分发）
+
+向量召回的内置模型与 ONNX 运行时**不打包进 `haruyuki` 发布物**：首次启用时从 npm registry
+或模型站点下载到 `<harness cache>/embedding/` 缓存目录，可随时删除；`npm pack` 清单里
+不包含它们（`scripts/release.mjs` 与 `scripts/check-build-leaks.mjs` 会核对）。
+
+| 内容 | 版本 | 许可 | 来源 |
+|---|---|---|---|
+| `onnxruntime-node` | 1.31.1 | MIT | npm registry（下载到运行时缓存，按平台裁剪） |
+| `onnxruntime-common` | 1.30.0 | MIT | npm registry |
+| `@huggingface/tokenizers` | 0.2.0 | Apache-2.0 | npm registry |
+| `bge-small-zh-v1.5`（ONNX 转换） | q8 / fp32 | MIT | hf-mirror → huggingface.co → ModelScope |
+| `bge-m3`（ONNX 转换） | q8 | MIT | 同上 |
+| `Qwen3-Embedding-0.6B` | 0.6B | Apache-2.0 | 同上（实验项，需手动选择） |
+
+下载前向导会显示体积与许可；`onnxruntime-node` 的权重与二进制在下载后按 sha512 校验。
+模型转换仓来自社区（`Xenova/…`），原模型许可以上表为准；本项目不重新分发权重。
+`Qwen3-Embedding` 的外部数据文件在首次使用时另行下载，同样不进本包。
+
 ## 7. 已知缺口
 
 无。闭包内所有包都已解析到 `node_modules` 中的实体。

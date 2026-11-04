@@ -540,6 +540,22 @@ haruyuki import --from ./work.hryk                   # 正式恢复（手敲 ove
 | `/recall` | `[设置] [值]` | 配置被动召回（同 `/memory recall`） |
 | `/recompile` | — | 重新编译当前 agent + 会话 —— **会使缓存失效，增加开销** |
 
+### 顶层命令：向量召回嵌入（`/recall embedding`）
+
+| 命令 | 参数 | 说明 |
+|---|---|---|
+| `/recall embedding` | — | 查看状态（空间/模型/覆盖率/构建进度）；未配置时给 setup 指引 |
+| `/recall embedding setup` | — | 首次配置向导：内置模型或外部端点；校准、GPU 角色、构建选项 |
+| `/recall embedding on` | — | 打开向量臂（首次需先 setup；已配置则直接启用） |
+| `/recall embedding off` | — | 关闭向量臂（索引保留，可随时再开） |
+| `/recall embedding build` | `[--full] [--keep-after-exit]` | 后台构建：默认增量，`--full` 全量；`--keep-after-exit` 让 detached 子进程在退出后继续 |
+| `/recall embedding status` | — | 打印状态文本（同裸命令） |
+| `/recall embedding cancel` | — | 取消本进程启动的构建（跨进程 detached 构建取消不了） |
+| `/recall embedding reset` | `[--all\|--model <id>] [--confirm]` | 先预览、再 `--confirm` 删除向量空间；转录与设置不动 |
+
+> 默认关闭。开启后与被动召回的词法臂并行、按加权 RRF 融合；模型/端点不可用时静默回退词法，状态行与 `/recall embedding status` 给出原因。
+> 索引是派生缓存：不进备份，删除会话/agent 会级联删除对应向量。CLI 同样可用（`haruyuki recall embedding ...`）；headless 首次配置可用 `--recall-embedding on --recall-embedding-backend builtin|endpoint`（TUI 下这些 flag 也会生效）。
+
 ### 顶层命令：反思
 
 | 命令 | 参数 | 说明 |
