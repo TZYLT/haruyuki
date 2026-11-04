@@ -226,6 +226,19 @@ export function displayValue(item: SettingsItem, raw: string | null): string {
 }
 
 /**
+ * What an inline editor opens with.
+ *
+ * A `secret` row's `read` is a presence word ("set (write-only)"), never the
+ * credential, so seeding the masked editor with it would save that word as the
+ * key on a bare Enter. Secret rows start empty; every other kind starts from
+ * its value (`""` when the read failed).
+ */
+export function editorDraft(item: SettingsItem, raw: string | null): string {
+  if (item.kind === "secret") return "";
+  return raw ?? "";
+}
+
+/**
  * The next canonical value for `←→`, or `null` when the row does not cycle.
  *
  * Toggles flip; selects wrap through their own option list; numbers step and clamp

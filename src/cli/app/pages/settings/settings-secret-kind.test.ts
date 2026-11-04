@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   cycleValue,
   displayValue,
+  editorDraft,
   type SettingsItem,
   type SettingsKind,
   validateValue,
@@ -50,6 +51,18 @@ describe("the secret settings kind", () => {
     expect(displayValue(SECRET_ITEM, "hidden (write-only)")).toBe(
       "hidden (write-only)",
     );
+  });
+
+  test("the masked editor opens empty, never seeded with the presence word", () => {
+    // Seeding "hidden (write-only)" would be invisible behind the mask, and a
+    // bare Enter would then write that word as the endpoint API key.
+    expect(editorDraft(SECRET_ITEM, "hidden (write-only)")).toBe("");
+    expect(editorDraft(SECRET_ITEM, "set (write-only)")).toBe("");
+    expect(editorDraft(SECRET_ITEM, null)).toBe("");
+    // Every other kind still opens on its value, and says so when unreadable.
+    const text: SettingsItem = { ...SECRET_ITEM, kind: "text", read: () => "" };
+    expect(editorDraft(text, "bge-small-zh-v1.5")).toBe("bge-small-zh-v1.5");
+    expect(editorDraft(text, null)).toBe("");
   });
 
   test("a secret value never cycles with the arrows", () => {

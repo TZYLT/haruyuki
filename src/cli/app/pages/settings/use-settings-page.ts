@@ -17,6 +17,7 @@ import {
 } from "@/cli/app/pages/settings/permissions-model";
 import {
   cycleValue,
+  editorDraft,
   GROUP_ROW_PREFIX,
   groupRows,
   PERMISSION_ROW_PREFIX,
@@ -420,7 +421,9 @@ export function useSettingsPage(view: AppViewProps): SettingsPageState {
     openEditor(
       { kind: "setting", itemId: item.id },
       item.label,
-      item.read(ctx) ?? "",
+      // A secret row's read is a presence word; the masked editor must start
+      // empty rather than seed the word that would then be saved as the key.
+      editorDraft(item, item.read(ctx)),
     );
   };
 
