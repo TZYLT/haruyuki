@@ -521,6 +521,57 @@ describe("production backend", () => {
     });
   });
 
+  test("cancel only stops the build whose id the client named", async () => {
+    const cancels: string[] = [];
+    const matched = backendHarness({
+      runtime: {
+        readStatus: async () =>
+          runtimeStatus({ buildSnapshot: BUILD_SNAPSHOT }),
+        cancel: async () => {
+          cancels.push("matched");
+          return "Cancelled the embedding build; committed chunks stay.";
+        },
+      },
+    });
+    expect(await matched.buildBackend().cancel(AGENT, "build-7")).toEqual({
+      ok: true,
+      value: { cancelled: true },
+    });
+
+    const mismatched = backendHarness({
+      runtime: {
+        readStatus: async () =>
+          runtimeStatus({ buildSnapshot: BUILD_SNAPSHOT }),
+        cancel: async () => {
+          cancels.push("mismatched");
+          return "Cancelled the embedding build; committed chunks stay.";
+        },
+      },
+    });
+    expect(await mismatched.buildBackend().cancel(AGENT, "build-8")).toEqual({
+      ok: true,
+      value: { cancelled: false },
+    });
+    // A stale id must not cancel the live build as a side effect.
+    expect(cancels).toEqual(["matched"]);
+  });
+
+  test("cancel treats an unreadable live build as no match, not as licence to cancel", async () => {
+    const h = backendHarness({
+      runtime: {
+        readStatus: async () => {
+          throw new Error("state.json is unreadable");
+        },
+        cancel: async () =>
+          "Cancelled the embedding build; committed chunks stay.",
+      },
+    });
+    expect(await h.buildBackend().cancel(AGENT, "build-7")).toEqual({
+      ok: true,
+      value: { cancelled: false },
+    });
+  });
+
   test("reset maps index/all onto A2's targets and parses the receipt", async () => {
     const scopes: unknown[] = [];
     const h = backendHarness({

@@ -423,6 +423,32 @@ function buildConfigured(settings: ResolvedEmbeddingSettings): boolean {
 }
 
 /**
+ * The id of the live build, when the runtime can name one.
+ *
+ * `embedding_cancel`'s response promises `cancelled: false` when "no live build
+ * matched the id", so a supplied id must be compared against the live build
+ * before cancelling. A runtime that cannot read status, or a build that has no
+ * id yet, cannot match: the id-filtered request is answered `cancelled: false`
+ * rather than silently cancelling whichever build happens to be running.
+ */
+async function liveBuildId(
+  runtime: EmbeddingRuntimePort,
+  agentId: string,
+): Promise<string | null> {
+  const readStatus = runtime.readStatus;
+  if (readStatus === undefined) return null;
+  try {
+    const status = await readStatus.call(runtime, {
+      agentId,
+      conversationId: null,
+    });
+    return status?.buildSnapshot?.buildId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The production {@link EmbeddingCommandBackend}.
  *
  * Thin by design: settings go through D3's writer, build/cancel/reset/status
@@ -586,9 +612,14 @@ export function createEmbeddingCommandBackend(
         return failureOf(error);
       }
     },
-    async cancel(agentId, _buildId) {
+    async cancel(agentId, buildId) {
       const cancel = runtime.cancel;
       if (cancel === undefined) return await unavailable();
+      if (buildId !== undefined && buildId.length > 0) {
+        const liveId = await liveBuildId(runtime, agentId);
+        if (liveId !== buildId)
+          return { ok: true, value: { cancelled: false } };
+      }
       try {
         const receipt = await cancel.call(runtime, {
           agentId,
