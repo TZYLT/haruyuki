@@ -230,19 +230,27 @@ export function createWorkerCalibrationProbe(
         const worker =
           options.worker ??
           (options.workerFactory ?? defaultWorkerFactory(options))();
-        await worker.start();
-        const initialization = await worker.init({
-          runtimeDir: options.assets.runtimeDir,
-          modelPath: options.assets.modelPath,
-          tokenizerPath: options.assets.tokenizerPath,
-          maxTokens: options.assets.manifest.maxTokens,
-          // Calibration measures the CPU path the query arm will actually use.
-          executionProviders: ["cpu"],
-          ...(options.threads !== undefined && options.threads > 0
-            ? { intraOpThreads: options.threads }
-            : {}),
-        });
-        return { worker, dim: initialization.dim };
+        try {
+          await worker.start();
+          const initialization = await worker.init({
+            runtimeDir: options.assets.runtimeDir,
+            modelPath: options.assets.modelPath,
+            tokenizerPath: options.assets.tokenizerPath,
+            maxTokens: options.assets.manifest.maxTokens,
+            // Calibration measures the CPU path the query arm will actually use.
+            executionProviders: ["cpu"],
+            ...(options.threads !== undefined && options.threads > 0
+              ? { intraOpThreads: options.threads }
+              : {}),
+          });
+          return { worker, dim: initialization.dim };
+        } catch (error) {
+          // A successful `start()` whose `init()` fails still owns a live
+          // child process; releasing it here keeps a retried measurement from
+          // leaking one worker per attempt.
+          discardWorker(worker);
+          throw error;
+        }
       })().catch((error: unknown) => {
         session = null;
         throw error;
@@ -333,7 +341,7 @@ export function createWorkerCalibrationProbe(
       try {
         worker = (await pending).worker;
       } catch {
-        // The worker never reached readiness; its failed start already cleaned up.
+        // The worker never reached readiness; `open()` already released it.
         return;
       }
       try {
@@ -348,6 +356,25 @@ export function createWorkerCalibrationProbe(
       }
     },
   };
+}
+
+/**
+ * Best-effort release of a worker that will never serve a measurement.
+ *
+ * `EmbeddingWorkerClient.dispose()` is synchronous: it rejects pending requests
+ * and kills the child process, which is exactly what a failed `init()` needs.
+ * A worker that only exposes `shutdown()` gets that instead.
+ */
+function discardWorker(worker: EmbeddingBuildWorker): void {
+  try {
+    if (typeof worker.dispose === "function") {
+      worker.dispose();
+      return;
+    }
+    void worker.shutdown?.({ timeoutMs: 1_000 }).catch(() => undefined);
+  } catch {
+    // A worker that already died has nothing left to release.
+  }
 }
 
 function defaultWorkerFactory(
@@ -559,20 +586,28 @@ export async function runEmbeddingCalibration(
       assets: options.assets,
       ...(options.probeOptions ?? {}),
     });
-  const result = await calibrateEmbedding({
-    environment: buildEmbeddingCalibrationEnvironment(
-      options.settings,
-      options.assets,
-      options.environment ?? {},
-    ),
-    probe,
-    ...(options.gpuProbe === undefined ? {} : { gpuProbe: options.gpuProbe }),
-    requestedGpuRole: options.settings.gpu,
-    ...(options.budgetMs === undefined ? {} : { budgetMs: options.budgetMs }),
-    ...(options.now === undefined ? {} : { now: options.now }),
-    ...(options.measuredAt === undefined
-      ? {}
-      : { measuredAt: options.measuredAt }),
-  });
+  let result: EmbeddingCalibrationResult;
+  try {
+    result = await calibrateEmbedding({
+      environment: buildEmbeddingCalibrationEnvironment(
+        options.settings,
+        options.assets,
+        options.environment ?? {},
+      ),
+      probe,
+      ...(options.gpuProbe === undefined ? {} : { gpuProbe: options.gpuProbe }),
+      requestedGpuRole: options.settings.gpu,
+      ...(options.budgetMs === undefined ? {} : { budgetMs: options.budgetMs }),
+      ...(options.now === undefined ? {} : { now: options.now }),
+      ...(options.measuredAt === undefined
+        ? {}
+        : { measuredAt: options.measuredAt }),
+    });
+  } catch (error) {
+    // The pass throws only for invalid input; the caller never receives the
+    // probe in that case, so this call would otherwise leak its worker.
+    await probe.dispose().catch(() => undefined);
+    throw error;
+  }
   return { result, probe };
 }

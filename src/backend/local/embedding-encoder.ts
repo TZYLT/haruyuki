@@ -271,8 +271,8 @@ class BuiltinEncoderEntry {
       }
       session.worker.dispose?.();
     } catch {
-      // The session never reached readiness; the failed start already released
-      // whatever it had. Nothing else to stop.
+      // The session never reached readiness; `initialize()` already released
+      // the worker it created. Nothing else to stop.
     }
   }
 
@@ -302,18 +302,36 @@ class BuiltinEncoderEntry {
     const workerPath =
       configuration.workerPath ?? resolveEmbeddingWorkerEntryForRuntime().path;
     const worker = configuration.createWorker(workerPath);
-    await worker.start();
-    await worker.init({
-      runtimeDir: assets.runtimeDir,
-      modelPath: assets.modelPath,
-      tokenizerPath: assets.tokenizerPath,
-      maxTokens: assets.manifest.maxTokens,
-      executionProviders: [...EMBEDDING_QUERY_EXECUTION_PROVIDERS],
-      ...(configuration.threads > 0
-        ? { intraOpThreads: configuration.threads }
-        : {}),
-    });
+    try {
+      await worker.start();
+      await worker.init({
+        runtimeDir: assets.runtimeDir,
+        modelPath: assets.modelPath,
+        tokenizerPath: assets.tokenizerPath,
+        maxTokens: assets.manifest.maxTokens,
+        executionProviders: [...EMBEDDING_QUERY_EXECUTION_PROVIDERS],
+        ...(configuration.threads > 0
+          ? { intraOpThreads: configuration.threads }
+          : {}),
+      });
+    } catch (error) {
+      // `start()` may have succeeded even when `init()` fails (a missing
+      // tokenizer, a runtime load error, a worker error frame). Without this
+      // the failed session is dropped and its child process stays alive; the
+      // retry path would then spawn a second one.
+      discardEmbeddingWorker(worker);
+      throw error;
+    }
     return { worker, queryInstruction: assets.manifest.queryInstruction };
+  }
+}
+
+/** Best-effort release of a worker that will never serve a request. */
+function discardEmbeddingWorker(worker: EmbeddingEncoderWorker): void {
+  try {
+    worker.dispose?.();
+  } catch {
+    // A worker that already died has nothing left to release.
   }
 }
 

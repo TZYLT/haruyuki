@@ -29,6 +29,7 @@ import {
   createDirectMlCalibrationProbe,
   createGpuTrialBudget,
   createWorkerCalibrationProbe,
+  type EmbeddingWorkerCalibrationProbe,
   readDiskFreeBytesDefault,
   runEmbeddingCalibration,
 } from "@/backend/local/embedding-calibration-probe";
@@ -247,6 +248,36 @@ describe("createWorkerCalibrationProbe", () => {
     expect(free).toBeGreaterThan(0);
   });
 
+  test("a failed worker init releases the worker it started, then retries", async () => {
+    const { worker, state } = fakeWorker();
+    let initAttempts = 0;
+    const flaky: EmbeddingBuildWorker = {
+      ...worker,
+      async init(options) {
+        initAttempts += 1;
+        if (initAttempts === 1) throw new Error("init failed");
+        return await worker.init(options);
+      },
+    };
+    const probe = createWorkerCalibrationProbe({
+      assets: assets(),
+      worker: flaky,
+    });
+
+    await expect(
+      probe.queryLatencyMs("query", { remainingMs: 5_000 }),
+    ).rejects.toThrow("init failed");
+    // `start()` succeeded; the child process must be released by `dispose()`.
+    expect(state.starts).toBe(1);
+    expect(state.disposes).toBe(1);
+
+    await probe.queryLatencyMs("query", { remainingMs: 5_000 });
+    expect(state.starts).toBe(2);
+    expect(state.disposes).toBe(1);
+    await probe.dispose();
+    expect(state.disposes).toBe(2);
+  });
+
   test("a failed worker start is retried on the next measurement", async () => {
     let attempts = 0;
     const { worker, state } = fakeWorker();
@@ -407,5 +438,30 @@ describe("runEmbeddingCalibration", () => {
     expect(result.result.snapshot.batch_throughput_per_s).toBeGreaterThan(0);
     expect(QUERY_LATENCY_SAMPLES).toBe(10);
     await probe.dispose();
+  });
+
+  test("disposes the probe it created when the pass throws", async () => {
+    let disposals = 0;
+    const probe: EmbeddingWorkerCalibrationProbe = {
+      queryLatencyMs: async () => 1,
+      batchEmbed: async () => ({ texts: 32, tokens: 1_000, elapsedMs: 1 }),
+      rssBytes: async () => 1,
+      diskFreeBytes: async () => 1,
+      async dispose() {
+        disposals += 1;
+      },
+    };
+
+    await expect(
+      runEmbeddingCalibration({
+        settings: settings(),
+        assets: assets(),
+        probe,
+        // An impossible chunker version makes fingerprinting throw.
+        environment: { chunkerVersion: 0 },
+      }),
+    ).rejects.toThrow();
+    // The caller never receives the probe on this path, so the callee owns it.
+    expect(disposals).toBe(1);
   });
 });

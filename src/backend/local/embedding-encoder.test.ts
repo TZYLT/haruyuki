@@ -33,6 +33,7 @@ const QUERY_INSTRUCTION = "为这个句子生成表示以用于检索相关文�
 class FakeEncoderWorker implements EmbeddingEncoderWorker {
   static instances: FakeEncoderWorker[] = [];
   static failNextStart = false;
+  static failNextInit = false;
 
   readonly initCalls: EmbeddingWorkerInitOptions[] = [];
   readonly embedCalls: string[][] = [];
@@ -45,6 +46,7 @@ class FakeEncoderWorker implements EmbeddingEncoderWorker {
   static reset(): void {
     FakeEncoderWorker.instances = [];
     FakeEncoderWorker.failNextStart = false;
+    FakeEncoderWorker.failNextInit = false;
   }
 
   async start(): Promise<unknown> {
@@ -58,6 +60,10 @@ class FakeEncoderWorker implements EmbeddingEncoderWorker {
   async init(
     options: EmbeddingWorkerInitOptions,
   ): Promise<EmbeddingWorkerInitResult> {
+    if (FakeEncoderWorker.failNextInit) {
+      FakeEncoderWorker.failNextInit = false;
+      throw new Error("fake worker init failed");
+    }
     this.initCalls.push(options);
     return { dim: 8, runtime: "node", maxTokens: 512, warmupMs: 1 };
   }
@@ -238,6 +244,28 @@ describe("createBuiltinQueryEncoder", () => {
     const vector = await encoder.encodeQuery("q");
     expect(vector).toBeInstanceOf(Float32Array);
     expect(FakeEncoderWorker.instances).toHaveLength(2);
+    await encoder.dispose();
+  });
+
+  test("disposes a started worker when init fails and retries with a new one", async () => {
+    FakeEncoderWorker.failNextInit = true;
+    const encoder = createBuiltinQueryEncoder(
+      builtinSettings(),
+      builtinOptions(),
+    );
+
+    await expect(encoder.encodeQuery("q")).rejects.toThrow(
+      "fake worker init failed",
+    );
+    expect(FakeEncoderWorker.instances).toHaveLength(1);
+    // The child process that `start()` brought up must not be leaked when the
+    // rest of the session cannot be used.
+    expect(FakeEncoderWorker.instances[0]?.disposed).toBe(true);
+
+    const vector = await encoder.encodeQuery("q");
+    expect(vector).toBeInstanceOf(Float32Array);
+    expect(FakeEncoderWorker.instances).toHaveLength(2);
+    expect(FakeEncoderWorker.instances[1]?.disposed).toBe(false);
     await encoder.dispose();
   });
 
