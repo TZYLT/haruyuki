@@ -175,7 +175,6 @@ export function EmbeddingWizard({
     }),
   );
   const stateRef = useRef(state);
-  const busyRef = useRef(false);
   const closedRef = useRef(false);
 
   // Step 4's list cursor lives here, not in the machine: it is navigation, not
@@ -224,8 +223,16 @@ export function EmbeddingWizard({
         listener: (next: EmbeddingWizardState) => void,
       ) => Promise<EmbeddingWizardState>,
     ) => {
-      if (busyRef.current) return;
-      busyRef.current = true;
+      // The machine's own busy state is the gate. Every runner commits its
+      // "started" phase synchronously before its first await, so a second
+      // keystroke for the same step is refused there and cannot race the write
+      // path. Gating on an in-flight-flag instead would swallow a legitimate
+      // action from a *different* step: skipping calibration moves to step 4
+      // while the measurement is still running, and pressing Enter on "Start
+      // build" then must not be dropped for the next few seconds. A runner whose
+      // step the user already left still lands, and the reducer's stale-result
+      // guards drop its outcome.
+      if (isEmbeddingWizardBusy(stateRef.current)) return;
       void action(stateRef.current, commit)
         .then((final) => {
           if (!closedRef.current) commit(final);
@@ -233,9 +240,6 @@ export function EmbeddingWizard({
         .catch(() => {
           // The runners turn dependency failures into state; nothing throws
           // here, and a thrown bug must not kill the overlay's render loop.
-        })
-        .finally(() => {
-          busyRef.current = false;
         });
     },
     [commit],

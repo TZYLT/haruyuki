@@ -456,6 +456,47 @@ describe("the embedding setup wizard", () => {
     }
   });
 
+  test("Start build still runs right after skipping a calibration that is still measuring", async () => {
+    let releaseCalibration: (result: EmbeddingWizardCalibration) => void =
+      () => undefined;
+    const measuring = new Promise<EmbeddingWizardCalibration>((resolve) => {
+      releaseCalibration = resolve;
+    });
+    const { tty, builds, saves, completions } = mount({
+      deps: {
+        isModelInstalled: async () => true,
+        isRuntimeInstalled: async () => true,
+        calibrate: () => measuring,
+      },
+    });
+    try {
+      await painted(tty);
+      await tty.press(ENTER, ENTER, ENTER);
+      await settle();
+      await settle();
+      expect(await painted(tty)).toContain("3/4 Calibration");
+
+      // "s" walks to step 4 while the measurement is still in flight. The only
+      // write path must not be swallowed by that stale action.
+      await tty.press("s");
+      await settle();
+      await tty.press(DOWN, DOWN, DOWN, ENTER);
+      await settle();
+      expect(builds).toHaveLength(1);
+      expect(saves).toHaveLength(1);
+
+      // The late measurement is dropped: it neither rewinds step 4 nor writes a
+      // second time.
+      releaseCalibration(fakeCalibration());
+      await settle();
+      expect(completions()).toHaveLength(1);
+      expect(builds).toHaveLength(1);
+      expect(saves).toHaveLength(1);
+    } finally {
+      tty.stop();
+    }
+  });
+
   test("An unmeasured calibration never paints a zero latency", async () => {
     const { tty } = mount({
       deps: {
