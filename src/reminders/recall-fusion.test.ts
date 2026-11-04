@@ -134,6 +134,43 @@ describe("the weighted RRF formula", () => {
     expect(fingerprints(first)).toEqual(["a:1", "z:1"]);
     expect(fingerprints(reversed)).toEqual(["a:1", "z:1"]);
   });
+
+  test("ranks an arm by its own score even when the caller concatenates corpora", () => {
+    // The live lexical arm appends the memory source's candidates after the
+    // transcript source's, so its list is *not* globally score-ordered. RRF
+    // ranks positionally: ranking the concatenation would put the weak
+    // transcript hit at rank 1 and the stronger memory hit at rank 2.
+    const result = fuseRecallCandidates({
+      lexical: [
+        candidate("transcript:weak", 1),
+        candidate("memory:strong", 9, "memory"),
+      ],
+      vector: [],
+    });
+
+    expect(fingerprints(result)).toEqual(["memory:strong", "transcript:weak"]);
+    expect(result.candidates[0]?.armRanks).toEqual({ lexical: 1 });
+    expect(scoreOf(result, "memory:strong")).toBeCloseTo(0.5 / 61, 12);
+    expect(scoreOf(result, "transcript:weak")).toBeCloseTo(0.5 / 62, 12);
+  });
+
+  test("the depth cut takes the arm's best candidates, not its first ones", () => {
+    const result = fuseRecallCandidates(
+      {
+        lexical: [
+          candidate("transcript:1", 1),
+          candidate("memory:9", 9, "memory"),
+          candidate("memory:8", 8, "memory"),
+        ],
+        vector: [],
+      },
+      { candidateDepth: 2 },
+    );
+
+    // Depth 2 must keep the two highest scores (memory:9, memory:8) and drop the
+    // lower-scored transcript hit that merely came first in the list.
+    expect(fingerprints(result)).toEqual(["memory:9", "memory:8"]);
+  });
 });
 
 describe("arm weights", () => {

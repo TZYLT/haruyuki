@@ -50,9 +50,15 @@ export const RECALL_FUSION_DEFAULTS = {
 } as const;
 
 export type RecallFusionInput = {
-  /** Lexical arm candidates, already in that arm's own score order. */
+  /**
+   * Lexical arm candidates. RRF ranks by position, so they must be in that arm's
+   * own score order; the strategy sorts defensively (`compareArmRank`) because
+   * the lexical arm's list is a concatenation of two corpora (transcript, then
+   * memory) and a missed sort would rank every memory hit below every transcript
+   * hit regardless of score.
+   */
   lexical: readonly RecallCandidate[];
-  /** Vector arm candidates, already in that arm's own score order. */
+  /** Vector arm candidates, in that arm's own score order. */
   vector: readonly RecallCandidate[];
 };
 
@@ -134,6 +140,19 @@ function compareFusedCandidates(
   return left.fingerprint < right.fingerprint ? -1 : 1;
 }
 
+/**
+ * The order an arm's ranks come from: descending score, then fingerprint.
+ *
+ * Rank is positional in RRF, so this is the whole of an arm's contribution.
+ * The fingerprint tie-break is code-unit order (never locale order) so two runs
+ * over the same candidates rank identically on every machine.
+ */
+function compareArmRank(left: RecallCandidate, right: RecallCandidate): number {
+  if (right.score !== left.score) return right.score - left.score;
+  if (left.fingerprint === right.fingerprint) return 0;
+  return left.fingerprint < right.fingerprint ? -1 : 1;
+}
+
 function finiteOr(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value) ? value : fallback;
 }
@@ -193,9 +212,13 @@ function rrfFuse(
 
   for (const { arm, candidates, weight } of arms) {
     if (!(weight > 0)) continue;
-    const end = Math.min(candidates.length, options.candidateDepth);
+    // Rank is position, so the arm is ordered by its own score before the depth
+    // cut: taking the first `candidateDepth` of an unordered list would both
+    // mis-rank and drop candidates the arm actually preferred.
+    const ordered = [...candidates].sort(compareArmRank);
+    const end = Math.min(ordered.length, options.candidateDepth);
     for (let index = 0; index < end; index += 1) {
-      const candidate = candidates[index];
+      const candidate = ordered[index];
       if (candidate === undefined) continue;
       const rank = index + 1;
       const contribution = weight / (options.k + rank);
