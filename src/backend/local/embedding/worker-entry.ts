@@ -19,9 +19,8 @@
  * Layer: `backend/local/`; never imports the client.
  */
 
-import { createRequire } from "node:module";
-import { join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   assertHiddenStateShape,
   DEFAULT_BATCH_MAX_SIZE,
@@ -32,9 +31,9 @@ import {
   planTokenBatches,
   poolBatch,
   sumSequenceTokens,
-  type TokenizedSequence,
   truncateSequence,
 } from "./featurize";
+import { importRuntimeModule } from "./runtime-module-import";
 import {
   EMBEDDING_WORKER_PROTOCOL_VERSION,
   type EmbeddingWorkerCancelResult,
@@ -56,17 +55,14 @@ import {
   truncateMessage,
   WorkerRequestError,
 } from "./worker-protocol";
+import {
+  createHuggingFaceTokenizerLoader,
+  type EmbeddingTokenizer,
+  type EmbeddingTokenizerLoader,
+} from "./worker-tokenizer";
 
 export const DEFAULT_MAX_TOKENS = 512;
 export const DEFAULT_WARMUP_TEXT = ".";
-
-export interface EmbeddingTokenizer {
-  encode(
-    text: string,
-    options?: { readonly maxTokens?: number },
-  ): TokenizedSequence;
-  readonly padTokenId?: number;
-}
 
 export interface EmbeddingSessionInput {
   readonly inputIds: Int32Array;
@@ -97,11 +93,6 @@ export interface EmbeddingRuntime {
 export type EmbeddingRuntimeLoader = (options: {
   readonly runtimeDir: string;
 }) => Promise<EmbeddingRuntime>;
-
-export type EmbeddingTokenizerLoader = (options: {
-  readonly runtimeDir: string;
-  readonly tokenizerPath: string;
-}) => Promise<EmbeddingTokenizer>;
 
 export interface EmbeddingWorkerDependencies {
   readonly loadRuntime?: EmbeddingRuntimeLoader;
@@ -661,38 +652,6 @@ export async function runEmbeddingWorker(
   return worker.summary(reason);
 }
 
-function isEsmRequireError(error: unknown): boolean {
-  return (
-    isRecord(error) &&
-    (error.code === "ERR_REQUIRE_ESM" ||
-      (typeof error.message === "string" &&
-        error.message.includes("require() of ES Module")))
-  );
-}
-
-async function importRuntimeModule(
-  runtimeDir: string,
-  specifier: string,
-): Promise<unknown> {
-  const nodeRequire = createRequire(join(runtimeDir, "package.json"));
-  let resolved: string;
-  try {
-    resolved = nodeRequire.resolve(specifier, {
-      paths: [join(runtimeDir, "node_modules")],
-    });
-  } catch (error) {
-    throw new Error(
-      `The embedding runtime package "${specifier}" is not installed under ${runtimeDir}: ${describeError(error)}`,
-    );
-  }
-  try {
-    return nodeRequire(resolved);
-  } catch (error) {
-    if (!isEsmRequireError(error)) throw error;
-    return await import(pathToFileURL(resolved).href);
-  }
-}
-
 interface OnnxSession {
   readonly inputNames?: readonly string[];
   readonly outputNames?: readonly string[];
@@ -815,133 +774,6 @@ function toFloat32(data: unknown): Float32Array {
       },
     };
   };
-}
-
-/**
- * Dynamic `@huggingface/tokenizers` loader. The API has moved between releases,
- * so the entry point is probed and a mismatch is a typed init error (C8 pins the
- * version with its real-runtime smoke).
- */
-export function createHuggingFaceTokenizerLoader(): EmbeddingTokenizerLoader {
-  return async ({ runtimeDir, tokenizerPath }) => {
-    const loaded = await importRuntimeModule(
-      runtimeDir,
-      "@huggingface/tokenizers",
-    );
-    return adaptTokenizer(instantiateTokenizer(loaded, tokenizerPath));
-  };
-}
-
-function instantiateTokenizer(loaded: unknown, tokenizerPath: string): unknown {
-  for (const candidate of [
-    loaded,
-    isRecord(loaded) ? loaded.default : undefined,
-  ]) {
-    const fromFile = isRecord(candidate) ? candidate.fromFile : undefined;
-    if (typeof fromFile === "function") {
-      return (fromFile as (this: unknown, path: string) => unknown).call(
-        candidate,
-        tokenizerPath,
-      );
-    }
-    if (typeof candidate !== "function") continue;
-    try {
-      return new (candidate as new (path: string) => unknown)(tokenizerPath);
-    } catch {}
-  }
-  throw new Error(
-    "The installed @huggingface/tokenizers exposes no loadable entry point.",
-  );
-}
-
-function adaptTokenizer(instance: unknown): EmbeddingTokenizer {
-  const record = isRecord(instance) ? instance : null;
-  if (record === null || typeof record.encode !== "function") {
-    throw new Error(
-      "The installed @huggingface/tokenizers does not expose encode().",
-    );
-  }
-  const encode = (
-    record.encode as (this: unknown, text: string) => unknown
-  ).bind(record);
-  const padTokenId = record.padTokenId ?? record.pad_token_id;
-  return {
-    encode(text, options) {
-      const encoded = encode(text);
-      if (encoded instanceof Promise) {
-        throw new Error(
-          "This tokenizer only offers asynchronous encode(); the worker requires a synchronous one.",
-        );
-      }
-      const sequence = normalizeTokenizedSequence(encoded);
-      return options?.maxTokens === undefined
-        ? sequence
-        : truncateSequence(sequence, options.maxTokens);
-    },
-    ...(typeof padTokenId === "number" ? { padTokenId } : {}),
-  };
-}
-
-function toNumberArray(value: unknown, label: string): number[] {
-  if (!Array.isArray(value) && !ArrayBuffer.isView(value)) {
-    throw new Error(`Tokenizer field ${label} is not a numeric array.`);
-  }
-  const view = value as ArrayLike<number | bigint>;
-  const numbers: number[] = [];
-  for (let index = 0; index < view.length; index += 1) {
-    const numeric = Number(view[index]);
-    if (!Number.isFinite(numeric)) {
-      throw new Error(`Tokenizer field ${label} contains a non-finite id.`);
-    }
-    numbers.push(numeric);
-  }
-  return numbers;
-}
-
-function readSequenceField(
-  record: Record<string, unknown>,
-  keys: readonly string[],
-  methods: readonly string[],
-): number[] | null {
-  for (const key of keys) {
-    const value = record[key];
-    if (value !== undefined && value !== null) return toNumberArray(value, key);
-  }
-  for (const method of methods) {
-    const value = record[method];
-    if (typeof value !== "function") continue;
-    const produced = (value as (this: unknown) => unknown).call(record);
-    if (produced !== undefined && produced !== null) {
-      return toNumberArray(produced, method);
-    }
-  }
-  return null;
-}
-
-function normalizeTokenizedSequence(raw: unknown): TokenizedSequence {
-  if (Array.isArray(raw) || ArrayBuffer.isView(raw)) {
-    const inputIds = toNumberArray(raw, "input_ids");
-    if (inputIds.length === 0)
-      throw new Error("The tokenizer produced no tokens.");
-    return { inputIds };
-  }
-  if (!isRecord(raw)) {
-    throw new Error("The tokenizer returned an unexpected encoding shape.");
-  }
-  const inputIds = readSequenceField(
-    raw,
-    ["input_ids", "ids"],
-    ["getIds", "get_ids"],
-  );
-  if (inputIds === null || inputIds.length === 0) {
-    throw new Error("The tokenizer encoding has no input_ids.");
-  }
-  const attentionMask = readSequenceField(
-    raw,
-    ["attention_mask", "attentionMask"],
-    ["getAttentionMask", "get_attention_mask"],
-  );
-  return attentionMask === null ? { inputIds } : { inputIds, attentionMask };
 }
 
 /** True when this file is the process entry point (tests import, not run, it). */

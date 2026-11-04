@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decodeVectorBase64 } from "./featurize";
 import { EmbeddingWorkerClient } from "./worker-client";
@@ -6,7 +9,6 @@ import {
   type EmbeddingRuntime,
   type EmbeddingSession,
   type EmbeddingSessionInput,
-  type EmbeddingTokenizer,
   type EmbeddingWorkerDependencies,
   type EmbeddingWorkerRunSummary,
   isEmbeddingWorkerMain,
@@ -22,6 +24,11 @@ import {
   type EmbeddingWorkerStats,
   parseEmbeddingWorkerFrame,
 } from "./worker-protocol";
+import {
+  createHuggingFaceTokenizerLoader,
+  createTokenizerFromModule,
+  type EmbeddingTokenizer,
+} from "./worker-tokenizer";
 
 const WORKER_PID = 4321;
 
@@ -736,5 +743,119 @@ describe("isEmbeddingWorkerMain", () => {
         "linux",
       ),
     ).toBe(false);
+  });
+});
+
+describe("tokenizer module contract", () => {
+  class FakeTokenizer {
+    readonly tokenizerJson: unknown;
+    readonly config: unknown;
+
+    constructor(tokenizerJson: unknown, config: unknown) {
+      this.tokenizerJson = tokenizerJson;
+      this.config = config;
+    }
+
+    encode(): { ids: number[]; attention_mask: number[] } {
+      return { ids: [101, 7, 102], attention_mask: [1, 1, 1] };
+    }
+  }
+
+  test("constructs @huggingface/tokenizers 0.2.0 via Tokenizer(json, config)", () => {
+    const tokenizerJson = { model: { type: "WordPiece" } };
+    const tokenizerConfig = { model_max_length: 512 };
+    const tokenizer = createTokenizerFromModule(
+      { Tokenizer: FakeTokenizer },
+      tokenizerJson,
+      tokenizerConfig,
+    );
+    expect(tokenizer.encode("部署卡住")).toEqual({
+      inputIds: [101, 7, 102],
+      attentionMask: [1, 1, 1],
+    });
+  });
+
+  test("finds the class behind a CJS/ESM default wrapper", () => {
+    const tokenizer = createTokenizerFromModule(
+      { default: { Tokenizer: FakeTokenizer } },
+      {},
+      {},
+    );
+    expect(tokenizer.encode("x").inputIds).toEqual([101, 7, 102]);
+  });
+
+  test("still accepts the legacy fromFile(path) shape", () => {
+    const tokenizer = createTokenizerFromModule(
+      {
+        fromFile: () => ({
+          encode: () => ({ ids: [9] }),
+        }),
+      },
+      {},
+      {},
+    );
+    expect(tokenizer.encode("x").inputIds).toEqual([9]);
+  });
+
+  test("reports a module with no usable entry point", () => {
+    expect(() => createTokenizerFromModule({}, {}, {})).toThrow(
+      "exposes no loadable entry point",
+    );
+  });
+
+  test("the real loader reads both JSON files next to tokenizer.json", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hryk-worker-tokenizer-"));
+    try {
+      const packageDir = join(
+        root,
+        "node_modules",
+        "@huggingface",
+        "tokenizers",
+      );
+      mkdirSync(packageDir, { recursive: true });
+      writeFileSync(join(root, "package.json"), "{}");
+      writeFileSync(
+        join(packageDir, "package.json"),
+        JSON.stringify({ name: "@huggingface/tokenizers", main: "index.cjs" }),
+      );
+      writeFileSync(
+        join(packageDir, "index.cjs"),
+        [
+          "class Tokenizer {",
+          "  constructor(tokenizerJson, tokenizerConfig) {",
+          "    this.tokenizerJson = tokenizerJson;",
+          "    this.tokenizerConfig = tokenizerConfig;",
+          "  }",
+          "  encode() {",
+          "    return { ids: [this.tokenizerJson.marker, 2], attention_mask: [1, 1] };",
+          "  }",
+          "}",
+          "module.exports = { Tokenizer };",
+        ].join("\n"),
+      );
+      const modelDir = join(root, "model");
+      mkdirSync(modelDir, { recursive: true });
+      writeFileSync(
+        join(modelDir, "tokenizer.json"),
+        JSON.stringify({ marker: 42 }),
+      );
+      writeFileSync(
+        join(modelDir, "tokenizer_config.json"),
+        JSON.stringify({ pad_token_id: 7 }),
+      );
+
+      const loadTokenizer = createHuggingFaceTokenizerLoader();
+      const tokenizer = await loadTokenizer({
+        runtimeDir: root,
+        tokenizerPath: join(modelDir, "tokenizer.json"),
+      });
+      expect(tokenizer.padTokenId).toBe(7);
+      expect(tokenizer.encode("hello")).toEqual({
+        inputIds: [42, 2],
+        attentionMask: [1, 1],
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
