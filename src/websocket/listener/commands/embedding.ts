@@ -1,11 +1,9 @@
 import type WebSocket from "ws";
 import type {
   EmbeddingBuildCommand,
-  EmbeddingBuildMode,
   EmbeddingBuildResponseMessage,
   EmbeddingCalibrateCommand,
   EmbeddingCalibrateResponseMessage,
-  EmbeddingCalibrationSnapshot,
   EmbeddingCancelCommand,
   EmbeddingCancelResponseMessage,
   EmbeddingConfigureCommand,
@@ -17,10 +15,8 @@ import type {
   EmbeddingEnableResponseMessage,
   EmbeddingResetCommand,
   EmbeddingResetResponseMessage,
-  EmbeddingSettingsSnapshot,
   EmbeddingStatusCommand,
   EmbeddingStatusResponseMessage,
-  EmbeddingStatusSnapshot,
 } from "@/types/embedding-protocol";
 import type { AgentRuntimeScope } from "@/types/runtime-scope";
 import { getErrorMessage } from "@/utils/error";
@@ -35,6 +31,10 @@ import {
   isEmbeddingResetCommand,
   isEmbeddingStatusCommand,
 } from "@/websocket/listener/embedding-protocol-inbound";
+import {
+  createEmbeddingCommandBackend,
+  type EmbeddingCommandBackend,
+} from "./embedding-backend";
 import type { RunDetachedListenerTask, SafeSocketSend } from "./types";
 
 /**
@@ -43,13 +43,16 @@ import type { RunDetachedListenerTask, SafeSocketSend } from "./types";
  * The eight commands are thin protocol adapters: they validate the payload,
  * delegate to a narrow `EmbeddingCommandBackend`, and answer with the frozen
  * D1 response shapes. No handler touches settings, the secrets store or the
- * build runner directly — the real owners (D3 settings/secrets, A2 build-state,
- * A3 runner, A4 host) land behind the interface, in one wiring diff.
+ * build runner directly — the production backend in `./embedding-backend`
+ * adapts the same owners the TUI and CLI use (D3 settings/secrets, A2's
+ * runtime port, A4's host, C5/C3 calibration).
  *
- * This file is the only place the not-yet-wired backend is stubbed:
- * `createEmbeddingCommandBackend` returns the placeholder. It answers `status`
- * as "not configured" and every write command as a typed `not_configured`
- * failure, so a client sees an honest, actionable state instead of a timeout.
+ * {@link createEmbeddingCommandBackend} is that production adapter. Its
+ * `deps` parameter is the test seam: it injects a fake runtime/settings
+ * writer/calibration pass, so this file never spawns a worker or touches the
+ * network in tests. The runtime port is the same `cli/helpers/embedding-runtime`
+ * one `/recall embedding` uses, so the three surfaces cannot disagree about
+ * asset gating, GPU policy or reset targets.
  *
  * The family entry matches the other families: the reply is queued through
  * `runDetachedListenerTask`, so the router's await path never waits on it.
@@ -61,96 +64,33 @@ export type EmbeddingProtocolCommandContext = {
   runDetachedListenerTask: RunDetachedListenerTask;
 };
 
-/** Code the placeholder backend and the handlers use for "nothing wired yet". */
-export const EMBEDDING_NOT_CONFIGURED = "not_configured";
 /** The command's runtime scope is malformed (defense in depth; the guard runs first). */
 export const EMBEDDING_INVALID_SCOPE = "invalid_embedding_scope";
 /** The patch failed the handler-side shape/coherence check. */
 export const EMBEDDING_INVALID_PATCH = "invalid_embedding_patch";
 
-/** A write command that the backend declined without throwing. */
-export type EmbeddingBackendFailure = { ok: false; error: string };
-
-/** First version of the family's result type; see the backend interface below. */
-export type EmbeddingBackendResult<T> =
-  | { ok: true; value: T }
-  | EmbeddingBackendFailure;
-
-/**
- * `embedding_status` distinguishes "not configured" from "read failed": the
- * former is a normal, renderable state (no space, no endpoint), not an error.
- */
-export type EmbeddingStatusBackendResult =
-  | { configured: true; status: EmbeddingStatusSnapshot }
-  | { configured: false; error: string };
-
-export type EmbeddingConfigureBackendValue = {
-  settings: EmbeddingSettingsSnapshot;
-  requiresRebuild: boolean;
-};
-export type EmbeddingEnableBackendValue = {
-  enabled: boolean;
-  buildStarted: boolean;
-};
-export type EmbeddingDisableBackendValue = { enabled: boolean };
-export type EmbeddingBuildBackendValue = {
-  started: boolean;
-  buildId?: string;
-  reason?: string;
-};
-export type EmbeddingCancelBackendValue = { cancelled: boolean };
-export type EmbeddingResetBackendValue = {
-  removedSpaces: number;
-  requiresRebuild: boolean;
-};
-export type EmbeddingCalibrateBackendValue = {
-  calibration: EmbeddingCalibrationSnapshot | null;
-};
-
-export type EmbeddingBuildOptions = {
-  mode: EmbeddingBuildMode;
-  keepAfterExit: boolean;
-};
-export type EmbeddingResetScope = "index" | "all";
-
-/**
- * The narrow seam between the protocol family and the embedding subsystem.
- *
- * Every method is agent-scoped: the vector index is a rebuildable derivative of
- * one agent's local data, so the runtime's conversation id is not a selector.
- * Failures are typed rather than thrown when the subsystem declines normally
- * (disabled, locked, not configured); an unexpected throw is caught by the
- * handler and mapped to the response's `error`.
- */
-export interface EmbeddingCommandBackend {
-  status(agentId: string): Promise<EmbeddingStatusBackendResult>;
-  configure(
-    agentId: string,
-    patch: EmbeddingConfigurePatch,
-  ): Promise<EmbeddingBackendResult<EmbeddingConfigureBackendValue>>;
-  enable(
-    agentId: string,
-  ): Promise<EmbeddingBackendResult<EmbeddingEnableBackendValue>>;
-  disable(
-    agentId: string,
-  ): Promise<EmbeddingBackendResult<EmbeddingDisableBackendValue>>;
-  build(
-    agentId: string,
-    options: EmbeddingBuildOptions,
-  ): Promise<EmbeddingBackendResult<EmbeddingBuildBackendValue>>;
-  cancel(
-    agentId: string,
-    buildId: string | undefined,
-  ): Promise<EmbeddingBackendResult<EmbeddingCancelBackendValue>>;
-  reset(
-    agentId: string,
-    scope: EmbeddingResetScope,
-  ): Promise<EmbeddingBackendResult<EmbeddingResetBackendValue>>;
-  calibrate(
-    agentId: string,
-    persist: boolean,
-  ): Promise<EmbeddingBackendResult<EmbeddingCalibrateBackendValue>>;
-}
+export type {
+  EmbeddingBackendFailure,
+  EmbeddingBackendResult,
+  EmbeddingBuildBackendValue,
+  EmbeddingBuildOptions,
+  EmbeddingCalibrateBackendValue,
+  EmbeddingCancelBackendValue,
+  EmbeddingCommandBackend,
+  EmbeddingCommandBackendDeps,
+  EmbeddingConfigureBackendValue,
+  EmbeddingDisableBackendValue,
+  EmbeddingEnableBackendValue,
+  EmbeddingResetBackendValue,
+  EmbeddingResetScope,
+  EmbeddingStatusBackendResult,
+} from "./embedding-backend";
+// The backend contract and the production adapter live in their own module
+// (size ceiling); these re-exports keep the family's public import site.
+export {
+  createEmbeddingCommandBackend,
+  EMBEDDING_NOT_CONFIGURED,
+} from "./embedding-backend";
 
 type EmbeddingProtocolCommand =
   | EmbeddingStatusCommand
@@ -176,40 +116,6 @@ function createEmbeddingSend(
       "listener_embedding_send_failed",
       "listener_embedding_protocol",
     );
-}
-
-/**
- * The single placeholder backend for this wave.
- *
- * TODO(integration): replace the method bodies with the real owners — D3
- * (`recall-settings`/`embedding-settings` + the secrets store) for
- * configure/status, A2/A3 (build state/lock/runner) for enable/disable/build/
- * cancel/reset, C5 for calibrate. Callers (the router) must not change: pass a
- * real `EmbeddingCommandBackend` into `handleEmbeddingProtocolCommand`, or
- * override individual methods through `deps` while pieces land.
- */
-export function createEmbeddingCommandBackend(
-  deps: Partial<EmbeddingCommandBackend> = {},
-): EmbeddingCommandBackend {
-  const notConfigured = async (): Promise<EmbeddingBackendFailure> => ({
-    ok: false,
-    error: EMBEDDING_NOT_CONFIGURED,
-  });
-  const notConfiguredStatus =
-    async (): Promise<EmbeddingStatusBackendResult> => ({
-      configured: false,
-      error: EMBEDDING_NOT_CONFIGURED,
-    });
-  return {
-    status: deps.status ?? notConfiguredStatus,
-    configure: deps.configure ?? notConfigured,
-    enable: deps.enable ?? notConfigured,
-    disable: deps.disable ?? notConfigured,
-    build: deps.build ?? notConfigured,
-    cancel: deps.cancel ?? notConfigured,
-    reset: deps.reset ?? notConfigured,
-    calibrate: deps.calibrate ?? notConfigured,
-  };
 }
 
 /** Reject a runtime scope that is not a complete agent/conversation address. */

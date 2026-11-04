@@ -4,8 +4,9 @@
  * The eight command handlers are pure protocol adapters over a narrow
  * `EmbeddingCommandBackend`, so every test here injects a fake backend: command
  * dispatch/claiming, per-command response shapes, handler-side patch/scope
- * validation, typed backend declines, thrown-backend errors, and the
- * not-yet-wired placeholder backend all stay local to this file.
+ * validation, typed backend declines and thrown-backend errors stay local to
+ * this file. The production backend's D3/A2/C5 mapping lives in
+ * `embedding-backend.test.ts`.
  */
 import { describe, expect, test } from "bun:test";
 import type WebSocket from "ws";
@@ -25,10 +26,8 @@ import type {
 } from "@/types/embedding-protocol";
 import type { AgentRuntimeScope } from "@/types/runtime-scope";
 import {
-  createEmbeddingCommandBackend,
   EMBEDDING_INVALID_PATCH,
   EMBEDDING_INVALID_SCOPE,
-  EMBEDDING_NOT_CONFIGURED,
   type EmbeddingBuildOptions,
   type EmbeddingCommandBackend,
   handleEmbeddingBuildCommand,
@@ -299,60 +298,6 @@ describe("embedding protocol dispatch", () => {
         backend,
       ),
     ).toBe(false);
-  });
-});
-
-describe("placeholder backend", () => {
-  test("status and every write command answer not_configured", async () => {
-    const backend = createEmbeddingCommandBackend();
-    expect(await backend.status(AGENT)).toEqual({
-      configured: false,
-      error: EMBEDDING_NOT_CONFIGURED,
-    });
-    const failures = [
-      await backend.configure(AGENT, {}),
-      await backend.enable(AGENT),
-      await backend.disable(AGENT),
-      await backend.build(AGENT, { mode: "incremental", keepAfterExit: false }),
-      await backend.cancel(AGENT, undefined),
-      await backend.reset(AGENT, "index"),
-      await backend.calibrate(AGENT, true),
-    ];
-    for (const failure of failures) {
-      expect(failure).toEqual({
-        ok: false,
-        error: EMBEDDING_NOT_CONFIGURED,
-      });
-    }
-  });
-
-  test("deps can override one method while the rest stay stubbed", async () => {
-    const backend = createEmbeddingCommandBackend({
-      enable: async () => ({
-        ok: true,
-        value: { enabled: true, buildStarted: false },
-      }),
-    });
-    expect(await backend.enable(AGENT)).toEqual({
-      ok: true,
-      value: { enabled: true, buildStarted: false },
-    });
-    expect(await backend.status(AGENT)).toEqual({
-      configured: false,
-      error: EMBEDDING_NOT_CONFIGURED,
-    });
-  });
-
-  test("the handlers surface the placeholder as an actionable error", async () => {
-    const { sent, socket, send } = harness();
-    await handleEmbeddingStatusCommand(statusCommand(), socket, send);
-    expect(lastSent(sent)).toEqual({
-      type: "embedding_status_response",
-      request_id: "r-status",
-      success: false,
-      status: null,
-      error: EMBEDDING_NOT_CONFIGURED,
-    });
   });
 });
 

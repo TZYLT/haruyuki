@@ -14,6 +14,7 @@ import { subscribeReflectionRunFinished } from "@/agent/reflection-run";
 import { formatReflectionRunFinishedNotification } from "@/agent/reflection-run-notification";
 import { shouldLaunchThroughListener } from "@/agent/subagents/subagent-launcher";
 import { applyEmbeddingSetupFlags } from "@/cli/commands/embedding-flags";
+import { applyEmbeddingHeadlessBuild } from "@/cli/helpers/embedding-headless";
 import { buildHeadlessSenderReminder } from "@/headless-message-sender";
 import { createHeadlessResponseState } from "@/headless-response-state";
 import { getTerminalTelemetrySurface, telemetry } from "@/telemetry";
@@ -1339,6 +1340,15 @@ export async function handleHeadlessCommand(
   }
   if (embeddingFlags.receipt.length > 0) {
     console.error(embeddingFlags.receipt);
+  }
+  // R-12: `--recall-embedding on` builds the index before the first turn. The
+  // build waits for its outcome (lifecycle "headless") and prints A2's receipt;
+  // a refusal is copy, never a startup failure.
+  const embeddingBuild = await applyEmbeddingHeadlessBuild(values, {
+    agentId: agent.id,
+  });
+  if (embeddingBuild.length > 0) {
+    console.error(embeddingBuild);
   }
 
   // Apply --system flag after memfs sync so isMemfsEnabled() is up to date.

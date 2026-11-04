@@ -60,6 +60,7 @@ import {
   parseCsvListFlag,
 } from "./cli/flag-utils";
 import { renderHelpText } from "./cli/help-text";
+import { recoverEmbeddingBoundariesAtStartup } from "./cli/helpers/embedding-startup";
 import { ensureFdPath, resolveFdPath } from "./cli/helpers/file-autocomplete";
 import { listPinnedAgentsForCurrentUser } from "./cli/helpers/pinned-agent-listing";
 import type { ApprovalRequest } from "./cli/helpers/stream";
@@ -1076,6 +1077,15 @@ async function main(): Promise<void> {
         // Load settings
         await settingsManager.loadLocalProjectSettings();
         const backend = getBackend();
+
+        // A crash can leave A2's build lock/lease behind; A5 recovers only
+        // provably stale ownership and never touches a live builder.
+        void recoverEmbeddingBoundariesAtStartup().catch((error) =>
+          debugWarn(
+            "embedding",
+            `startup boundary recovery failed: ${String(error)}`,
+          ),
+        );
 
         setStartupHasCloudCredentials(Boolean(settings.refreshToken || apiKey));
         // Local model discovery can hit slow/unreachable provider endpoints
