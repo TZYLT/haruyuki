@@ -660,13 +660,15 @@ export function applyEmbeddingWizardEvent(
         ...state.endpoint,
         [event.field]: event.value,
       };
+      // Every field invalidates a previous test-embed, the credential included:
+      // the verified form records a round trip made with the old URL, model and
+      // key, and 48-1 §7.2 only accepts an endpoint after a successful test of
+      // the values that will be written. Editing the key and walking forward
+      // again must therefore re-test instead of reusing the old pass.
       return {
         ...state,
         error: null,
-        endpoint:
-          event.field === "baseUrl" || event.field === "model"
-            ? resetEndpointTest(endpoint)
-            : endpoint,
+        endpoint: resetEndpointTest(endpoint),
       };
     }
     case "next":
