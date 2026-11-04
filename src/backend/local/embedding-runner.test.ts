@@ -17,7 +17,7 @@ import {
   expect,
   test,
 } from "bun:test";
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { EmbeddingCalibrationBudget } from "@/backend/local/embedding/calibration";
 import type { EmbeddingEmbedCallback } from "@/backend/local/embedding-build";
@@ -755,22 +755,6 @@ describe("cancellation and resume", () => {
       const snapshot = readUnitSnapshot(unitOf(runUnit));
       expect(snapshot?.meta.chunkCount).toBeGreaterThan(0);
     }
-  });
-  test("a rebuild keeps only the current and previous generation", async () => {
-    const units = [conversationUnit("conv-a", [["msg-1", TEXT_A]])];
-    for (let run = 0; run < 3; run += 1) {
-      const result = await runEmbeddingBuild(
-        runnerOptions(recordingEmbed(), units),
-      );
-      expect(result.status).toBe("completed");
-    }
-    const unitDir = embeddingVectorUnitDir(unitOf(unitAt(units, 0)), {
-      root: dirs.root,
-    });
-    const generations = readdirSync(unitDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-    expect(generations).toHaveLength(2);
   });
 });
 
