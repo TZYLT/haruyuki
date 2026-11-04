@@ -433,8 +433,12 @@ function clipInjectionTail(value: string, maxCharacters: number): string {
  *
  * The focus block is the hit message's role label plus the 300-character window.
  * Whatever room is left after it pays for the separator, the neighbour's label
- * and the neighbour text; a previous user message contributes its *tail* (the
- * part nearest the hit), a next assistant message its head. If the leftover
+ * and the neighbour text — but never more than
+ * {@link VECTOR_INJECTION_NEIGHBOR_CHARS}, which is the requirement's own cap on
+ * the neighbour (48-1 §6.7, R-33). Without that second cap a short hit message
+ * would spend almost the whole 400 on context and nearly none on the passage the
+ * vector arm actually matched. A previous user message contributes its *tail*
+ * (the part nearest the hit), a next assistant message its head. If the leftover
  * budget cannot hold at least one character, the neighbour is dropped rather
  * than emitted as a dangling label.
  */
@@ -453,12 +457,13 @@ function transcriptVectorText(input: {
   if (neighbor === undefined) return focusText;
   const separator = "\n\n";
   const neighborLabel = VECTOR_ROLE_LABELS[neighbor.role];
-  const remaining =
+  const room =
     VECTOR_INJECTION_MAX_CHARS -
     focusText.length -
     separator.length -
     neighborLabel.length -
     "：".length;
+  const remaining = Math.min(room, VECTOR_INJECTION_NEIGHBOR_CHARS);
   if (remaining < 1) return focusText;
   const neighborText =
     neighbor.role === "user"

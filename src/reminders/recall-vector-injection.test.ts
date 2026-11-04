@@ -192,6 +192,50 @@ describe("buildTranscriptVectorCandidate", () => {
     );
   });
 
+  test("a short hit still spends at most 100 characters on the neighbour", () => {
+    // The leftover-budget rule alone would let the neighbour take ~385 of the
+    // 400 characters here, so the passage the vector arm matched would be a
+    // footnote in its own entry. R-33 caps the neighbour at 100 regardless.
+    const shortHit = "短暂命中。";
+    const messages = [
+      message("m0", "user", USER_TEXT, 1),
+      message("m1", "assistant", shortHit, 2),
+    ];
+    const candidate = buildTranscriptVectorCandidate({
+      hit: transcriptHit("m1", shortHit),
+      conversationKey: "conv-1",
+      messages,
+      readParent: createTranscriptVectorParentReader(messages),
+    });
+    expect(candidate).toBeDefined();
+    if (candidate === undefined) return;
+    expect(candidate.text).toBe(
+      `助手：${shortHit}\n\n用户：${USER_TEXT.slice(
+        -VECTOR_INJECTION_NEIGHBOR_CHARS,
+      )}`,
+    );
+    expect(candidate.text.length).toBeLessThan(VECTOR_INJECTION_MAX_CHARS);
+  });
+
+  test("a next-assistant neighbour is capped at 100 characters too", () => {
+    const shortHit = "短暂命中。";
+    const nextAnswer = "后续回答。".repeat(40);
+    const messages = [
+      message("m1", "assistant", shortHit, 1),
+      message("m2", "assistant", nextAnswer, 2),
+    ];
+    const candidate = buildTranscriptVectorCandidate({
+      hit: transcriptHit("m1", shortHit),
+      conversationKey: "conv-1",
+      messages,
+      readParent: createTranscriptVectorParentReader(messages),
+    });
+    expect(candidate).toBeDefined();
+    if (candidate === undefined) return;
+    expect(candidate.text.endsWith(nextAnswer.slice(0, 100))).toBe(true);
+    expect(candidate.text).not.toBe(`助手：${shortHit}\n\n助手：${nextAnswer}`);
+  });
+
   test("keeps the lexical fingerprint and the vector arm marker", () => {
     const messages = [message("m1", "assistant", LONG_MESSAGE)];
     const candidate = buildTranscriptVectorCandidate({
