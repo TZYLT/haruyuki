@@ -80,6 +80,7 @@ import {
   readEmbeddingIndex,
   writeEmbeddingIndex,
 } from "./embedding-format";
+import { pruneEmbeddingGenerations } from "./embedding-generation-prune";
 import {
   createEmbeddingLeaseForLock,
   type EmbeddingLeaseHandle,
@@ -750,6 +751,11 @@ export async function runEmbeddingBuild(
         if (stateError !== null) return result("failed", { error: stateError });
         continue;
       }
+
+      // Bound disk growth: the commit above makes the older generations
+      // unreachable, except for the immediate previous one a concurrent query
+      // may still be reading. Cleanup is best effort and never fails a build.
+      pruneEmbeddingGenerations(unitDir);
 
       completedUnits += 1;
       reusedChunks += built.reusedChunks;
