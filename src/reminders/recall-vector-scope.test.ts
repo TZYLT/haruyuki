@@ -352,3 +352,71 @@ describe("the vector arm's scope exclusions", () => {
     expect(empty.diagnostic).toEqual(absent.diagnostic);
   });
 });
+
+describe("the vector arm's cosine safety floor", () => {
+  test("keeps an unrelated passage out of the merge, and is a per-model knob", async () => {
+    const fixture = createFixture();
+    writeConversation(fixture, HISTORY_DIRECTORY_KEY);
+    indexTranscript(fixture, HISTORY_DIRECTORY_KEY);
+    const queryVector = fakeEmbeddingVector(
+      MESSAGES[0]?.text ?? "",
+      DIMENSIONS,
+    );
+    // A second unit whose vectors are exactly anti-parallel to the query, so its
+    // cosine is -1: a certain miss for any floor above -1.
+    const unrelatedKey = "unrelated";
+    const unrelated: readonly RecallMessageText[] = [
+      {
+        id: "u1",
+        role: "user",
+        ts: "2026-01-01T00:00:05.000Z",
+        text: "机房搬迁计划在下周执行，涉及三台服务器与一条专线。",
+      },
+    ];
+    writeConversation(fixture, unrelatedKey, unrelated);
+    indexTranscript(fixture, unrelatedKey, unrelated, () =>
+      Float32Array.from(queryVector, (value) => -value),
+    );
+
+    const searchWith = (minScore?: number) =>
+      createEmbeddingIndexSearch({
+        space: { agentId: AGENT_ID, spaceId: SPACE_ID },
+        units: [
+          { kind: "transcript", conversationKey: HISTORY_DIRECTORY_KEY },
+          { kind: "transcript", conversationKey: unrelatedKey },
+        ],
+        root: fixture.vectorsRoot,
+        ...(minScore === undefined ? {} : { minScore }),
+      });
+    const keysOf = (
+      result: Awaited<
+        ReturnType<ReturnType<typeof createEmbeddingIndexSearch>>
+      >,
+    ): string[] =>
+      result.hits.map((entry) =>
+        entry.kind === "transcript"
+          ? `${entry.conversationKey}:${entry.hit.parentId}`
+          : `memory:${entry.hit.parentId}`,
+      );
+    const request = {
+      scope: {
+        agentId: AGENT_ID,
+        currentConversationId: CURRENT_CONVERSATION_ID,
+      },
+      query: queryVector,
+      topK: 10,
+      shouldStop: () => false,
+    };
+
+    // The default floor is 48-1 §6.7's 0.35: an unrelated passage never enters
+    // the merge, while the matching parent does.
+    const floored = await searchWith()(request);
+    expect(floored.status).toBe("searched");
+    expect(keysOf(floored)).toContain(`${HISTORY_DIRECTORY_KEY}:m1`);
+    expect(keysOf(floored)).not.toContain(`${unrelatedKey}:u1`);
+
+    // The floor is a per-model knob, and -1 is how a caller turns it off.
+    const unfloored = await searchWith(-1)(request);
+    expect(keysOf(unfloored)).toContain(`${unrelatedKey}:u1`);
+  });
+});

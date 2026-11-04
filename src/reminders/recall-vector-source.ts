@@ -99,6 +99,19 @@ export const VECTOR_RECALL_MIN_QUERY_CHARS = 6;
 export const VECTOR_RECALL_MEMORY_EXCERPT_LINES = 2;
 
 /**
+ * The cosine floor below which a parent hit is not admitted to the merge
+ * (48-1 §6.7 "安全阀", P-03).
+ *
+ * A *safety* floor, not a relevance threshold: bge-family similarities are
+ * compressed into roughly `[0.6, 1]`, so treating 0.5 as "not similar" would
+ * discard most genuine hits. 0.35 only catches a passage that is essentially
+ * unrelated to the query, and it is per-model overridable through
+ * {@link CreateEmbeddingIndexSearchOptions.minScore} — the number lives here
+ * because the merge must happen even when no settings record exists.
+ */
+export const VECTOR_RECALL_MIN_COSINE = 0.35;
+
+/**
  * Encodes a query for the vector arm.
  *
  * A3/integration adapts the runtime clients to this shape:
@@ -252,6 +265,14 @@ export type CreateEmbeddingIndexSearchOptions = {
   root?: string;
   /** Extra generation expectations (model/dimensions/quant/format). */
   expectation?: EmbeddingIndexExpectation;
+  /**
+   * Cosine floor for a parent hit; defaults to
+   * {@link VECTOR_RECALL_MIN_COSINE}. Relative filtering (RRF's `top × ratio`)
+   * happens later, on fused scores; this is the absolute *safety* floor that
+   * keeps an unrelated passage out of the merge in the first place (48-1 §6.7
+   * "安全阀"). `-1` disables it (every cosine clears `-1`).
+   */
+  minScore?: number;
 };
 
 /**
@@ -270,6 +291,7 @@ export type CreateEmbeddingIndexSearchOptions = {
 export function createEmbeddingIndexSearch(
   options: CreateEmbeddingIndexSearchOptions,
 ): RecallVectorSearchPort {
+  const minScore = resolveMinCosine(options.minScore);
   return (input) => {
     const units =
       typeof options.units === "function"
@@ -316,6 +338,7 @@ export function createEmbeddingIndexSearch(
       usableUnits += 1;
       const searched = searchEmbeddingIndex(loaded.index, input.query, {
         topK: input.topK,
+        minScore,
       });
       if (!searched.ok) {
         // A width mismatch is a space-level problem: one unit's answer cannot
@@ -503,6 +526,18 @@ function resolveBudget(value: number | undefined): number {
   // `0` and negatives mean "no budget", the same convention the turn deadline
   // uses: a corrupt setting must not bound the arm.
   return value > 0 ? Math.trunc(value) : 0;
+}
+
+/**
+ * The cosine floor as a usable number: the default when absent or unusable, and
+ * clamped to the only range a cosine can occupy (`[-1, 1]`, where `-1` means
+ * "no floor" rather than a broken value).
+ */
+function resolveMinCosine(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return VECTOR_RECALL_MIN_COSINE;
+  }
+  return Math.min(1, Math.max(-1, value));
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {

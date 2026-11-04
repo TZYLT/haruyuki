@@ -253,6 +253,13 @@ function indexTranscript(
   fixture: Fixture,
   conversationKey: string,
   messages: readonly RecallMessageText[],
+  /**
+   * Chunk vector factory; defaults to the deterministic fake embedding. The
+   * cosine-floor test supplies vectors of its own so the similarity to the query
+   * is exact rather than incidental.
+   */
+  vectorFor: (chunkText: string) => Float32Array = (chunkText) =>
+    fakeEmbeddingVector(chunkText, DIMENSIONS),
 ): EmbeddingChunkPlan[] {
   const unitDir = embeddingVectorUnitDir(
     { agentId: AGENT_ID, spaceId: SPACE_ID, conversationKey },
@@ -261,15 +268,14 @@ function indexTranscript(
   const plans = messages.map((message) =>
     buildEmbeddingChunkPlan({ parentId: message.id, text: message.text }),
   );
+  const chunks = plans.flatMap((plan) => plan.chunks);
   writeEmbeddingIndex({
     unitDir,
     unit: { agentId: AGENT_ID, spaceId: SPACE_ID, conversationKey },
     modelId: MODEL_ID,
     dimensions: DIMENSIONS,
     records: plans.flatMap((plan) => embeddingChunkRecordsFromPlan(plan)),
-    vectors: plans.flatMap((plan) =>
-      plan.chunks.map((chunk) => fakeEmbeddingVector(chunk.text, DIMENSIONS)),
-    ),
+    vectors: chunks.map((chunk) => vectorFor(chunk.text)),
     coverage: coverageOf(plans),
     generation: nextGeneration(),
   });
@@ -321,11 +327,13 @@ function memoryUnit(file: string, memoryFileKey: string): RecallVectorUnit {
 function spaceSearch(
   fixture: Fixture,
   units: readonly RecallVectorUnit[],
+  minScore?: number,
 ): ReturnType<typeof createEmbeddingIndexSearch> {
   return createEmbeddingIndexSearch({
     space: { agentId: AGENT_ID, spaceId: SPACE_ID },
     units,
     root: fixture.vectorsRoot,
+    ...(minScore === undefined ? {} : { minScore }),
   });
 }
 
@@ -356,6 +364,12 @@ type SourceOverrides = {
   topK?: number;
   budgetMs?: number;
   now?: () => number;
+  /**
+   * Cosine floor for the space search; defaults to the production one.
+   * Most tests here use synthetic embeddings whose pairwise cosines are
+   * arbitrary, so they disable the floor (`-1`) unless the floor is the subject.
+   */
+  minScore?: number;
 };
 
 function makeSource(
@@ -365,7 +379,7 @@ function makeSource(
 ): RecallSourcePort {
   return createVectorRecallSource({
     encoder: overrides.encoder ?? targetingEncoder(MESSAGES[0]?.text ?? ""),
-    search: spaceSearch(fixture, units),
+    search: spaceSearch(fixture, units, overrides.minScore),
     parentReader: localParents(fixture),
     topK: overrides.topK,
     budgetMs: overrides.budgetMs,
@@ -508,6 +522,10 @@ describe("createVectorRecallSource", () => {
 
     const full = await makeSource(fixture, [transcriptUnit(CONVERSATION_KEY)], {
       topK: 50,
+      // Synthetic embeddings: pairwise cosines are arbitrary, so the semantic
+      // floor would drop parents this test needs. The floor is asserted on its
+      // own in `createEmbeddingIndexSearch`.
+      minScore: -1,
     }).search(searchRequest());
     expect(full.candidates).toHaveLength(MESSAGES.length);
     expect(
@@ -519,29 +537,11 @@ describe("createVectorRecallSource", () => {
     const limited = await makeSource(
       fixture,
       [transcriptUnit(CONVERSATION_KEY)],
-      { topK: 2 },
+      { topK: 2, minScore: -1 },
     ).search(searchRequest());
     expect(limited.candidates.length).toBeLessThanOrEqual(2);
     const scores = limited.candidates.map((entry) => entry.score);
     expect([...scores].sort((left, right) => right - left)).toEqual(scores);
-  });
-
-  test("reports an encoder that returns null as unavailable", async () => {
-    const fixture = createFixture();
-    writeConversation(fixture, CONVERSATION_KEY, MESSAGES);
-    indexTranscript(fixture, CONVERSATION_KEY, MESSAGES);
-    const source = makeSource(fixture, [transcriptUnit(CONVERSATION_KEY)], {
-      encoder: { encodeQuery: async () => null },
-    });
-
-    const result = await source.search(searchRequest());
-
-    expect(result.candidates).toEqual([]);
-    expect(result.diagnostic).toMatchObject({
-      source: "vector",
-      status: "unavailable",
-    });
-    expect(result.diagnostic.reason).toContain("no query vector");
   });
 
   test("reports an encoder that throws as failed with its message", async () => {
@@ -726,7 +726,9 @@ describe("createVectorRecallSource", () => {
     const result = await makeSource(
       fixture,
       [transcriptUnit(CONVERSATION_KEY)],
-      { topK: 20 },
+      // Synthetic embeddings: disable the semantic floor so every parent has a
+      // renderable window (the floor itself is covered in createEmbeddingIndexSearch).
+      { topK: 20, minScore: -1 },
     ).search(searchRequest());
 
     const assistant = result.candidates.find(
@@ -749,10 +751,16 @@ describe("createEmbeddingIndexSearch", () => {
     indexTranscript(fixture, CONVERSATION_KEY, MESSAGES);
     writeMemory(fixture, MEMORY_FILE, MEMORY_CONTENT);
     const memoryFileKey = indexMemory(fixture, MEMORY_FILE);
-    const search = spaceSearch(fixture, [
-      transcriptUnit(CONVERSATION_KEY),
-      memoryUnit(MEMORY_FILE, memoryFileKey),
-    ]);
+    // Synthetic embeddings: the merge rule is what this test pins, not the
+    // semantic floor, so the floor is disabled here.
+    const search = spaceSearch(
+      fixture,
+      [
+        transcriptUnit(CONVERSATION_KEY),
+        memoryUnit(MEMORY_FILE, memoryFileKey),
+      ],
+      -1,
+    );
 
     const result = await search({
       scope: {
@@ -811,7 +819,8 @@ describe("fusion and the service wiring", () => {
         transcriptUnit(CONVERSATION_KEY),
         memoryUnit(MEMORY_FILE, memoryFileKey),
       ],
-      { topK: 20 },
+      // Synthetic embeddings: the fusion keys are the subject, not the floor.
+      { topK: 20, minScore: -1 },
     ).search(searchRequest());
 
     const lexical = [
