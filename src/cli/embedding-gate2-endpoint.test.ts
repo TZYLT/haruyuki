@@ -143,6 +143,8 @@ function vectorSourceFor(input: {
   messages: () => readonly RecallMessageText[];
   conversationKey: string;
   spaceId?: string;
+  /** `-1` disables the cosine floor so a drift test reaches the mapping layer. */
+  minScore?: number;
 }) {
   return createVectorRecallSource({
     encoder: {
@@ -156,6 +158,7 @@ function vectorSourceFor(input: {
       space: { agentId: AGENT_ID, spaceId: input.spaceId ?? SPACE_ID },
       root: vectorRoot,
       units: [{ kind: "transcript", conversationKey: input.conversationKey }],
+      ...(input.minScore === undefined ? {} : { minScore: input.minScore }),
     }),
     parentReader: createGate2ParentPort({ messages: input.messages }),
     topK: 50,
@@ -644,6 +647,9 @@ describe("group D - F-15 injection window rules", () => {
       messages: () => current,
       conversationKey: "conv-drift",
       spaceId: "space-drift",
+      // The default cosine floor can filter this edited parent before the drift
+      // check runs; the point of this test is the mapping layer's own drop.
+      minScore: -1,
     });
     // Simulate an edit between the build and the query: same message id, new text.
     current = gate2MessageTexts([
