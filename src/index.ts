@@ -4,6 +4,7 @@ import { APIError } from "@letta-ai/letta-client/core/error";
 import type { AgentState } from "@letta-ai/letta-client/resources/agents/agents";
 import type { Message } from "@letta-ai/letta-client/resources/agents/messages";
 import { wireFullScreenTerminal } from "@/cli/app/shell/full-screen-terminal";
+import { applyEmbeddingSetupFlags } from "@/cli/commands/embedding-flags";
 import { APP_BINARY_NAME } from "@/constants";
 import { getTerminalTelemetrySurface, telemetry } from "@/telemetry";
 import { trackBoundaryError } from "@/telemetry/error-reporting";
@@ -894,6 +895,22 @@ async function main(): Promise<void> {
   }
 
   markMilestone("TUI_MODE_START");
+
+  // The `--recall-embedding*` flags configure startup state, so the interactive
+  // path must apply them too; before this they were parsed and then silently
+  // ignored whenever stdin was a TTY (headless was the only consumer). A bad
+  // combination is refused before Ink mounts, where the message stays visible.
+  const embeddingFlags = await applyEmbeddingSetupFlags(values, {
+    agentId: null,
+    conversationId: null,
+  });
+  if (!embeddingFlags.ok) {
+    console.error(`Error: ${embeddingFlags.error}`);
+    process.exit(1);
+  }
+  if (embeddingFlags.receipt.length > 0) {
+    console.error(embeddingFlags.receipt);
+  }
 
   // Interactive: lazy-load React/Ink + App
   markMilestone("REACT_IMPORT_START");
