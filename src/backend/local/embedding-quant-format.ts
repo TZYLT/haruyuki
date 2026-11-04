@@ -171,9 +171,13 @@ export function writeEmbeddingQuantIndex(
       quantized.codes.byteLength,
     ),
   );
-  const exactBytes = rescore
-    ? encodeFloat32Vectors(input.vectors, dimensions)
-    : undefined;
+  // An empty generation has no originals to keep: writing a zero-byte
+  // `vectors.float32.bin` alongside its checksum would make the reader reject
+  // the generation as corrupt, because it treats size 0 as "no file".
+  const exactBytes =
+    rescore && input.vectors.length > 0
+      ? encodeFloat32Vectors(input.vectors, dimensions)
+      : undefined;
   const checksum = quantChecksum(recordsBytes, codesBytes);
   const identity = unitIdentity(input.unit);
   const createdAt = new Date().toISOString();

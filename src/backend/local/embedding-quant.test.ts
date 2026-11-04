@@ -786,6 +786,30 @@ describe("int8 on-disk generation", () => {
     expect(result.rescoreUnavailable).toBe(true);
   });
 
+  test("an empty generation round-trips without a phantom float32 file", () => {
+    const written = writeEmbeddingQuantIndex({
+      unitDir: unitDir(),
+      unit,
+      modelId: "bge-small-zh-v1.5",
+      dimensions: EMBEDDING_FIXTURE_DIMENSIONS,
+      records: [],
+      vectors: [],
+      coverage: { embeddedChars: 0, recallableChars: 0, ratio: 0 },
+      generation: "gen-i8-empty",
+    });
+    expect(written.meta.chunkCount).toBe(0);
+    expect(written.meta.float32VectorsBytes).toBe(0);
+    expect(written.meta.float32Checksum).toBeUndefined();
+
+    const read = readEmbeddingQuantIndex(unitDir());
+    expectOk(read);
+    expect(read.snapshot.meta.chunkCount).toBe(0);
+    expect(read.snapshot.records).toEqual([]);
+    expect(read.snapshot.exactVectors).toBeUndefined();
+    expect(read.snapshot.mode).toBe("int8-only");
+    expect(read.snapshot.rescoreUnavailable).toBe(true);
+  });
+
   test("a damaged int8 generation is a typed problem, not a throw", () => {
     const written = writeQuantGeneration({ generation: "gen-i8-bad" });
     truncateSync(
