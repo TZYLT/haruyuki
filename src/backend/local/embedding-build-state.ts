@@ -391,7 +391,18 @@ export function mergeEmbeddingBuildProgress(
   let finishedAt =
     update.finishedAt !== undefined ? update.finishedAt : state.finishedAt;
   if (update.phase !== undefined) {
-    if (update.phase === "running" && startedAt === null) startedAt = now;
+    if (update.phase === "running") {
+      // `startedAt` is the start of *this* run. An interrupted run continues
+      // its clock; a run that starts after a terminal (or idle) state starts a
+      // new one, otherwise a second build inherits the previous run's start.
+      const continuing =
+        state.phase === "running" || state.phase === "cancelling";
+      if (update.startedAt !== undefined) {
+        startedAt = update.startedAt;
+      } else if (!continuing || startedAt === null) {
+        startedAt = now;
+      }
+    }
     if (isTerminalBuildPhase(update.phase)) {
       if (finishedAt === null) finishedAt = now;
     } else if (update.phase === "running" || update.phase === "cancelling") {

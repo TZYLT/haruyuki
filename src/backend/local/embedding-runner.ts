@@ -80,6 +80,7 @@ import {
   readEmbeddingIndex,
   writeEmbeddingIndex,
 } from "./embedding-format";
+import { pruneEmbeddingGenerations } from "./embedding-generation-prune";
 import {
   createEmbeddingLeaseForLock,
   type EmbeddingLeaseHandle,
@@ -105,6 +106,17 @@ export const EMBEDDING_RUN_HEARTBEAT_INTERVAL_MS = 30_000;
 
 /** Upper bound on a persisted failure message; callers must already redact. */
 const MAX_FAILURE_MESSAGE_CHARS = 300;
+
+/**
+ * Thrown from the heartbeat-wrapped `embed` when the space lock is no longer
+ * ours; the unit loop turns it into the typed `lock_lost` rejection.
+ */
+class EmbeddingLockLostError extends Error {
+  constructor() {
+    super("The build lost the space lock while embedding.");
+    this.name = "EmbeddingLockLostError";
+  }
+}
 
 /** Same component rule B2 applies to path segments; keeps space dirs inside. */
 const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -533,7 +545,10 @@ export async function runEmbeddingBuild(
       });
     };
 
-    const resumeStartedAt = resumeState?.startedAt ?? undefined;
+    const resumeStartedAt =
+      resumeState !== null && !isTerminalBuildPhase(resumeState.phase)
+        ? (resumeState.startedAt ?? undefined)
+        : undefined;
     const initialError = await checkpoint({
       buildId,
       mode,
@@ -560,24 +575,44 @@ export async function runEmbeddingBuild(
     let aborted = false;
     let lockLost = false;
 
+    /** Refreshes the lock/lease when due; `false` means the lock is no longer ours. */
+    const refreshLockIfDue = async (): Promise<boolean> => {
+      const now = clock();
+      if (now - lastHeartbeatAt < heartbeatIntervalMs) return true;
+      let alive = false;
+      try {
+        alive = await heartbeatEmbeddingBuildLockAndLease(lock, lease);
+      } catch {
+        alive = false;
+      }
+      lastHeartbeatAt = now;
+      return alive;
+    };
+
+    /**
+     * `embed` with a heartbeat between batches. A single unit may embed for
+     * longer than the lock's stale window (a slow endpoint, a large
+     * conversation); heartbeating only between units would let the lock go
+     * stale mid-unit and a second builder could reap it while this one still
+     * writes. The wrapper keeps the lock fresh at the same granularity as
+     * cancellation (one batch).
+     */
+    const embedWithHeartbeat: EmbeddingEmbedCallback = async (chunks) => {
+      if (!(await refreshLockIfDue())) {
+        lockLost = true;
+        throw new EmbeddingLockLostError();
+      }
+      return options.embed(chunks);
+    };
+
     for (const runUnit of units) {
       if (abortRequested(options)) {
         aborted = true;
         break;
       }
-      const now = clock();
-      if (now - lastHeartbeatAt >= heartbeatIntervalMs) {
-        let alive = false;
-        try {
-          alive = await heartbeatEmbeddingBuildLockAndLease(lock, lease);
-        } catch {
-          alive = false;
-        }
-        if (!alive) {
-          lockLost = true;
-          break;
-        }
-        lastHeartbeatAt = now;
+      if (!(await refreshLockIfDue())) {
+        lockLost = true;
+        break;
       }
 
       if (!runUnit || !runUnit.unit) {
@@ -636,7 +671,7 @@ export async function runEmbeddingBuild(
       let built: EmbeddingBuildResult;
       try {
         built = await buildEmbeddingIndex(runUnit.plans, {
-          embed: options.embed,
+          embed: embedWithHeartbeat,
           previous,
           reuse: options.reuse ?? mode !== "full",
           batchSize: batch.chunkBatchSize,
@@ -652,6 +687,10 @@ export async function runEmbeddingBuild(
             : { isAborted: options.isAborted }),
         });
       } catch (error) {
+        // The heartbeat-wrapped `embed` aborted the unit because the space
+        // lock is gone; that is not an embed failure and must not be recorded
+        // as one.
+        if (lockLost) break;
         const stateError = await unitFailure(
           unitId,
           kind,
@@ -712,6 +751,11 @@ export async function runEmbeddingBuild(
         if (stateError !== null) return result("failed", { error: stateError });
         continue;
       }
+
+      // Bound disk growth: the commit above makes the older generations
+      // unreachable, except for the immediate previous one a concurrent query
+      // may still be reading. Cleanup is best effort and never fails a build.
+      pruneEmbeddingGenerations(unitDir);
 
       completedUnits += 1;
       reusedChunks += built.reusedChunks;

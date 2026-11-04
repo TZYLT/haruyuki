@@ -17,7 +17,7 @@ import {
   expect,
   test,
 } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { EmbeddingCalibrationBudget } from "@/backend/local/embedding/calibration";
 import type { EmbeddingEmbedCallback } from "@/backend/local/embedding-build";
@@ -679,12 +679,14 @@ describe("cancellation and resume", () => {
     const path = embeddingBuildStatePath(spaceDir);
     const persisted = await readEmbeddingBuildState(path, IDENTITY);
     expect(persisted.status).toBe("ok");
+    const resumedFrom = persisted.state.startedAt;
     await writeEmbeddingBuildState(path, {
       ...persisted.state,
       phase: "running",
       finishedAt: null,
     });
 
+    clock.advance(5_000);
     const secondRecorder = recordingEmbed();
     const second = await runEmbeddingBuild(
       runnerOptions(secondRecorder, units),
@@ -692,6 +694,9 @@ describe("cancellation and resume", () => {
 
     expect(second.status).toBe("completed");
     expect(second.buildId).toBe(first.buildId);
+    // A resumed run continues the interrupted run's clock instead of
+    // pretending it started at the resume moment.
+    expect(second.state?.startedAt).toBe(resumedFrom);
     expect(second.completedUnits).toBe(2);
     expect(second.reusedChunks).toBe(expectedChunks([unitAt(units, 0)]));
     expect(second.embeddedChunks).toBe(expectedChunks([unitAt(units, 1)]));
@@ -730,7 +735,10 @@ describe("cancellation and resume", () => {
       runnerOptions(recordingEmbed({ clock }), units),
     );
     expect(first.status).toBe("completed");
+    const firstStartedAt = first.state?.startedAt;
 
+    clock.advance(60_000);
+    const secondStartedAt = clock.now();
     const secondRecorder = recordingEmbed();
     const second = await runEmbeddingBuild(
       runnerOptions(secondRecorder, units),
@@ -740,10 +748,29 @@ describe("cancellation and resume", () => {
     expect(secondRecorder.calls).toEqual([]);
     expect(second.reusedChunks).toBe(first.embeddedChunks);
     expect(second.embeddedChunks).toBe(0);
+    // A fresh run does not report the previous run's start time.
+    expect(second.state?.startedAt).toBe(secondStartedAt);
+    expect(second.state?.startedAt).not.toBe(firstStartedAt);
     for (const runUnit of units) {
       const snapshot = readUnitSnapshot(unitOf(runUnit));
       expect(snapshot?.meta.chunkCount).toBeGreaterThan(0);
     }
+  });
+  test("a rebuild keeps only the current and previous generation", async () => {
+    const units = [conversationUnit("conv-a", [["msg-1", TEXT_A]])];
+    for (let run = 0; run < 3; run += 1) {
+      const result = await runEmbeddingBuild(
+        runnerOptions(recordingEmbed(), units),
+      );
+      expect(result.status).toBe("completed");
+    }
+    const unitDir = embeddingVectorUnitDir(unitOf(unitAt(units, 0)), {
+      root: dirs.root,
+    });
+    const generations = readdirSync(unitDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    expect(generations).toHaveLength(2);
   });
 });
 
@@ -828,6 +855,57 @@ describe("space lock", () => {
     const state = await readState();
     expect(state.phase).toBe("failed");
     expect(state.progress.embeddedChunks).toBeGreaterThan(0);
+  });
+
+  test("a lock lost between embed batches stops without writing the unit", async () => {
+    // One unit with 40 chunks needs two embed batches at the default size, and
+    // the unit itself never checkpoints, so only the in-batch heartbeat can
+    // notice the theft before the unit is written.
+    const longPlan = fakePlan(
+      "parent-long",
+      Array.from({ length: 40 }, () => 10),
+    );
+    const units: EmbeddingRunUnit[] = [
+      {
+        unit: {
+          agentId: IDENTITY.agentId,
+          spaceId: IDENTITY.spaceId,
+          conversationKey: "conv-long",
+        },
+        plans: [longPlan],
+      },
+    ];
+    let batches = 0;
+    const recorder = recordingEmbed({
+      onCall: (call) => {
+        if (call !== 1) return;
+        rmSync(embeddingBuildLockPath(spaceDir), { force: true });
+      },
+    });
+    const recordingEmbedCallback = recorder.embed;
+    const embed: EmbeddingEmbedCallback = async (chunks) => {
+      batches += 1;
+      return await recordingEmbedCallback(chunks);
+    };
+
+    const result = await runEmbeddingBuild(
+      runnerOptions({ ...recorder, embed }, units, {
+        heartbeatIntervalMs: 0,
+        lockEnvironment: {
+          clock: clock.now,
+          pid: 555,
+          host: "test-host",
+          token: "mine",
+          isPidAlive: () => true,
+        },
+      }),
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error?.code).toBe("lock_lost");
+    expect(batches).toBe(1);
+    expect(result.embeddedChunks).toBe(0);
+    expect(readUnitSnapshot(unitOf(unitAt(units, 0)))).toBeNull();
   });
 });
 

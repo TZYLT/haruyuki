@@ -312,6 +312,51 @@ describe("mergeEmbeddingBuildProgress", () => {
     expect(state.startedAt).toBe(now - 4_000);
   });
 
+  test("a new run after a finished one starts its own clock", () => {
+    let state = emptyState();
+    state = mergeEmbeddingBuildProgress(state, { phase: "running" }, { clock });
+    const firstStartedAt = state.startedAt;
+    expect(firstStartedAt).toBe(now);
+
+    now += 4_000;
+    state = mergeEmbeddingBuildProgress(
+      state,
+      { phase: "completed" },
+      { clock },
+    );
+    expect(state.startedAt).toBe(firstStartedAt);
+
+    now += 1_000;
+    state = mergeEmbeddingBuildProgress(state, { phase: "running" }, { clock });
+    // The previous run's start must not be reported as this run's start.
+    expect(state.startedAt).toBe(now);
+    expect(state.finishedAt).toBeNull();
+  });
+
+  test("resuming an interrupted run keeps its original start", () => {
+    let state = emptyState();
+    state = mergeEmbeddingBuildProgress(state, { phase: "running" }, { clock });
+    const startedAt = state.startedAt;
+
+    now += 4_000;
+    state = mergeEmbeddingBuildProgress(
+      state,
+      { phase: "cancelled" },
+      { clock },
+    );
+    // Simulate the killed-process checkpoint the runner reads back.
+    state = { ...state, phase: "running", finishedAt: null };
+
+    now += 1_000;
+    state = mergeEmbeddingBuildProgress(
+      state,
+      { phase: "running", startedAt: startedAt ?? undefined },
+      { clock },
+    );
+    expect(state.startedAt).toBe(startedAt);
+    expect(state.finishedAt).toBeNull();
+  });
+
   test("appends failures and keeps the list bounded", () => {
     let state = emptyState();
     for (let index = 0; index < EMBEDDING_BUILD_MAX_FAILURES + 5; index += 1) {
