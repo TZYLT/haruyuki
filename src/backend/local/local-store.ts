@@ -729,6 +729,18 @@ export class LocalStore {
   }
 
   /**
+   * The vector-unit key that mirrors this conversation's transcript directory.
+   * `LocalBackend.deleteConversation` hands it to the embedding cascade while
+   * the record still resolves; the builder stores units under this encoding.
+   */
+  vectorUnitKeyForConversation(
+    conversationId: string,
+    agentId: string,
+  ): string {
+    return encodePathSegment(this.conversationKey(conversationId, agentId));
+  }
+
+  /**
    * The record a deletion targets, resolved without deleting it.
    *
    * `LocalBackend.deleteConversation` needs the owning agent (for the

@@ -44,6 +44,10 @@ import {
   prepareCompaction as prepareCompactionRun,
 } from "./compaction-run";
 import { summarizeConversation } from "./compaction-summarizer";
+import {
+  removeEmbeddingAgentVectorRoot,
+  removeEmbeddingConversationVectorUnits,
+} from "./embedding-cascade";
 import { initialMemoryFilesFromCreateBody } from "./initial-memory";
 import {
   compactionSettingsRecord,
@@ -82,6 +86,7 @@ import {
 import type { LocalTopicCreatedBy } from "./local-transcript-topic-entry";
 import {
   getLocalBackendMemoryFilesystemRoot,
+  getLocalBackendStorageDir,
   isLocalBackendMemfsDisabledForProcess,
 } from "./paths";
 import {
@@ -453,6 +458,10 @@ export class LocalBackend extends HeadlessBackend {
   async deleteConversation(conversationId: string): Promise<void> {
     const conversation =
       this.store.resolveConversationRecordForDelete(conversationId);
+    const vectorUnitKey = this.store.vectorUnitKeyForConversation(
+      conversationId,
+      conversation.agent_id,
+    );
     this.store.deleteConversation(conversationId, conversation.agent_id);
     // The transcript is gone, so this drops the conversation's index record.
     this.refreshTopicIndex(conversationId, conversation.agent_id);
@@ -461,6 +470,39 @@ export class LocalBackend extends HeadlessBackend {
       agentFree: conversation.agent_free === true,
       conversationId,
     });
+    // Derived vectors follow the transcript out (48-1 R-16); best-effort.
+    if (this.shouldCascadeEmbeddingVectors()) {
+      removeEmbeddingConversationVectorUnits(
+        conversation.agent_id,
+        vectorUnitKey,
+      );
+    }
+  }
+
+  /**
+   * Agent deletion has no dedicated hook in `HeadlessBackend`, so the local
+   * backend adds the vector cascade after the transcript store is gone.
+   */
+  override async deleteAgent(...args: Parameters<Backend["deleteAgent"]>) {
+    const [agentId] = args;
+    await super.deleteAgent(...args);
+    if (this.shouldCascadeEmbeddingVectors()) {
+      removeEmbeddingAgentVectorRoot(agentId);
+    }
+    return undefined as never;
+  }
+
+  /**
+   * The vector index lives under the harness home, not the local-backend
+   * storage dir. A test process gets a temp storage dir but inherits the real
+   * harness home, so cascading there would read live data (docs/31 A1): skip
+   * unless the caller redirected the home or we are the default production
+   * backend.
+   */
+  private shouldCascadeEmbeddingVectors(): boolean {
+    if (process.env.HARUYUKI_HOME) return true;
+    if (process.env.NODE_ENV === "test") return false;
+    return this.storageDir === getLocalBackendStorageDir();
   }
 
   override async recompileConversation(
