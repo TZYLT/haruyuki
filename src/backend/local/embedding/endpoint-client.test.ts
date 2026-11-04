@@ -797,6 +797,32 @@ describe("circuit breaker", () => {
     expect(skipped.kind).toBe("circuit-open");
   });
 
+  test("does not count a caller-side abort toward the breaker", async () => {
+    const requestImpl: EmbeddingEndpointRequestImpl = async () => {
+      const error = new Error("The embedding request budget was exhausted.");
+      (error as { code?: string }).code = "ABORT_ERR";
+      throw error;
+    };
+    const client = createEmbeddingEndpointClient({
+      kind: "openai",
+      baseUrl: "http://127.0.0.1:9",
+      model: "text-embedding-3-small",
+      maxRetries: 0,
+      breakerThreshold: 1,
+      breakerCooldownMs: 5_000,
+      requestImpl,
+    });
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const error = asEndpointError(
+        await captureError(() => client.embed(["hello"])),
+      );
+      expect(error.kind).toBe("aborted");
+    }
+    // Three budget aborts are not three endpoint failures (48-1 §6.9).
+    expect(client.circuitState()).toBe("closed");
+  });
+
   test("resetCircuit closes the breaker explicitly", async () => {
     let mode: "ok" | "fail" = "fail";
     const server = await startMockServer((request) => {

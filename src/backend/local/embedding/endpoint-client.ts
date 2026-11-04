@@ -44,6 +44,7 @@ import {
   defaultEndpointRequest,
   EmbeddingEndpointError,
   type EmbeddingEndpointRequestImpl,
+  isEmbeddingEndpointError,
   requestEndpointJson,
   responseError,
   shapeRequestError,
@@ -784,6 +785,13 @@ export function createEmbeddingEndpointClient(
         openUntil = 0;
         return vectors;
       } catch (error) {
+        // A caller-side abort is the query-budget fallback, not an endpoint
+        // failure: 48-1 §6.9 says an encode that overruns its budget degrades
+        // this turn and is not counted by the breaker. Counting it would let
+        // three merely slow turns disable the vector arm.
+        if (isEmbeddingEndpointError(error) && error.kind === "aborted") {
+          throw error;
+        }
         consecutiveFailures += 1;
         if (
           state === "half-open" ||
