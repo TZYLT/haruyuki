@@ -17,6 +17,7 @@ import { SYSTEM_REMINDER_CLOSE, SYSTEM_REMINDER_OPEN } from "@/constants";
 import { experimentManager } from "@/experiments/manager";
 import { permissionMode } from "@/permissions/mode";
 import {
+  readEmbeddingSettings,
   readRecallSettings,
   recallOptionsFromSettings,
 } from "@/recall-settings";
@@ -30,6 +31,7 @@ import {
   type SharedReminderMode,
 } from "./catalog";
 import { evaluateDiskSpaceReminder } from "./disk-space";
+import type { RecallEmbeddingArms } from "./recall-embedding-arms";
 import { formatRecallReminder } from "./recall-reminder";
 import { recallBreakerTripped, recordRecallDecision } from "./recall-runtime";
 import { formatReflectionRunNotice } from "./reflection-run";
@@ -610,6 +612,35 @@ async function buildRecallReminder(
     const backend = getBackend();
     if (!(backend instanceof LocalBackend)) return null;
 
+    // Feature 48 (rework B): the vector arm, built only when the user enabled
+    // embedding recall and the space has usable units. Reading the settings is a
+    // value lookup, so an embedding-off turn performs no new I/O and passes
+    // `runRecall` exactly the arguments it passed before this wiring existed; a
+    // construction failure costs the arm only (invariant I7).
+    const embeddingSettings = readEmbeddingSettings();
+    let arms: RecallEmbeddingArms | null = null;
+    if (embeddingSettings.enabled) {
+      try {
+        // Loaded only when the feature is on, so the embedding-off path never
+        // pulls in the encoder and B2 reader.
+        const { maybeCreateRecallEmbeddingArms } = await import(
+          "./recall-embedding-arms"
+        );
+        arms = maybeCreateRecallEmbeddingArms({
+          backend,
+          agentId: context.agent.id,
+          settings: embeddingSettings,
+        });
+      } catch (error) {
+        debugLog(
+          "recall",
+          `Embedding arms unavailable: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        arms = null;
+      }
+    }
     const decision = await runRecall({
       backend,
       agentId: context.agent.id,
@@ -621,6 +652,9 @@ async function buildRecallReminder(
       // two a chance to disagree.
       currentTurn: context.state.turnCount,
       options: recallOptionsFromSettings(settings),
+      ...(arms === null
+        ? {}
+        : { vectorSource: arms.vectorSource, fusion: arms.fusion }),
     });
     debugLog(
       "recall",
