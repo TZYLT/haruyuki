@@ -151,7 +151,15 @@ export class EmbeddingWorkerClient {
 
   private readonly pending = new Map<number, PendingRequest>();
   private nextRequestId = 1;
-  private decoder = new StringDecoder("utf8");
+  /**
+   * One decoder per stream. Sharing a single `StringDecoder` between stdout and
+   * stderr corrupts both: a multi-byte UTF-8 character split across a chunk
+   * boundary is held inside the decoder, so bytes from the other stream would
+   * complete (or be consumed by) that pending sequence — turning a benign
+   * stderr write into a protocol-desync that kills the worker.
+   */
+  private stdoutDecoder = new StringDecoder("utf8");
+  private stderrDecoder = new StringDecoder("utf8");
   private stdoutBuffer = "";
   private stderrBuffer = "";
 
@@ -538,7 +546,8 @@ export class EmbeddingWorkerClient {
     this.readyFrame = null;
     this.stdoutBuffer = "";
     this.stderrBuffer = "";
-    this.decoder = new StringDecoder("utf8");
+    this.stdoutDecoder = new StringDecoder("utf8");
+    this.stderrDecoder = new StringDecoder("utf8");
     this.watchdog.noteSpawn();
     this.state = "starting";
     const timeouts = this.timeouts;
@@ -637,7 +646,7 @@ export class EmbeddingWorkerClient {
         this.stdoutBuffer +=
           typeof chunk === "string"
             ? chunk
-            : this.decoder.write(Buffer.from(chunk));
+            : this.stdoutDecoder.write(Buffer.from(chunk));
         this.consumeStdoutLines();
       }
     } catch {
@@ -652,7 +661,7 @@ export class EmbeddingWorkerClient {
         const text =
           typeof chunk === "string"
             ? chunk
-            : this.decoder.write(Buffer.from(chunk));
+            : this.stderrDecoder.write(Buffer.from(chunk));
         this.stderrBuffer = `${this.stderrBuffer}${text}`.slice(
           -MAX_STDERR_CHARS,
         );
