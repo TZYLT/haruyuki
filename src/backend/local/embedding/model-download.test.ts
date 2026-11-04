@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -839,6 +840,11 @@ describe("importModelFromDirectory", () => {
     );
     expect(error.kind).toBe("checksum");
     expect(existsSync(join(root, "model"))).toBe(false);
+    // The import copies into a random `.model.import-*` sibling and has no
+    // resumable state, so a failed run must not leave that copy behind.
+    expect(
+      readdirSync(root).filter((entry) => entry.startsWith(".model.import-")),
+    ).toEqual([]);
   });
 
   test("rejects a missing required file", async () => {

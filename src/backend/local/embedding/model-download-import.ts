@@ -14,7 +14,7 @@
 
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   buildInstallManifest,
@@ -247,10 +247,17 @@ async function runImportModel(
       warnings,
     };
   } catch (error) {
+    // Unlike a download, an import has no resumable state: the staging path is
+    // a random per-run sibling, so leaving it behind can only leak a full copy
+    // of the weights. Drop it (best effort) before reporting the failure; the
+    // user's source directory is never touched.
+    await rm(stagingDir, { force: true, recursive: true }).catch(
+      () => undefined,
+    );
     if (isAbortError(error)) {
       throw new EmbeddingModelDownloadError(
         "aborted",
-        `Model import was cancelled; the staging directory was kept at ${stagingDir}.`,
+        "Model import was cancelled; the partial staging copy was discarded.",
         { cause: error, modelId },
       );
     }
