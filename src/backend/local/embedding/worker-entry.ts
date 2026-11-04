@@ -30,6 +30,7 @@ import {
   padTokenBatch,
   planTokenBatches,
   poolBatch,
+  resolveModelInputNames,
   sumSequenceTokens,
   truncateSequence,
 } from "./featurize";
@@ -67,6 +68,8 @@ export const DEFAULT_WARMUP_TEXT = ".";
 export interface EmbeddingSessionInput {
   readonly inputIds: Int32Array;
   readonly attentionMask: Int32Array;
+  /** Segment ids for BERT-family graphs; zero-filled when the model has none. */
+  readonly tokenTypeIds?: Int32Array;
   readonly sequences: number;
   readonly tokens: number;
 }
@@ -77,6 +80,8 @@ export interface EmbeddingSessionOutput {
 }
 
 export interface EmbeddingSession {
+  /** The graph's input names; drives which feeds `run` must supply. */
+  readonly inputNames?: readonly string[];
   run(input: EmbeddingSessionInput): Promise<EmbeddingSessionOutput>;
   release?(): void | Promise<void>;
 }
@@ -475,6 +480,7 @@ class EmbeddingWorkerState {
           ),
         ],
         tokenizer.padTokenId ?? 0,
+        { includeTokenTypeIds: sessionNeedsTokenTypeIds(session) },
       );
       const output = await session.run(batch);
       assertHiddenStateShape(
@@ -550,7 +556,9 @@ class EmbeddingWorkerState {
           cancelled = true;
           break;
         }
-        const padded = padTokenBatch(batch, tokenizer.padTokenId ?? 0);
+        const padded = padTokenBatch(batch, tokenizer.padTokenId ?? 0, {
+          includeTokenTypeIds: sessionNeedsTokenTypeIds(session),
+        });
         const output = await session.run(padded);
         if (output.dim !== dim) {
           throw new WorkerRequestError(
@@ -705,6 +713,11 @@ function toFloat32(data: unknown): Float32Array {
   throw new Error("The inference output tensor has no numeric data.");
 }
 
+/** True when the graph declares the BERT-family segment-id input. */
+function sessionNeedsTokenTypeIds(session: EmbeddingSession): boolean {
+  return session.inputNames?.includes("token_type_ids") === true;
+}
+
 /** Dynamic `onnxruntime-node` loader; C5 decides threads/providers. */ export function createOnnxRuntimeLoader(): EmbeddingRuntimeLoader {
   return async ({ runtimeDir }) => {
     const ort = resolveOnnxModule(
@@ -724,28 +737,38 @@ function toFloat32(data: unknown): Float32Array {
           enableMemPattern: false,
           logSeverityLevel: 3,
         });
-        const [inputIdsName, attentionMaskName] = session.inputNames ?? [];
-        if (inputIdsName === undefined || attentionMaskName === undefined) {
-          throw new Error(
-            "The inference session must expose input_ids and attention_mask.",
-          );
-        }
+        const inputNames = session.inputNames ?? [];
+        // BGE graphs expose a third `token_type_ids` input; feeding only the
+        // first two names (the old order-based assumption) left it unfed and
+        // ORT refused the session. Resolve every feed by name instead.
+        const resolvedInputs = resolveModelInputNames(inputNames);
         const release = session.release?.bind(session);
         return {
+          inputNames: Object.freeze([...inputNames]),
           async run(input): Promise<EmbeddingSessionOutput> {
             const dims = [input.sequences, input.tokens];
-            const outputs = await session.run({
-              [inputIdsName]: new ort.Tensor(
+            const feeds: Record<string, unknown> = {
+              [resolvedInputs.inputIds]: new ort.Tensor(
                 "int64",
                 toBigInt64(input.inputIds),
                 dims,
               ),
-              [attentionMaskName]: new ort.Tensor(
+              [resolvedInputs.attentionMask]: new ort.Tensor(
                 "int64",
                 toBigInt64(input.attentionMask),
                 dims,
               ),
-            });
+            };
+            if (resolvedInputs.tokenTypeIds !== null) {
+              feeds[resolvedInputs.tokenTypeIds] = new ort.Tensor(
+                "int64",
+                toBigInt64(
+                  input.tokenTypeIds ?? new Int32Array(input.inputIds.length),
+                ),
+                dims,
+              );
+            }
+            const outputs = await session.run(feeds);
             const outputName =
               session.outputNames?.[0] ?? Object.keys(outputs)[0];
             const output =

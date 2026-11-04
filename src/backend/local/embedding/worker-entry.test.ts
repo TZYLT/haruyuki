@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { decodeVectorBase64 } from "./featurize";
 import { EmbeddingWorkerClient } from "./worker-client";
 import {
+  createOnnxRuntimeLoader,
   type EmbeddingRuntime,
   type EmbeddingSession,
   type EmbeddingSessionInput,
@@ -854,6 +855,90 @@ describe("tokenizer module contract", () => {
         inputIds: [42, 2],
         attentionMask: [1, 1],
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("createOnnxRuntimeLoader input feeds", () => {
+  function writeFakeOrt(root: string, inputNames: readonly string[]): void {
+    const packageDir = join(root, "node_modules", "onnxruntime-node");
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(join(root, "package.json"), "{}");
+    writeFileSync(
+      join(packageDir, "package.json"),
+      JSON.stringify({ name: "onnxruntime-node", main: "index.cjs" }),
+    );
+    writeFileSync(
+      join(packageDir, "index.cjs"),
+      [
+        "class Tensor {",
+        "  constructor(type, data, dims) {",
+        "    this.type = type;",
+        "    this.data = data;",
+        "    this.dims = dims;",
+        "  }",
+        "}",
+        "const InferenceSession = {",
+        "  async create() {",
+        "    return {",
+        `      inputNames: ${JSON.stringify(inputNames)},`,
+        '      outputNames: ["last_hidden_state"],',
+        "      async run(feeds) {",
+        "        globalThis.__embeddingFeeds = feeds;",
+        "        return {",
+        '          last_hidden_state: new Tensor("float32", new Float32Array(6), [2, 1, 3]),',
+        "        };",
+        "      },",
+        "    };",
+        "  },",
+        "};",
+        "module.exports = { InferenceSession, Tensor };",
+      ].join("\n"),
+    );
+  }
+
+  test("feeds token_type_ids when the BGE graph declares it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hryk-onnx-feeds-"));
+    try {
+      writeFakeOrt(root, ["input_ids", "attention_mask", "token_type_ids"]);
+      const runtime = await createOnnxRuntimeLoader()({ runtimeDir: root });
+      const session = await runtime.createSession({
+        runtimeDir: root,
+        modelPath: "model.onnx",
+      });
+      const output = await session.run({
+        inputIds: Int32Array.from([1, 2]),
+        attentionMask: Int32Array.from([1, 1]),
+        sequences: 2,
+        tokens: 1,
+      });
+      expect(output.dim).toBe(3);
+      const feeds = (
+        globalThis as {
+          __embeddingFeeds?: Record<string, { data: BigInt64Array }>;
+        }
+      ).__embeddingFeeds;
+      expect(Object.keys(feeds ?? {}).sort()).toEqual([
+        "attention_mask",
+        "input_ids",
+        "token_type_ids",
+      ]);
+      expect(feeds?.token_type_ids?.data).toEqual(BigInt64Array.from([0n, 0n]));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a graph whose inputs the worker cannot feed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hryk-onnx-feeds-bad-"));
+    try {
+      writeFakeOrt(root, ["input_ids", "position_ids"]);
+      const runtime = await createOnnxRuntimeLoader()({ runtimeDir: root });
+      await expect(
+        runtime.createSession({ runtimeDir: root, modelPath: "model.onnx" }),
+      ).rejects.toThrow("Unsupported model input name");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
