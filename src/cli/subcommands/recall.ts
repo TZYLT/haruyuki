@@ -86,6 +86,25 @@ function parseRecallArgs(argv: string[]) {
 }
 
 /**
+ * One of the three shared options' values.
+ *
+ * A missing value (or the next token being another flag) is an error rather
+ * than a silent fallback: `--agent --full` used to swallow `--full` as the
+ * agent id and drop the flag the user actually asked for.
+ */
+function optionValue(
+  argv: string[],
+  index: number,
+  name: string,
+): { value: string } | { error: string } {
+  const value = argv[index + 1];
+  if (value === undefined || value.trim().length === 0 || value.startsWith("-")) {
+    return { error: `${name} needs a value.` };
+  }
+  return { value: value.trim() };
+}
+
+/**
  * The embedding family's own flags (`--full`, `--confirm`, `--keep-after-exit`)
  * are not `haruyuki recall` options, and `parseArgs(..., strict: true)` would
  * reject them before the command ever sees them. Split them out first: pull the
@@ -99,29 +118,36 @@ function splitEmbeddingArgv(argv: string[]): {
   agent?: string;
   conversation?: string;
   help: boolean;
+  error?: string;
 } | null {
   const positionals: string[] = [];
   let agent: string | undefined;
   let conversation: string | undefined;
   let help = false;
+  let error: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index] ?? "";
-    if (token === "--agent") {
-      agent = argv[index + 1];
+    if (token === "--agent" || token === "--conversation") {
+      const name = token === "--agent" ? "--agent" : "--conversation";
+      const read = optionValue(argv, index, name);
       index += 1;
+      if ("error" in read) {
+        error = error ?? read.error;
+        continue;
+      }
+      if (name === "--agent") agent = read.value;
+      else conversation = read.value;
       continue;
     }
-    if (token.startsWith("--agent=")) {
-      agent = token.slice("--agent=".length);
-      continue;
-    }
-    if (token === "--conversation") {
-      conversation = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    if (token.startsWith("--conversation=")) {
-      conversation = token.slice("--conversation=".length);
+    if (token.startsWith("--agent=") || token.startsWith("--conversation=")) {
+      const name = token.slice(0, token.indexOf("="));
+      const value = token.slice(token.indexOf("=") + 1).trim();
+      if (value.length === 0) {
+        error = error ?? `${name} needs a value.`;
+        continue;
+      }
+      if (name === "--agent") agent = value;
+      else conversation = value;
       continue;
     }
     if (token === "-h" || token === "--help") {
@@ -131,7 +157,7 @@ function splitEmbeddingArgv(argv: string[]): {
     positionals.push(token);
   }
   if (positionals[0] !== "embedding") return null;
-  return { positionals, agent, conversation, help };
+  return { positionals, agent, conversation, help, ...(error === undefined ? {} : { error }) };
 }
 
 export async function runRecallSubcommand(
@@ -143,6 +169,12 @@ export async function runRecallSubcommand(
     positionals: string[];
   };
   const embeddingSplit = splitEmbeddingArgv(argv);
+  if (embeddingSplit !== null && embeddingSplit.error !== undefined) {
+    // A flag with no value is a script error, like any other bad argument.
+    console.error(`Error: ${embeddingSplit.error}`);
+    printUsage();
+    return 1;
+  }
   if (embeddingSplit !== null) {
     parsed = {
       values: {

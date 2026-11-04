@@ -154,6 +154,18 @@ test("an unknown embedding flag fails the script", async () => {
   expect(stderr.join("\n")).toContain("takes only --full and --keep-after-exit");
 });
 
+test("a shared option with no value is refused instead of eating the next flag", async () => {
+  // `--agent --full` used to take `--full` as the agent id and silently drop the
+  // flag the caller asked for.
+  const code = await runRecallSubcommand(
+    ["embedding", "build", "--agent", "--full"],
+    { initializeSettings: noopInitialize },
+  );
+  expect(code).toBe(1);
+  expect(stderr.join("\n")).toContain("--agent needs a value");
+  expect(stdout.join("\n")).toContain("Usage:");
+});
+
 test("a cloud backend is refused with an explanation", async () => {
   const code = await runRecallSubcommand(["status"], {
     initializeSettings: noopInitialize,
