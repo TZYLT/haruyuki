@@ -710,4 +710,23 @@ describe("embeddingMetrics integration", () => {
       expect(decision.timedOut).toBeUndefined();
     });
   });
+
+  test("an empty arm is a no-match, not a degraded round", async () => {
+    await withRecallFixture(async (fixture) => {
+      resetEmbeddingMetrics();
+      const decision = await probe(fixture, {
+        vectorSource: vectorPort([], "empty", "the vector space has no units"),
+      });
+      const snapshot = embeddingMetrics.snapshot();
+      const round = snapshot.last;
+      // "The source ran and found nothing" is a normal recall outcome. Counting
+      // it as a degrade reason would paint the product-status row as degraded on
+      // almost every no-match turn, which is exactly the "no hit" versus "not
+      // working" distinction the row exists for (48-1 §6.9, §7.4).
+      expect(round?.degrade).toEqual([]);
+      expect(snapshot.totals.degradedRounds).toBe(0);
+      expect(round?.injected).toBe(decision.entries.length);
+      expect(decision.status).toBe("injected");
+    });
+  });
 });

@@ -309,6 +309,18 @@ function fuseRecallArms(
   };
 }
 
+/**
+ * The degrade vocabulary for one arm's diagnostic, or `undefined` when the arm
+ * ran normally.
+ *
+ * `empty` is deliberately **not** a degradation: it means the arm ran and
+ * nothing matched, which is the ordinary outcome of a recall turn. Recording it
+ * would make the status face paint "degraded" on almost every round and destroy
+ * the only distinction it exists for — "no hit" versus "not working"
+ * (48-1 §6.9, §7.4). A space that cannot answer at all reports `unavailable`
+ * (or the arm is not attached), which is the signal `/recall embedding build` is
+ * the fix for.
+ */
 function degradeReasonFor(
   status: RecallSourceDiagnostic["status"],
 ): EmbeddingDegradeReason | undefined {
@@ -320,7 +332,7 @@ function degradeReasonFor(
     case "failed":
       return "failed";
     case "empty":
-      return "empty";
+      return undefined;
     case "searched":
       return undefined;
   }
