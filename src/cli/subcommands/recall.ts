@@ -81,19 +81,87 @@ function parseRecallArgs(argv: string[]) {
   });
 }
 
+/**
+ * The embedding family's own flags (`--full`, `--confirm`, `--keep-after-exit`)
+ * are not `haruyuki recall` options, and `parseArgs(..., strict: true)` would
+ * reject them before the command ever sees them. Split them out first: pull the
+ * three shared options off the front when they appear, and hand every remaining
+ * token to the embedding parser unchanged. Returns `null` when the invocation
+ * is not the embedding family, so the ordinary strict parse still runs for
+ * every other subcommand.
+ */
+function splitEmbeddingArgv(argv: string[]): {
+  positionals: string[];
+  agent?: string;
+  conversation?: string;
+  help: boolean;
+} | null {
+  const positionals: string[] = [];
+  let agent: string | undefined;
+  let conversation: string | undefined;
+  let help = false;
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index] ?? "";
+    if (token === "--agent") {
+      agent = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("--agent=")) {
+      agent = token.slice("--agent=".length);
+      continue;
+    }
+    if (token === "--conversation") {
+      conversation = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("--conversation=")) {
+      conversation = token.slice("--conversation=".length);
+      continue;
+    }
+    if (token === "-h" || token === "--help") {
+      help = true;
+      continue;
+    }
+    positionals.push(token);
+  }
+  if (positionals[0] !== "embedding") return null;
+  return { positionals, agent, conversation, help };
+}
+
 export async function runRecallSubcommand(
   argv: string[],
   deps: RecallSubcommandDeps = {},
 ): Promise<number> {
-  let parsed: ReturnType<typeof parseRecallArgs>;
-  try {
-    parsed = parseRecallArgs(argv);
-  } catch (error) {
-    console.error(
-      `Error: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    printUsage();
-    return 1;
+  let parsed: {
+    values: { agent?: string; conversation?: string; help?: boolean };
+    positionals: string[];
+  };
+  const embeddingSplit = splitEmbeddingArgv(argv);
+  if (embeddingSplit !== null) {
+    parsed = {
+      values: {
+        ...(embeddingSplit.agent === undefined
+          ? {}
+          : { agent: embeddingSplit.agent }),
+        ...(embeddingSplit.conversation === undefined
+          ? {}
+          : { conversation: embeddingSplit.conversation }),
+        help: embeddingSplit.help,
+      },
+      positionals: embeddingSplit.positionals,
+    };
+  } else {
+    try {
+      parsed = parseRecallArgs(argv);
+    } catch (error) {
+      console.error(
+        `Error: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      printUsage();
+      return 1;
+    }
   }
 
   const positionals = parsed.positionals;
@@ -157,7 +225,7 @@ export async function runRecallSubcommand(
       requestedAgent === undefined
         ? undefined
         : { agentId: requestedAgent, conversationId: conversationId ?? null },
-      { backend },
+      { backend, embedding: { lifecycle: "headless" } },
     );
   } catch (error) {
     // `build` walks every transcript and `status` loads the whole corpus: an I/O

@@ -128,6 +128,21 @@ test("a setting can be written from a script", async () => {
   expect(stdout.join("\n")).toContain("display silent");
 });
 
+test("embedding flags reach the embedding command instead of the recall parser", async () => {
+  await withRecallFixture(async (fixture) => {
+    // `--confirm` is an embedding-family flag, not a `haruyuki recall` option.
+    // Before the split it failed as an unknown option; it must now reach
+    // `/recall embedding reset --confirm` and find nothing to delete.
+    const code = await runRecallSubcommand(
+      ["embedding", "reset", "--confirm", "--agent", fixture.agentId],
+      { initializeSettings: noopInitialize, backend: fixture.backend },
+    );
+    expect(code).toBe(0);
+    expect(stderr.join("\n")).not.toContain("Unknown option");
+    expect(stdout.join("\n")).toContain("nothing was deleted");
+  });
+});
+
 test("a cloud backend is refused with an explanation", async () => {
   const code = await runRecallSubcommand(["status"], {
     initializeSettings: noopInitialize,

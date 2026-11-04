@@ -29,7 +29,6 @@
  */
 
 import type { DreamCommandScope } from "@/agent/reflection-runs";
-import type { EmbeddingBuildStateSnapshot } from "@/backend/local/embedding-build-state";
 import { saveEmbeddingApiKey } from "@/cli/app/pages/settings/embedding-secrets";
 import {
   EmbeddingSettingsError,
@@ -54,13 +53,7 @@ import {
   embeddingMetrics,
 } from "@/reminders/embedding-metrics";
 import { settingsManager } from "@/settings-manager";
-import type {
-  EmbeddingBuildMode,
-  EmbeddingBuildState,
-  EmbeddingEndpointKind,
-  EmbeddingGpuRole,
-  EmbeddingQuantization,
-} from "@/types/embedding-protocol";
+import type { EmbeddingBuildMode } from "@/types/embedding-protocol";
 
 // ── Copy ────────────────────────────────────────────────────────────
 
@@ -77,7 +70,8 @@ export const EMBEDDING_COMMAND_USAGE = [
   "  /recall embedding status          same, spelled out",
   "  /recall embedding on              enable; first run opens setup",
   "  /recall embedding off             disable; stored vectors stay on disk",
-  "  /recall embedding build [--full]  build or refresh the vector index",
+  "  /recall embedding build [--full] [--keep-after-exit]",
+  "                                    build or refresh the vector index",
   "  /recall embedding cancel          stop a running build",
   "  /recall embedding reset [--all|--model <id>] [--confirm]",
   "                                    delete stored vector spaces",
@@ -137,7 +131,7 @@ export type EmbeddingCommand =
   | { kind: "status" }
   | { kind: "on" }
   | { kind: "off" }
-  | { kind: "build"; mode: EmbeddingBuildMode }
+  | { kind: "build"; mode: EmbeddingBuildMode; keepAfterExit: boolean }
   | { kind: "cancel" }
   | { kind: "reset"; target: EmbeddingResetTarget; confirmed: boolean }
   | { kind: "setup" }
@@ -145,13 +139,32 @@ export type EmbeddingCommand =
   | { kind: "usage" }
   | { kind: "error"; message: string };
 
-/** What `reset` deletes. The default is the space for the current model. */
-export type EmbeddingResetTarget =
-  | { kind: "current" }
-  | { kind: "all" }
-  | { kind: "model"; model: string };
-
 /** A non-negative whole number, or `null` when the text is not one. */
+// The runtime contract lives in its own module so this parser/renderer stays
+// under the file-size ceiling; these re-exports keep the public import site.
+import type {
+  EmbeddingResetTarget,
+  EmbeddingRuntimeBuildProgress,
+  EmbeddingRuntimeCalibration,
+  EmbeddingRuntimePort,
+  EmbeddingRuntimeScope,
+  EmbeddingRuntimeSpace,
+  EmbeddingRuntimeStatus,
+} from "@/cli/commands/embedding-runtime-contract";
+
+export type {
+  EmbeddingEndpointProbeInput,
+  EmbeddingEndpointProbeResult,
+  EmbeddingResetTarget,
+  EmbeddingRuntimeBuildOptions,
+  EmbeddingRuntimeBuildProgress,
+  EmbeddingRuntimeCalibration,
+  EmbeddingRuntimePort,
+  EmbeddingRuntimeScope,
+  EmbeddingRuntimeSpace,
+  EmbeddingRuntimeStatus,
+} from "@/cli/commands/embedding-runtime-contract";
+
 export function parseEmbeddingCount(raw: string | undefined): number | null {
   if (raw === undefined) return null;
   const text = raw.trim();
@@ -216,6 +229,35 @@ function parseReset(rest: string[]): EmbeddingCommand {
 }
 
 /**
+ * Parse `build`'s flags: `--full` rebuilds every chunk, `--keep-after-exit`
+ * opts into a detached child (48-1 R-34's only exception to "the build dies with
+ * its host"). Both are optional and order-independent; an unknown word is
+ * refused rather than ignored.
+ */
+function parseBuild(rest: string[]): EmbeddingCommand {
+  let full = false;
+  let keepAfterExit = false;
+  for (const word of rest) {
+    if (word === "--full") {
+      full = true;
+      continue;
+    }
+    if (word === "--keep-after-exit") {
+      keepAfterExit = true;
+      continue;
+    }
+    return error(
+      "`/recall embedding build` takes only --full and --keep-after-exit: /recall embedding build [--full] [--keep-after-exit].",
+    );
+  }
+  return {
+    kind: "build",
+    mode: full ? "full" : "incremental",
+    keepAfterExit,
+  };
+}
+
+/**
  * Parse the words after `/recall embedding`.
  *
  * A bare invocation answers the status, because opening an overlay is the TUI
@@ -250,13 +292,8 @@ export function parseEmbeddingCommand(args: string[]): EmbeddingCommand {
         ? { kind: "setup" }
         : error("`/recall embedding setup` takes no arguments.");
     case "build": {
-      if (rest.length === 0) return { kind: "build", mode: "incremental" };
-      if (rest.length === 1 && rest[0] === "--full") {
-        return { kind: "build", mode: "full" };
-      }
-      return error(
-        "`/recall embedding build` takes only --full: /recall embedding build [--full].",
-      );
+      const parsed = parseBuild(rest);
+      return parsed;
     }
     case "cancel":
       return rest.length === 0
@@ -340,108 +377,6 @@ export function parseEmbeddingCommand(args: string[]): EmbeddingCommand {
   }
 }
 
-// ── Narrow runtime seam (A2/A3/A4 integration point) ─────────────────
-
-/** Build progress as the status face paints it. */
-export interface EmbeddingRuntimeBuildProgress {
-  state: EmbeddingBuildState;
-  /** 0..1. */
-  progress: number;
-  processedChunks: number;
-  totalChunks: number;
-  etaMs: number | null;
-  /** Redacted, actionable failure text. */
-  error?: string;
-}
-
-/** One stored model space, summarised. */
-export interface EmbeddingRuntimeSpace {
-  model: string;
-  dimensions: number;
-  chunks: number;
-  conversations: number;
-  /** 0..1, or `null` when nothing recallable was found. */
-  coverage: number | null;
-  builtAt: string | null;
-}
-
-/** The bounded calibration result, as measured. */
-export interface EmbeddingRuntimeCalibration {
-  measuredAt: string;
-  queryLatencyP50Ms: number;
-  queryLatencyP90Ms: number;
-  throughputPerSecond: number;
-  gpuRole: EmbeddingGpuRole;
-  threads: number;
-  quantization: EmbeddingQuantization;
-}
-
-/** Everything `status` needs beyond settings. */
-export interface EmbeddingRuntimeStatus {
-  /** A configured space matches the current settings and can answer queries. */
-  ready: boolean;
-  space: EmbeddingRuntimeSpace | null;
-  build: EmbeddingRuntimeBuildProgress | null;
-  /**
-   * A2's raw build-state projection (`state.json`), when the runtime can read
-   * it. Used for the extra coverage/rate/skipped lines only while {@link build}
-   * is absent, so the same progress is never printed twice.
-   */
-  buildSnapshot?: EmbeddingBuildStateSnapshot | null;
-  calibration: EmbeddingRuntimeCalibration | null;
-  /** Endpoint queries leave the machine (non-loopback base URL). */
-  egress: boolean;
-  /** Last failure, redacted; `null` when healthy. */
-  failure: string | null;
-}
-
-/** Scoping for a runtime call; at least the agent is required to find a space. */
-export interface EmbeddingRuntimeScope {
-  agentId: string;
-  conversationId: string | null;
-}
-
-/** The result of a successful endpoint test-embed. */
-export interface EmbeddingEndpointProbeResult {
-  kind: EmbeddingEndpointKind;
-  /** Model id the endpoint reported; defaults to the one asked for. */
-  model?: string;
-  dimensions: number;
-  timeoutMs?: number;
-}
-
-/** Input for one endpoint probe; `apiKey` is never persisted or echoed here. */
-export interface EmbeddingEndpointProbeInput {
-  agentId: string | null;
-  baseUrl: string;
-  model: string | null;
-  /** Read from the named environment variable by the caller; may be `null`. */
-  apiKey: string | null;
-}
-
-/**
- * The runtime seam. Every method is optional on purpose: the command works for
- * the settings-only actions (on/off/knobs/setup) with no runtime at all, and
- * says so instead of throwing when a runtime action is not wired.
- */
-export interface EmbeddingRuntimePort {
-  readStatus?(
-    scope: EmbeddingRuntimeScope,
-  ): Promise<EmbeddingRuntimeStatus | null>;
-  build?(
-    scope: EmbeddingRuntimeScope,
-    mode: EmbeddingBuildMode,
-  ): Promise<string>;
-  cancel?(scope: EmbeddingRuntimeScope): Promise<string>;
-  reset?(
-    scope: EmbeddingRuntimeScope,
-    target: EmbeddingResetTarget,
-  ): Promise<string>;
-  configureEndpoint?(
-    input: EmbeddingEndpointProbeInput,
-  ): Promise<EmbeddingEndpointProbeResult>;
-}
-
 // ── Dependencies ────────────────────────────────────────────────────
 
 /** Everything the handler reads; the defaults are the production readers. */
@@ -462,6 +397,13 @@ export interface EmbeddingCommandDeps {
   /** Environment for `--recall-embedding-api-key-env`; defaults to `process.env`. */
   env?: Record<string, string | undefined>;
   /**
+   * Which surface is running this command: the TUI (immediate receipt) or the
+   * CLI/headless path (waits for the build's terminal checkpoint). Defaults to
+   * `tui`, because the interactive shell is the one place where a long-running
+   * build must not block the prompt.
+   */
+  lifecycle?: "tui" | "headless" | "websocket";
+  /**
    * The process-wide recall telemetry (`embedding-metrics`); defaults to the
    * shared recorder, because the turn path and this command live in one
    * process.
@@ -477,6 +419,7 @@ interface ResolvedDeps {
   openSetup: ((commandInput: string) => boolean) | null;
   saveApiKey: (value: string, agentId: string | null) => Promise<unknown>;
   env: Record<string, string | undefined>;
+  lifecycle: "tui" | "headless" | "websocket";
   readMetrics: () => EmbeddingMetricsSnapshot | null;
 }
 
@@ -500,6 +443,7 @@ function resolveDeps(deps: EmbeddingCommandDeps): ResolvedDeps {
       deps.saveApiKey ??
       ((value, agentId) => saveEmbeddingApiKey(value, agentId ?? undefined)),
     env: deps.env ?? process.env,
+    lifecycle: deps.lifecycle ?? "tui",
     // The process-wide recorder is the status face's source by default: the turn
     // path and this command share one process, so a round the turn recorded is
     // exactly what status should show. An injected reader still wins (tests,
@@ -761,7 +705,10 @@ async function runBuild(
   const runtimeScopeValue = runtimeScope(scope);
   if (runtimeScopeValue === null) return NEEDS_AGENT;
   if (deps.runtime?.build === undefined) return RUNTIME_UNAVAILABLE.build;
-  const receipt = await deps.runtime.build(runtimeScopeValue, command.mode);
+  const receipt = await deps.runtime.build(runtimeScopeValue, command.mode, {
+    keepAfterExit: command.keepAfterExit,
+    lifecycle: deps.lifecycle,
+  });
   return deps.readSettings().enabled
     ? receipt
     : `${receipt}\n  Note: vector recall is off; the build is still usable once you turn it on.`;

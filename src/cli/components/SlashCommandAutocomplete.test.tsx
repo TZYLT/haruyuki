@@ -279,7 +279,7 @@ describe("SlashCommandAutocomplete on the frame", () => {
       "  /doctor        Investigate an agent issue in this conversation",
       "  /memory        Memory: view, init, filesystem backend, remote, palace, recall",
       "  /search        Search messages across all agents (/search [query])",
-      "  /recall        Configure passive recall of earlier conversations and memory",
+      "  /recall        Configure passive recall of earlier conversations and memory (and vector recall)",
       "  /clear         Clear in-context messages",
       "  /cd            Change working directory for this TUI session (/cd <path>)",
     ]);

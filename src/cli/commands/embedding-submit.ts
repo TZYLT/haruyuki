@@ -23,6 +23,7 @@ import {
   type EmbeddingCommandDeps,
   handleEmbeddingCommand,
 } from "@/cli/commands/embedding";
+import { createEmbeddingRuntimePort } from "@/cli/helpers/embedding-runtime";
 import { resolveUiV2Once } from "@/experiments/ui-v2";
 import { getErrorMessage } from "@/utils/error";
 
@@ -73,7 +74,17 @@ export async function runEmbeddingSubmitCommand(
     const output = await handleEmbeddingCommand(
       embeddingSubmitArgs(input),
       scope,
-      { ...deps, openSetup: deps.openSetup ?? openEmbeddingSettings },
+      {
+        ...deps,
+        // The TUI owns an in-process build: the receipt returns immediately and
+        // progress reaches the status line through A5. Only the caller-supplied
+        // runtime wins, so tests can still inject a fake.
+        runtime:
+          deps.runtime === undefined
+            ? createEmbeddingRuntimePort({ lifecycle: "tui" })
+            : deps.runtime,
+        openSetup: deps.openSetup ?? openEmbeddingSettings,
+      },
     );
     command.finish(output, true);
     return output;

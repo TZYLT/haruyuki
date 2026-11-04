@@ -134,11 +134,16 @@ describe("parsing /recall embedding", () => {
     expect(parseEmbeddingCommand(["build"])).toEqual({
       kind: "build",
       mode: "incremental",
+      keepAfterExit: false,
     });
     expect(parseEmbeddingCommand(["build", "--full"])).toEqual({
       kind: "build",
       mode: "full",
+      keepAfterExit: false,
     });
+    expect(
+      parseEmbeddingCommand(["build", "--keep-after-exit", "--full"]),
+    ).toEqual({ kind: "build", mode: "full", keepAfterExit: true });
   });
 
   test("reset previews by default and understands --all, --model and --confirm", () => {

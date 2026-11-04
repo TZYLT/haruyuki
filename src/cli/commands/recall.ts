@@ -19,13 +19,16 @@ import {
   handleEmbeddingCommand,
 } from "@/cli/commands/embedding";
 import { setRecallDisplay } from "@/cli/components/transcript-display-state";
+import { createEmbeddingRuntimePort } from "@/cli/helpers/embedding-runtime";
 import {
   formatRecallSettingsLine,
   type ResolvedRecallSettings,
+  readEmbeddingSettings,
   readRecallSettings,
   recallOptionsFromSettings,
 } from "@/recall-settings";
 import { isRecallDisplay } from "@/reminders/recall-display";
+import { maybeCreateRecallEmbeddingArms } from "@/reminders/recall-embedding-arms";
 import { isRecallDiversity } from "@/reminders/recall-port";
 import { formatRecallProbeLines } from "@/reminders/recall-probe";
 import { resetRecallRuntime } from "@/reminders/recall-runtime";
@@ -341,7 +344,23 @@ export async function handleRecallCommand(
   // never waits on the local-backend check below: `/recall embedding off` must
   // work even when the agent's store is unreadable.
   if (command.kind === "embedding") {
-    return handleEmbeddingCommand(command.args, scope, deps.embedding ?? {});
+    const embedding = deps.embedding ?? {};
+    // The TUI hands its scope and returns an immediate receipt; the CLI
+    // subcommand injects a backend, which is this dispatcher's only signal that
+    // a build must be awaited to completion (48-1 §7.1: no prompt to block).
+    const lifecycle =
+      embedding.lifecycle ?? (deps.backend === undefined ? "tui" : "headless");
+    return handleEmbeddingCommand(command.args, scope, {
+      ...embedding,
+      lifecycle,
+      runtime:
+        embedding.runtime === undefined
+          ? createEmbeddingRuntimePort({
+              ...(deps.backend === undefined ? {} : { backend: deps.backend }),
+              lifecycle,
+            })
+          : embedding.runtime,
+    });
   }
 
   if (
@@ -406,6 +425,18 @@ export async function handleRecallCommand(
   // `dryRun`.
   if (!scope?.agentId) return RECALL_PROBE_NEEDS_AGENT;
   const probeSettings = readRecallSettings();
+  // Feature ③: the manual trial run shows what the real turn would see, so when
+  // the vector arm is enabled it is fused exactly as the turn path does. The
+  // factory returns null when there is no usable space, which keeps the probe
+  // lexical-only instead of failing.
+  const embeddingSettings = readEmbeddingSettings();
+  const embeddingArms = embeddingSettings.enabled
+    ? maybeCreateRecallEmbeddingArms({
+        backend,
+        agentId: scope.agentId,
+        settings: embeddingSettings,
+      })
+    : null;
   const decision = await runRecall({
     backend,
     agentId: scope.agentId,
@@ -421,6 +452,12 @@ export async function handleRecallCommand(
       // The window is what the probe exists to look past.
       dedupTurns: 0,
     },
+    ...(embeddingArms === null
+      ? {}
+      : {
+          vectorSource: embeddingArms.vectorSource,
+          fusion: embeddingArms.fusion,
+        }),
   });
   return formatRecallProbeLines(decision).join("\n");
 }
