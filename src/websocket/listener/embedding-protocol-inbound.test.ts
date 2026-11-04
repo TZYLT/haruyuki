@@ -15,6 +15,7 @@ import {
   isEmbeddingResetCommand,
   isEmbeddingStatusCommand,
 } from "./embedding-protocol-inbound";
+import { parseServerMessage } from "./protocol-inbound";
 
 const runtime = { agent_id: "agent-1", conversation_id: "conv-1" };
 
@@ -299,6 +300,67 @@ describe("embedding optional fields", () => {
       expect(command.guard(null), command.name).toBe(false);
       expect(command.guard("embedding_status"), command.name).toBe(false);
       expect(command.guard([]), command.name).toBe(false);
+    }
+  });
+});
+
+/**
+ * The guards above can all pass while `parseServerMessage` still drops the
+ * frame (a family that is not in its OR-chain is invisible to every client),
+ * so this block exercises the real inbound entry point, not the guards.
+ */
+describe("embedding commands reach parseServerMessage", () => {
+  function frameFor(command: CommandCase): Record<string, unknown> {
+    const extra = command.type === "embedding_configure" ? { patch: {} } : {};
+    return {
+      type: command.type,
+      request_id: "req-parse",
+      runtime,
+      ...extra,
+    };
+  }
+
+  function parsedType(value: unknown): string | null {
+    if (value === null || typeof value !== "object") return null;
+    const type = (value as { type?: unknown }).type;
+    return typeof type === "string" ? type : null;
+  }
+
+  test("each of the eight commands survives the inbound OR-chain unchanged", () => {
+    for (const command of COMMANDS) {
+      expect(
+        parsedType(
+          parseServerMessage(Buffer.from(JSON.stringify(frameFor(command)))),
+        ),
+        command.name,
+      ).toBe(command.type);
+    }
+  });
+
+  test("a frame the family guard rejects is not routed as an embedding command", () => {
+    const malformed: Record<string, unknown>[] = [
+      {
+        type: "embedding_configure",
+        request_id: "req-bad",
+        runtime,
+        patch: { weight: 2 },
+      },
+      {
+        type: "embedding_build",
+        request_id: "req-bad",
+        runtime,
+        mode: "bogus",
+      },
+      { type: "embedding_status", request_id: "req-bad", runtime: {} },
+      { type: "embedding_nope", request_id: "req-bad", runtime },
+    ];
+    for (const frame of malformed) {
+      const type = parsedType(
+        parseServerMessage(Buffer.from(JSON.stringify(frame))),
+      );
+      expect(type, JSON.stringify(frame)).not.toBe("embedding_status");
+      expect(type, JSON.stringify(frame)).not.toBe("embedding_configure");
+      expect(type, JSON.stringify(frame)).not.toBe("embedding_build");
     }
   });
 });
