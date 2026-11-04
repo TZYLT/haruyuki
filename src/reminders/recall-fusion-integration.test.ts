@@ -43,6 +43,7 @@ import {
   embeddingMetrics,
   resetEmbeddingMetrics,
 } from "@/reminders/embedding-metrics";
+import { createRecallDeadline } from "@/reminders/recall-deadline";
 import type {
   RecallCandidate,
   RecallDecision,
@@ -727,6 +728,44 @@ describe("embeddingMetrics integration", () => {
       expect(snapshot.totals.degradedRounds).toBe(0);
       expect(round?.injected).toBe(decision.entries.length);
       expect(decision.status).toBe("injected");
+    });
+  });
+
+  test("a late vector result never mutates anything after the turn returns", async () => {
+    await withRecallFixture(async (fixture) => {
+      // The turn's budget is spent before the search starts, so the lexical arm
+      // is the one whose verdict freezes to `timedOut`. The vector arm still has
+      // its own budget and answers: that answer is folded into *this* turn (the
+      // service awaits both phases before it returns), and it can never arrive
+      // later and change a turn that already went out.
+      let now = 0;
+      const deadline = createRecallDeadline(1, () => now);
+      now = 10;
+      const twin = vectorCandidate({
+        fingerprint: "memory:late.md",
+        file: "late.md",
+      });
+
+      const decision = await probe(fixture, {
+        vectorSource: vectorPort([twin]),
+        fusion: { vectorWeight: 1, minScoreRatio: 0 },
+        deadline,
+      });
+
+      // The budget verdict is the lexical arm's, and it is reported.
+      expect(decision.timedOut).toBe(true);
+      // The late-but-within-budget result is injected as part of this turn: a
+      // recall result that arrived inside the arm's own budget is still useful,
+      // and the timeout flag is what the breaker counts (recall-runtime.ts).
+      expect(decision.status).toBe("injected");
+      expect(decision.entries.map((entry) => entry.fingerprint)).toContain(
+        twin.fingerprint,
+      );
+      // A second read of the decision (the caller's view) is unchanged: nothing
+      // detached kept writing to it.
+      expect(decision.entries.map((entry) => entry.fingerprint)).toEqual([
+        twin.fingerprint,
+      ]);
     });
   });
 });
