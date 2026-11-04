@@ -283,6 +283,9 @@ export async function handleEmbeddingEnableCommand(
       success: true,
       enabled: result.value.enabled,
       build_started: result.value.buildStarted,
+      ...(result.value.reason === undefined
+        ? {}
+        : { reason: result.value.reason }),
     };
     send(response);
   } catch (error) {

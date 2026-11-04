@@ -90,6 +90,8 @@ export type EmbeddingConfigureBackendValue = {
 export type EmbeddingEnableBackendValue = {
   enabled: boolean;
   buildStarted: boolean;
+  /** Why the attempted first build did not start (wire `reason`). */
+  reason?: string;
 };
 export type EmbeddingDisableBackendValue = { enabled: boolean };
 export type EmbeddingBuildBackendValue = {
@@ -550,8 +552,11 @@ export function createEmbeddingCommandBackend(
       }
       // 48-2 §4.9 D2: enabling may start the first build. It starts one only
       // when the agent is configured and this space has nothing usable yet; a
-      // refusal leaves the switch on and reports buildStarted: false.
+      // refusal leaves the switch on and reports buildStarted: false together
+      // with the launcher's first line, so the client can tell "already built"
+      // from "cannot build yet" (48-1 F-08 degrade visibility).
       let buildStarted = false;
+      let reason: string | undefined;
       const readStatus = runtime.readStatus;
       if (
         updated.enabled &&
@@ -571,14 +576,23 @@ export function createEmbeddingCommandBackend(
               lifecycle: "websocket",
             });
             buildStarted = BUILD_STARTED_RECEIPT.test(receipt);
+            if (!buildStarted) reason = firstLine(receipt);
           }
-        } catch {
+        } catch (error) {
           // Enabling must not fail because the optional first build did not
           // start; the client can send embedding_build and read the status.
           buildStarted = false;
+          reason = firstLine(getErrorMessage(error));
         }
       }
-      return { ok: true, value: { enabled: updated.enabled, buildStarted } };
+      return {
+        ok: true,
+        value: {
+          enabled: updated.enabled,
+          buildStarted,
+          ...(reason === undefined ? {} : { reason }),
+        },
+      };
     },
     async disable(_agentId) {
       try {

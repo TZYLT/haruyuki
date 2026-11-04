@@ -201,6 +201,12 @@ export interface EmbeddingEnableResponseMessage {
   enabled: boolean;
   /** True when enabling kicked off the first background build. */
   build_started: boolean;
+  /**
+   * Why no first build started, when `build_started` is false and enabling did
+   * try one (missing model/runtime, lock held, …). Additive: an older client
+   * that never reads it keeps its previous behaviour.
+   */
+  reason?: string;
   error?: string;
 }
 

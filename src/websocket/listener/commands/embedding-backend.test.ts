@@ -126,6 +126,9 @@ function backendHarness(
     writeSettings?: (
       patch: EmbeddingSettingsPatch,
     ) => ResolvedEmbeddingSettings;
+    buildFromSettings?: (
+      request: BuildEmbeddingFromSettingsRequest,
+    ) => Promise<string>;
   } = {},
 ): BackendHarness {
   let current = resolvedSettings(options.settings);
@@ -154,10 +157,12 @@ function backendHarness(
       savedKeys.push([value, agentId]);
     },
     readSpaceId: () => "space-test",
-    buildFromSettings: async (request) => {
-      builds.push(request);
-      return options.buildReceipt ?? "Build started (incremental).";
-    },
+    buildFromSettings:
+      options.buildFromSettings ??
+      (async (request) => {
+        builds.push(request);
+        return options.buildReceipt ?? "Build started (incremental).";
+      }),
     runCalibration: async () => options.calibration ?? CALIBRATION,
   };
   return {
@@ -446,7 +451,32 @@ describe("production backend", () => {
     });
     expect(await h.buildBackend().enable(AGENT)).toEqual({
       ok: true,
-      value: { enabled: true, buildStarted: false },
+      value: {
+        enabled: true,
+        buildStarted: false,
+        // The launcher's first line explains why nothing started; without it
+        // the client cannot tell "already built" from "cannot build yet".
+        reason:
+          "Built-in embedding is not ready: missing model. Run /recall embedding setup first.",
+      },
+    });
+    expect(h.settings().enabled).toBe(true);
+  });
+
+  test("enable reports a thrown first-build failure as a reason, not a failed enable", async () => {
+    const h = backendHarness({
+      runtime: { readStatus: async () => runtimeStatus({ space: null }) },
+      buildFromSettings: async () => {
+        throw new Error("The embedding worker entry is missing.");
+      },
+    });
+    expect(await h.buildBackend().enable(AGENT)).toEqual({
+      ok: true,
+      value: {
+        enabled: true,
+        buildStarted: false,
+        reason: "The embedding worker entry is missing.",
+      },
     });
     expect(h.settings().enabled).toBe(true);
   });

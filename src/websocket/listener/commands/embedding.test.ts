@@ -480,6 +480,29 @@ describe("embedding_enable / disable", () => {
     });
   });
 
+  test("enable forwards why a first build did not start", async () => {
+    const { backend } = createFakeBackend({
+      enable: async () => ({
+        ok: true,
+        value: {
+          enabled: true,
+          buildStarted: false,
+          reason: "missing model and runtime; run setup",
+        },
+      }),
+    });
+    const { sent, socket, send } = harness();
+    await handleEmbeddingEnableCommand(enableCommand(), socket, send, backend);
+    expect(lastSent(sent)).toEqual({
+      type: "embedding_enable_response",
+      request_id: "r-enable",
+      success: true,
+      enabled: true,
+      build_started: false,
+      reason: "missing model and runtime; run setup",
+    });
+  });
+
   test("disable reports the switch", async () => {
     const { backend } = createFakeBackend();
     const { sent, socket, send } = harness();
