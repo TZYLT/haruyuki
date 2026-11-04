@@ -33,7 +33,7 @@ import { chmodSync, existsSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { APP_SUBDIRS, appHomePath } from "@/utils/app-paths";
 import { getLocalBackendStorageDir } from "@/utils/local-backend-paths";
-import { getSecretValue, isKeychainAvailable } from "@/utils/secrets";
+import { isKeychainAvailable } from "@/utils/secrets";
 import {
   deleteSecretOnServer,
   refreshAndListSecrets,
@@ -283,11 +283,15 @@ export async function saveEmbeddingEndpointApiKey(
   hardenEmbeddingSecretFile();
 
   if (keychainAvailable) {
-    const storedInKeychain = await getSecretValue(
-      EMBEDDING_ENDPOINT_SECRET_NAME,
-      "embedding endpoint API key",
+    // Verify through the same scoped read path the retrieval uses
+    // (`refreshAndListSecrets(agentId)`): a direct `getSecretValue` read is not
+    // agent-scoped, so an agent-domain write read back as null and the
+    // disclosure wrongly fell back to "plaintext-file".
+    const entries = await refreshAndListSecrets(agentId);
+    const stored = entries.find(
+      (entry) => entry.key === EMBEDDING_ENDPOINT_SECRET_NAME,
     );
-    if (storedInKeychain === trimmed) return "keychain";
+    if (stored?.value === trimmed) return "keychain";
   }
   return "plaintext-file";
 }
