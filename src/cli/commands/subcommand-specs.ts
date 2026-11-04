@@ -189,7 +189,7 @@ export const EMBEDDING_COMMAND_SPECS = [
   },
   {
     name: "build",
-    args: "[--full]",
+    args: "[--full] [--keep-after-exit]",
     desc: "Build or refresh the vector index",
     textArg: true,
   },

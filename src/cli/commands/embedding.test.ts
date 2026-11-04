@@ -904,4 +904,19 @@ describe("/recall completion", () => {
       });
     }
   });
+
+  test("the build row advertises every flag its parser accepts", () => {
+    // The row's `args` string is the only hint a user sees before typing, so a
+    // flag the parser accepts but the row omits is a silent drift.
+    const build = EMBEDDING_COMMAND_SPECS.find((row) => row.name === "build");
+    expect(build?.args).toContain("--full");
+    expect(build?.args).toContain("--keep-after-exit");
+    expect(parseEmbeddingCommand(["build", "--full", "--keep-after-exit"])).toEqual(
+      {
+        kind: "build",
+        mode: "full",
+        keepAfterExit: true,
+      },
+    );
+  });
 });
