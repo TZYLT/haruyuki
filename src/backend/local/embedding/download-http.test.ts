@@ -646,6 +646,34 @@ describe("CONNECT proxy", () => {
     ).rejects.toMatchObject({ kind: "proxy", statusCode: 403 });
   });
 
+  test("rejects a chunked response whose chunk header never ends", async () => {
+    const sockets = new Set<net.Socket>();
+    const upstream = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      // A hostile mirror: a transfer-encoding chunked body with no CRLF, so a
+      // decoder without a header-line bound would buffer these bytes forever.
+      socket.write("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
+      socket.write("f".repeat(32 * 1024));
+    });
+    await new Promise<void>((resolve) => {
+      upstream.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = upstream.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    cleanups.push(async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    });
+    const proxy = await startConnectProxy();
+
+    const result = await requestDownloadHttp({
+      url: `http://127.0.0.1:${port}/asset.bin`,
+      proxyUrl: proxy.url,
+    });
+    await expect(readAll(result.stream)).rejects.toThrow(/chunk header/);
+  });
+
   test("rejects an unsupported proxy protocol", async () => {
     await expect(
       requestDownloadHttp({

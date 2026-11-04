@@ -37,6 +37,13 @@ import {
 
 const HEAD_END = Buffer.from("\r\n\r\n");
 const MAX_RESPONSE_HEAD_BYTES = 64 * 1024;
+/**
+ * Upper bound on one chunked-encoding header/trailer line. A chunk-size line is
+ * normally a handful of bytes; without a bound a hostile server can stream
+ * bytes that never contain CRLF and make the decoder buffer grow without limit
+ * in the caller's process.
+ */
+const MAX_CHUNK_HEADER_BYTES = 8 * 1024;
 
 function targetPort(url: URL): number {
   if (url.port.length > 0) return Number.parseInt(url.port, 10);
@@ -150,7 +157,14 @@ class ChunkedBodyDecoder extends Transform {
       if (this.state === "done") return;
 
       const lineEnd = this.buffer.indexOf("\r\n");
-      if (lineEnd < 0) return;
+      if (lineEnd < 0) {
+        if (this.buffer.length > MAX_CHUNK_HEADER_BYTES) {
+          throw new Error(
+            `Malformed chunked response: chunk header line exceeded ${MAX_CHUNK_HEADER_BYTES} bytes.`,
+          );
+        }
+        return;
+      }
       const line = this.buffer.subarray(0, lineEnd).toString("latin1");
       this.buffer = this.buffer.subarray(lineEnd + 2);
 
