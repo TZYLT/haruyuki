@@ -606,6 +606,29 @@ describe("embedding_cancel / reset / calibrate", () => {
     });
   });
 
+  test("cancel treats the empty status sentinel as an omitted build id", async () => {
+    const seen: { buildId: string | undefined } = { buildId: "unset" };
+    const { backend } = createFakeBackend({
+      cancel: async (_agentId, buildId) => {
+        seen.buildId = buildId;
+        return { ok: true, value: { cancelled: true } };
+      },
+    });
+    const { sent, socket, send } = harness();
+    await handleEmbeddingCancelCommand(
+      cancelCommand(""),
+      socket,
+      send,
+      backend,
+    );
+    expect(seen.buildId).toBeUndefined();
+    expect(lastSent(sent)).toMatchObject({
+      type: "embedding_cancel_response",
+      success: true,
+      cancelled: true,
+    });
+  });
+
   test("reset defaults to the index scope", async () => {
     const seen: { scope: "index" | "all" | null } = { scope: null };
     const { backend } = createFakeBackend({

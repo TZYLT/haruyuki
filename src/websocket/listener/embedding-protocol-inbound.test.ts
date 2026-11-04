@@ -258,9 +258,11 @@ describe("embedding optional fields", () => {
         frame("embedding_cancel", { build_id: "build-1" }),
       ),
     ).toBe(true);
+    // The status snapshot's "no id assigned" sentinel round-trips as the
+    // omitted form instead of being dropped (and timing out) on the client.
     expect(
       isEmbeddingCancelCommand(frame("embedding_cancel", { build_id: "" })),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isEmbeddingCancelCommand(frame("embedding_cancel", { build_id: 3 })),
     ).toBe(false);

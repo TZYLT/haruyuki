@@ -412,7 +412,13 @@ export async function handleEmbeddingCancelCommand(
   const send = createEmbeddingSend(socket, safeSocketSend);
   try {
     const agentId = requireAgentId(command.runtime);
-    const result = await backend.cancel(agentId, command.build_id);
+    // `""` is the status snapshot's "no id assigned" sentinel; treat it as the
+    // omitted form so a client echoing status can still cancel the live build.
+    const buildId =
+      command.build_id === undefined || command.build_id.length === 0
+        ? undefined
+        : command.build_id;
+    const result = await backend.cancel(agentId, buildId);
     if (!result.ok) {
       const response: EmbeddingCancelResponseMessage = {
         type: "embedding_cancel_response",

@@ -189,10 +189,10 @@ export function isEmbeddingCancelCommand(
   value: unknown,
 ): value is EmbeddingCancelCommand {
   if (!hasEmbeddingEnvelope(value, "embedding_cancel")) return false;
-  return (
-    value.build_id === undefined ||
-    (typeof value.build_id === "string" && value.build_id.length > 0)
-  );
+  // `""` is the status snapshot's "no build id was ever assigned" sentinel; a
+  // client that echoes it back means "whatever is live", not a malformed id.
+  // Rejecting it left such a client waiting for a response that never came.
+  return value.build_id === undefined || typeof value.build_id === "string";
 }
 
 export function isEmbeddingResetCommand(
