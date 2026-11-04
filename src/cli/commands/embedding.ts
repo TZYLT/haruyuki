@@ -39,6 +39,7 @@ import {
 } from "@/cli/app/pages/settings/embedding-settings";
 import type { EmbeddingSetupFlags } from "@/cli/args";
 import {
+  embeddingCalibrationMeasured,
   formatEmbeddingBuildSnapshotLines,
   formatEmbeddingMetricsLines,
   formatEmbeddingStoredCalibrationLine,
@@ -562,6 +563,16 @@ function formatBuild(build: EmbeddingRuntimeBuildProgress): string {
 }
 
 function formatCalibration(calibration: EmbeddingRuntimeCalibration): string {
+  // A defaults-based record (zeros) is not a measurement; say so instead of
+  // "p50 0ms · 0/s" (48-2 R-43's rule, applied to the status face too).
+  if (
+    !embeddingCalibrationMeasured({
+      p50Ms: calibration.queryLatencyP50Ms,
+      throughputPerSecond: calibration.throughputPerSecond,
+    })
+  ) {
+    return `Calibration: not measured — the documented default budget is in use (recorded ${calibration.measuredAt}); re-run /recall embedding setup to measure it.`;
+  }
   return `Calibration: ${calibration.measuredAt} · p50 ${calibration.queryLatencyP50Ms}ms · p90 ${calibration.queryLatencyP90Ms}ms · ${calibration.throughputPerSecond}/s · ${calibration.gpuRole} gpu · ${calibration.threads} threads · ${calibration.quantization}`;
 }
 

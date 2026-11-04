@@ -360,6 +360,29 @@ describe("the /recall embedding handler", () => {
     expect(output).not.toContain("apiKey");
   });
 
+  test("status never paints a defaults-based calibration as zero latency", async () => {
+    const h = harness({
+      runtime: fakeRuntime({
+        readStatus: async () =>
+          runtimeStatus({
+            calibration: {
+              measuredAt: "2026-11-04T09:00:00Z",
+              queryLatencyP50Ms: 0,
+              queryLatencyP90Ms: 0,
+              throughputPerSecond: 0,
+              gpuRole: "auto",
+              threads: 0,
+              quantization: "float32",
+            },
+          }),
+      }),
+    });
+    const output = await handleEmbeddingCommand(["status"], SCOPE, h.deps);
+    expect(output).toContain("Calibration: not measured");
+    expect(output).not.toContain("p50 0ms");
+    expect(output).not.toContain("0/s");
+  });
+
   test("status without an agent names how to scope the runtime read", async () => {
     const h = harness({ runtime: fakeRuntime() });
     const output = await handleEmbeddingCommand(

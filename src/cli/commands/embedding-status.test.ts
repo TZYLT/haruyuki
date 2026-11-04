@@ -214,6 +214,22 @@ describe("formatEmbeddingStoredCalibrationLine", () => {
   test("no stored calibration paints nothing", () => {
     expect(formatEmbeddingStoredCalibrationLine(null)).toEqual([]);
   });
+
+  test("a defaults-based record says not measured instead of painting zeros", () => {
+    // C5's skipped/failed path stores zeros with a timestamp; `p50 0ms · 0/s`
+    // would read as a measurement (48-2 R-43, the same rule as wizard step 3).
+    const lines = formatEmbeddingStoredCalibrationLine({
+      ...STORED_CALIBRATION,
+      queryLatencyP50Ms: 0,
+      queryLatencyP90Ms: 0,
+      batchThroughputPerSec: 0,
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("not measured");
+    expect(lines[0]).toContain("documented default budget");
+    expect(lines[0]).not.toContain("0ms");
+    expect(lines[0]).not.toContain("0/s");
+  });
 });
 
 // ── handler integration ─────────────────────────────────────────────

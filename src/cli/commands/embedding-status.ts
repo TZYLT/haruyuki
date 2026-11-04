@@ -124,6 +124,27 @@ export function formatEmbeddingBuildSnapshotLines(
 }
 
 /**
+ * Whether a calibration record carries real measurements.
+ *
+ * C5's documented-defaults path (a skipped or failed measurement) records zeros,
+ * and a zero latency is never a measurement: a status line that printed
+ * `p50 0ms · 0/s` would claim the opposite of what happened. The wizard's step 3
+ * paints "not measured" for exactly this case (48-2 R-43); every face that shows
+ * these numbers uses the same rule.
+ */
+export function embeddingCalibrationMeasured(input: {
+  readonly p50Ms: number;
+  readonly throughputPerSecond: number;
+}): boolean {
+  return (
+    Number.isFinite(input.p50Ms) &&
+    input.p50Ms > 0 &&
+    Number.isFinite(input.throughputPerSecond) &&
+    input.throughputPerSecond > 0
+  );
+}
+
+/**
  * The stored C5 calibration, for a process where the runtime port is absent.
  *
  * The runtime's own line wins when it is present: it is the live measurement,
@@ -133,6 +154,15 @@ export function formatEmbeddingStoredCalibrationLine(
   calibration: EmbeddingCalibrationSettings | null,
 ): string[] {
   if (calibration === null) return [];
+  const measured = embeddingCalibrationMeasured({
+    p50Ms: calibration.queryLatencyP50Ms,
+    throughputPerSecond: calibration.batchThroughputPerSec,
+  });
+  if (!measured) {
+    return [
+      `Calibration (stored): not measured — the documented default budget is in use (recorded ${calibration.measuredAt})`,
+    ];
+  }
   return [
     `Calibration (stored): ${calibration.measuredAt} · p50 ${ms(calibration.queryLatencyP50Ms)} · p90 ${ms(calibration.queryLatencyP90Ms)} · ${compact(calibration.batchThroughputPerSec)}/s · ${calibration.gpuRole} gpu · ${calibration.threads} threads · ${calibration.quantization}`,
   ];
