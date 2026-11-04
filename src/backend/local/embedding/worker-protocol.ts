@@ -106,7 +106,8 @@ export type EmbeddingWorkerFrame =
 /**
  * `init` payload without the envelope. `runtimeDir` holds the installed
  * `node_modules` closure; `modelPath`/`tokenizerPath` are absolute. Threads and
- * execution providers are decided by C5's calibration.
+ * execution providers are decided by C5's calibration; `pooling` comes from the
+ * model manifest (mean for BGE-small, CLS for bge-m3, last for Qwen).
  */
 export interface EmbeddingWorkerInitOptions {
   readonly runtimeDir: string;
@@ -117,8 +118,18 @@ export interface EmbeddingWorkerInitOptions {
   readonly maxBatchTokens?: number;
   readonly intraOpThreads?: number;
   readonly executionProviders?: readonly string[];
+  readonly pooling?: EmbeddingWorkerPooling;
   readonly warmupText?: string;
 }
+
+/** Token-pooling strategy a model's embedding head expects. */
+export type EmbeddingWorkerPooling = "mean" | "cls" | "last";
+
+const EMBEDDING_WORKER_POOLING: ReadonlySet<string> = new Set([
+  "mean",
+  "cls",
+  "last",
+]);
 
 /** Any frame the client may send. */
 export type EmbeddingWorkerRequest =
@@ -175,6 +186,8 @@ export interface EmbeddingWorkerEmbedResult {
   readonly tokens: number;
   readonly batches: number;
   readonly elapsedMs: number;
+  /** Worker-process RSS after the batch; calibration reads this, not the parent's. */
+  readonly rssBytes?: number;
 }
 
 /** Reply to `cancel`: how many requests were stopped and which ids. */
@@ -207,6 +220,8 @@ export interface EmbeddingWorkerStats {
   readonly uptimeMs: number;
   readonly queueDepth: number;
   readonly pendingRequestId: number | null;
+  /** Worker-process RSS; the parent process cannot measure this. */
+  readonly rssBytes?: number;
 }
 
 /** Reply to `shutdown`. */
@@ -437,6 +452,7 @@ export interface WorkerInitDefaults {
   readonly maxBatchSize: number;
   readonly maxBatchTokens: number;
   readonly warmupText: string;
+  readonly pooling?: EmbeddingWorkerPooling;
 }
 
 /** Validated `init` options with every default resolved. */
@@ -449,6 +465,7 @@ export interface NormalizedWorkerInitOptions {
   readonly maxBatchTokens: number;
   readonly intraOpThreads: number | undefined;
   readonly executionProviders: readonly string[] | undefined;
+  readonly pooling: EmbeddingWorkerPooling;
   readonly warmupText: string;
 }
 
@@ -484,9 +501,20 @@ export function normalizeInitOptions(
       options.executionProviders === undefined
         ? undefined
         : requireStringArray(options.executionProviders, "executionProviders"),
+    pooling: requirePooling(options.pooling ?? defaults.pooling ?? "mean"),
     warmupText:
       options.warmupText === undefined
         ? defaults.warmupText
         : requireText(options.warmupText, "warmupText"),
   };
+}
+
+function requirePooling(value: unknown): EmbeddingWorkerPooling {
+  if (typeof value !== "string" || !EMBEDDING_WORKER_POOLING.has(value)) {
+    throw new WorkerRequestError(
+      "invalid-request",
+      'pooling must be one of "mean", "cls", "last".',
+    );
+  }
+  return value as EmbeddingWorkerPooling;
 }

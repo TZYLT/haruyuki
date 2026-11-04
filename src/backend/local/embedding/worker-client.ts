@@ -982,6 +982,9 @@ export class EmbeddingWorkerClient {
       tokens: typeof result.tokens === "number" ? result.tokens : 0,
       batches: typeof result.batches === "number" ? result.batches : 0,
       elapsedMs: typeof result.elapsedMs === "number" ? result.elapsedMs : 0,
+      ...(typeof result.rssBytes === "number" && result.rssBytes > 0
+        ? { rssBytes: result.rssBytes }
+        : {}),
     };
   }
 }

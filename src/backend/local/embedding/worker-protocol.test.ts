@@ -238,6 +238,7 @@ describe("normalizeInitOptions", () => {
       maxBatchTokens: 1_700,
       intraOpThreads: undefined,
       executionProviders: undefined,
+      pooling: "mean",
       warmupText: ".",
     });
   });
@@ -251,6 +252,7 @@ describe("normalizeInitOptions", () => {
         maxBatchTokens: 64,
         intraOpThreads: 2,
         executionProviders: ["dml", "cpu"],
+        pooling: "last",
         warmupText: "hi",
       },
       defaults,
@@ -258,6 +260,7 @@ describe("normalizeInitOptions", () => {
     expect(options.maxTokens).toBe(128);
     expect(options.intraOpThreads).toBe(2);
     expect(options.executionProviders).toEqual(["dml", "cpu"]);
+    expect(options.pooling).toBe("last");
     expect(options.warmupText).toBe("hi");
   });
 
@@ -271,5 +274,11 @@ describe("normalizeInitOptions", () => {
     expect(() =>
       normalizeInitOptions({ ...base, executionProviders: [] }, defaults),
     ).toThrow(/executionProviders/);
+    expect(() =>
+      normalizeInitOptions(
+        { ...base, pooling: "median" as unknown as "mean" },
+        defaults,
+      ),
+    ).toThrow(/pooling/);
   });
 });

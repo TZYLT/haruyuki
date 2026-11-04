@@ -42,6 +42,7 @@ import {
   type EmbeddingWorkerErrorCode,
   type EmbeddingWorkerFrame,
   type EmbeddingWorkerInitResult,
+  type EmbeddingWorkerPooling,
   type EmbeddingWorkerRequest,
   type EmbeddingWorkerRequestType,
   type EmbeddingWorkerResultFrame,
@@ -153,6 +154,16 @@ function rate(count: number, elapsedMs: number): number {
   return Math.round((count / (elapsedMs / 1000)) * 100) / 100;
 }
 
+/** RSS of this worker process; the parent cannot see the ONNX arena's memory. */
+function currentRssBytes(): number | undefined {
+  try {
+    const rss = process.memoryUsage().rss;
+    return Number.isFinite(rss) && rss > 0 ? rss : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function releaseQuietly(session: EmbeddingSession | null): Promise<void> {
   if (session === null || session.release === undefined) return;
   try {
@@ -187,6 +198,7 @@ class EmbeddingWorkerState {
   private maxTokens = DEFAULT_MAX_TOKENS;
   private maxBatchSize = DEFAULT_BATCH_MAX_SIZE;
   private maxBatchTokens = DEFAULT_BATCH_MAX_TOKENS;
+  private pooling: EmbeddingWorkerPooling = "mean";
 
   private activeEmbedId: number | null = null;
   private cancelRequested = false;
@@ -441,6 +453,7 @@ class EmbeddingWorkerState {
       maxBatchSize: DEFAULT_BATCH_MAX_SIZE,
       maxBatchTokens: DEFAULT_BATCH_MAX_TOKENS,
       warmupText: DEFAULT_WARMUP_TEXT,
+      pooling: "mean",
     });
     const {
       runtimeDir,
@@ -451,6 +464,7 @@ class EmbeddingWorkerState {
       maxBatchTokens,
       intraOpThreads,
       executionProviders,
+      pooling,
       warmupText,
     } = options;
 
@@ -508,6 +522,7 @@ class EmbeddingWorkerState {
     this.maxTokens = maxTokens;
     this.maxBatchSize = maxBatchSize;
     this.maxBatchTokens = maxBatchTokens;
+    this.pooling = pooling;
     this.counters.inits += 1;
     await releaseQuietly(previous);
 
@@ -569,6 +584,7 @@ class EmbeddingWorkerState {
         const batchVectors = poolBatch({
           hidden: output.hidden,
           dim,
+          pooling: this.pooling,
           ...padded,
         });
         for (let row = 0; row < batchVectors.length; row += 1) {
@@ -593,6 +609,7 @@ class EmbeddingWorkerState {
     this.counters.totalEmbedMs += elapsedMs;
     this.counters.lastEmbedMs = elapsedMs;
     if (cancelled) this.counters.cancelled += 1;
+    const rssBytes = currentRssBytes();
     await this.send({
       type: "result",
       id: request.id,
@@ -604,6 +621,7 @@ class EmbeddingWorkerState {
         tokens: tokensRun,
         batches: batchesRun,
         elapsedMs,
+        ...(rssBytes === undefined ? {} : { rssBytes }),
       },
     } satisfies EmbeddingWorkerResultFrame<EmbeddingWorkerEmbedResult>);
   }
@@ -612,6 +630,7 @@ class EmbeddingWorkerState {
     request: Extract<EmbeddingWorkerRequest, { type: "stats" }>,
   ): Promise<void> {
     const counters = this.counters;
+    const rssBytes = currentRssBytes();
     const stats: EmbeddingWorkerStats = {
       ...counters,
       initialized: this.session !== null && this.tokenizer !== null,
@@ -627,6 +646,7 @@ class EmbeddingWorkerState {
       uptimeMs: Math.max(0, this.now() - this.startedAt),
       queueDepth: this.queue.length,
       pendingRequestId: this.activeEmbedId,
+      ...(rssBytes === undefined ? {} : { rssBytes }),
     };
     await this.send({
       type: "result",

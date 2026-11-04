@@ -237,6 +237,7 @@ export function createWorkerCalibrationProbe(
             modelPath: options.assets.modelPath,
             tokenizerPath: options.assets.tokenizerPath,
             maxTokens: options.assets.manifest.maxTokens,
+            pooling: options.assets.manifest.pooling,
             // Calibration measures the CPU path the query arm will actually use.
             executionProviders: ["cpu"],
             ...(options.threads !== undefined && options.threads > 0
@@ -322,6 +323,11 @@ export function createWorkerCalibrationProbe(
         throw new Error(
           `The RSS batch only covered ${output.tokens} token(s); a short batch underestimates resident memory.`,
         );
+      }
+      // The ONNX session and its arena live in the worker child; the parent's
+      // RSS misses the memory this measurement exists to size.
+      if (typeof output.rssBytes === "number" && output.rssBytes > 0) {
+        return output.rssBytes;
       }
       const readRss =
         options.readRssBytes ?? ((): number => process.memoryUsage().rss);

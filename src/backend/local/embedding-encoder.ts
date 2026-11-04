@@ -309,6 +309,7 @@ class BuiltinEncoderEntry {
         modelPath: assets.modelPath,
         tokenizerPath: assets.tokenizerPath,
         maxTokens: assets.manifest.maxTokens,
+        pooling: assets.manifest.pooling,
         executionProviders: [...EMBEDDING_QUERY_EXECUTION_PROVIDERS],
         ...(configuration.threads > 0
           ? { intraOpThreads: configuration.threads }

@@ -528,6 +528,40 @@ describe("runEmbeddingWorker: embed", () => {
     await harness.run;
   });
 
+  test("reports the worker's own RSS on an embed result", async () => {
+    const { harness } = await initialisedHarness({ dim: 3 });
+    harness.send({ id: 2, type: "embed", texts: ["ab"] });
+    const embed = (await harness.waitForResult(2))
+      .result as EmbeddingWorkerEmbedResult;
+    expect(typeof embed.rssBytes).toBe("number");
+    expect(embed.rssBytes).toBeGreaterThan(0);
+    harness.send({ id: 3, type: "shutdown" });
+    await harness.run;
+  });
+
+  test("pools with the strategy the manifest declares (CLS)", async () => {
+    const control = createFakeRuntime({ dim: 3 });
+    const harness = createHarness({
+      loadRuntime: async () => control.runtime,
+      loadTokenizer: async () => createFakeTokenizer(),
+    });
+    harness.send(initFrame({ pooling: "cls" }));
+    await harness.waitForResult(1);
+    harness.send({ id: 2, type: "embed", texts: ["ab"] });
+    const embed = (await harness.waitForResult(2))
+      .result as EmbeddingWorkerEmbedResult;
+    // The fake hidden row for token 0 is [10,20,30]; mean pooling over both
+    // tokens would be [15,30,45], so this pins the strategy, not just the data.
+    const expected = [10, 20, 30];
+    const magnitude = Math.hypot(...expected);
+    const actual = Array.from(decodeVectorBase64(embed.vectors[0] ?? "", 3));
+    expect(actual.map((value) => Number(value.toFixed(5)))).toEqual(
+      expected.map((value) => Number((value / magnitude).toFixed(5))),
+    );
+    harness.send({ id: 3, type: "shutdown" });
+    await harness.run;
+  });
+
   test("rejects an embed frame with no texts", async () => {
     const { harness } = await initialisedHarness();
     harness.send({ id: 2, type: "embed", texts: [] });

@@ -51,6 +51,8 @@ export interface EmbeddingWorkerEmbedOutput {
   readonly tokens: number;
   readonly batches: number;
   readonly elapsedMs: number;
+  /** Worker-process RSS after the batch, when the worker reports it. */
+  readonly rssBytes?: number;
 }
 
 /** Options for {@link EmbeddingWorkerClient.embedBatched}. */

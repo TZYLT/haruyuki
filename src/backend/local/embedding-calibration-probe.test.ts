@@ -217,6 +217,7 @@ describe("createWorkerCalibrationProbe", () => {
       tokenizerPath: "/models/test-model/tokenizer.json",
       executionProviders: ["cpu"],
       intraOpThreads: 2,
+      pooling: assets().manifest.pooling,
     });
 
     const batch = await probe.batchEmbed([], { remainingMs: 5_000 });
@@ -240,6 +241,28 @@ describe("createWorkerCalibrationProbe", () => {
     // Idempotent: a second pass in the same process must not double-close.
     await probe.dispose();
     expect(state.shutdowns).toBe(1);
+  });
+
+  test("prefers the worker's own RSS over the parent process", async () => {
+    const { worker } = fakeWorker();
+    const reported = 640 * 1024 ** 2;
+    const withRss: EmbeddingBuildWorker = {
+      ...worker,
+      async embed(texts) {
+        const output = await worker.embed(texts);
+        return { ...output, rssBytes: reported };
+      },
+    };
+    const probe = createWorkerCalibrationProbe({
+      assets: assets(),
+      worker: withRss,
+      // The parent number is what the old probe reported; it must lose.
+      readRssBytes: () => 1,
+    });
+    await expect(probe.rssBytes([], { remainingMs: 5_000 })).resolves.toBe(
+      reported,
+    );
+    await probe.dispose();
   });
 
   test("the default disk probe answers a number, never a throw", () => {
