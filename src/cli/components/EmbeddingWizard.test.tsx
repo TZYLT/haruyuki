@@ -22,21 +22,22 @@ import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
  * The first-run vector-recall wizard, judged on the frame (48-2 §4.9 D5).
  *
  * The state machine test pins the transitions and the writes; this file pins
- * what a user actually sees at each step: the four numbered screens, the
- * download / licence disclosure before any transfer, the masked endpoint key,
- * the test-embedding result and error text, the "keep building after exit"
- * switch (off by default) and the finish receipt. It also proves the flow keeps
- * its earlier screen when a dependency fails, which a frame assertion is the
- * only way to see.
+ * what a user actually sees at each step: the GPU role screen, the cached-install
+ * check that skips the download, the two-size download confirmation, the masked
+ * endpoint key, the calibration screen's "not measured" wording, the step-4
+ * selectable rows (highlight, Space/Enter toggles, the Start build action row)
+ * and the finish receipt.
  */
 
 const ENTER = String.fromCharCode(13);
 const ESCAPE = String.fromCharCode(27);
 const CTRL_C = String.fromCharCode(3);
+const DOWN = "\u001B[B";
 
 const MODEL_ID = "bge-small-zh-v1.5";
+const RUNTIME_DIR = "/tmp/runtime/1.31.1";
 
-const settle = (ms = 150) => new Promise((resolve) => setTimeout(resolve, ms));
+const settle = (ms = 200) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function fakeCalibration(
   overrides: Partial<EmbeddingWizardCalibration> = {},
@@ -67,6 +68,9 @@ interface Harness {
   builds: EmbeddingWizardBuildRequest[];
   keys: string[];
   probes: EmbeddingWizardEndpointProbeRequest[];
+  modelDownloads: string[];
+  runtimeDownloads: number[];
+  order: string[];
   closes: () => number;
   completions: () => string[];
 }
@@ -82,6 +86,9 @@ function mount(
   const builds: EmbeddingWizardBuildRequest[] = [];
   const keys: string[] = [];
   const probes: Harness["probes"] = [];
+  const modelDownloads: string[] = [];
+  const runtimeDownloads: number[] = [];
+  const order: string[] = [];
   const completions: string[] = [];
   let closes = 0;
   const tty = mountInkTty(
@@ -90,11 +97,23 @@ function mount(
       initialSettings={EMBEDDING_SETTING_DEFAULTS}
       env={options.env ?? {}}
       deps={{
-        downloadModel: async (request) => ({
-          modelId: request.modelId,
-          modelDir: `/tmp/models/${request.modelId}`,
-          alreadyInstalled: false,
-        }),
+        downloadModel: async (request) => {
+          modelDownloads.push(request.modelId);
+          order.push("model");
+          return {
+            modelId: request.modelId,
+            modelDir: `/tmp/models/${request.modelId}`,
+            alreadyInstalled: false,
+            runtimeDir: RUNTIME_DIR,
+          };
+        },
+        isModelInstalled: async () => false,
+        isRuntimeInstalled: async () => false,
+        downloadRuntime: async () => {
+          runtimeDownloads.push(1);
+          order.push("runtime");
+          return { runtimeDir: RUNTIME_DIR, alreadyInstalled: false };
+        },
         probeEndpoint: async (request) => {
           probes.push(request);
           return {
@@ -134,6 +153,9 @@ function mount(
     builds,
     keys,
     probes,
+    modelDownloads,
+    runtimeDownloads,
+    order,
     closes: () => closes,
     completions: () => completions,
   };
@@ -141,32 +163,47 @@ function mount(
 
 async function painted(tty: ReturnType<typeof mountInkTty>): Promise<string> {
   await settle();
-  return (await tty.rows()).join("\n");
+  return (await tty.rows()).join("\\n");
 }
 
-/** Backend (built-in, the default cursor) → model picker → download confirmation. */
+/**
+ * Backend (built-in) → GPU role (Auto) → model picker → cached-install check →
+ * the download confirmation (the fake cache reports "nothing installed").
+ */
 async function toBuiltinDownload(
   tty: ReturnType<typeof mountInkTty>,
 ): Promise<void> {
-  await tty.press(ENTER, ENTER);
+  await tty.press(ENTER, ENTER, ENTER);
+  await settle();
   await settle();
 }
 
-/** … and through the download + automatic calibration to the finish step. */
+/** … and through the runtime + model install and automatic calibration. */
 async function toFinish(tty: ReturnType<typeof mountInkTty>): Promise<string> {
   await toBuiltinDownload(tty);
   await tty.press(ENTER);
+  await settle();
   await settle();
   await settle();
   await tty.press(ENTER);
   return painted(tty);
 }
 
-/** Backend (endpoint row) → protocol (OpenAI) → URL screen. */
+/** Step 4's action row is the fourth row: three Downs then Enter. */
+async function startBuildFromFinish(
+  tty: ReturnType<typeof mountInkTty>,
+): Promise<void> {
+  await tty.press(DOWN, DOWN, DOWN, ENTER);
+  await settle();
+}
+
+/** Backend (endpoint row) → GPU → protocol (OpenAI) → URL screen. */
 async function toEndpointUrl(
   tty: ReturnType<typeof mountInkTty>,
 ): Promise<void> {
   await tty.press("j", ENTER);
+  await settle();
+  await tty.press(ENTER);
   await settle();
   await tty.press(ENTER);
   await settle();
@@ -207,10 +244,23 @@ describe("the embedding setup wizard", () => {
     }
   });
 
-  test("the built-in path discloses the download, then calibrates and finishes", async () => {
+  test("the built-in path asks the GPU role, discloses both downloads, then calibrates and finishes", async () => {
     const { tty, saves, builds, completions } = mount();
     try {
       await painted(tty);
+      await tty.press(ENTER);
+      const gpuFrame = await painted(tty);
+      expect(gpuFrame).toContain("2/4 GPU");
+      expect(gpuFrame).toContain("Auto (default)");
+      expect(gpuFrame).toContain("CPU only");
+      if (process.platform === "win32") {
+        expect(gpuFrame).toContain("Index build only");
+      } else {
+        expect(gpuFrame).toContain(
+          "CPU only (this platform cannot build the index on a GPU)",
+        );
+      }
+
       await tty.press(ENTER);
       const modelFrame = await painted(tty);
       expect(modelFrame).toContain("2/4 Built-in model");
@@ -219,15 +269,19 @@ describe("the embedding setup wizard", () => {
       expect(modelFrame).toContain("MIT");
 
       await tty.press(ENTER);
+      await settle();
+      await settle();
       const downloadFrame = await painted(tty);
       expect(downloadFrame).toContain("2/4 Download");
       expect(downloadFrame).toContain("Download now");
-      expect(downloadFrame).toContain("Size: 24.5 MB");
+      expect(downloadFrame).toContain("Model download: ~24.5 MB");
+      expect(downloadFrame).toContain("Runtime download: ~115 MB");
       expect(downloadFrame).toContain("License: MIT");
       expect(downloadFrame).toContain("sha256 not recorded");
       expect(saves).toEqual([]);
 
       await tty.press(ENTER);
+      await settle();
       await settle();
       await settle();
       const calibrationFrame = await painted(tty);
@@ -236,22 +290,25 @@ describe("the embedding setup wizard", () => {
       expect(calibrationFrame).toContain("p90 55ms");
       expect(calibrationFrame).toContain("query +100ms");
       expect(calibrationFrame).toContain("Tier: small (calibrated)");
+      expect(calibrationFrame).toContain("GPU: auto");
 
       await tty.press(ENTER);
       const finishFrame = await painted(tty);
       expect(finishFrame).toContain("4/4 Finish");
       expect(finishFrame).toContain("[ ] Keep building after you exit");
-      expect(finishFrame).toContain("closing Haruyuki stops it");
-      expect(finishFrame).toContain("Enter finish");
+      expect(finishFrame).toContain("[x] Build mode: incremental");
+      expect(finishFrame).toContain("Start build");
+      expect(finishFrame).toContain("↑↓ move");
+      expect(finishFrame).toContain("Space/Enter toggle");
       expect(saves).toEqual([]);
 
-      await tty.press(ENTER);
-      await settle();
+      await startBuildFromFinish(tty);
       expect(saves).toEqual([
         {
           enabled: true,
           backend: "builtin",
           model: MODEL_ID,
+          gpu: "auto",
           calibration: {
             fingerprint: "fp-1",
             measuredAt: "2026-11-04T00:00:00.000Z",
@@ -265,7 +322,12 @@ describe("the embedding setup wizard", () => {
         },
       ]);
       expect(builds).toEqual([
-        { backend: "builtin", model: MODEL_ID, keepAfterExit: false },
+        {
+          backend: "builtin",
+          model: MODEL_ID,
+          keepAfterExit: false,
+          mode: "incremental",
+        },
       ]);
       expect(completions()).toEqual(["build started"]);
     } finally {
@@ -273,17 +335,154 @@ describe("the embedding setup wizard", () => {
     }
   });
 
-  test("the keep-after-exit switch defaults off and toggles on", async () => {
+  test("an installed model and runtime skip the download screen and say they are cached", async () => {
+    const { tty, saves, modelDownloads, runtimeDownloads } = mount({
+      deps: {
+        isModelInstalled: async () => true,
+        isRuntimeInstalled: async () => true,
+      },
+    });
+    try {
+      await painted(tty);
+      await tty.press(ENTER, ENTER, ENTER);
+      await settle();
+      await settle();
+      const frame = await painted(tty);
+      expect(frame).toContain("3/4 Calibration");
+      expect(frame).toContain("already installed");
+      expect(frame).not.toContain("2/4 Download");
+      expect(modelDownloads).toHaveLength(0);
+      expect(runtimeDownloads).toHaveLength(0);
+      expect(saves).toEqual([]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a missing runtime still shows the download screen and installs the runtime first", async () => {
+    const { tty, modelDownloads, runtimeDownloads, order } = mount({
+      deps: {
+        isModelInstalled: async () => true,
+        isRuntimeInstalled: async () => false,
+      },
+    });
+    try {
+      await painted(tty);
+      await tty.press(ENTER, ENTER, ENTER);
+      await settle();
+      await settle();
+      expect(await painted(tty)).toContain("2/4 Download");
+      await tty.press(ENTER);
+      await settle();
+      await settle();
+      expect(order).toEqual(["runtime", "model"]);
+      expect(runtimeDownloads).toHaveLength(1);
+      expect(modelDownloads).toEqual([MODEL_ID]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a runtime download failure keeps the download screen with its own error", async () => {
+    const { tty } = mount({
+      deps: {
+        downloadRuntime: async () => {
+          throw new Error("npm registry unreachable");
+        },
+      },
+    });
+    try {
+      await toBuiltinDownload(tty);
+      await tty.press(ENTER);
+      await settle();
+      await settle();
+      const frame = await painted(tty);
+      expect(frame).toContain("2/4 Download");
+      expect(frame).toContain(
+        "Runtime install failed: npm registry unreachable",
+      );
+      expect(frame).toContain("Enter retry");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("step 4's rows take the cursor, Space/Enter toggles them and Start build runs", async () => {
+    const { tty, builds, saves } = mount();
+    try {
+      await toFinish(tty);
+      // Row 0: Enter toggles the keep switch.
+      await tty.press(ENTER);
+      let frame = await painted(tty);
+      expect(frame).toContain("[x] Keep building after you exit");
+      expect(frame).toContain("[x] Build mode: incremental");
+
+      // Row 1: Space selects incremental (already on) — a no-op this time.
+      await tty.press(DOWN, " ");
+      frame = await painted(tty);
+      expect(frame).toContain("[x] Build mode: incremental");
+      expect(frame).toContain("[ ] Build mode: full");
+
+      // Row 2: Space selects the full build mode.
+      await tty.press(DOWN, " ");
+      frame = await painted(tty);
+      expect(frame).toContain("[ ] Build mode: incremental");
+      expect(frame).toContain("[x] Build mode: full");
+      expect(saves).toEqual([]);
+
+      // Row 3: the action row.
+      await tty.press(DOWN, ENTER);
+      await settle();
+      expect(builds).toHaveLength(1);
+      expect(builds[0]?.keepAfterExit).toBe(true);
+      expect(builds[0]?.mode).toBe("full");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the t shortcut still toggles keep-after-exit and the row shows it", async () => {
     const { tty, builds } = mount();
     try {
       await toFinish(tty);
       await tty.press("t");
       const toggled = await painted(tty);
       expect(toggled).toContain("[x] Keep building after you exit");
-      expect(toggled).toContain("survives closing Haruyuki");
+      expect(toggled).toContain("runs detached; survives exit");
+      await startBuildFromFinish(tty);
+      expect(builds[0]?.keepAfterExit).toBe(true);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("An unmeasured calibration never paints a zero latency", async () => {
+    const { tty } = mount({
+      deps: {
+        calibrate: async () =>
+          fakeCalibration({
+            calibrated: false,
+            p50Ms: 0,
+            p90Ms: 0,
+            throughputPerSec: 0,
+            reason: "calibration probe is not wired in this build",
+            tier: "documented",
+            queryBudgetMs: 150,
+          }),
+      },
+    });
+    try {
+      await toBuiltinDownload(tty);
       await tty.press(ENTER);
       await settle();
-      expect(builds[0]?.keepAfterExit).toBe(true);
+      await settle();
+      const frame = await painted(tty);
+      expect(frame).toContain("3/4 Calibration");
+      expect(frame).toContain(
+        "not measured / not applicable (default budget used)",
+      );
+      expect(frame).not.toContain("p50 0ms");
+      expect(frame).toContain("query +150ms");
     } finally {
       tty.stop();
     }
@@ -317,8 +516,7 @@ describe("the embedding setup wizard", () => {
       await settle();
       await tty.press(ENTER); // continue to finish
       await settle();
-      await tty.press(ENTER); // finish
-      await settle();
+      await startBuildFromFinish(tty);
       expect(keys).toEqual(["sk-live-secret"]);
       expect(saves[0]).toEqual({
         enabled: true,
@@ -329,6 +527,7 @@ describe("the embedding setup wizard", () => {
           model: "text-embedding-3-small",
           dimensions: 768,
         },
+        gpu: "auto",
         calibration: {
           fingerprint: "fp-1",
           measuredAt: "2026-11-04T00:00:00.000Z",
@@ -378,6 +577,7 @@ describe("the embedding setup wizard", () => {
             modelId: request.modelId,
             modelDir: `/tmp/models/${request.modelId}`,
             alreadyInstalled: false,
+            runtimeDir: RUNTIME_DIR,
           };
         },
       },
@@ -385,6 +585,8 @@ describe("the embedding setup wizard", () => {
     try {
       await toBuiltinDownload(tty);
       await tty.press(ENTER);
+      await settle();
+      await settle();
       const failed = await painted(tty);
       expect(failed).toContain("2/4 Download");
       expect(failed).toContain("Download failed: offline");
@@ -404,7 +606,7 @@ describe("the embedding setup wizard", () => {
     try {
       await painted(tty);
       await tty.press(ENTER);
-      expect(await painted(tty)).toContain("2/4 Built-in model");
+      expect(await painted(tty)).toContain("2/4 GPU");
       await tty.press(ESCAPE);
       expect(await painted(tty)).toContain("1/4 Backend");
       expect(closes()).toBe(0);
@@ -436,10 +638,12 @@ describe("the embedding setup wizard", () => {
     try {
       const frame = await painted(tty);
       expect(frame).toContain("1/4 Backend");
-      await tty.press(ENTER, ENTER);
+      await tty.press(ENTER, ENTER, ENTER);
+      await settle();
+      await settle();
       const download = await painted(tty);
       expect(download).toContain("2/4 Download");
-      expect(download).toContain("Size: 24.5 MB");
+      expect(download).toContain("Model download: ~24.5 MB");
       expect(download).toContain("Model: bge-small-zh-v1.5");
     } finally {
       tty.stop();

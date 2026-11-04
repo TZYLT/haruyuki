@@ -28,14 +28,33 @@ import {
   type EmbeddingModelDownloadProgress,
   fetchEmbeddingModel,
 } from "@/backend/local/embedding/model-download";
+import { isEmbeddingModelInstalled } from "@/backend/local/embedding/model-download-install";
+import {
+  fetchEmbeddingRuntime,
+  readEmbeddingRuntimeManifest,
+} from "@/backend/local/embedding/runtime-fetch";
+import { resolveEmbeddingBuiltinAssets } from "@/backend/local/embedding-assets";
+import {
+  buildEmbeddingCalibrationEnvironment,
+  createDirectMlCalibrationProbe,
+  runEmbeddingCalibration,
+} from "@/backend/local/embedding-calibration-probe";
 import { EMBEDDING_INDEX_CHUNKER_VERSION } from "@/backend/local/embedding-format";
 import { saveEmbeddingApiKey } from "@/cli/app/pages/settings/embedding-secrets";
 import { updateEmbeddingSettings } from "@/cli/app/pages/settings/embedding-settings";
-import { embeddingWizardCalibrationFromResult } from "@/cli/helpers/embedding-wizard-actions";
+import { buildEmbeddingFromSettings } from "@/cli/helpers/embedding-runtime";
+import {
+  embeddingWizardCalibrationFromResult,
+  runtimeFetchFraction,
+} from "@/cli/helpers/embedding-wizard-actions";
 import type {
-  EmbeddingWizardBuildRequest,
+  EmbeddingWizardCalibrationRequest,
   EmbeddingWizardDeps,
 } from "@/cli/helpers/embedding-wizard-state";
+import {
+  type ResolvedEmbeddingSettings,
+  readEmbeddingSettings,
+} from "@/recall-settings";
 
 // ── Production seams ───────────────────────────────────────────────────────
 
@@ -83,21 +102,101 @@ function calibrationEnvironment(
 }
 
 /**
- * Step 4's build start. A4 (`cli/helpers/embedding-build-host`) is the intended
- * owner of `startEmbeddingBuild`; this seam is the one place a Lead integration
- * swaps the default for it. Reporting the command is deliberate: telling the
- * user a build started when no host is wired would be the worse lie.
+ * Step 4's build start is A4's host through {@link buildEmbeddingFromSettings}:
+ * the wizard has already written the settings by the time this runs, so the
+ * build resolves the same space, asset gate and GPU decision as the command.
  */
-function defaultStartBuild(request: EmbeddingWizardBuildRequest): string {
-  const lifecycle = request.keepAfterExit
-    ? "keep-after-exit is on"
-    : "the build stops when you exit";
-  return `Settings saved. Run /recall embedding build to start the index (${lifecycle}); the background build host is not wired in this build.`;
+
+/** Test seam: point the production checks at a fixture cache directory. */
+export interface EmbeddingWizardDefaultDepsOptions {
+  readonly modelsDir?: string;
+}
+
+/** The settings record a calibration step is measured against. */
+function calibrationSettings(
+  request: EmbeddingWizardCalibrationRequest,
+): ResolvedEmbeddingSettings {
+  const settings = readEmbeddingSettings();
+  return {
+    ...settings,
+    backend: request.backend,
+    model: request.modelId,
+    endpoint: request.endpoint,
+    gpu: request.gpuRole,
+  };
+}
+
+/** The built-in assets a calibration probe reads (installed by step 2). */
+function assetsForCalibration(
+  request: EmbeddingWizardCalibrationRequest,
+  options: EmbeddingWizardDefaultDepsOptions,
+) {
+  return resolveEmbeddingBuiltinAssets(request.modelId, {
+    ...(options.modelsDir === undefined
+      ? {}
+      : { modelsDir: options.modelsDir }),
+  });
+}
+
+/**
+ * Step 3: the bounded calibration pass.
+ *
+ * A built-in model is measured through C3's worker (`runEmbeddingCalibration`),
+ * with a DirectML trial on Windows when the user asked for a GPU role. Endpoint
+ * backends keep C5's documented defaults: their latency is a network round trip,
+ * not a local encode, and the encoder client owns its own timeout/breaker. The
+ * probe is disposed either way; a failed measurement becomes C5's defaults, never
+ * a blocked wizard step.
+ */
+async function defaultCalibrate(
+  request: EmbeddingWizardCalibrationRequest,
+  options: EmbeddingWizardDefaultDepsOptions,
+) {
+  if (request.backend !== "builtin") {
+    const skipped = skipEmbeddingCalibration(
+      calibrationEnvironment(request.modelId),
+      {
+        reason:
+          "endpoint mode keeps the documented budget: the endpoint client owns its own timeout and breaker",
+      },
+    );
+    return embeddingWizardCalibrationFromResult(skipped);
+  }
+  const settings = calibrationSettings(request);
+  const assets = assetsForCalibration(request, options);
+  const environment = buildEmbeddingCalibrationEnvironment(settings, assets);
+  const gpuRole = request.gpuRole;
+  const gpuProbe =
+    process.platform === "win32" && gpuRole !== "off"
+      ? createDirectMlCalibrationProbe({ assets })
+      : undefined;
+  let probe:
+    | Awaited<ReturnType<typeof runEmbeddingCalibration>>["probe"]
+    | null = null;
+  try {
+    const calibration = await runEmbeddingCalibration({
+      settings,
+      assets,
+      ...(gpuProbe === undefined ? {} : { gpuProbe }),
+    });
+    probe = calibration.probe;
+    return embeddingWizardCalibrationFromResult(calibration.result);
+  } catch {
+    // A measurement failure is not a wizard failure (48-1 §6.6): fall back to
+    // the documented defaults and let the finish step record them as such.
+    const skipped = skipEmbeddingCalibration(environment, {
+      reason: "calibration measurement failed; documented defaults are used",
+    });
+    return embeddingWizardCalibrationFromResult(skipped);
+  } finally {
+    await probe?.dispose().catch(() => undefined);
+  }
 }
 
 export function createEmbeddingWizardDefaultDeps(
   agentId: string,
   env: Record<string, string | undefined> | undefined,
+  options: EmbeddingWizardDefaultDepsOptions = {},
 ): EmbeddingWizardDeps {
   return {
     downloadModel: async (request) => {
@@ -116,6 +215,28 @@ export function createEmbeddingWizardDefaultDeps(
         modelId: result.manifest.id,
         modelDir: result.modelDir,
         alreadyInstalled: result.alreadyInstalled,
+        runtimeDir: "",
+      };
+    },
+    isModelInstalled: async (modelId) =>
+      isEmbeddingModelInstalled({
+        modelId,
+        ...(options.modelsDir === undefined
+          ? {}
+          : { modelsDir: options.modelsDir }),
+      }),
+    isRuntimeInstalled: async () =>
+      (await readEmbeddingRuntimeManifest()) !== null,
+    downloadRuntime: async (request) => {
+      const result = await fetchEmbeddingRuntime({
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+        onProgress: (progress) => {
+          request.onProgress?.(runtimeFetchFraction(progress));
+        },
+      });
+      return {
+        runtimeDir: result.runtimeDir,
+        alreadyInstalled: result.alreadyInstalled,
       };
     },
     probeEndpoint: async (request) => {
@@ -133,21 +254,20 @@ export function createEmbeddingWizardDefaultDeps(
         latencyMs: result.latencyMs,
       };
     },
-    calibrate: async (request) => {
-      const environment = calibrationEnvironment(request.modelId);
-      const result = skipEmbeddingCalibration(environment, {
-        reason:
-          "calibration probe is not wired in this build; documented defaults are used",
-      });
-      return embeddingWizardCalibrationFromResult(result);
-    },
+    calibrate: async (request) => defaultCalibrate(request, options),
     saveSettings: (patch) => {
       updateEmbeddingSettings(patch);
     },
     saveApiKey: async (value) => {
       await saveEmbeddingApiKey(value, agentId);
     },
-    startBuild: (request) => defaultStartBuild(request),
+    startBuild: async (request) =>
+      await buildEmbeddingFromSettings({
+        agentId,
+        mode: request.mode,
+        keepAfterExit: request.keepAfterExit,
+        lifecycle: "tui",
+      }),
     readEnv: (name) => (env ?? process.env)[name],
   };
 }

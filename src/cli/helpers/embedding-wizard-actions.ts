@@ -23,17 +23,33 @@
  * APIs; never the network or the settings file directly.
  */
 
-import { resolveEmbeddingModelPaths } from "@/backend/local/embedding/model-download-install";
+import {
+  isEmbeddingModelInstalled,
+  resolveEmbeddingModelPaths,
+} from "@/backend/local/embedding/model-download-install";
+import {
+  DEFAULT_EMBEDDING_RUNTIME_VERSION,
+  fetchEmbeddingRuntime,
+  type RuntimeFetchProgress,
+  readEmbeddingRuntimeManifest,
+} from "@/backend/local/embedding/runtime-fetch";
+import { getEmbeddingRuntimeDir } from "@/backend/local/embedding/secrets";
 import type { EmbeddingSettingsPatch } from "@/cli/app/pages/settings/embedding-settings";
+import {
+  EMBEDDING_WIZARD_RUNTIME_BYTES,
+  type EmbeddingWizardApiKeyResolution,
+  embeddingWizardModelOption,
+  resolveEmbeddingWizardApiKeyFrom,
+} from "@/cli/helpers/embedding-wizard-facts";
 import {
   applyEmbeddingWizardEvent,
   type EmbeddingWizardCalibration,
   type EmbeddingWizardDeps,
   type EmbeddingWizardEvent,
+  type EmbeddingWizardInstallCheckResult,
   type EmbeddingWizardState,
   type EmbeddingWizardStateListener,
   embeddingWizardEndpointNeedsKey,
-  resolveEmbeddingWizardApiKey,
 } from "@/cli/helpers/embedding-wizard-state";
 import type { EmbeddingCalibrationSettings } from "@/recall-settings";
 import type {
@@ -62,6 +78,76 @@ export function embeddingWizardManualImportHint(modelId: string): string {
   const dir = embeddingWizardModelDir(modelId);
   const where = dir === null ? "the model cache" : dir;
   return `If downloads are blocked on this machine, import a copy of the model into ${where} with the offline importer and retry.`;
+}
+
+/** Where C2 installs the onnxruntime closure, or `null` when unresolvable. */
+export function embeddingWizardRuntimeDir(): string | null {
+  try {
+    return getEmbeddingRuntimeDir(DEFAULT_EMBEDDING_RUNTIME_VERSION);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * {@link resolveEmbeddingWizardApiKeyFrom} against the wizard's own endpoint
+ * form; the runners and the frame must agree on which two fields hold the key.
+ */
+export function resolveEmbeddingWizardApiKey(
+  state: EmbeddingWizardState,
+  readEnv: (name: string) => string | undefined = (name) => process.env[name],
+): EmbeddingWizardApiKeyResolution {
+  return resolveEmbeddingWizardApiKeyFrom(state.endpoint, readEnv);
+}
+
+/**
+ * Whether step 2's two installs are already on disk. Both halves count: the
+ * model without the runtime cannot embed, so a check that only looked at the
+ * weights would skip the download screen and fail later at build time.
+ *
+ * The dependencies stay injectable (tests never touch a real cache); the
+ * defaults are C4's cheap install check and C2's manifest read.
+ */
+export async function runEmbeddingWizardInstallCheck(
+  state: EmbeddingWizardState,
+  deps: EmbeddingWizardDeps,
+  listener?: EmbeddingWizardStateListener,
+  reader?: EmbeddingWizardStateReader,
+): Promise<EmbeddingWizardState> {
+  if (state.step !== "builtin-check") return state;
+  if (state.builtin.installCheck.phase !== "idle") return state;
+  const modelId = state.builtin.modelId;
+  const checking = notify(
+    listener,
+    applyEmbeddingWizardEvent(state, { type: "install-check-started" }),
+  );
+  try {
+    const modelInstalled = deps.isModelInstalled
+      ? await deps.isModelInstalled(modelId)
+      : await isEmbeddingModelInstalled({ modelId });
+    const runtimeInstalled = deps.isRuntimeInstalled
+      ? await deps.isRuntimeInstalled()
+      : (await readEmbeddingRuntimeManifest()) !== null;
+    const result: EmbeddingWizardInstallCheckResult = {
+      modelInstalled,
+      runtimeInstalled,
+      modelDir: modelInstalled ? embeddingWizardModelDir(modelId) : null,
+      runtimeDir: runtimeInstalled ? embeddingWizardRuntimeDir() : null,
+    };
+    return applyOutcome(
+      checking,
+      { type: "install-check-succeeded", result },
+      listener,
+      reader,
+    );
+  } catch (error) {
+    return applyOutcome(
+      checking,
+      { type: "install-check-failed", error: getErrorMessage(error) },
+      listener,
+      reader,
+    );
+  }
 }
 
 // ── Calibration mapping ────────────────────────────────────────────────────
@@ -127,11 +213,75 @@ export function embeddingCalibrationSettings(
   };
 }
 
+// ── Calibration display thresholds ─────────────────────────────────────────
+
+/** The calibration values the display thresholds look at. */
+export interface EmbeddingWizardCalibrationDisplay {
+  readonly calibrated: boolean;
+  readonly p50Ms: number;
+  readonly p90Ms: number;
+  readonly throughputPerSec: number;
+}
+
+/**
+ * Whether a calibration result carries real measurements. C5's skipped/defaults
+ * path reports zeros and `calibrated: false`; a zero latency is never a
+ * measurement, so the frame says "not measured" rather than `p50 0ms · 0/s`.
+ */
+export function embeddingWizardCalibrationMeasured(
+  calibration: EmbeddingWizardCalibrationDisplay | null,
+): boolean {
+  if (calibration === null) return false;
+  if (!calibration.calibrated) return false;
+  return (
+    Number.isFinite(calibration.p50Ms) &&
+    calibration.p50Ms > 0 &&
+    Number.isFinite(calibration.throughputPerSec) &&
+    calibration.throughputPerSec > 0
+  );
+}
+
+function formatMs(value: number): string {
+  if (!Number.isFinite(value)) return "n/a";
+  return Number.isInteger(value) ? `${value}ms` : `${value.toFixed(1)}ms`;
+}
+
+/** Step 3's latency line: numbers only when there is a measurement. */
+export function embeddingWizardCalibrationLatencyLine(
+  calibration: EmbeddingWizardCalibrationDisplay | null,
+): string {
+  if (
+    calibration === null ||
+    !embeddingWizardCalibrationMeasured(calibration)
+  ) {
+    return "Query latency: not measured / not applicable (default budget used)";
+  }
+  return `Query latency: p50 ${formatMs(calibration.p50Ms)} · p90 ${formatMs(
+    calibration.p90Ms,
+  )} · ${calibration.throughputPerSec}/s`;
+}
+
+/** Step 4's one-line recap: the same rule, in the summary's wording. */
+export function embeddingWizardCalibrationSummary(
+  calibration:
+    | (EmbeddingWizardCalibrationDisplay & { readonly queryBudgetMs: number })
+    | null,
+): string {
+  if (calibration === null) {
+    return "Calibration: skipped (documented defaults)";
+  }
+  if (!embeddingWizardCalibrationMeasured(calibration)) {
+    return "Calibration: not measured (documented defaults)";
+  }
+  return `Calibration: p50 ${formatMs(calibration.p50Ms)} · p90 ${formatMs(
+    calibration.p90Ms,
+  )} · query budget ${calibration.queryBudgetMs}ms`;
+}
+
 /**
  * The D3 patch the finish step writes. Pure and exported so the test can pin the
  * exact record (including the "only one write" property) without a component.
- */
-export function embeddingWizardSettingsPatch(state: EmbeddingWizardState): {
+ */ export function embeddingWizardSettingsPatch(state: EmbeddingWizardState): {
   patch: EmbeddingSettingsPatch | null;
   error: string | null;
 } {
@@ -146,6 +296,7 @@ export function embeddingWizardSettingsPatch(state: EmbeddingWizardState): {
         enabled: true,
         backend: "builtin",
         model: state.builtin.modelId,
+        gpu: state.gpu,
         ...calibrationPatch,
       },
       error: null,
@@ -164,6 +315,7 @@ export function embeddingWizardSettingsPatch(state: EmbeddingWizardState): {
         enabled: true,
         backend: "endpoint",
         endpoint,
+        gpu: state.gpu,
         ...calibrationPatch,
       },
       error: null,
@@ -218,8 +370,11 @@ function applyOutcome(
 }
 
 /**
- * Download the selected built-in model (C4). Only called after the explicit
- * confirmation screen: an Enter on the picker alone never downloads.
+ * Download the selected built-in model and the onnxruntime closure (C4 + C2).
+ * Only called after the explicit confirmation screen: an Enter on the picker
+ * alone never downloads. The runtime goes first because it is the larger
+ * transfer and the model cannot be embedded with without it; either transfer is
+ * skipped when the install check already found it on disk.
  */
 export async function runEmbeddingWizardDownload(
   state: EmbeddingWizardState,
@@ -234,39 +389,98 @@ export async function runEmbeddingWizardDownload(
     listener,
     applyEmbeddingWizardEvent(state, { type: "download-started" }),
   );
+  // The runner threads its own working state so a caller without a reader (and
+  // every state written between here and the outcome) still sees the runtime
+  // sub-transfer as done; the listener/reader only add late-navigation safety.
+  let current = running;
+  const modelBytes = embeddingWizardModelOption(modelId)?.totalBytes ?? 0;
+  const needsRuntime = !state.builtin.download.runtimeDone;
+  const runtimeBytes = needsRuntime ? EMBEDDING_WIZARD_RUNTIME_BYTES : 0;
+  const totalBytes = runtimeBytes + modelBytes;
+  const runtimeShare = totalBytes > 0 ? runtimeBytes / totalBytes : 0;
+  let lastProgress = 0;
+  const emit = (fraction: number) => {
+    const progress = Math.min(1, Math.max(lastProgress, fraction));
+    lastProgress = progress;
+    listener?.(
+      applyEmbeddingWizardEvent(current, {
+        type: "download-progress",
+        progress,
+      }),
+    );
+  };
+  let phase: "runtime" | "model" = needsRuntime ? "runtime" : "model";
+  let runtimeDir = state.builtin.download.runtimeDir;
   try {
+    if (needsRuntime) {
+      const runtime = deps.downloadRuntime
+        ? await deps.downloadRuntime({
+            onProgress: (fraction) => emit(runtimeShare * fraction),
+          })
+        : await fetchEmbeddingRuntime({
+            onProgress: (progress) =>
+              emit(runtimeShare * runtimeFetchFraction(progress)),
+          });
+      runtimeDir = runtime.runtimeDir;
+      current = applyEmbeddingWizardEvent(current, {
+        type: "runtime-downloaded",
+        runtimeDir,
+      });
+      listener?.(current);
+      emit(runtimeShare);
+    }
+    phase = "model";
     const result = await deps.downloadModel({
       modelId,
-      onProgress: (progress) => {
-        listener?.(
-          applyEmbeddingWizardEvent(running, {
-            type: "download-progress",
-            progress,
-          }),
-        );
-      },
+      onProgress: (fraction) =>
+        emit(runtimeShare + (1 - runtimeShare) * fraction),
     });
     return applyOutcome(
-      running,
+      current,
       {
         type: "download-succeeded",
-        result,
+        result: {
+          ...result,
+          runtimeDir: runtimeDir ?? embeddingWizardRuntimeDir() ?? "",
+        },
       },
       listener,
       reader,
     );
   } catch (error) {
     return applyOutcome(
-      running,
+      current,
       {
         type: "download-failed",
-        error: getErrorMessage(error),
-        hint: embeddingWizardManualImportHint(modelId),
+        error:
+          phase === "runtime"
+            ? `Runtime install failed: ${getErrorMessage(error)}`
+            : getErrorMessage(error),
+        hint:
+          phase === "runtime"
+            ? "The embedding runtime could not be installed; check that this machine can reach an npm registry or its mirror, then press Enter to retry."
+            : embeddingWizardManualImportHint(modelId),
       },
       listener,
       reader,
     );
   }
+}
+
+/** Map a C2 progress tick onto 0..1, so the two transfers share one bar. */
+export function runtimeFetchFraction(progress: RuntimeFetchProgress): number {
+  if (progress.phase === "metadata") return 0.05;
+  if (progress.phase === "download") {
+    const written = progress.bytesWritten;
+    const total = progress.totalBytes;
+    if (typeof written === "number" && typeof total === "number" && total > 0) {
+      return 0.1 + 0.75 * Math.min(1, written / total);
+    }
+    return 0.5;
+  }
+  if (progress.phase === "verify") return 0.9;
+  if (progress.phase === "extract") return 0.92;
+  return 0.98;
 }
 
 /**
@@ -361,6 +575,7 @@ export async function runEmbeddingWizardCalibration(
       backend,
       modelId,
       endpoint: state.endpoint.verified,
+      gpuRole: state.gpu,
     });
     return applyOutcome(
       running,
@@ -452,6 +667,7 @@ export async function runEmbeddingWizardFinish(
       backend: saving.backend ?? "builtin",
       model,
       keepAfterExit: saving.finish.keepAfterExit,
+      mode: saving.finish.buildMode,
     });
   } catch (caught) {
     receipt = `Settings saved, but the build could not be started: ${getErrorMessage(caught)}. Run /recall embedding build to start it.`;

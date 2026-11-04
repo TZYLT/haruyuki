@@ -2,31 +2,41 @@ import { describe, expect, test } from "bun:test";
 import type { EmbeddingSettingsPatch } from "@/cli/app/pages/settings/embedding-settings";
 import {
   embeddingWizardCalibrationFromResult,
+  embeddingWizardCalibrationLatencyLine,
+  embeddingWizardCalibrationMeasured,
   embeddingWizardManualImportHint,
   embeddingWizardModelDir,
   embeddingWizardSettingsPatch,
+  resolveEmbeddingWizardApiKey,
   runEmbeddingWizardCalibration,
   runEmbeddingWizardDownload,
   runEmbeddingWizardEndpointTest,
   runEmbeddingWizardFinish,
+  runEmbeddingWizardInstallCheck,
 } from "@/cli/helpers/embedding-wizard-actions";
 import {
-  applyEmbeddingWizardEvent,
-  createEmbeddingWizardState,
   EMBEDDING_WIZARD_COMMAND,
   EMBEDDING_WIZARD_STEP_COUNT,
+  embeddingWizardAllowsIndexOnlyGpu,
+  embeddingWizardGpuMismatch,
+  embeddingWizardGpuRoleOptions,
+  embeddingWizardModelOptions,
+  embeddingWizardStepTitle,
+  formatEmbeddingWizardBytes,
+} from "@/cli/helpers/embedding-wizard-facts";
+import {
+  applyEmbeddingWizardEvent,
+  builtinInstalled,
+  createEmbeddingWizardState,
   type EmbeddingWizardBuildRequest,
   type EmbeddingWizardCalibration,
   type EmbeddingWizardCalibrationRequest,
   type EmbeddingWizardDeps,
   type EmbeddingWizardEndpointProbeRequest,
+  type EmbeddingWizardRuntimeDownloadRequest,
   type EmbeddingWizardState,
   embeddingWizardBackStep,
-  embeddingWizardModelOptions,
-  embeddingWizardStepTitle,
-  formatEmbeddingWizardBytes,
   isEmbeddingWizardBusy,
-  resolveEmbeddingWizardApiKey,
 } from "@/cli/helpers/embedding-wizard-state";
 
 /**
@@ -37,6 +47,7 @@ import {
  */
 
 const MODEL_ID = "bge-small-zh-v1.5";
+const RUNTIME_DIR = "/tmp/runtime/1.31.1";
 
 function start(): EmbeddingWizardState {
   return createEmbeddingWizardState();
@@ -51,11 +62,45 @@ function chooseBuiltin(
   });
 }
 
+function atGpuRole(): EmbeddingWizardState {
+  return chooseBuiltin();
+}
+
+function atBuiltinModel(
+  state: EmbeddingWizardState = atGpuRole(),
+): EmbeddingWizardState {
+  return applyEmbeddingWizardEvent(state, {
+    type: "choose-gpu",
+    role: "auto",
+  });
+}
+
+function checkSucceeded(
+  state: EmbeddingWizardState,
+  result: {
+    modelInstalled: boolean;
+    runtimeInstalled: boolean;
+    modelDir: string | null;
+    runtimeDir: string | null;
+  },
+): EmbeddingWizardState {
+  return applyEmbeddingWizardEvent(
+    applyEmbeddingWizardEvent(state, { type: "install-check-started" }),
+    { type: "install-check-succeeded", result },
+  );
+}
+
+/** The check reports "nothing cached": the confirmation screen is next. */
 function atBuiltinDownload(): EmbeddingWizardState {
-  let state = chooseBuiltin();
-  state = applyEmbeddingWizardEvent(state, {
+  let state = applyEmbeddingWizardEvent(atBuiltinModel(), {
     type: "choose-model",
-    modelId: state.builtin.modelId,
+    modelId: MODEL_ID,
+  });
+  state = checkSucceeded(state, {
+    modelInstalled: false,
+    runtimeInstalled: false,
+    modelDir: null,
+    runtimeDir: null,
   });
   return state;
 }
@@ -65,6 +110,10 @@ function atEndpointKey(): EmbeddingWizardState {
   let state = applyEmbeddingWizardEvent(start(), {
     type: "choose-backend",
     backend: "endpoint",
+  });
+  state = applyEmbeddingWizardEvent(state, {
+    type: "choose-gpu",
+    role: "auto",
   });
   state = applyEmbeddingWizardEvent(state, {
     type: "choose-endpoint-kind",
@@ -119,8 +168,22 @@ function fakeCalibration(
   };
 }
 
+/** The defaults path C5 returns when no measurement ran: zeros, not measured. */
+function unmeasuredCalibration(): EmbeddingWizardCalibration {
+  return fakeCalibration({
+    calibrated: false,
+    p50Ms: 0,
+    p90Ms: 0,
+    throughputPerSec: 0,
+    reason: "calibration probe is not wired in this build",
+    tier: "documented",
+    queryBudgetMs: 150,
+  });
+}
+
 interface Calls {
   downloads: string[];
+  runtimes: EmbeddingWizardRuntimeDownloadRequest[];
   probes: EmbeddingWizardEndpointProbeRequest[];
   calibrations: EmbeddingWizardCalibrationRequest[];
   saved: EmbeddingSettingsPatch[];
@@ -136,6 +199,7 @@ interface FakeDeps {
 function fakeDeps(overrides: Partial<EmbeddingWizardDeps> = {}): FakeDeps {
   const calls: Calls = {
     downloads: [],
+    runtimes: [],
     probes: [],
     calibrations: [],
     saved: [],
@@ -150,7 +214,15 @@ function fakeDeps(overrides: Partial<EmbeddingWizardDeps> = {}): FakeDeps {
         modelId: request.modelId,
         modelDir: `/tmp/models/${request.modelId}`,
         alreadyInstalled: false,
+        runtimeDir: RUNTIME_DIR,
       };
+    },
+    isModelInstalled: async () => false,
+    isRuntimeInstalled: async () => false,
+    downloadRuntime: async (request) => {
+      calls.runtimes.push(request);
+      request.onProgress?.(0.5);
+      return { runtimeDir: RUNTIME_DIR, alreadyInstalled: false };
     },
     probeEndpoint: async (request) => {
       calls.probes.push(request);
@@ -199,7 +271,11 @@ describe("the embedding wizard state machine", () => {
     const state = start();
     expect(state.step).toBe("backend");
     expect(state.outcome).toBe("active");
+    expect(state.gpu).toBe("auto");
+    expect(state.finish.buildMode).toBe("incremental");
     expect(embeddingWizardStepTitle("backend")).toBe("1/4 Backend");
+    expect(embeddingWizardStepTitle("gpu-role")).toBe("2/4 GPU");
+    expect(embeddingWizardStepTitle("builtin-check")).toBe("2/4 Model check");
     expect(embeddingWizardStepTitle("builtin-download")).toBe("2/4 Download");
     expect(embeddingWizardStepTitle("endpoint-test")).toBe("2/4 Endpoint test");
     expect(embeddingWizardStepTitle("calibrate")).toBe("3/4 Calibration");
@@ -213,7 +289,7 @@ describe("the embedding wizard state machine", () => {
     expect(formatEmbeddingWizardBytes(24_451_050)).toBe("24.5 MB");
   });
 
-  test("a re-entered setup pre-fills the current backend and model", () => {
+  test("a re-entered setup pre-fills the current backend, model and GPU role", () => {
     const state = createEmbeddingWizardState({
       settings: {
         enabled: true,
@@ -232,13 +308,14 @@ describe("the embedding wizard state machine", () => {
         chunkOverlap: 32,
         maxChunksPerMessage: 1024,
         threads: 0,
-        gpu: "auto",
+        gpu: "index-only",
         quantization: "float32",
         calibration: null,
         keepSpaces: 2,
       },
     });
     expect(state.backend).toBe("endpoint");
+    expect(state.gpu).toBe("index-only");
     expect(state.endpoint.kind).toBe("ollama");
     expect(state.endpoint.baseUrl).toBe("http://localhost:11434");
     expect(state.endpoint.model).toBe("nomic-embed-text");
@@ -252,26 +329,107 @@ describe("the embedding wizard state machine", () => {
     ).toBe("cancelled");
     const atRoot = apply(start(), { type: "back" });
     expect(atRoot.outcome).toBe("cancelled");
-    let deeper = chooseBuiltin();
-    deeper = apply(deeper, {
-      type: "choose-model",
-      modelId: deeper.builtin.modelId,
-    });
+    const deeper = atBuiltinDownload();
     expect(apply(deeper, { type: "cancel" }).outcome).toBe("cancelled");
     expect(apply(deeper, { type: "back" }).step).toBe("builtin-model");
     expect(embeddingWizardBackStep(deeper)).toBe("builtin-model");
     expect(embeddingWizardBackStep(atEndpointTest())).toBe("endpoint-key");
+    // A cancel mid-check or mid-download is refused while the action is busy.
+    const busyCheck: EmbeddingWizardState = {
+      ...atBuiltinModel(),
+      step: "builtin-check",
+      builtin: {
+        ...atBuiltinModel().builtin,
+        installCheck: {
+          phase: "checking",
+          error: null,
+          modelInstalled: false,
+          runtimeInstalled: false,
+          modelDir: null,
+          runtimeDir: null,
+        },
+      },
+    };
+    expect(isEmbeddingWizardBusy(busyCheck)).toBe(true);
+    expect(apply(busyCheck, { type: "cancel" }).outcome).toBe("active");
   });
 
-  test("the built-in branch reaches the download confirmation without downloading", () => {
+  test("the built-in branch asks for a GPU role before the model, and the check before any download", () => {
     let state = chooseBuiltin();
+    expect(state.step).toBe("gpu-role");
+    state = apply(state, { type: "choose-gpu", role: "off" });
     expect(state.step).toBe("builtin-model");
+    expect(state.gpu).toBe("off");
     state = apply(state, { type: "choose-model", modelId: MODEL_ID });
-    expect(state.step).toBe("builtin-download");
+    expect(state.step).toBe("builtin-check");
+    expect(state.builtin.installCheck.phase).toBe("idle");
     expect(state.builtin.download.phase).toBe("idle");
+    expect(embeddingWizardBackStep(state)).toBe("builtin-model");
   });
 
-  test("the download runner downloads once, reports progress and lands on calibration", async () => {
+  test("an installed model and runtime skip the download screen entirely", async () => {
+    const { deps, calls } = fakeDeps({
+      isModelInstalled: async () => true,
+      isRuntimeInstalled: async () => true,
+    });
+    let state = apply(atBuiltinModel(), {
+      type: "choose-model",
+      modelId: MODEL_ID,
+    });
+    const settled = await runEmbeddingWizardInstallCheck(state, deps);
+    expect(calls.downloads).toHaveLength(0);
+    expect(settled.step).toBe("calibrate");
+    expect(settled.builtin.download.phase).toBe("done");
+    expect(settled.builtin.installCheck).toEqual({
+      phase: "done",
+      error: null,
+      modelInstalled: true,
+      runtimeInstalled: true,
+      modelDir: expect.stringContaining(MODEL_ID),
+      runtimeDir: expect.stringContaining("runtime"),
+    });
+    expect(builtinInstalled(settled)).toBe(true);
+    state = settled;
+    expect(state.calibration.phase).toBe("idle");
+  });
+
+  test("a missing runtime still shows the download screen with the runtime pending", async () => {
+    const { deps } = fakeDeps({
+      isModelInstalled: async () => true,
+      isRuntimeInstalled: async () => false,
+    });
+    const settled = await runEmbeddingWizardInstallCheck(
+      apply(atBuiltinModel(), { type: "choose-model", modelId: MODEL_ID }),
+      deps,
+    );
+    expect(settled.step).toBe("builtin-download");
+    expect(settled.builtin.download.runtimeDone).toBe(false);
+    expect(settled.builtin.download.modelDone).toBe(true);
+    expect(settled.builtin.installCheck.modelInstalled).toBe(true);
+    expect(settled.builtin.installCheck.runtimeInstalled).toBe(false);
+  });
+
+  test("a failed install check keeps the check screen with an actionable error", async () => {
+    const { deps } = fakeDeps({
+      isModelInstalled: async () => {
+        throw new Error("cache unreadable");
+      },
+    });
+    const before = apply(atBuiltinModel(), {
+      type: "choose-model",
+      modelId: MODEL_ID,
+    });
+    const failed = await runEmbeddingWizardInstallCheck(before, deps);
+    expect(failed.step).toBe("builtin-check");
+    expect(failed.builtin.installCheck.phase).toBe("failed");
+    expect(failed.builtin.installCheck.error).toBe("cache unreadable");
+    // Enter retries: the reset returns to idle so the effect runs the check.
+    const retried = apply(failed, { type: "next" });
+    expect(retried.step).toBe("builtin-check");
+    expect(retried.builtin.installCheck.phase).toBe("idle");
+  });
+
+  test("the download runner installs the runtime before the model and lands on calibration", async () => {
     const { deps, calls } = fakeDeps();
     const progress: number[] = [];
     const final = await runEmbeddingWizardDownload(
@@ -283,16 +441,37 @@ describe("the embedding wizard state machine", () => {
         }
       },
     );
+    expect(calls.runtimes).toHaveLength(1);
     expect(calls.downloads).toEqual([MODEL_ID]);
-    expect(progress).toContain(0.5);
+    expect(calls.runtimes[0]?.onProgress).toBeDefined();
+    expect(progress.length).toBeGreaterThan(0);
+    expect(Math.max(...progress)).toBeLessThanOrEqual(1);
     expect(final.step).toBe("calibrate");
     expect(final.builtin.download.phase).toBe("done");
     expect(final.builtin.download.progress).toBe(1);
     expect(final.builtin.download.modelDir).toBe(`/tmp/models/${MODEL_ID}`);
+    expect(final.builtin.download.runtimeDir).toBe(RUNTIME_DIR);
+    expect(final.builtin.download.runtimeDone).toBe(true);
+    expect(final.builtin.download.modelDone).toBe(true);
     expect(final.calibration.phase).toBe("idle");
   });
 
-  test("a failed download keeps its step with the offline-import hint", async () => {
+  test("a runtime download that fails keeps the step and says which transfer failed", async () => {
+    const { deps, calls } = fakeDeps({
+      downloadRuntime: async () => {
+        throw new Error("npm registry unreachable");
+      },
+    });
+    const final = await runEmbeddingWizardDownload(atBuiltinDownload(), deps);
+    expect(final.step).toBe("builtin-download");
+    expect(final.builtin.download.phase).toBe("failed");
+    expect(final.builtin.download.error).toContain("Runtime install failed");
+    expect(final.builtin.download.error).toContain("npm registry unreachable");
+    expect(final.builtin.download.hint).toContain("npm registry");
+    expect(calls.downloads).toHaveLength(0);
+  });
+
+  test("a failed model download keeps its step with the offline-import hint", async () => {
     const { deps } = fakeDeps({
       downloadModel: async () => {
         throw new Error("network is down");
@@ -305,22 +484,23 @@ describe("the embedding wizard state machine", () => {
     expect(final.builtin.download.hint).toContain("import a copy");
     expect(embeddingWizardManualImportHint(MODEL_ID)).toContain(MODEL_ID);
     expect(embeddingWizardModelDir(MODEL_ID)).toContain(MODEL_ID);
+    // The runtime already landed; a retry would only resume the model.
+    expect(final.builtin.download.runtimeDone).toBe(true);
   });
 
   test("stale outcomes are ignored once their step is no longer current", () => {
     const atDownload = atBuiltinDownload();
-    // Not running: a success that arrives before the runner started is dropped.
     const earlySuccess = apply(atDownload, {
       type: "download-succeeded",
       result: {
         modelId: MODEL_ID,
         modelDir: "/tmp/x",
         alreadyInstalled: false,
+        runtimeDir: RUNTIME_DIR,
       },
     });
     expect(earlySuccess).toBe(atDownload);
 
-    // The endpoint result belongs to the endpoint screen only.
     const atBackend = apply(start(), {
       type: "endpoint-test-succeeded",
       result: {
@@ -334,7 +514,6 @@ describe("the embedding wizard state machine", () => {
     expect(atBackend.step).toBe("backend");
     expect(atBackend.endpoint.test.phase).toBe("idle");
 
-    // A calibration result cannot rewind the screen from finish.
     const atFinish = apply(
       {
         ...atBuiltinDownload(),
@@ -353,16 +532,16 @@ describe("the embedding wizard state machine", () => {
 
   test("the endpoint form validates URL, model, key variable and key", () => {
     let state = apply(start(), { type: "choose-backend", backend: "endpoint" });
+    expect(state.step).toBe("gpu-role");
+    state = apply(state, { type: "choose-gpu", role: "auto" });
     expect(state.step).toBe("endpoint-kind");
     state = apply(state, { type: "choose-endpoint-kind", kind: "openai" });
     expect(state.step).toBe("endpoint-url");
 
-    // Empty URL.
     const empty = apply(state, { type: "next" });
     expect(empty.step).toBe("endpoint-url");
     expect(empty.error).toContain("must not be empty");
 
-    // Plain http to a remote host is refused by C6's allow-list.
     state = apply(state, {
       type: "update-endpoint",
       field: "baseUrl",
@@ -430,7 +609,6 @@ describe("the embedding wizard state machine", () => {
     const missing = resolveEmbeddingWizardApiKey(state, () => undefined);
     expect(missing.apiKey).toBeNull();
     expect(missing.error).toContain("HARUYUKI_EMBEDDING_API_KEY");
-    // The message names the variable, never a value.
     expect(missing.error).not.toContain("sk-env-secret");
 
     const typed = apply(atEndpointTest(), {
@@ -494,16 +672,17 @@ describe("the embedding wizard state machine", () => {
     expect(final.endpoint.test.error).toContain("empty or unset");
   });
 
-  test("calibration runs, can be skipped, and a failure can continue", async () => {
+  test("calibration runs with the chosen GPU role, can be skipped, and a failure can continue", async () => {
     const { deps, calls } = fakeDeps();
     const calibrated = await runEmbeddingWizardCalibration(
-      { ...atBuiltinDownload(), step: "calibrate" },
+      { ...atBuiltinDownload(), gpu: "off", step: "calibrate" },
       deps,
     );
     expect(calls.calibrations[0]).toEqual({
       backend: "builtin",
       modelId: MODEL_ID,
       endpoint: null,
+      gpuRole: "off",
     });
     expect(calibrated.calibration.phase).toBe("done");
     expect(calibrated.calibration.result?.p50Ms).toBe(42);
@@ -519,6 +698,7 @@ describe("the embedding wizard state machine", () => {
       enabled: true,
       backend: "builtin",
       model: MODEL_ID,
+      gpu: "auto",
     });
 
     const { deps: failing } = fakeDeps({
@@ -561,11 +741,12 @@ describe("the embedding wizard state machine", () => {
     expect(final.calibration.phase).toBe("skipped");
   });
 
-  test("the built-in finish writes the D3 patch and passes the lifecycle switch", async () => {
+  test("the built-in finish writes the D3 patch (gpu included) and passes the build mode", async () => {
     const { deps, calls } = fakeDeps();
-    const state = apply(
+    let state = apply(
       {
         ...atBuiltinDownload(),
+        gpu: "index-only",
         step: "calibrate",
         calibration: { phase: "done", result: fakeCalibration(), error: null },
       },
@@ -580,6 +761,7 @@ describe("the embedding wizard state machine", () => {
         enabled: true,
         backend: "builtin",
         model: MODEL_ID,
+        gpu: "index-only",
         calibration: {
           fingerprint: "fp-1",
           measuredAt: "2026-11-04T00:00:00.000Z",
@@ -593,18 +775,27 @@ describe("the embedding wizard state machine", () => {
       },
     ]);
     expect(calls.builds).toEqual([
-      { backend: "builtin", model: MODEL_ID, keepAfterExit: false },
+      {
+        backend: "builtin",
+        model: MODEL_ID,
+        keepAfterExit: false,
+        mode: "incremental",
+      },
     ]);
     expect(defaultFinish.outcome).toBe("completed");
     expect(defaultFinish.finish.buildReceipt).toBe("build started");
 
-    // The one switch defaults off and toggles on.
-    const toggled = apply(state, { type: "toggle-keep-after-exit" });
-    expect(toggled.finish.keepAfterExit).toBe(true);
+    // The keep switch and the build mode are step-4 answers, not settings keys.
+    state = apply(state, { type: "toggle-keep-after-exit" });
+    state = apply(state, { type: "choose-build-mode", mode: "full" });
+    expect(state.finish.keepAfterExit).toBe(true);
+    expect(state.finish.buildMode).toBe("full");
     const { deps: depsOn, calls: callsOn } = fakeDeps();
-    const withKeep = await runEmbeddingWizardFinish(toggled, depsOn);
+    const withKeep = await runEmbeddingWizardFinish(state, depsOn);
     expect(withKeep.outcome).toBe("completed");
     expect(callsOn.builds[0]?.keepAfterExit).toBe(true);
+    expect(callsOn.builds[0]?.mode).toBe("full");
+    expect(callsOn.saved[0]?.gpu).toBe("index-only");
   });
 
   test("the endpoint finish stores the key before the settings and the build start", async () => {
@@ -617,6 +808,7 @@ describe("the embedding wizard state machine", () => {
       saveSettings: (patch) => {
         order.push("settings");
         expect(patch.backend).toBe("endpoint");
+        expect(patch.gpu).toBe("auto");
         expect(patch.endpoint).toEqual({
           kind: "openai",
           baseUrl: "https://api.example.com/v1",
@@ -648,6 +840,7 @@ describe("the embedding wizard state machine", () => {
         step: "finish",
         finish: {
           keepAfterExit: false,
+          buildMode: "incremental",
           phase: "ready",
           error: null,
           buildReceipt: null,
@@ -744,5 +937,57 @@ describe("the embedding wizard state machine", () => {
     expect(mapped.gpuRole).toBe("index-only");
     expect(mapped.diskHeadroomOk).toBe(false);
     expect(mapped.reason).toBeNull();
+  });
+
+  test("zero-valued calibration results are never painted as measurements", () => {
+    const unmeasured = unmeasuredCalibration();
+    expect(embeddingWizardCalibrationMeasured(unmeasured)).toBe(false);
+    expect(embeddingWizardCalibrationLatencyLine(unmeasured)).toContain(
+      "not measured",
+    );
+    expect(embeddingWizardCalibrationLatencyLine(unmeasured)).not.toContain(
+      "p50 0ms",
+    );
+    // A calibrated result with a zero latency is still not a measurement.
+    expect(
+      embeddingWizardCalibrationMeasured(
+        fakeCalibration({ p50Ms: 0, throughputPerSec: 0 }),
+      ),
+    ).toBe(false);
+    const measured = fakeCalibration();
+    expect(embeddingWizardCalibrationMeasured(measured)).toBe(true);
+    expect(embeddingWizardCalibrationLatencyLine(measured)).toContain(
+      "p50 42ms",
+    );
+    expect(embeddingWizardCalibrationLatencyLine(measured)).toContain("128/s");
+  });
+
+  test("the GPU picker lets index-only be chosen on Windows only", () => {
+    expect(embeddingWizardAllowsIndexOnlyGpu("win32")).toBe(true);
+    expect(embeddingWizardAllowsIndexOnlyGpu("linux")).toBe(false);
+    expect(embeddingWizardAllowsIndexOnlyGpu("darwin")).toBe(false);
+
+    const win = embeddingWizardGpuRoleOptions("win32");
+    expect(win.map((row) => row.role)).toEqual(["auto", "off", "index-only"]);
+    expect(win.every((row) => !row.disabled)).toBe(true);
+
+    const linux = embeddingWizardGpuRoleOptions("linux");
+    const indexOnly = linux.find((row) => row.role === "index-only");
+    expect(indexOnly?.disabled).toBe(true);
+    expect(indexOnly?.description).toContain("CPU only");
+    expect(linux.find((row) => row.role === "auto")?.disabled).toBe(false);
+    expect(linux.find((row) => row.role === "off")?.disabled).toBe(false);
+  });
+
+  test("a calibration measured under another GPU role is reported honestly", () => {
+    const measured = fakeCalibration({ gpuRole: "off" });
+    expect(embeddingWizardGpuMismatch(measured, "auto")).toContain(
+      'measured with GPU role "off"',
+    );
+    expect(embeddingWizardGpuMismatch(measured, "off")).toBeNull();
+    // Defaults-based results say nothing about the hardware.
+    expect(
+      embeddingWizardGpuMismatch(unmeasuredCalibration(), "index-only"),
+    ).toBeNull();
   });
 });

@@ -5,40 +5,47 @@
  *
  * 1. **Backend** — built-in model, external endpoint, or "not now" (which is a
  *    cancel and writes nothing).
- * 2. **Configuration** — the built-in tier with its size / licence / integrity
- *    disclosure and a separate download confirmation, or the endpoint form
- *    (URL → model → key-variable → masked key) followed by a test embedding that
- *    shows the reported dimension, norm and latency.
+ * 2. **Configuration** — the GPU role (auto / CPU-only / index-build-only, the
+ *    last Windows-only), then either the built-in tier — a cached-install check
+ *    for the weights *and* the onnxruntime closure, a two-size download
+ *    confirmation only when something is missing, and the licence/integrity
+ *    disclosure — or the endpoint form (URL → model → key-variable → masked key)
+ *    followed by a test embedding.
  * 3. **Calibration** — the bounded pass (≤5 s, skippable) with its p50/p90,
- *    throughput and the derived build budget.
- * 4. **Finish** — one write of the D3 settings record, the "keep building after
- *    exit" switch (off by default, R-34) and the build start.
+ *    throughput and the derived build budget; a defaults-based result says "not
+ *    measured" instead of painting zeros.
+ * 4. **Finish** — one write of the D3 settings record (GPU role included), the
+ *    selectable "keep building after you exit" and build-mode rows (the mode
+ *    only reaches the build request), and the build start.
  *
- * The state machine lives in `@/cli/helpers/embedding-wizard-state`, the async
- * runners in `@/cli/helpers/embedding-wizard-actions`, and the production
- * dependency defaults in `@/cli/helpers/embedding-wizard-defaults`; this file
- * only draws the state, binds the keys and calls a runner. Two consequences are
+ * The state machine lives in `@/cli/helpers/embedding-wizard-state`, its pure
+ * facts in `@/cli/helpers/embedding-wizard-facts`, the async runners in
+ * `@/cli/helpers/embedding-wizard-actions`, and the production dependency
+ * defaults in `@/cli/helpers/embedding-wizard-defaults`; this file only draws
+ * the state, binds the keys and calls a runner. Two consequences are
  * deliberate:
  *
  * - **Cancel writes nothing and a failed step keeps the screen.** The component
  *   has no write path of its own, and every async outcome goes back through the
- *   reducer, so a download/probe/save failure stays where it happened with the
- *   earlier answers intact.
+ *   reducer, so a download/check/probe/save failure stays where it happened with
+ *   the earlier answers intact.
  * - **The key is never painted.** The masked field keeps the typed value in the
  *   machine and the frame only ever shows the mask characters, or the *name* of
  *   the environment variable that holds the key.
  *
- * The production dependencies are the committed C4/C6/C5/D3 seams. `calibrate`
+ * The production dependencies are the committed C4/C2/C6/C5/D3 seams. `calibrate`
  * uses C5's `skipEmbeddingCalibration` with a redacted reason until a runtime
  * probe is wired (the dep is injectable for exactly that reason); `startBuild`
- * is A4's host seam — until `cli/helpers/embedding-build-host` is wired in, the
- * receipt says the command that starts the index instead of pretending a build
- * started.
+ * is A4's host seam — until the build host is wired in, the receipt says the
+ * command that starts the index instead of pretending a build started.
  */
 
 import { Box } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  CalibrationStep,
+  DownloadStep,
+  FinishStep,
   InfoFrame,
   InfoLine,
   MaskedTextStep,
@@ -46,43 +53,42 @@ import {
 import {
   cursorIndexFor,
   PickerStep,
-  StepHint,
   TextStep,
 } from "@/cli/components/ScheduleWizardSteps";
-import { Text } from "@/cli/components/Text";
 import {
   type EmbeddingWizardStateReader,
-  embeddingWizardSettingsPatch,
+  resolveEmbeddingWizardApiKey,
   runEmbeddingWizardCalibration,
   runEmbeddingWizardDownload,
   runEmbeddingWizardEndpointTest,
   runEmbeddingWizardFinish,
+  runEmbeddingWizardInstallCheck,
 } from "@/cli/helpers/embedding-wizard-actions";
 import { createEmbeddingWizardDefaultDeps } from "@/cli/helpers/embedding-wizard-defaults";
 import {
-  applyEmbeddingWizardEvent,
-  createEmbeddingWizardState,
   EMBEDDING_WIZARD_COMMAND,
   EMBEDDING_WIZARD_STEP_COUNT,
-  type EmbeddingWizardDeps,
-  type EmbeddingWizardEvent,
-  type EmbeddingWizardState,
-  embeddingWizardEndpointNeedsKey,
+  embeddingWizardGpuRoleOptions,
   embeddingWizardModelOption,
   embeddingWizardModelOptions,
   embeddingWizardStepTitle,
   formatEmbeddingWizardBytes,
+} from "@/cli/helpers/embedding-wizard-facts";
+import {
+  applyEmbeddingWizardEvent,
+  builtinInstalled,
+  createEmbeddingWizardState,
+  type EmbeddingWizardDeps,
+  type EmbeddingWizardEvent,
+  type EmbeddingWizardState,
+  embeddingWizardEndpointNeedsKey,
   isEmbeddingWizardBusy,
-  resolveEmbeddingWizardApiKey,
 } from "@/cli/helpers/embedding-wizard-state";
 import { type KeyBinding, namedKeyChords } from "@/cli/helpers/input-keys";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import { useTerminalWidth } from "@/cli/hooks/use-terminal-width";
-import {
-  type SingleSelectItem,
-  SingleSelectPicker,
-} from "@/cli/overlay/adapters";
-import { OverlayFrame } from "@/cli/overlay/frame";
+import type { SingleSelectItem } from "@/cli/overlay/adapters";
+import type { OverlayListItem } from "@/cli/overlay/list-model";
 import { wizardBindings } from "@/cli/overlay/wizard";
 import {
   type ResolvedEmbeddingSettings,
@@ -91,6 +97,9 @@ import {
 
 const COMMAND = EMBEDDING_WIZARD_COMMAND;
 const KEY_OWNER = "embedding-wizard";
+
+/** Step 4's fixed rows: keep switch, incremental, full, and the action row. */
+const FINISH_ITEM_COUNT = 4;
 
 /** Step 1's rows, in the order the requirement names them. */
 const BACKEND_ITEMS: readonly SingleSelectItem[] = [
@@ -168,6 +177,19 @@ export function EmbeddingWizard({
   const stateRef = useRef(state);
   const busyRef = useRef(false);
   const closedRef = useRef(false);
+
+  // Step 4's list cursor lives here, not in the machine: it is navigation, not
+  // an answer, and only the machine's state is ever written to settings.
+  const [finishCursor, setFinishCursor] = useState(0);
+  const finishCursorRef = useRef(0);
+  const moveFinishCursor = useCallback((delta: number) => {
+    const next = Math.min(
+      FINISH_ITEM_COUNT - 1,
+      Math.max(0, finishCursorRef.current + delta),
+    );
+    finishCursorRef.current = next;
+    setFinishCursor(next);
+  }, []);
 
   const resolvedDeps = useMemo(
     () => ({ ...createEmbeddingWizardDefaultDeps(agentId, env), ...deps }),
@@ -261,6 +283,28 @@ export function EmbeddingWizard({
     );
   }, [state.step, state.calibration.phase, runAction, stateReader]);
 
+  // Step 2 asks C4/C2 whether both installs are already on disk before it ever
+  // offers a download; the answer decides "download screen" vs "calibration".
+  useEffect(() => {
+    if (state.step !== "builtin-check") return;
+    if (state.builtin.installCheck.phase !== "idle") return;
+    runAction((current, listener) =>
+      runEmbeddingWizardInstallCheck(
+        current,
+        depsRef.current,
+        listener,
+        stateReader,
+      ),
+    );
+  }, [state.step, state.builtin.installCheck.phase, runAction, stateReader]);
+
+  // Entering step 4 starts the list cursor on the first option row.
+  useEffect(() => {
+    if (state.step !== "finish") return;
+    finishCursorRef.current = 0;
+    setFinishCursor(0);
+  }, [state.step]);
+
   const startDownload = useCallback(() => {
     runAction((current, listener) =>
       runEmbeddingWizardDownload(
@@ -308,11 +352,76 @@ export function EmbeddingWizard({
 
   const isPickerStep =
     state.step === "backend" ||
+    state.step === "gpu-role" ||
     state.step === "builtin-model" ||
     state.step === "builtin-download" ||
     state.step === "endpoint-kind";
 
+  // Step 4's rows: two checkbox options, two mutually exclusive build modes and
+  // the action row at the bottom. Only "Start build" runs the one write path.
+  const finishItems: OverlayListItem[] = [
+    {
+      key: "keep",
+      label: `[${state.finish.keepAfterExit ? "x" : " "}] Keep building after you exit`,
+      description: state.finish.keepAfterExit
+        ? "runs detached; survives exit"
+        : "off (default); stops on exit",
+    },
+    {
+      key: "mode-incremental",
+      label: `[${state.finish.buildMode === "incremental" ? "x" : " "}] Build mode: incremental`,
+      description: "new/changed chunks only (default)",
+    },
+    {
+      key: "mode-full",
+      label: `[${state.finish.buildMode === "full" ? "x" : " "}] Build mode: full`,
+      description: "rebuild every chunk",
+    },
+    {
+      key: "start",
+      label: "Start build",
+      description: "save once, then start the index build",
+    },
+  ];
+
+  /** What Space/Enter does on the row under the step-4 cursor. */
+  const activateFinishRow = (): "consumed" | "declined" => {
+    const current = stateRef.current;
+    if (isEmbeddingWizardBusy(current)) return "declined";
+    const key = finishItems[finishCursorRef.current]?.key;
+    if (key === "start") {
+      startFinish();
+      return "consumed";
+    }
+    if (key === "keep") dispatch({ type: "toggle-keep-after-exit" });
+    else if (key === "mode-incremental") {
+      dispatch({ type: "choose-build-mode", mode: "incremental" });
+    } else if (key === "mode-full") {
+      dispatch({ type: "choose-build-mode", mode: "full" });
+    }
+    return "consumed";
+  };
+
   const extraBindings: KeyBinding[] = [];
+  if (state.step === "builtin-check") {
+    extraBindings.push({
+      id: "embedding-wizard.install-check-retry",
+      chords: namedKeyChords("return"),
+      run: () => {
+        const current = stateRef.current;
+        if (isEmbeddingWizardBusy(current)) return "declined";
+        const check = current.builtin.installCheck;
+        if (
+          check.phase === "failed" ||
+          (check.phase === "done" && builtinInstalled(current))
+        ) {
+          dispatch({ type: "next" });
+          return "consumed";
+        }
+        return "declined";
+      },
+    });
+  }
   if (state.step === "endpoint-test") {
     extraBindings.push({
       id: "embedding-wizard.endpoint-test",
@@ -383,19 +492,38 @@ export function EmbeddingWizard({
   if (state.step === "finish") {
     extraBindings.push(
       {
-        id: "embedding-wizard.finish",
-        chords: namedKeyChords("return"),
+        id: "embedding-wizard.finish-row-up",
+        chords: namedKeyChords("upArrow"),
         run: () => {
-          const current = stateRef.current;
-          if (current.finish.phase === "saving") return "declined";
-          startFinish();
+          if (isEmbeddingWizardBusy(stateRef.current)) return "declined";
+          moveFinishCursor(-1);
           return "consumed";
         },
       },
       {
-        id: "embedding-wizard.keep-after-exit",
-        chords: [{ key: "t" }, { key: "space" }],
+        id: "embedding-wizard.finish-row-down",
+        chords: namedKeyChords("downArrow"),
         run: () => {
+          if (isEmbeddingWizardBusy(stateRef.current)) return "declined";
+          moveFinishCursor(1);
+          return "consumed";
+        },
+      },
+      {
+        id: "embedding-wizard.finish-row-space",
+        chords: [{ key: "space" }],
+        run: () => activateFinishRow(),
+      },
+      {
+        id: "embedding-wizard.finish-row-enter",
+        chords: namedKeyChords("return"),
+        run: () => activateFinishRow(),
+      },
+      {
+        id: "embedding-wizard.keep-after-exit",
+        chords: [{ key: "t" }],
+        run: () => {
+          if (isEmbeddingWizardBusy(stateRef.current)) return "declined";
           dispatch({ type: "toggle-keep-after-exit" });
           return "consumed";
         },
@@ -458,6 +586,107 @@ export function EmbeddingWizard({
     );
   }
 
+  // ── Step 2: GPU role ────────────────────────────────────────────────────
+  if (state.step === "gpu-role") {
+    const items: SingleSelectItem[] = embeddingWizardGpuRoleOptions(
+      process.platform,
+    ).map((option) => ({
+      key: option.role,
+      label: option.label,
+      description: option.description,
+      disabled: option.disabled,
+    }));
+    return (
+      <PickerStep
+        key="gpu-role"
+        command={COMMAND}
+        title={embeddingWizardStepTitle("gpu-role")}
+        hint="How the local embedding runtime may use a GPU. Auto probes during calibration; index-only builds the index on the GPU while every query stays on the CPU."
+        items={items}
+        initialCursorIndex={cursorIndexFor(items, state.gpu)}
+        onSelect={(key) =>
+          dispatch({
+            type: "choose-gpu",
+            role: key === "off" || key === "index-only" ? key : "auto",
+          })
+        }
+        onCancel={back}
+        footer="Enter select · ↑↓ move · Esc back"
+        width={width}
+      />
+    );
+  }
+
+  // ── Step 2: cached-install check (model + runtime) ──────────────────────
+  if (state.step === "builtin-check") {
+    const check = state.builtin.installCheck;
+    const model = embeddingWizardModelOption(state.builtin.modelId);
+    return (
+      <InfoFrame
+        key="builtin-check"
+        title={embeddingWizardStepTitle("builtin-check")}
+        footer={
+          check.phase === "failed"
+            ? "Enter retry · Esc back · ctrl+c cancel"
+            : "Esc back · ctrl+c cancel"
+        }
+        width={width}
+      >
+        <InfoLine
+          text={`Model: ${model?.displayName ?? state.builtin.modelId}`}
+          width={width}
+        />
+        {check.phase === "idle" || check.phase === "checking" ? (
+          <InfoLine
+            text="Checking the model cache and the embedding runtime…"
+            width={width}
+          />
+        ) : null}
+        {check.phase === "failed" ? (
+          <>
+            <InfoLine
+              text={`Install check failed: ${check.error ?? "unknown error"}`}
+              tone="error"
+              width={width}
+            />
+            <InfoLine
+              text="The check only reads the cache; nothing was written. Enter retries, Esc goes back."
+              tone="dim"
+              width={width}
+            />
+          </>
+        ) : null}
+        {check.phase === "done" ? (
+          <>
+            <InfoLine
+              text={
+                check.modelInstalled
+                  ? `Model: cached at ${check.modelDir ?? "the model cache"}`
+                  : "Model: not installed"
+              }
+              width={width}
+            />
+            <InfoLine
+              text={
+                check.runtimeInstalled
+                  ? `Runtime: cached at ${check.runtimeDir ?? "the runtime cache"}`
+                  : "Runtime: not installed"
+              }
+              width={width}
+            />
+            {builtinInstalled(state) ? (
+              <InfoLine
+                text="Both installs were found; Enter continues to calibration without downloading anything."
+                tone="dim"
+                width={width}
+              />
+            ) : null}
+          </>
+        ) : null}
+      </InfoFrame>
+    );
+  }
+
   // ── Step 2a: built-in model choice ──────────────────────────────────────
   if (state.step === "builtin-model") {
     const models = embeddingWizardModelOptions();
@@ -486,125 +715,23 @@ export function EmbeddingWizard({
     );
   }
 
-  // ── Step 2a: download confirmation ──────────────────────────────────────
+  // ── Step 2a: download confirmation (runtime + model) ────────────────────
   if (state.step === "builtin-download") {
-    const option = embeddingWizardModelOption(state.builtin.modelId);
-    const download = state.builtin.download;
-    const items: SingleSelectItem[] = [
-      {
-        key: "download",
-        label: download.phase === "failed" ? "Retry download" : "Download now",
-        description:
-          "Transfers the model files once, verifies them, then installs",
-      },
-      {
-        key: "back",
-        label: "Back",
-        description: "Choose a different model",
-      },
-    ];
     return (
-      <OverlayFrame
+      <DownloadStep
         key="builtin-download"
-        command={COMMAND}
-        title={embeddingWizardStepTitle("builtin-download")}
-        footer={
-          <StepHint
-            text={
-              busy
-                ? "Downloading… Esc waits for the current file"
-                : "Enter select · ↑↓ move · Esc back"
-            }
-            width={width}
-          />
-        }
-      >
-        <Box flexDirection="column">
-          <Box marginBottom={1}>
-            <InfoLine
-              text={
-                option === undefined
-                  ? `Model: ${state.builtin.modelId}`
-                  : `Model: ${option.displayName}`
-              }
-              width={width}
-            />
-          </Box>
-          {option === undefined ? null : (
-            <>
-              <InfoLine
-                text={`Size: ${formatEmbeddingWizardBytes(option.totalBytes)} (one-time download)`}
-                width={width}
-              />
-              <InfoLine
-                text={`License: ${option.licenseName} (${option.licenseId})`}
-                width={width}
-              />
-              <InfoLine text={`Terms: ${option.licenseNotice}`} width={width} />
-              <InfoLine
-                text={`More: ${option.licenseUrl}`}
-                tone="dim"
-                width={width}
-              />
-              <InfoLine
-                text={
-                  option.integrityPinned
-                    ? "Integrity: every required file is sha256-pinned"
-                    : "Integrity: some required files are verified by size only (sha256 not recorded)"
-                }
-                tone={option.integrityPinned ? "normal" : "dim"}
-                width={width}
-              />
-              <Box height={1} />
-            </>
-          )}
-          {download.phase === "running" ? (
-            <InfoLine
-              text={`Downloading… ${Math.round(download.progress * 100)}%`}
-              width={width}
-            />
-          ) : null}
-          {download.phase === "failed" ? (
-            <>
-              <InfoLine
-                text={`Download failed: ${download.error ?? "unknown error"}`}
-                tone="error"
-                width={width}
-              />
-              {download.hint === null ? null : (
-                <InfoLine text={download.hint} tone="dim" width={width} />
-              )}
-              <Box height={1} />
-            </>
-          ) : null}
-          {download.phase === "done" ? (
-            <InfoLine
-              text={`Installed in ${download.modelDir ?? "the model cache"}`}
-              tone="dim"
-              width={width}
-            />
-          ) : null}
-          <SingleSelectPicker
-            items={items}
-            onSelect={(key) => {
-              if (isEmbeddingWizardBusy(stateRef.current)) return;
-              if (key === "download") {
-                startDownload();
-                return;
-              }
-              back();
-            }}
-            onCancel={back}
-            footer={
-              <Text dimColor>
-                {download.phase === "failed"
-                  ? "Enter retry · Esc back"
-                  : "Enter download · Esc back"}
-              </Text>
-            }
-          />
-        </Box>
-      </OverlayFrame>
+        state={state}
+        busy={busy}
+        onSelect={(key) => {
+          if (key === "download") {
+            startDownload();
+            return;
+          }
+          back();
+        }}
+        onCancel={back}
+        width={width}
+      />
     );
   }
 
@@ -791,11 +918,10 @@ export function EmbeddingWizard({
   // ── Step 3: calibration ─────────────────────────────────────────────────
   if (state.step === "calibrate") {
     const calibration = state.calibration;
-    const result = calibration.result;
     return (
-      <InfoFrame
+      <CalibrationStep
         key="calibrate"
-        title={embeddingWizardStepTitle("calibrate")}
+        state={state}
         footer={
           calibration.phase === "running"
             ? "s skip · Esc waits for the measurement"
@@ -804,135 +930,24 @@ export function EmbeddingWizard({
               : "Enter continue · s skip · Esc back"
         }
         width={width}
-      >
-        {calibration.phase === "idle" || calibration.phase === "running" ? (
-          <>
-            <InfoLine
-              text="Measuring query latency and deriving the build budget (bounded to 5s)…"
-              width={width}
-            />
-            <InfoLine
-              text="The measurement is bounded: the documented defaults are used if it runs out of time."
-              tone="dim"
-              width={width}
-            />
-          </>
-        ) : null}
-        {result === null ? null : (
-          <>
-            <InfoLine
-              text={`Query latency: p50 ${result.p50Ms}ms · p90 ${result.p90Ms}ms · ${result.throughputPerSec}/s`}
-              width={width}
-            />
-            <InfoLine
-              text={`Budget: query +${result.queryBudgetMs}ms · ${result.threads} threads · ${result.gpuRole} gpu · ${result.quantization}`}
-              width={width}
-            />
-            <InfoLine
-              text={`Memory: RSS ${formatEmbeddingWizardBytes(result.rssBytes)} · disk ${formatEmbeddingWizardBytes(result.diskFreeBytes)} free (${result.diskHeadroomOk ? "ok" : "low"})`}
-              width={width}
-            />
-            <InfoLine
-              text={`Tier: ${result.tier}${result.calibrated ? " (calibrated)" : ` (uncalibrated: ${result.reason ?? "unknown reason"})`}`}
-              tone={result.calibrated ? "normal" : "dim"}
-              width={width}
-            />
-            <Box height={1} />
-          </>
-        )}
-        {calibration.phase === "skipped" ? (
-          <InfoLine
-            text="Calibration skipped: the documented defaults are used and can be re-measured later."
-            tone="dim"
-            width={width}
-          />
-        ) : null}
-        {calibration.phase === "failed" ? (
-          <InfoLine
-            text={`Calibration failed: ${calibration.error ?? "unknown error"} — the documented defaults will be used.`}
-            tone="error"
-            width={width}
-          />
-        ) : null}
-        {calibration.phase === "done" && result?.calibrated === false ? (
-          <InfoLine
-            text="The measurement could not complete, so the documented defaults above are shown instead of measurements."
-            tone="dim"
-            width={width}
-          />
-        ) : null}
-      </InfoFrame>
+      />
     );
   }
 
   // ── Step 4: finish ──────────────────────────────────────────────────────
-  const option = embeddingWizardModelOption(state.builtin.modelId);
-  const patchPreview = embeddingWizardSettingsPatch(state);
-  const finish = state.finish;
-  const calibrationLine =
-    state.calibration.result === null
-      ? "Calibration: skipped (documented defaults)"
-      : `Calibration: p50 ${state.calibration.result.p50Ms}ms · p90 ${state.calibration.result.p90Ms}ms · query budget ${state.calibration.result.queryBudgetMs}ms`;
-  const backendLine =
-    state.backend === "endpoint"
-      ? `Backend: endpoint · ${state.endpoint.kind} · ${state.endpoint.verified?.baseUrl ?? state.endpoint.baseUrl} · ${state.endpoint.verified?.model ?? state.endpoint.model}`
-      : `Backend: built-in · ${option?.displayName ?? state.builtin.modelId}`;
   return (
-    <InfoFrame
+    <FinishStep
       key="finish"
-      title={embeddingWizardStepTitle("finish")}
+      state={state}
+      items={finishItems}
+      cursor={finishCursor}
       footer={
-        finish.phase === "saving"
+        state.finish.phase === "saving"
           ? "Saving settings and starting the build…"
-          : "Enter finish · t toggle keep-after-exit · Esc back · ctrl+c cancel"
+          : "↑↓ move · Space/Enter toggle · Enter on Start build · t keep-after-exit · Esc back"
       }
       width={width}
-    >
-      <InfoLine text={backendLine} width={width} />
-      <InfoLine text={calibrationLine} width={width} />
-      {state.backend === "endpoint" ? (
-        <InfoLine
-          text="Egress: query text leaves this machine (endpoint); the egress marker stays on the status line."
-          tone="dim"
-          width={width}
-        />
-      ) : null}
-      <Box height={1} />
-      <InfoLine
-        text={
-          finish.keepAfterExit
-            ? "Build: starts when you finish; keep-after-exit keeps it running after you leave (detached)."
-            : "Build: starts when you finish; closing Haruyuki stops it and it resumes next run."
-        }
-        width={width}
-      />
-      <InfoLine
-        text={`${finish.keepAfterExit ? "[x]" : "[ ]"} Keep building after you exit`}
-        width={width}
-      />
-      <InfoLine
-        text={
-          finish.keepAfterExit
-            ? "On: the build runs detached and survives closing Haruyuki."
-            : "Off (default): closing Haruyuki stops the build; it resumes next run."
-        }
-        tone="dim"
-        width={width}
-      />
-      {patchPreview.error === null ? null : (
-        <InfoLine text={patchPreview.error} tone="error" width={width} />
-      )}
-      {finish.phase === "saving" ? (
-        <InfoLine text="Saving settings…" tone="dim" width={width} />
-      ) : null}
-      {finish.phase === "failed" ? (
-        <InfoLine
-          text={`Finish failed: ${finish.error ?? "unknown error"}. Nothing else was written; Enter retries.`}
-          tone="error"
-          width={width}
-        />
-      ) : null}
-    </InfoFrame>
+    />
   );
 }
 

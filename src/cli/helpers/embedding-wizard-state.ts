@@ -1,9 +1,10 @@
 /**
  * The first-run vector-recall setup wizard's state machine (48-2 §4.9, D5).
  *
- * The requirement fixes four steps — backend → built-in download **or** endpoint
- * test → calibration → finish — and three properties that are the reason this
- * module exists apart from the component:
+ * The requirement fixes four steps — backend → configuration (GPU role, cached
+ * install check, built-in download **or** endpoint test) → calibration → finish
+ * — and three properties that are the reason this module exists apart from the
+ * component:
  *
  * - **Cancel writes nothing.** Every answer lives here until the final step, and
  *   that step performs the only writes (`saveSettings` + `saveApiKey` + the build
@@ -26,21 +27,23 @@
  * and dispatches events.
  *
  * The injected dependency contract (`EmbeddingWizardDeps`) is declared here
- * beside the state it serves: `downloadModel` (C4), `probeEndpoint` (C6),
- * `calibrate` (C5), `startBuild` (A4's host), `saveSettings` (D3's single
+ * beside the state it serves: `downloadModel` (C4), `isModelInstalled` (C4's
+ * cache check), `isRuntimeInstalled`/`downloadRuntime` (C2), `probeEndpoint`
+ * (C6), `calibrate` (C5), `startBuild` (A4's host), `saveSettings` (D3's single
  * writer) and `saveApiKey` (D3's secret store). Nothing here reads the network,
  * the model cache or the settings file by itself.
  */
 
-import { normalizeEndpointBaseUrl } from "@/backend/local/embedding/endpoint-client";
-import {
-  BUILTIN_EMBEDDING_MODELS,
-  type EmbeddingModelManifest,
-} from "@/backend/local/embedding/model-manifest";
 import {
   type EmbeddingSettingsPatch,
   validateEmbeddingModelInput,
 } from "@/cli/app/pages/settings/embedding-settings";
+import {
+  type EmbeddingWizardStep,
+  embeddingWizardModelOptions,
+  isEmbeddingWizardEnvName,
+  validateEmbeddingWizardEndpointUrl,
+} from "@/cli/helpers/embedding-wizard-facts";
 import {
   EMBEDDING_SETTING_DEFAULTS,
   type EmbeddingEndpointSettings,
@@ -48,148 +51,42 @@ import {
 } from "@/recall-settings";
 import type {
   EmbeddingBackendKind,
+  EmbeddingBuildMode,
   EmbeddingEndpointKind,
   EmbeddingGpuRole,
   EmbeddingQuantization,
 } from "@/types/embedding-protocol";
-import { getErrorMessage } from "@/utils/error";
-
-// ── Steps and titles ───────────────────────────────────────────────────────
-
-/**
- * One screen of the wizard. The five endpoint-* screens and the two built-in
- * screens are sub-steps of the same numbered step, which is why the title
- * numbers come from {@link EMBEDDING_WIZARD_STEPS} rather than from an array
- * index — a sub-step must not invent its own count.
- */
-export type EmbeddingWizardStep =
-  | "backend"
-  | "builtin-model"
-  | "builtin-download"
-  | "endpoint-kind"
-  | "endpoint-url"
-  | "endpoint-model"
-  | "endpoint-key-env"
-  | "endpoint-key"
-  | "endpoint-test"
-  | "calibrate"
-  | "finish";
-
-/** The requirement's four numbered steps (48-1 §7.2). */
-export const EMBEDDING_WIZARD_STEP_COUNT = 4;
-
-/** The command whose overlay frame names the wizard; the TUI seam reuses it. */
-export const EMBEDDING_WIZARD_COMMAND = "/recall embedding setup";
-
-/**
- * Every screen with the slot it is numbered by. `builtin-*` and `endpoint-*`
- * share slot 2 because step 2 is exactly "the backend you picked, configured";
- * the labels differ so the user still sees which half they are in.
- */
-export const EMBEDDING_WIZARD_STEPS: readonly {
-  readonly id: EmbeddingWizardStep;
-  readonly slot: number;
-  readonly label: string;
-}[] = [
-  { id: "backend", slot: 1, label: "Backend" },
-  { id: "builtin-model", slot: 2, label: "Built-in model" },
-  { id: "builtin-download", slot: 2, label: "Download" },
-  { id: "endpoint-kind", slot: 2, label: "Endpoint" },
-  { id: "endpoint-url", slot: 2, label: "Endpoint URL" },
-  { id: "endpoint-model", slot: 2, label: "Endpoint model" },
-  { id: "endpoint-key-env", slot: 2, label: "Endpoint key" },
-  { id: "endpoint-key", slot: 2, label: "Endpoint key" },
-  { id: "endpoint-test", slot: 2, label: "Endpoint test" },
-  { id: "calibrate", slot: 3, label: "Calibration" },
-  { id: "finish", slot: 4, label: "Finish" },
-];
-
-/** `3/4 Calibration` — the title line for a screen. */
-export function embeddingWizardStepTitle(step: EmbeddingWizardStep): string {
-  const entry = EMBEDDING_WIZARD_STEPS.find(
-    (candidate) => candidate.id === step,
-  );
-  if (entry === undefined) return "";
-  return `${entry.slot}/${EMBEDDING_WIZARD_STEP_COUNT} ${entry.label}`;
-}
-
-// ── Built-in model facts ───────────────────────────────────────────────────
-
-/** What the download confirmation paints for one built-in model. */
-export interface EmbeddingWizardModelOption {
-  readonly id: string;
-  readonly displayName: string;
-  readonly dimensions: number;
-  /** Sum of the required files' pinned sizes, or `0` when none are pinned. */
-  readonly totalBytes: number;
-  readonly licenseId: string;
-  readonly licenseName: string;
-  readonly licenseNotice: string;
-  readonly licenseUrl: string;
-  /** False means "some required files are verified by size only". */
-  readonly integrityPinned: boolean;
-}
-
-function modelOption(
-  manifest: EmbeddingModelManifest,
-): EmbeddingWizardModelOption {
-  const totalBytes = manifest.files.reduce(
-    (sum, file) => sum + (file.bytes ?? 0),
-    0,
-  );
-  return {
-    id: manifest.id,
-    displayName: manifest.displayName,
-    dimensions: manifest.dimensions,
-    totalBytes,
-    licenseId: manifest.license.id,
-    licenseName: manifest.license.name,
-    licenseNotice: manifest.license.notice,
-    licenseUrl: manifest.license.url,
-    integrityPinned: manifest.integrityPinned,
-  };
-}
-
-/** The built-in models this build can download (C4's append-only table). */
-export function embeddingWizardModelOptions(): EmbeddingWizardModelOption[] {
-  return BUILTIN_EMBEDDING_MODELS.map(modelOption);
-}
-
-/** One model's facts, or `undefined` when the id is not a built-in. */
-export function embeddingWizardModelOption(
-  modelId: string,
-): EmbeddingWizardModelOption | undefined {
-  return embeddingWizardModelOptions().find((option) => option.id === modelId);
-}
-
-/** `24.5 MB` — decimal units, the way weight sizes are quoted. */
-export function formatEmbeddingWizardBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return "unknown";
-  if (bytes < 1_000) return `${Math.round(bytes)} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1_000;
-  let unit = 0;
-  while (value >= 1_000 && unit < units.length - 1) {
-    value /= 1_000;
-    unit += 1;
-  }
-  const rounded =
-    value >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
-  return `${rounded} ${units[unit]}`;
-}
 
 // ── State ──────────────────────────────────────────────────────────────────
 
-/** The download half of step 2. */
+/** Which of step 2's two installs exist on disk, and where. */
+export interface EmbeddingWizardInstallCheckState {
+  phase: "idle" | "checking" | "done" | "failed";
+  error: string | null;
+  modelInstalled: boolean;
+  runtimeInstalled: boolean;
+  modelDir: string | null;
+  runtimeDir: string | null;
+}
+
+/**
+ * The download half of step 2. The built-in backend needs two installs — the
+ * model weights and the onnxruntime closure — so this state tracks both and the
+ * screen still prints one combined percentage.
+ */
 export interface EmbeddingWizardDownloadState {
   phase: "idle" | "running" | "done" | "failed";
-  /** 0..1 when the downloader reports byte counts. */
+  /** 0..1 across both transfers; the screen prints one percentage. */
   progress: number;
   error: string | null;
   /** Offered on failure: the offline-import hint, never a second write path. */
   hint: string | null;
   modelDir: string | null;
+  runtimeDir: string | null;
   alreadyInstalled: boolean;
+  /** Sub-transfer completion; the runner skips whatever is already done. */
+  runtimeDone: boolean;
+  modelDone: boolean;
 }
 
 /** One test-embed outcome, as the frame paints it. */
@@ -247,8 +144,10 @@ export interface EmbeddingWizardCalibrationState {
 
 /** Step 4's lifecycle. */
 export interface EmbeddingWizardFinishState {
-  /** The one switch in step 4; off by default (48-2 §4.8, R-34). */
+  /** The keep-building switch in step 4; off by default (48-2 §4.8, R-34). */
   keepAfterExit: boolean;
+  /** The build request's mode; no settings key carries it (48-2 A4). */
+  buildMode: EmbeddingBuildMode;
   phase: "ready" | "saving" | "failed" | "done";
   error: string | null;
   /** What the build start reported; the overlay prints it as the receipt. */
@@ -260,8 +159,11 @@ export interface EmbeddingWizardState {
   step: EmbeddingWizardStep;
   /** The backend decided in step 1; `null` only before the picker is answered. */
   backend: EmbeddingBackendKind | null;
+  /** The GPU role step 2 asks for, written to the settings patch. */
+  gpu: EmbeddingGpuRole;
   builtin: {
     modelId: string;
+    installCheck: EmbeddingWizardInstallCheckState;
     download: EmbeddingWizardDownloadState;
   };
   endpoint: EmbeddingWizardEndpointState;
@@ -277,7 +179,14 @@ export interface EmbeddingWizardState {
 /** Everything the component can tell the machine. */
 export type EmbeddingWizardEvent =
   | { type: "choose-backend"; backend: EmbeddingBackendKind | "later" }
+  | { type: "choose-gpu"; role: EmbeddingGpuRole }
   | { type: "choose-model"; modelId: string }
+  | { type: "install-check-started" }
+  | {
+      type: "install-check-succeeded";
+      result: EmbeddingWizardInstallCheckResult;
+    }
+  | { type: "install-check-failed"; error: string }
   | { type: "choose-endpoint-kind"; kind: EmbeddingEndpointKind }
   | {
       type: "update-endpoint";
@@ -289,6 +198,7 @@ export type EmbeddingWizardEvent =
   | { type: "cancel" }
   | { type: "download-started" }
   | { type: "download-progress"; progress: number }
+  | { type: "runtime-downloaded"; runtimeDir: string }
   | { type: "download-succeeded"; result: EmbeddingWizardDownloadResult }
   | { type: "download-failed"; error: string; hint: string }
   | { type: "endpoint-test-started" }
@@ -303,6 +213,7 @@ export type EmbeddingWizardEvent =
   | { type: "calibration-skip" }
   | { type: "calibration-reset" }
   | { type: "toggle-keep-after-exit"; value?: boolean }
+  | { type: "choose-build-mode"; mode: EmbeddingBuildMode }
   | { type: "finish-started" }
   | { type: "finish-succeeded"; receipt: string }
   | { type: "finish-failed"; error: string };
@@ -320,6 +231,27 @@ export interface EmbeddingWizardDownloadResult {
   modelId: string;
   modelDir: string;
   alreadyInstalled: boolean;
+  /** Where the onnxruntime closure landed; reports any cached install too. */
+  runtimeDir: string;
+}
+
+/** What the runtime downloader is asked for (C2's fetch). */
+export interface EmbeddingWizardRuntimeDownloadRequest {
+  onProgress?: (progress: number) => void;
+  signal?: AbortSignal;
+}
+
+export interface EmbeddingWizardRuntimeDownloadResult {
+  runtimeDir: string;
+  alreadyInstalled: boolean;
+}
+
+/** The cached-install answer step 2 starts from. */
+export interface EmbeddingWizardInstallCheckResult {
+  modelInstalled: boolean;
+  runtimeInstalled: boolean;
+  modelDir: string | null;
+  runtimeDir: string | null;
 }
 
 /** What the endpoint probe is asked for; `apiKey` is null for keyless Oollama. */
@@ -343,6 +275,8 @@ export interface EmbeddingWizardCalibrationRequest {
   backend: EmbeddingBackendKind;
   modelId: string;
   endpoint: EmbeddingEndpointSettings | null;
+  /** The role step 2 chose; a probe-backed calibration reports its own answer. */
+  gpuRole: EmbeddingGpuRole;
 }
 
 /** What the build start is asked for (A4's host owns the lifecycle). */
@@ -350,6 +284,8 @@ export interface EmbeddingWizardBuildRequest {
   backend: EmbeddingBackendKind;
   model: string;
   keepAfterExit: boolean;
+  /** `full` rebuilds every chunk; `incremental` indexes new/changed ones. */
+  mode: EmbeddingBuildMode;
 }
 
 /**
@@ -361,6 +297,14 @@ export interface EmbeddingWizardDeps {
   downloadModel(
     request: EmbeddingWizardDownloadRequest,
   ): Promise<EmbeddingWizardDownloadResult>;
+  /** Whether the built-in model is already installed (C4's cheap check). */
+  isModelInstalled?(modelId: string): Promise<boolean>;
+  /** Whether the onnxruntime closure is already installed (C2's manifest). */
+  isRuntimeInstalled?(runtimeVersion?: string): Promise<boolean>;
+  /** Install the onnxruntime closure (C2); skipped when it is already there. */
+  downloadRuntime?(
+    request: EmbeddingWizardRuntimeDownloadRequest,
+  ): Promise<EmbeddingWizardRuntimeDownloadResult>;
   probeEndpoint(
     request: EmbeddingWizardEndpointProbeRequest,
   ): Promise<EmbeddingWizardEndpointTestResult>;
@@ -396,7 +340,21 @@ function initialDownload(): EmbeddingWizardDownloadState {
     error: null,
     hint: null,
     modelDir: null,
+    runtimeDir: null,
     alreadyInstalled: false,
+    runtimeDone: false,
+    modelDone: false,
+  };
+}
+
+function initialInstallCheck(): EmbeddingWizardInstallCheckState {
+  return {
+    phase: "idle",
+    error: null,
+    modelInstalled: false,
+    runtimeInstalled: false,
+    modelDir: null,
+    runtimeDir: null,
   };
 }
 
@@ -428,8 +386,10 @@ export function createEmbeddingWizardState(
   return {
     step: "backend",
     backend: settings.backend,
+    gpu: settings.gpu,
     builtin: {
       modelId,
+      installCheck: initialInstallCheck(),
       download: initialDownload(),
     },
     endpoint: {
@@ -446,6 +406,7 @@ export function createEmbeddingWizardState(
     calibration: { phase: "idle", result: null, error: null },
     finish: {
       keepAfterExit: false,
+      buildMode: "incremental",
       phase: "ready",
       error: null,
       buildReceipt: null,
@@ -457,24 +418,6 @@ export function createEmbeddingWizardState(
 
 // ── Shared questions ───────────────────────────────────────────────────────
 
-const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-/**
- * Validate and normalise the endpoint base URL through C6's allow-list, so the
- * wizard, the settings page and the runtime cannot disagree about what a legal
- * endpoint is.
- */
-export function validateEmbeddingWizardEndpointUrl(raw: string): {
-  url: string | null;
-  error: string | null;
-} {
-  try {
-    return { url: normalizeEndpointBaseUrl(raw), error: null };
-  } catch (error) {
-    return { url: null, error: getErrorMessage(error) };
-  }
-}
-
 /** Whether this endpoint kind needs a credential (Ollama usually does not). */
 export function embeddingWizardEndpointNeedsKey(
   state: EmbeddingWizardState,
@@ -482,49 +425,15 @@ export function embeddingWizardEndpointNeedsKey(
   return state.endpoint.kind === "openai";
 }
 
-/** How the wizard resolves the endpoint credential, and what the UI may say. */
-export interface EmbeddingWizardApiKeyResolution {
-  apiKey: string | null;
-  source: "env" | "typed" | "none";
-  /** User-facing text; never contains the key itself. */
-  error: string | null;
-}
-
-/**
- * Resolve the key from the named environment variable, else from the masked
- * field. The returned error is safe to paint: it names the variable, never the
- * value. Exported because the test-embed and finish runners — and the frame —
- * must all agree on what key the wizard is about to use.
- */
-export function resolveEmbeddingWizardApiKey(
-  state: EmbeddingWizardState,
-  readEnv: (name: string) => string | undefined = (name) => process.env[name],
-): EmbeddingWizardApiKeyResolution {
-  const envName = state.endpoint.apiKeyEnv.trim();
-  const typed = state.endpoint.apiKey.trim();
-  if (envName.length > 0) {
-    if (!ENV_NAME_PATTERN.test(envName)) {
-      return {
-        apiKey: null,
-        source: "env",
-        error: `"${envName}" is not an environment variable name.`,
-      };
-    }
-    const value = readEnv(envName)?.trim();
-    if (value === undefined || value === "") {
-      return {
-        apiKey: null,
-        source: "env",
-        error: `Environment variable ${envName} is empty or unset; set it before testing the endpoint.`,
-      };
-    }
-    return { apiKey: value, source: "env", error: null };
-  }
-  if (typed.length > 0) return { apiKey: typed, source: "typed", error: null };
-  return { apiKey: null, source: "none", error: null };
-}
-
 // ── Navigation ─────────────────────────────────────────────────────────────
+
+/** True when both halves of step 2's built-in install are present on disk. */
+export function builtinInstalled(state: EmbeddingWizardState): boolean {
+  return (
+    state.builtin.installCheck.modelInstalled &&
+    state.builtin.installCheck.runtimeInstalled
+  );
+}
 
 /**
  * Where Escape goes from the current screen, or `null` when the current screen is
@@ -537,12 +446,16 @@ export function embeddingWizardBackStep(
   switch (state.step) {
     case "backend":
       return null;
-    case "builtin-model":
+    case "gpu-role":
       return "backend";
+    case "builtin-model":
+      return "gpu-role";
+    case "builtin-check":
+      return "builtin-model";
     case "builtin-download":
       return "builtin-model";
     case "endpoint-kind":
-      return "backend";
+      return "gpu-role";
     case "endpoint-url":
       return "endpoint-kind";
     case "endpoint-model":
@@ -554,9 +467,8 @@ export function embeddingWizardBackStep(
     case "endpoint-test":
       return "endpoint-key";
     case "calibrate":
-      return state.backend === "endpoint"
-        ? "endpoint-test"
-        : "builtin-download";
+      if (state.backend === "endpoint") return "endpoint-test";
+      return builtinInstalled(state) ? "builtin-check" : "builtin-download";
     case "finish":
       return "calibrate";
   }
@@ -564,6 +476,7 @@ export function embeddingWizardBackStep(
 
 /** Whether an async action is in flight; Escape/back wait for it to settle. */
 export function isEmbeddingWizardBusy(state: EmbeddingWizardState): boolean {
+  if (state.builtin.installCheck.phase === "checking") return true;
   if (state.builtin.download.phase === "running") return true;
   if (state.endpoint.test.phase === "running") return true;
   if (state.calibration.phase === "running") return true;
@@ -604,6 +517,13 @@ function isCurrentFinish(state: EmbeddingWizardState): boolean {
   return state.step === "finish" && state.finish.phase === "saving";
 }
 
+function isCurrentInstallCheck(state: EmbeddingWizardState): boolean {
+  return (
+    state.step === "builtin-check" &&
+    state.builtin.installCheck.phase === "checking"
+  );
+}
+
 /**
  * The transition function. Every branch is a pure state-to-state change; async
  * outcomes arrive as their own events, and each one is ignored when the screen
@@ -621,32 +541,104 @@ export function applyEmbeddingWizardEvent(
       if (event.backend === "later") {
         return { ...state, outcome: "cancelled", error: null };
       }
-      if (event.backend === "builtin") {
-        return {
-          ...state,
-          backend: "builtin",
-          step: "builtin-model",
-          error: null,
-          builtin: { ...state.builtin, download: initialDownload() },
-        };
-      }
+      // Step 2 opens on the GPU role whichever backend was picked: the answer
+      // is a settings-level fact, not a built-in-only one.
       return {
         ...state,
-        backend: "endpoint",
-        step: "endpoint-kind",
+        backend: event.backend,
+        step: "gpu-role",
         error: null,
-        endpoint: resetEndpointTest(state.endpoint),
+        builtin: {
+          ...state.builtin,
+          installCheck: initialInstallCheck(),
+          download: initialDownload(),
+        },
+        endpoint:
+          event.backend === "endpoint"
+            ? resetEndpointTest(state.endpoint)
+            : state.endpoint,
+      };
+    }
+    case "choose-gpu": {
+      if (state.step !== "gpu-role") return state;
+      return {
+        ...state,
+        gpu: event.role,
+        step: state.backend === "endpoint" ? "endpoint-kind" : "builtin-model",
+        error: null,
       };
     }
     case "choose-model": {
       if (state.step !== "builtin-model") return state;
       return {
         ...state,
-        step: "builtin-download",
+        step: "builtin-check",
         error: null,
         builtin: {
           modelId: event.modelId,
+          installCheck: initialInstallCheck(),
           download: initialDownload(),
+        },
+      };
+    }
+    case "install-check-started": {
+      if (state.step !== "builtin-check") return state;
+      return {
+        ...state,
+        error: null,
+        builtin: {
+          ...state.builtin,
+          installCheck: { ...initialInstallCheck(), phase: "checking" },
+        },
+      };
+    }
+    case "install-check-succeeded": {
+      if (!isCurrentInstallCheck(state)) return state;
+      const result = event.result;
+      const installed = result.modelInstalled && result.runtimeInstalled;
+      const download: EmbeddingWizardDownloadState = {
+        ...initialDownload(),
+        runtimeDone: result.runtimeInstalled,
+        modelDone: result.modelInstalled,
+        runtimeDir: result.runtimeDir,
+        modelDir: result.modelDir,
+        alreadyInstalled: installed,
+        ...(installed ? { phase: "done" as const, progress: 1 } : {}),
+      };
+      return {
+        ...state,
+        // Both halves cached: skip the download screen entirely and move to
+        // calibration. Either one missing: the confirmation screen shows what
+        // still has to be fetched (runtime first).
+        step: installed ? "calibrate" : "builtin-download",
+        error: null,
+        builtin: {
+          ...state.builtin,
+          installCheck: { phase: "done", error: null, ...result },
+          download,
+        },
+        ...(installed
+          ? {
+              calibration: {
+                phase: "idle" as const,
+                result: null,
+                error: null,
+              },
+            }
+          : {}),
+      };
+    }
+    case "install-check-failed": {
+      if (!isCurrentInstallCheck(state)) return state;
+      return {
+        ...state,
+        builtin: {
+          ...state.builtin,
+          installCheck: {
+            ...initialInstallCheck(),
+            phase: "failed",
+            error: event.error,
+          },
         },
       };
     }
@@ -718,6 +710,20 @@ export function applyEmbeddingWizardEvent(
         },
       };
     }
+    case "runtime-downloaded": {
+      if (!isCurrentDownload(state)) return state;
+      return {
+        ...state,
+        builtin: {
+          ...state.builtin,
+          download: {
+            ...state.builtin.download,
+            runtimeDir: event.runtimeDir,
+            runtimeDone: true,
+          },
+        },
+      };
+    }
     case "download-succeeded": {
       if (!isCurrentDownload(state)) return state;
       return {
@@ -733,7 +739,10 @@ export function applyEmbeddingWizardEvent(
             error: null,
             hint: null,
             modelDir: event.result.modelDir,
+            runtimeDir: event.result.runtimeDir,
             alreadyInstalled: event.result.alreadyInstalled,
+            runtimeDone: true,
+            modelDone: true,
           },
         },
         calibration: { phase: "idle", result: null, error: null },
@@ -862,6 +871,10 @@ export function applyEmbeddingWizardEvent(
       const value = event.value ?? !state.finish.keepAfterExit;
       return { ...state, finish: { ...state.finish, keepAfterExit: value } };
     }
+    case "choose-build-mode": {
+      if (state.step !== "finish") return state;
+      return { ...state, finish: { ...state.finish, buildMode: event.mode } };
+    }
     case "finish-started": {
       if (state.step !== "finish") return state;
       return {
@@ -895,6 +908,27 @@ export function applyEmbeddingWizardEvent(
 /** `next`: validate the current text screen, or move on from a result screen. */
 function advance(state: EmbeddingWizardState): EmbeddingWizardState {
   switch (state.step) {
+    case "builtin-check": {
+      // A failed check retries (the component's effect re-runs on `idle`); a
+      // successful installed check only reaches here when the user walked back.
+      if (state.builtin.installCheck.phase === "failed") {
+        return {
+          ...state,
+          builtin: { ...state.builtin, installCheck: initialInstallCheck() },
+        };
+      }
+      if (
+        state.builtin.installCheck.phase === "done" &&
+        builtinInstalled(state)
+      ) {
+        return clearTransient({
+          ...state,
+          step: "calibrate",
+          calibration: { phase: "idle", result: null, error: null },
+        });
+      }
+      return state;
+    }
     case "endpoint-url": {
       const { url, error } = validateEmbeddingWizardEndpointUrl(
         state.endpoint.baseUrl,
@@ -913,7 +947,7 @@ function advance(state: EmbeddingWizardState): EmbeddingWizardState {
     }
     case "endpoint-key-env": {
       const name = state.endpoint.apiKeyEnv.trim();
-      if (name.length > 0 && !ENV_NAME_PATTERN.test(name)) {
+      if (name.length > 0 && !isEmbeddingWizardEnvName(name)) {
         return {
           ...state,
           error: `"${name}" is not an environment variable name.`,
