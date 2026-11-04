@@ -383,6 +383,29 @@ describe("the /recall embedding handler", () => {
     expect(output).not.toContain("0/s");
   });
 
+  test("status counts conversations and memory files separately", async () => {
+    const h = harness({
+      runtime: fakeRuntime({
+        readStatus: async () =>
+          runtimeStatus({
+            space: {
+              model: "bge-small-zh-v1.5",
+              dimensions: 512,
+              chunks: 1_200,
+              conversations: 12,
+              memoryFiles: 3,
+              coverage: 0.92,
+              builtAt: "2026-11-03T10:00:00Z",
+            },
+          }),
+      }),
+    });
+    const output = await handleEmbeddingCommand(["status"], SCOPE, h.deps);
+    expect(output).toContain("12 conversations · 3 memory files");
+    // The memory units are not conversations; the total must not be folded in.
+    expect(output).not.toContain("15 conversations");
+  });
+
   test("status without an agent names how to scope the runtime read", async () => {
     const h = harness({ runtime: fakeRuntime() });
     const output = await handleEmbeddingCommand(

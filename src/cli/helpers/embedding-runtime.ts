@@ -688,7 +688,11 @@ async function readRuntimeStatus(
         model: space.modelId,
         dimensions: summary.dimensions ?? space.dimensions,
         chunks: summary.chunks,
-        conversations: summary.conversations + summary.memoryFiles,
+        // The summary counts conversation units and memory units separately;
+        // folding them would make the status line claim more conversations
+        // than exist.
+        conversations: summary.conversations,
+        memoryFiles: summary.memoryFiles,
         coverage: summary.coverage,
         builtAt: summary.builtAt,
       }

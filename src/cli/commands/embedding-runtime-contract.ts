@@ -49,7 +49,14 @@ export interface EmbeddingRuntimeSpace {
   model: string;
   dimensions: number;
   chunks: number;
+  /** Conversations the space has a unit for (memory files are separate). */
   conversations: number;
+  /**
+   * Memory files the space has a unit for. Optional so a caller that only knows
+   * the conversation count still satisfies the shape; the status face prints it
+   * separately rather than folding it into the conversation total.
+   */
+  memoryFiles?: number;
   /** 0..1, or `null` when nothing recallable was found. */
   coverage: number | null;
   builtAt: string | null;

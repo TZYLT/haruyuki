@@ -545,7 +545,13 @@ export function formatEmbeddingSettingsSummary(
 function formatSpace(space: EmbeddingRuntimeSpace): string {
   const built =
     space.builtAt === null ? "built time unknown" : `built ${space.builtAt}`;
-  return `Space: ${space.model} · ${space.dimensions}d · ${space.chunks} chunks · ${space.conversations} conversations · coverage ${formatPercent(space.coverage)} · ${built}`;
+  // Memory units are indexed too, but they are not conversations; the status
+  // face lists them separately instead of inflating the conversation total.
+  const memory =
+    space.memoryFiles === undefined || space.memoryFiles <= 0
+      ? ""
+      : ` · ${space.memoryFiles} memory files`;
+  return `Space: ${space.model} · ${space.dimensions}d · ${space.chunks} chunks · ${space.conversations} conversations${memory} · coverage ${formatPercent(space.coverage)} · ${built}`;
 }
 
 function formatBuild(build: EmbeddingRuntimeBuildProgress): string {
