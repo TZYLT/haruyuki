@@ -202,6 +202,36 @@ function resolveCandidateDepth(value: number | undefined): number {
 }
 
 /**
+ * The per-source depth the lexical arm is built with.
+ *
+ * Feature ②' s pool is `candidateLimit` per source (12), and that is exactly what
+ * the embedding-off path must keep — it is part of the bit-for-bit compatibility
+ * guarantee (48-1 §6.7: "off 时保持②的每源 12"). When both arms actually fuse,
+ * the requirement raises each arm to `recallEmbeddingCandidateDepth` (50):
+ * "两臂候选等深 50", and P-02 explicitly forbids unequal arms, because RRF ranks
+ * positionally and a 12-deep arm would simply have fewer votes than a 50-deep
+ * one. So the lexical sources are built at the fusion depth when the vector arm
+ * is going to participate.
+ *
+ * `vectorWeight: 0` means "lexical only" — the merge drops the vector arm, so
+ * that turn keeps ②'s depth: raising it would change a turn the vector arm does
+ * not serve, and the weight is the user's statement that they want ②'s result.
+ */
+function lexicalCandidateLimit(
+  options: RecallOptions,
+  request: RecallRequest,
+): number {
+  if (request.vectorSource === undefined) return options.candidateLimit;
+  if (!(resolveVectorWeight(request.fusion?.vectorWeight) > 0)) {
+    return options.candidateLimit;
+  }
+  return Math.max(
+    options.candidateLimit,
+    resolveCandidateDepth(request.fusion?.candidateDepth),
+  );
+}
+
+/**
  * Replace the first arm's text with the vector arm's when both found the unit.
  *
  * RRF keys on `fingerprint`, so a two-arm hit is one entry — but the two arms
@@ -545,7 +575,7 @@ export async function runRecall(
       storageDir: request.backend.getLocalStorageDir(),
       memoryDir,
       excludedMessageIds,
-      candidateLimit: options.candidateLimit,
+      candidateLimit: lexicalCandidateLimit(options, request),
       neighbors: options.neighbors,
       excerptLines: options.excerptLines,
       shouldStop: () => deadline.expired(),
