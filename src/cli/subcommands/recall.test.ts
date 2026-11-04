@@ -143,6 +143,17 @@ test("embedding flags reach the embedding command instead of the recall parser",
   });
 });
 
+test("an unknown embedding flag fails the script", async () => {
+  // The embedding vocabulary is refused by its own parser; a script that
+  // mistypes it must not leave with the success exit code a printed error
+  // message would otherwise imply.
+  const code = await runRecallSubcommand(["embedding", "build", "--bogus"], {
+    initializeSettings: noopInitialize,
+  });
+  expect(code).toBe(1);
+  expect(stderr.join("\n")).toContain("takes only --full and --keep-after-exit");
+});
+
 test("a cloud backend is refused with an explanation", async () => {
   const code = await runRecallSubcommand(["status"], {
     initializeSettings: noopInitialize,

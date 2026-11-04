@@ -14,6 +14,10 @@ import { parseArgs } from "node:util";
 import { getBackend } from "@/backend";
 import { LocalBackend } from "@/backend/local/local-backend";
 import {
+  EMBEDDING_COMMAND_USAGE,
+  parseEmbeddingCommand,
+} from "@/cli/commands/embedding";
+import {
   handleRecallCommand,
   parseRecallCommand,
   RECALL_COMMAND_USAGE,
@@ -176,6 +180,17 @@ export async function runRecallSubcommand(
   if (command.kind === "error") {
     console.error(`${command.message}\n\n${RECALL_COMMAND_USAGE}`);
     return 1;
+  }
+
+  // The embedding family has its own parser and vocabulary. Its refusals are
+  // script errors like any other, so they fail the exit code here rather than
+  // being printed by the handler with success.
+  if (command.kind === "embedding") {
+    const parsedEmbedding = parseEmbeddingCommand(command.args);
+    if (parsedEmbedding.kind === "error") {
+      console.error(`${parsedEmbedding.message}\n\n${EMBEDDING_COMMAND_USAGE}`);
+      return 1;
+    }
   }
 
   try {
