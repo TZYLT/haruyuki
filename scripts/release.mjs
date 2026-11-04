@@ -58,7 +58,12 @@ const BIN_TARGET = "haruyuki.js";
 /** Legal files that must ship. */
 const LEGAL_FILES = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"];
 /** Build outputs the package cannot ship without. */
-const REQUIRED_ARTIFACTS = ["haruyuki.js", "image-resize-worker.js", "dist"];
+const REQUIRED_ARTIFACTS = [
+  "haruyuki.js",
+  "image-resize-worker.js",
+  "embedding-worker.js",
+  "dist",
+];
 const REGISTRY = "https://registry.npmjs.org/";
 const CONFIRM_TOKEN_ENV = "RELEASE_CONFIRM_TOKEN";
 const HTTP_TIMEOUT_MS = 8_000;
@@ -482,6 +487,39 @@ function checkBuildArtifacts(main) {
   } catch (error) {
     const detail = String(error.stderr ?? "").trim() || String(error.message ?? error);
     bad(`${BIN_TARGET} --version`, `the bundle did not run: ${detail}`);
+  }
+  // The bundle spawns the embedding worker from a path beside itself. A stale
+  // bundle or a missing build output is a runtime ENOENT for the whole vector
+  // feature, so the preflight talks to the worker once (stdin closes, so the
+  // worker answers the handshake and exits).
+  try {
+    const workerOutput = execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, "embedding-worker.js")],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        input: "",
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout: SMOKE_TIMEOUT_MS,
+        env: { ...process.env, HARUYUKI_HOME: smokeHome },
+      },
+    );
+    const ready = workerOutput
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line.includes('"type":"ready"'));
+    if (ready === undefined) {
+      bad("embedding-worker.js handshake", "the worker printed no ready frame");
+    } else {
+      ok("embedding-worker.js handshake");
+    }
+  } catch (error) {
+    const detail = String(error.stderr ?? "").trim() || String(error.message ?? error);
+    bad(
+      "embedding-worker.js handshake",
+      `the worker did not run: ${detail} — rebuild with: bun run build`,
+    );
   } finally {
     rmSync(smokeHome, { recursive: true, force: true });
   }
@@ -614,6 +652,18 @@ function checkTarball(entry) {
     ok(`${BIN_TARGET} in tarball`);
   } else {
     bad(`${BIN_TARGET} missing from tarball`, "the published package would not run");
+  }
+  // The bundle spawns these worker entries from paths beside it; a tarball that
+  // omits one packages a feature that fails at runtime with ENOENT.
+  for (const worker of ["image-resize-worker.js", "embedding-worker.js"]) {
+    if (paths.includes(worker)) {
+      ok(`${worker} in tarball`);
+    } else {
+      bad(
+        `${worker} missing from tarball`,
+        "the published package cannot spawn this worker",
+      );
+    }
   }
   return undefined;
 }
