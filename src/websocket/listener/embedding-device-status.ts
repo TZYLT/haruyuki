@@ -26,8 +26,10 @@ const EMBEDDING_SUMMARY_CACHE_LIMIT = 64;
  * Where the build-state projection is plugged in (A2 `state.json` / A5
  * progress). `null` means "no embedding subsystem in this build".
  *
- * TODO(integration): A2/A5 wire the real reader here; until then the default
- * provider answers `null` and `device_status.embedding` reports nothing.
+ * This module installs A5's real projection at load time
+ * ({@link readEmbeddingBuildDeviceSummary}); alternate hosts and tests may
+ * replace or clear it through {@link setEmbeddingDeviceSummaryProvider}, and the
+ * TTL/dedup below still apply to whatever provider is installed.
  */
 export type EmbeddingDeviceSummaryProvider = (
   agentId: string,

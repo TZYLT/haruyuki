@@ -3,15 +3,21 @@
  *
  * The summary rides a broadcast that fires many times per turn, so the read is
  * cached per agent (5s TTL) and deduped by JSON. These tests pin the `null`
- * default (no provider wired in this wave), the TTL behaviour, the JSON dedup
- * identity, the provider swap/clear, and the `buildDeviceStatus` wiring that
- * puts the projection on the wire.
+ * projection, the TTL behaviour, the JSON dedup identity, the provider
+ * swap/clear, and the `buildDeviceStatus` wiring that puts the projection on
+ * the wire.
+ *
+ * The module installs A5's real reader at load time, so every test restores
+ * that provider afterwards instead of leaving the process without one: a
+ * cleared provider would silently disable `device_status.embedding` for any
+ * later test file sharing this Bun worker.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { __listenClientTestUtils } from "@/websocket/listener/client";
 import {
   EMBEDDING_DEVICE_SUMMARY_TTL_MS,
   getEmbeddingDeviceSummary,
+  readEmbeddingBuildDeviceSummary,
   resetEmbeddingDeviceSummaryCache,
   setEmbeddingDeviceSummaryProvider,
 } from "@/websocket/listener/embedding-device-status";
@@ -20,7 +26,7 @@ import { buildDeviceStatus } from "@/websocket/listener/protocol-outbound";
 const AGENT = "agent-device-embedding";
 
 afterEach(() => {
-  setEmbeddingDeviceSummaryProvider(null);
+  setEmbeddingDeviceSummaryProvider(readEmbeddingBuildDeviceSummary);
   resetEmbeddingDeviceSummaryCache();
 });
 
@@ -46,7 +52,8 @@ describe("getEmbeddingDeviceSummary", () => {
     expect(calls).toBe(0);
   });
 
-  test("no provider wired means no embedding data", () => {
+  test("a cleared provider reports no embedding data", () => {
+    setEmbeddingDeviceSummaryProvider(null);
     expect(getEmbeddingDeviceSummary(AGENT)).toBeNull();
   });
 
