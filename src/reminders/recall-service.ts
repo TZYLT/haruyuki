@@ -565,6 +565,11 @@ export async function runRecall(
       {
         agentId: request.agentId,
         currentConversationId: request.conversationId,
+        // The vector arm reads the B2 index rather than the corpus the lexical
+        // arm was built from, so it needs `N` in the scope to apply the same
+        // exclusion (48-1 §6.2 item 9). The lexical sources ignore this field —
+        // they were already built with it.
+        excludedMessageIds,
       },
       deadline,
     );

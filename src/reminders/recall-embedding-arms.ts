@@ -300,7 +300,8 @@ export type ListRecallEmbeddingUnitsInput = {
 export function listRecallEmbeddingUnits(
   input: ListRecallEmbeddingUnitsInput,
 ): RecallVectorUnit[] {
-  const conversationKeys: string[] = [];
+  const conversations: { conversationKey: string; conversationId: string }[] =
+    [];
   const spaceEntries = readDirectoryEntries(input.spaceDir);
   if (spaceEntries.length > 0) {
     const live = new Set(
@@ -327,15 +328,27 @@ export function listRecallEmbeddingUnits(
       if (conversation === undefined) continue;
       if (conversation.hidden === true) continue;
       if (conversation.agent_id !== input.agentId) continue;
-      conversationKeys.push(entry.name);
+      // The record id travels with the unit so the query arm can tell "this is
+      // the conversation the turn is running in" and apply the same in-context
+      // exclusion as the lexical arm (48-1 §6.2 item 9). It is read here anyway
+      // to filter hidden conversations, so carrying it costs nothing.
+      conversations.push({
+        conversationKey: entry.name,
+        conversationId: conversation.id,
+      });
     }
-    conversationKeys.sort(compareCodeUnits);
+    conversations.sort((left, right) =>
+      compareCodeUnits(left.conversationKey, right.conversationKey),
+    );
   }
 
-  const units: RecallVectorUnit[] = conversationKeys.map((conversationKey) => ({
-    kind: "transcript",
-    conversationKey,
-  }));
+  const units: RecallVectorUnit[] = conversations.map(
+    ({ conversationKey, conversationId }) => ({
+      kind: "transcript",
+      conversationKey,
+      conversationId,
+    }),
+  );
 
   // The memory side is enumerated from the workspace, not from the space
   // directory: the unit name is `memoryFileKey(path)`, a one-way hash, while the

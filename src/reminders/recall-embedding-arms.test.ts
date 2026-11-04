@@ -366,8 +366,23 @@ describe("space unit listing", () => {
           fixture.storageDir,
         ),
       });
+      const historyRecord = JSON.parse(
+        readFileSync(
+          join(
+            fixture.storageDir,
+            "conversations",
+            fixture.historyDirectory,
+            "conversation.json",
+          ),
+          "utf8",
+        ),
+      ) as { id: string };
       expect(units).toEqual([
-        { kind: "transcript", conversationKey: fixture.historyDirectory },
+        {
+          kind: "transcript",
+          conversationKey: fixture.historyDirectory,
+          conversationId: historyRecord.id,
+        },
         {
           kind: "memory",
           file: "reference/notes.md",

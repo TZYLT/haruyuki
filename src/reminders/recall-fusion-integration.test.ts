@@ -30,7 +30,7 @@ import {
 } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { buildEmbeddingChunkPlan } from "@/backend/local/embedding-chunk";
 import {
   embeddingChunkRecordsFromPlan,
@@ -65,6 +65,7 @@ import {
 } from "@/reminders/recall-vector-source";
 import { fakeEmbeddingVector } from "@/test-utils/embedding-fixture";
 import {
+  conversationDirFor,
   RECALL_FIXTURE_QUERY,
   type RecallFixture,
   withRecallFixture,
@@ -132,17 +133,20 @@ function targetingEncoder(chunkText: string): RecallEncoderPort {
 }
 
 /**
- * Builds a real B2 index for the fixture's history conversation.
+ * Builds a real B2 index for one of the fixture's conversations.
  *
- * Returns the messages and the first chunk's text — the encoder targets that
- * text, so the arm's top hit is deterministic without a model.
+ * Defaults to the history conversation. Returns the messages and the first
+ * chunk's text — the encoder targets that text, so the arm's top hit is
+ * deterministic without a model.
  */
-function buildTranscriptIndex(fixture: RecallFixture): {
+function buildTranscriptIndex(
+  fixture: RecallFixture,
+  conversationKey = fixture.historyDirectory,
+): {
   conversationKey: string;
   messages: ReturnType<typeof readRecallMessageTexts>;
   targetText: string;
 } {
-  const conversationKey = fixture.historyDirectory;
   const messages = readRecallMessageTexts(
     join(fixture.storageDir, "conversations", conversationKey),
   );
@@ -186,13 +190,20 @@ function b2VectorSource(
   fixture: RecallFixture,
   conversationKey: string,
   chunkText: string,
+  conversationId?: string,
 ): RecallSourcePort {
   return createVectorRecallSource({
     encoder: targetingEncoder(chunkText),
     search: createEmbeddingIndexSearch({
       space: { agentId: fixture.agentId, spaceId: SPACE_ID },
       root: VECTOR_ROOT,
-      units: [{ kind: "transcript", conversationKey }],
+      units: [
+        {
+          kind: "transcript",
+          conversationKey,
+          ...(conversationId === undefined ? {} : { conversationId }),
+        },
+      ],
     }),
     parentReader: createLocalVectorParentPort({
       storageDir: fixture.storageDir,
@@ -337,6 +348,80 @@ describe("two-arm fusion on the real service path", () => {
         0,
       );
       expect(totalCharacters).toBeLessThanOrEqual(1200);
+    });
+  });
+
+  test("the vector arm applies the same in-context exclusion as the lexical arm", async () => {
+    await withRecallFixture(async (fixture) => {
+      // The fixture's current conversation has one message, and it is still in
+      // the model's context (`N`). Index it so the vector arm *could* answer
+      // from it, then prove both arms refuse it.
+      const currentDirectory = basename(
+        await conversationDirFor(
+          fixture.storageDir,
+          fixture.currentConversationId,
+        ),
+      );
+      const indexed = buildTranscriptIndex(fixture, currentDirectory);
+      const currentMessage = indexed.messages[0];
+      expect(currentMessage).toBeDefined();
+      if (currentMessage === undefined) return;
+      const currentFingerprint = `transcript:${currentDirectory}:${currentMessage.id}`;
+
+      // The lexical arm's `N` filter already refuses it.
+      const baseline = await probe(fixture);
+      expect(
+        baseline.entries.some(
+          (entry) => entry.fingerprint === currentFingerprint,
+        ),
+      ).toBe(false);
+
+      // Without the record id the arm cannot tell which conversation is current,
+      // so this is the control: the same index *does* yield the in-context unit.
+      const anonymous = b2VectorSource(
+        fixture,
+        currentDirectory,
+        indexed.targetText,
+      );
+      const anonymousOutcome = await anonymous.search({
+        terms: recallQueryTerms(RECALL_FIXTURE_QUERY),
+        scope: {
+          agentId: fixture.agentId,
+          currentConversationId: fixture.currentConversationId,
+        },
+      });
+      expect(
+        anonymousOutcome.candidates.some(
+          (candidate) => candidate.fingerprint === currentFingerprint,
+        ),
+      ).toBe(true);
+
+      // On the live turn the service passes `N` in the scope and the arm knows
+      // the conversation id, so the in-context unit is dropped before it can be
+      // injected twice.
+      const source = b2VectorSource(
+        fixture,
+        currentDirectory,
+        indexed.targetText,
+        fixture.currentConversationId,
+      );
+      const decision = await probe(fixture, {
+        vectorSource: source,
+        options: { limit: 5 },
+        fusion: { vectorWeight: 1, minScoreRatio: 0 },
+      });
+      const vectorDiagnostic = decision.diagnostics.sources.find(
+        (diagnostic) => diagnostic.source === "vector",
+      );
+      expect(vectorDiagnostic?.candidates).toBe(0);
+      expect(vectorDiagnostic?.reason).toContain(
+        "still in the current conversation's context",
+      );
+      expect(
+        decision.entries.some(
+          (entry) => entry.fingerprint === currentFingerprint,
+        ),
+      ).toBe(false);
     });
   });
 

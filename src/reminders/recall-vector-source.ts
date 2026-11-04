@@ -123,14 +123,29 @@ export type RecallEncoderPort = {
   ): Promise<readonly (Float32Array | null)[]>;
 };
 
-/** One unit of a vector space: a transcript conversation or a memory file. */
+/**
+ * One unit of a vector space: a transcript conversation or a memory file.
+ *
+ * A transcript unit may carry its conversation's *record id* next to the
+ * directory key. The key is what locates the index and the transcript; the id is
+ * what proves "this is the conversation the turn is running in", so the arm can
+ * apply the same in-context exclusion as the lexical arm (48-1 §6.2 item 9)
+ * without decoding the store's key → id scheme. Omitted means "unknown", and the
+ * arm then cannot exclude that unit's in-context hits rather than guessing.
+ */
 export type RecallVectorUnit =
-  | { kind: "transcript"; conversationKey: string }
+  | { kind: "transcript"; conversationKey: string; conversationId?: string }
   | { kind: "memory"; file: string; memoryFileKey: string };
 
 /** One B2 parent-level hit, tagged with the unit that produced it. */
 export type RecallVectorSearchHit =
-  | { kind: "transcript"; conversationKey: string; hit: EmbeddingSearchHit }
+  | {
+      kind: "transcript";
+      conversationKey: string;
+      /** The unit's conversation record id, when the search knows it. */
+      conversationId?: string;
+      hit: EmbeddingSearchHit;
+    }
   | { kind: "memory"; file: string; hit: EmbeddingSearchHit };
 
 export type RecallVectorSearchInput = {
@@ -571,11 +586,20 @@ async function searchVectorArm(
     excerptLines: settings.excerptLines,
     includeTitlePrefix: settings.includeTitlePrefix,
     shouldStop,
+    currentConversationId: request.scope.currentConversationId,
+    ...(request.scope.excludedMessageIds === undefined
+      ? {}
+      : { excludedMessageIds: request.scope.excludedMessageIds }),
   });
   // The arm's depth is 50 shared between transcript and memory; a per-unit scan
   // can return more than the merged depth, so the cut happens after mapping.
   const candidates = mapped.candidates.slice(0, settings.topK);
   const reasons: string[] = [];
+  if (mapped.excluded > 0) {
+    reasons.push(
+      `${mapped.excluded} hit(s) were still in the current conversation's context`,
+    );
+  }
   if (mapped.dropped > 0) {
     reasons.push(
       `${mapped.dropped} hit(s) dropped because their parent text drifted`,
@@ -674,6 +698,12 @@ async function encodeQueryWithinBudget(
  * Transcript hits are grouped by conversation so the transcript is read once per
  * search, exactly like the lexical arm. Memory hits are grouped by file for the
  * same reason (the reader reads the whole document to map a line span).
+ *
+ * The current conversation's in-context messages (`N`) are dropped before the
+ * conversation is read: they are the same units the lexical arm filters out of
+ * its corpus, and re-injecting one would spend a slot on text the model already
+ * has (48-1 §6.2 item 9). Only the *current* conversation qualifies — a message
+ * id from another conversation is a different unit.
  */
 function mapVectorHits(input: {
   hits: readonly RecallVectorSearchHit[];
@@ -681,45 +711,90 @@ function mapVectorHits(input: {
   excerptLines: number;
   includeTitlePrefix: boolean;
   shouldStop: () => boolean;
+  currentConversationId: string;
+  excludedMessageIds?: ReadonlySet<string>;
 }): {
   candidates: RecallVectorCandidate[];
+  /** Hits dropped because their parent text or conversation no longer matches. */
   dropped: number;
+  /** Transcript hits dropped because they are still in the model's context. */
+  excluded: number;
   stopped: boolean;
 } {
-  const transcriptHits = new Map<string, EmbeddingSearchHit[]>();
+  const transcriptHits = new Map<
+    string,
+    { conversationId?: string; hits: EmbeddingSearchHit[] }
+  >();
   const memoryHits = new Map<string, EmbeddingSearchHit[]>();
   for (const tagged of input.hits) {
-    const groups = tagged.kind === "transcript" ? transcriptHits : memoryHits;
-    const key =
-      tagged.kind === "transcript" ? tagged.conversationKey : tagged.file;
-    const bucket = groups.get(key);
-    if (bucket === undefined) groups.set(key, [tagged.hit]);
+    if (tagged.kind === "transcript") {
+      let group = transcriptHits.get(tagged.conversationKey);
+      if (group === undefined) {
+        group = {
+          ...(tagged.conversationId === undefined
+            ? {}
+            : { conversationId: tagged.conversationId }),
+          hits: [],
+        };
+        transcriptHits.set(tagged.conversationKey, group);
+      } else if (group.conversationId === undefined) {
+        group.conversationId = tagged.conversationId;
+      }
+      group.hits.push(tagged.hit);
+      continue;
+    }
+    const bucket = memoryHits.get(tagged.file);
+    if (bucket === undefined) memoryHits.set(tagged.file, [tagged.hit]);
     else bucket.push(tagged.hit);
   }
 
   const candidates: RecallVectorCandidate[] = [];
   let dropped = 0;
+  let excluded = 0;
+  const excludedIds = input.excludedMessageIds;
 
-  for (const [conversationKey, hits] of transcriptHits) {
-    if (input.shouldStop()) return { candidates, dropped, stopped: true };
+  for (const [conversationKey, group] of transcriptHits) {
+    if (input.shouldStop()) {
+      return { candidates, dropped, excluded, stopped: true };
+    }
+    // Same-conversation is decided by the record id, not the directory key: the
+    // message ids in `N` belong to one conversation, and message ids are reused
+    // between conversations, so matching on the id is what keeps this the same
+    // rule the lexical arm applies. A unit whose id is unknown cannot be proven
+    // to be the current conversation, so its hits are kept (the arm never
+    // silently drops recallable text on a guess).
+    const sameConversation =
+      group.conversationId !== undefined &&
+      group.conversationId === input.currentConversationId;
+    const kept =
+      excludedIds === undefined || excludedIds.size === 0 || !sameConversation
+        ? group.hits
+        : group.hits.filter((hit) => {
+            if (!excludedIds.has(hit.parentId)) return true;
+            excluded += 1;
+            return false;
+          });
+    if (kept.length === 0) continue;
     const messages = input.parentReader.transcriptMessages(conversationKey);
     if (messages === undefined || messages.length === 0) {
       // The conversation disappeared between the build and this turn.
-      dropped += hits.length;
+      dropped += kept.length;
       continue;
     }
     const built = buildTranscriptVectorCandidates({
-      hits,
+      hits: kept,
       conversationKey,
       messages,
       readParent: createTranscriptVectorParentReader(messages),
     });
-    dropped += hits.length - built.length;
+    dropped += kept.length - built.length;
     candidates.push(...built);
   }
 
   for (const [file, hits] of memoryHits) {
-    if (input.shouldStop()) return { candidates, dropped, stopped: true };
+    if (input.shouldStop()) {
+      return { candidates, dropped, excluded, stopped: true };
+    }
     const built = buildMemoryVectorCandidates({
       hits,
       file,
@@ -742,7 +817,7 @@ function mapVectorHits(input: {
     seen.add(candidate.fingerprint);
     return true;
   });
-  return { candidates: unique, dropped, stopped: false };
+  return { candidates: unique, dropped, excluded, stopped: false };
 }
 
 function unitIdentity(
@@ -766,9 +841,17 @@ function taggedHit(
   unit: RecallVectorUnit,
   hit: EmbeddingSearchHit,
 ): RecallVectorSearchHit {
-  return unit.kind === "transcript"
-    ? { kind: "transcript", conversationKey: unit.conversationKey, hit }
-    : { kind: "memory", file: unit.file, hit };
+  if (unit.kind !== "transcript") {
+    return { kind: "memory", file: unit.file, hit };
+  }
+  return {
+    kind: "transcript",
+    conversationKey: unit.conversationKey,
+    ...(unit.conversationId === undefined
+      ? {}
+      : { conversationId: unit.conversationId }),
+    hit,
+  };
 }
 
 function compareVectorSearchHits(

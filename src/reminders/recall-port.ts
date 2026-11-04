@@ -139,6 +139,19 @@ export type RecallQueryTerms = {
 export type RecallScope = {
   agentId: string;
   currentConversationId: string;
+  /**
+   * `N`: the message ids of `currentConversationId` that are still in the model's
+   * context, so they are not recallable.
+   *
+   * The lexical transcript source filters against this at corpus load. The vector
+   * arm needs it in the scope too, because it reads a *different* corpus (the B2
+   * index) whose parent ids are the same message ids — without it the arm would
+   * re-inject messages the model can already see, spending a slot on a duplicate
+   * and violating the requirement's "same exclusion as the lexical arm"
+   * (48-1 §6.2 item 9). Optional so every existing fixture keeps compiling; a
+   * missing set means "nothing to exclude", never "exclude nothing else".
+   */
+  excludedMessageIds?: ReadonlySet<string>;
 };
 
 export type RecallSourceRequest = {
