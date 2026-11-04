@@ -957,12 +957,12 @@ describe("/recall completion", () => {
     const build = EMBEDDING_COMMAND_SPECS.find((row) => row.name === "build");
     expect(build?.args).toContain("--full");
     expect(build?.args).toContain("--keep-after-exit");
-    expect(parseEmbeddingCommand(["build", "--full", "--keep-after-exit"])).toEqual(
-      {
-        kind: "build",
-        mode: "full",
-        keepAfterExit: true,
-      },
-    );
+    expect(
+      parseEmbeddingCommand(["build", "--full", "--keep-after-exit"]),
+    ).toEqual({
+      kind: "build",
+      mode: "full",
+      keepAfterExit: true,
+    });
   });
 });

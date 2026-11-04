@@ -151,7 +151,9 @@ test("an unknown embedding flag fails the script", async () => {
     initializeSettings: noopInitialize,
   });
   expect(code).toBe(1);
-  expect(stderr.join("\n")).toContain("takes only --full and --keep-after-exit");
+  expect(stderr.join("\n")).toContain(
+    "takes only --full and --keep-after-exit",
+  );
 });
 
 test("a shared option with no value is refused instead of eating the next flag", async () => {

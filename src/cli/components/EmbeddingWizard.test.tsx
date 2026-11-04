@@ -457,8 +457,8 @@ describe("the embedding setup wizard", () => {
   });
 
   test("Start build still runs right after skipping a calibration that is still measuring", async () => {
-    let releaseCalibration: (result: EmbeddingWizardCalibration) => void =
-      () => undefined;
+    let releaseCalibration: (result: EmbeddingWizardCalibration) => void = () =>
+      undefined;
     const measuring = new Promise<EmbeddingWizardCalibration>((resolve) => {
       releaseCalibration = resolve;
     });

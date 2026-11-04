@@ -98,7 +98,11 @@ function optionValue(
   name: string,
 ): { value: string } | { error: string } {
   const value = argv[index + 1];
-  if (value === undefined || value.trim().length === 0 || value.startsWith("-")) {
+  if (
+    value === undefined ||
+    value.trim().length === 0 ||
+    value.startsWith("-")
+  ) {
     return { error: `${name} needs a value.` };
   }
   return { value: value.trim() };
@@ -157,7 +161,13 @@ function splitEmbeddingArgv(argv: string[]): {
     positionals.push(token);
   }
   if (positionals[0] !== "embedding") return null;
-  return { positionals, agent, conversation, help, ...(error === undefined ? {} : { error }) };
+  return {
+    positionals,
+    agent,
+    conversation,
+    help,
+    ...(error === undefined ? {} : { error }),
+  };
 }
 
 export async function runRecallSubcommand(
