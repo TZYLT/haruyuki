@@ -135,13 +135,13 @@ function requireAgentId(scope: AgentRuntimeScope): string {
  * Handler-side patch coherence, on top of the D1 shape guard.
  *
  * The wire guard already bounds every scalar; the cross-field rules the guard
- * deliberately leaves to the handler are checked here. Returning a code keeps
- * the response's `error` actionable instead of a sentence the client must parse.
+ * deliberately leaves to the handler are checked here only when the patch itself
+ * carries both sides of the relation, so a partial patch is never judged
+ * against a value it does not set. Endpoint/backend coherence is not checked
+ * here at all: it depends on the *stored* settings, so the production backend
+ * validates the merged result (see `EmbeddingCommandBackend.configure`).
  */
 function validateConfigurePatch(patch: EmbeddingConfigurePatch): string | null {
-  if (patch.backend === "endpoint" && !patch.endpoint) {
-    return "embedding_endpoint_config_required";
-  }
   if (
     patch.chunk_target !== undefined &&
     patch.chunk_max !== undefined &&

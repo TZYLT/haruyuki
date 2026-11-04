@@ -26,6 +26,7 @@ import {
   EmbeddingSettingsError,
   type EmbeddingSettingsPatch,
   embeddingPatchInvalidatesSpace,
+  previewEmbeddingSettings,
   updateEmbeddingSettings,
   validateEmbeddingSettingsPatch,
 } from "@/cli/app/pages/settings/embedding-settings";
@@ -56,6 +57,15 @@ import { getErrorMessage } from "@/utils/error";
 
 /** Code used when the embedding runtime cannot answer in this process. */
 export const EMBEDDING_NOT_CONFIGURED = "not_configured";
+
+/**
+ * The resolved settings select the endpoint backend but carry no endpoint.
+ *
+ * Returned by `configure` for a patch whose *merged* result would be unusable,
+ * whichever side of the pair (backend or endpoint) the patch changed.
+ */
+export const EMBEDDING_ENDPOINT_CONFIG_REQUIRED =
+  "embedding_endpoint_config_required";
 
 /** A write command that the backend declined without throwing. */
 export type EmbeddingBackendFailure = { ok: false; error: string };
@@ -474,8 +484,19 @@ export function createEmbeddingCommandBackend(
     },
     async configure(agentId, wirePatch) {
       const patch = toSettingsPatch(wirePatch);
-      const invalid = validateEmbeddingSettingsPatch(patch, readSettings());
+      const current = readSettings();
+      const invalid = validateEmbeddingSettingsPatch(patch, current);
       if (invalid !== null) return { ok: false, error: invalid };
+      // D1's patch is partial, so endpoint coherence is a property of the
+      // *merged* settings: selecting the endpoint backend is refused unless an
+      // endpoint exists (stored or in this patch), and clearing the endpoint is
+      // refused while the endpoint backend is active. Checking only the patch
+      // would reject a legitimate two-step `endpoint` -> `backend:"endpoint"`
+      // and would accept `endpoint:null` on an endpoint-backed config.
+      const merged = previewEmbeddingSettings(patch, current);
+      if (merged.backend === "endpoint" && merged.endpoint === null) {
+        return { ok: false, error: EMBEDDING_ENDPOINT_CONFIG_REQUIRED };
+      }
       try {
         // Write-only credential first: a settings write that follows a stored
         // key is recoverable by re-running configure; the reverse is not.

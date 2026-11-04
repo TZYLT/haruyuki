@@ -24,10 +24,19 @@ import {
 import type { EmbeddingCalibrationSnapshot } from "@/types/embedding-protocol";
 import {
   createEmbeddingCommandBackend,
+  EMBEDDING_ENDPOINT_CONFIG_REQUIRED,
   EMBEDDING_NOT_CONFIGURED,
   type EmbeddingCommandBackend,
   type EmbeddingCommandBackendDeps,
 } from "./embedding-backend";
+
+/** A stored endpoint, used by the merged-coherence configure tests. */
+const STORED_ENDPOINT: ResolvedEmbeddingSettings["endpoint"] = {
+  kind: "openai",
+  baseUrl: "https://api.example.com/v1",
+  model: "text-embedding-3-small",
+  dimensions: 384,
+};
 
 const AGENT = "agent-embedding-protocol";
 const CALIBRATION: EmbeddingCalibrationSnapshot = {
@@ -334,6 +343,49 @@ describe("production backend", () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected a refusal");
     expect(result.error).toContain("chunk max");
+    expect(h.writes).toEqual([]);
+  });
+
+  test("configure accepts the endpoint backend when an endpoint is already stored", async () => {
+    // The wire patch is partial: a client may configure the endpoint first and
+    // select the backend in a later command. Judging `backend:"endpoint"`
+    // against the patch alone would reject that legitimate two-step flow.
+    const h = backendHarness({
+      settings: { endpoint: STORED_ENDPOINT },
+    });
+    const result = await h.buildBackend().configure(AGENT, {
+      backend: "endpoint",
+    });
+    expect(result).toEqual({ ok: true, value: expect.anything() });
+    expect(h.writes).toEqual([{ backend: "endpoint" }]);
+    expect(h.settings().backend).toBe("endpoint");
+    expect(h.settings().endpoint).toEqual(STORED_ENDPOINT);
+  });
+
+  test("configure refuses an endpoint backend with no endpoint anywhere", async () => {
+    const h = backendHarness();
+    const result = await h.buildBackend().configure(AGENT, {
+      backend: "endpoint",
+      api_key: "sk-unusable",
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: EMBEDDING_ENDPOINT_CONFIG_REQUIRED,
+    });
+    // Refused before the key store and the settings writer are touched.
+    expect(h.writes).toEqual([]);
+    expect(h.savedKeys).toEqual([]);
+  });
+
+  test("configure refuses clearing the endpoint while the endpoint backend is active", async () => {
+    const h = backendHarness({
+      settings: { backend: "endpoint", endpoint: STORED_ENDPOINT },
+    });
+    const result = await h.buildBackend().configure(AGENT, { endpoint: null });
+    expect(result).toEqual({
+      ok: false,
+      error: EMBEDDING_ENDPOINT_CONFIG_REQUIRED,
+    });
     expect(h.writes).toEqual([]);
   });
 

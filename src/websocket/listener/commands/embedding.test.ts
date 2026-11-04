@@ -418,6 +418,32 @@ describe("embedding_configure", () => {
     expect(calls).toEqual([]);
   });
 
+  test("endpoint/backend coherence is delegated to the backend's merged check", async () => {
+    // The handler cannot judge `backend:"endpoint"` on its own: the stored
+    // settings may already carry an endpoint (a two-step configure). The
+    // backend owns the merged decision, and its error is what the client sees.
+    const seen: EmbeddingConfigurePatch[] = [];
+    const { backend } = createFakeBackend({
+      configure: async (_agentId, patch) => {
+        seen.push(patch);
+        return { ok: false, error: "embedding_endpoint_config_required" };
+      },
+    });
+    const { sent, socket, send } = harness();
+    await handleEmbeddingConfigureCommand(
+      configureCommand({ backend: "endpoint" }),
+      socket,
+      send,
+      backend,
+    );
+    expect(seen).toEqual([{ backend: "endpoint" }]);
+    expect(lastSent(sent)).toMatchObject({
+      success: false,
+      settings: null,
+      error: "embedding_endpoint_config_required",
+    });
+  });
+
   test("a declined patch answers a typed failure", async () => {
     const { backend } = createFakeBackend({
       configure: async () => ({ ok: false, error: "settings_locked" }),
