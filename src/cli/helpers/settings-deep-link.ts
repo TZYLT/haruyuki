@@ -103,60 +103,60 @@ const EMBEDDING_SET_COMMANDS: Readonly<Record<string, SetCommandForm>> = {
     headless: "haruyuki recall embedding on|off",
   },
   recallEmbeddingBackend: {
-    legacy: "/recall embedding setup",
-    headless: "haruyuki recall embedding setup",
+    legacy: "/recall embedding connect",
+    headless: "haruyuki recall embedding connect",
   },
   recallEmbeddingModel: {
-    legacy: "/recall embedding setup",
-    headless: "haruyuki recall embedding setup",
+    legacy: "/recall embedding connect",
+    headless: "haruyuki recall embedding connect",
   },
   recallEmbeddingEndpoint: {
-    legacy: "/recall embedding setup",
-    headless: "haruyuki recall embedding setup",
+    legacy: "/recall embedding connect",
+    headless: "haruyuki recall embedding connect",
   },
   recallEmbeddingApiKey: {
-    legacy: "/recall embedding setup",
-    headless: "haruyuki recall embedding setup",
+    legacy: "/recall embedding connect",
+    headless: "haruyuki recall embedding connect",
   },
   recallEmbeddingWeight: {
-    legacy: "/recall embedding weight <0..1>",
-    headless: "haruyuki recall embedding weight <0..1>",
+    legacy: "/recall config weight <0..1>",
+    headless: "haruyuki recall config weight <0..1>",
   },
   recallEmbeddingCandidateDepth: {
-    legacy: "/recall embedding depth <n>",
-    headless: "haruyuki recall embedding depth <n>",
+    legacy: "/recall config depth <n>",
+    headless: "haruyuki recall config depth <n>",
   },
   recallEmbeddingChunkTarget: {
-    legacy: "/recall embedding chunk <tokens>",
-    headless: "haruyuki recall embedding chunk <tokens>",
+    legacy: "/recall embedding config chunk-target <tokens>",
+    headless: "haruyuki recall embedding config chunk-target <tokens>",
   },
   recallEmbeddingChunkMax: {
-    legacy: "/recall embedding chunk-max <tokens>",
-    headless: "haruyuki recall embedding chunk-max <tokens>",
+    legacy: "/recall embedding config chunk-max <tokens>",
+    headless: "haruyuki recall embedding config chunk-max <tokens>",
   },
   recallEmbeddingChunkOverlap: {
-    legacy: "/recall embedding chunk-overlap <tokens>",
-    headless: "haruyuki recall embedding chunk-overlap <tokens>",
+    legacy: "/recall embedding config chunk-overlap <tokens>",
+    headless: "haruyuki recall embedding config chunk-overlap <tokens>",
   },
   recallEmbeddingMaxChunksPerMessage: {
-    legacy: "/recall embedding max-chunks <n>",
-    headless: "haruyuki recall embedding max-chunks <n>",
+    legacy: "/recall embedding config max-chunks <n>",
+    headless: "haruyuki recall embedding config max-chunks <n>",
   },
   recallEmbeddingThreads: {
-    legacy: "/recall embedding threads <n>",
-    headless: "haruyuki recall embedding threads <n>",
+    legacy: "/recall embedding config threads <n>",
+    headless: "haruyuki recall embedding config threads <n>",
   },
   recallEmbeddingGpu: {
-    legacy: "/recall embedding gpu auto|off|index-only",
-    headless: "haruyuki recall embedding gpu auto|off|index-only",
+    legacy: "/recall embedding config gpu auto|off",
+    headless: "haruyuki recall embedding config gpu auto|off",
   },
   recallEmbeddingQuantization: {
-    legacy: "/recall embedding quant float32|int8",
-    headless: "haruyuki recall embedding quant float32|int8",
+    legacy: "/recall embedding connect",
+    headless: "haruyuki recall embedding connect",
   },
   recallEmbeddingKeepSpaces: {
-    legacy: "/recall embedding spaces <n>",
-    headless: "haruyuki recall embedding spaces <n>",
+    legacy: "/recall embedding model",
+    headless: "haruyuki recall embedding model --json",
   },
 };
 

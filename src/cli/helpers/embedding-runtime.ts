@@ -8,7 +8,7 @@
  * and the reason is reported in the receipt; queries stay on CPU.
  *
  * Nothing here downloads (missing assets are refused with the
- * `/recall embedding setup` remedy), and nothing here throws at the turn path:
+ * `/recall embedding connect` remedy), and nothing here throws at the turn path:
  * `build`/`cancel`/`reset` return copy, and `readStatus` degrades to `null`.
  *
  * Layer: `cli/helpers/`. Imports `backend/local/` and the command contract.
@@ -16,29 +16,25 @@
 
 import { type Backend, getBackend } from "@/backend";
 import {
-  createEmbeddingEndpointClient,
   DEFAULT_ENDPOINT_TIMEOUT_MS,
   type EmbeddingEndpointClient,
   type EmbeddingEndpointOptions,
   listEmbeddingEndpointModels,
   testEmbeddingEndpoint,
 } from "@/backend/local/embedding/endpoint-client";
-import {
-  type CreateEmbeddingDeviceAdapterOptions,
-  createChunkEmbedCallback,
-  createEmbeddingDeviceAdapter,
-  type EmbeddingBuildWorker,
-  type EmbeddingDeviceAdapter,
+import type {
+  CreateEmbeddingDeviceAdapterOptions,
+  EmbeddingBuildWorker,
+  EmbeddingDeviceAdapter,
 } from "@/backend/local/embedding/gpu-build-path";
 import { isEmbeddingModelInstalled } from "@/backend/local/embedding/model-download-install";
-import { getEmbeddingEndpointApiKey } from "@/backend/local/embedding/secrets";
-import { EmbeddingWorkerClient } from "@/backend/local/embedding/worker-client";
 import {
   checkEmbeddingBuiltinAssets,
-  type EmbeddingBuiltinAssets,
   type EmbeddingBuiltinAssetsOptions,
 } from "@/backend/local/embedding-assets";
 import type { EmbeddingEmbedCallback } from "@/backend/local/embedding-build";
+import { createEmbeddingBuildEmbed } from "@/backend/local/embedding-build-embed";
+import type { EmbeddingBuildDeviceSnapshot } from "@/backend/local/embedding-build-state";
 import {
   type EmbeddingBuildStateSnapshot,
   embeddingBuildStatePath,
@@ -49,14 +45,26 @@ import {
   resolveEmbeddingAgentMemoryDir,
   scanEmbeddingBuildUnits,
 } from "@/backend/local/embedding-build-units";
-import { createGpuTrialBudget } from "@/backend/local/embedding-calibration-probe";
-import { resolveEmbeddingWorkerEntryForRuntime } from "@/backend/local/embedding-encoder";
-import { getRecallVectorsRoot } from "@/backend/local/embedding-format";
+import {
+  EMBEDDING_INDEX_CHUNKER_VERSION,
+  getRecallVectorsRoot,
+} from "@/backend/local/embedding-format";
+import {
+  EMBEDDING_PROFILE_SCHEMA_VERSION,
+  type EmbeddingProfile,
+  endpointFingerprint,
+  readEmbeddingProfile,
+} from "@/backend/local/embedding-profile";
 import type {
   EmbeddingRunnerOptions,
   EmbeddingRunResult,
 } from "@/backend/local/embedding-runner";
-import { resolveEmbeddingSpace } from "@/backend/local/embedding-space";
+import {
+  type EmbeddingSpaceIdentity,
+  resolveEmbeddingSpace,
+} from "@/backend/local/embedding-space";
+import { migrateLegacyEmbeddingSpace } from "@/backend/local/embedding-space-migrate";
+import { pruneEmbeddingSpaces } from "@/backend/local/embedding-space-retention";
 import {
   hasUsableEmbeddingSpace,
   readEmbeddingSpaceSummary,
@@ -74,15 +82,16 @@ import type {
 } from "@/cli/commands/embedding";
 import {
   cancelEmbeddingBuild,
-  createEndpointEmbedAdapter,
   type EmbeddingBuildHostError,
   type EmbeddingBuildHostOutcome,
   type EmbeddingBuildHostStartResult,
-  type EmbeddingDetachedCommand,
-  type EmbeddingDetachedSpawner,
   type EmbeddingHostLifecycle,
   startEmbeddingBuild,
 } from "@/cli/helpers/embedding-build-host";
+import type {
+  EmbeddingDetachedCommand,
+  EmbeddingDetachedSpawner,
+} from "@/cli/helpers/embedding-detached-child";
 import { resetEmbeddingSpaces } from "@/cli/helpers/embedding-runtime-reset";
 import {
   noteEmbeddingBuildProgress,
@@ -208,12 +217,39 @@ interface BuildEmbeddingResult {
   readonly started: EmbeddingBuildHostStartResult | null;
 }
 
-/** One built encode path plus the cleanup that releases it. */
-interface EmbeddingBuildEmbed {
-  readonly embed: EmbeddingEmbedCallback;
-  readonly dispose: () => Promise<void>;
-  /** Redacted GPU fallback reason, when the build worker degraded to CPU. */
-  readonly degradedReason: string | null;
+/** The profile one build records for its space (48-4 D-10). */
+async function buildSpaceProfile(
+  space: EmbeddingSpaceIdentity,
+  settings: ResolvedEmbeddingSettings,
+  now: number,
+): Promise<EmbeddingProfile> {
+  const existing = await readEmbeddingProfile(space.spaceDir);
+  const endpoint = settings.backend === "endpoint" ? settings.endpoint : null;
+  return {
+    schemaVersion: EMBEDDING_PROFILE_SCHEMA_VERSION,
+    backend: settings.backend,
+    modelId: space.modelId,
+    dimensions: space.dimensions,
+    quantization: settings.quantization,
+    chunkTarget: settings.chunkTarget,
+    chunkMax: settings.chunkMax,
+    chunkOverlap: settings.chunkOverlap,
+    maxChunksPerMessage: settings.maxChunksPerMessage,
+    chunkerVersion: EMBEDDING_INDEX_CHUNKER_VERSION,
+    ...(endpoint === null
+      ? {}
+      : {
+          endpoint: {
+            kind: endpoint.kind,
+            baseUrl: endpoint.baseUrl,
+            model: endpoint.model,
+            dimensions: endpoint.dimensions,
+            fingerprint: endpointFingerprint(endpoint.baseUrl),
+          },
+        }),
+    createdAt: existing?.createdAt ?? new Date(now).toISOString(),
+    pinned: existing?.pinned ?? false,
+  };
 }
 
 function chunkOptionsOf(settings: ResolvedEmbeddingSettings): {
@@ -228,110 +264,6 @@ function chunkOptionsOf(settings: ResolvedEmbeddingSettings): {
     overlapTokens: settings.chunkOverlap,
     maxChunksPerParent: settings.maxChunksPerMessage,
   };
-}
-
-/**
- * Build the encode path for one settings record.
- *
- * `builtin` starts a C8 device adapter (CPU, or DirectML first when the platform
- * and `settings.gpu` allow it) and adapts it to A3's chunk callback; a GPU
- * refusal is reported through `onDegrade` and the adapter keeps working on CPU.
- * `endpoint` uses C6's long-lived client, which owns retries and the breaker;
- * the API key is read from the secret store exactly once.
- */
-async function createBuildEmbed(
-  settings: ResolvedEmbeddingSettings,
-  deps: EmbeddingRuntimeDeps,
-): Promise<EmbeddingBuildEmbed> {
-  if (settings.backend === "endpoint") {
-    const endpoint = settings.endpoint;
-    if (endpoint === null) {
-      throw new Error(
-        'The embedding backend is "endpoint" but no endpoint is configured; run /recall embedding setup and complete the endpoint form first.',
-      );
-    }
-    const apiKey = await getEmbeddingEndpointApiKey().catch(() => null);
-    const client = (deps.createEndpointClient ?? createEmbeddingEndpointClient)(
-      {
-        kind: endpoint.kind,
-        baseUrl: endpoint.baseUrl,
-        model: endpoint.model,
-        dimensions: endpoint.dimensions,
-        timeoutMs: endpoint.timeoutMs ?? DEFAULT_ENDPOINT_TIMEOUT_MS,
-        ...(apiKey === null ? {} : { apiKey }),
-      },
-    );
-    return {
-      embed: createEndpointEmbedAdapter(client),
-      dispose: async () => {
-        // C6's client holds only breaker state; the transport is per-request.
-      },
-      degradedReason: null,
-    };
-  }
-
-  const assets = await builtinAssets(settings, deps);
-  const platform = deps.platform ?? process.platform;
-  const gpuAllowed = platform === "win32" && settings.gpu !== "off";
-  let degradedReason: string | null = null;
-  const adapter = await (
-    deps.createDeviceAdapter ?? createEmbeddingDeviceAdapter
-  )({
-    ...(gpuAllowed
-      ? {
-          budget: createGpuTrialBudget({ quantization: settings.quantization }),
-        }
-      : {}),
-    createWorker:
-      deps.createWorker ??
-      (() =>
-        new EmbeddingWorkerClient({
-          workerPath:
-            deps.workerPath ?? resolveEmbeddingWorkerEntryForRuntime().path,
-        })),
-    init: {
-      runtimeDir: assets.runtimeDir,
-      modelPath: assets.modelPath,
-      tokenizerPath: assets.tokenizerPath,
-      maxTokens: assets.manifest.maxTokens,
-      ...(settings.threads > 0 ? { intraOpThreads: settings.threads } : {}),
-    },
-    onDegrade: (event) => {
-      degradedReason = event.reason;
-      debugWarn(
-        "embedding",
-        `the embedding build worker fell back to CPU: ${event.reason}`,
-      );
-    },
-  });
-  return {
-    embed: createChunkEmbedCallback(adapter),
-    dispose: () => adapter.dispose(),
-    degradedReason,
-  };
-}
-
-/** Resolve the built-in assets, refusing rather than downloading. */
-async function builtinAssets(
-  settings: ResolvedEmbeddingSettings,
-  deps: EmbeddingRuntimeDeps,
-): Promise<EmbeddingBuiltinAssets> {
-  const check = await (deps.checkAssets ?? checkEmbeddingBuiltinAssets)(
-    settings.model,
-    deps.assets ?? {},
-  );
-  if (!check.installed) {
-    throw new Error(
-      addSetupRemedy(
-        `Built-in embedding is not ready: missing ${check.missing.join(" and ")}.`,
-      ),
-    );
-  }
-  return check.assets;
-}
-
-function addSetupRemedy(message: string): string {
-  return `${message} Run /recall embedding setup to download the model and runtime, then start the build again. The build never downloads assets itself.`;
 }
 
 function formatHostError(error: EmbeddingBuildHostError): string {
@@ -449,7 +381,12 @@ async function startBuildFromSettings(
 ): Promise<BuildEmbeddingResult> {
   const settings = settingsOf(deps);
   const root = recallRoot(deps);
+  migrateLegacyEmbeddingSpace(request.agentId, settings, { root });
   const space = resolveEmbeddingSpace(request.agentId, settings, { root });
+  const profile = await buildSpaceProfile(space, settings, clockOf(deps)());
+  pruneEmbeddingSpaces(request.agentId, space.spaceId, settings.keepSpaces, {
+    root,
+  });
   const lifecycle = request.lifecycle ?? deps.lifecycle ?? "tui";
   const keepAfterExit = request.keepAfterExit === true;
 
@@ -461,6 +398,7 @@ async function startBuildFromSettings(
   let embed: EmbeddingEmbedCallback;
   let disposeEmbed: () => Promise<void> = async () => {};
   let degradedReason: string | null = null;
+  let device: EmbeddingBuildDeviceSnapshot | undefined;
   if (keepAfterExit) {
     // A detached child builds its own encode path; spawn no worker here.
     embed = async () => {
@@ -470,10 +408,11 @@ async function startBuildFromSettings(
     };
   } else {
     try {
-      const built = await createBuildEmbed(settings, deps);
+      const built = await createEmbeddingBuildEmbed(settings, deps);
       embed = built.embed;
       disposeEmbed = built.dispose;
       degradedReason = built.degradedReason;
+      device = built.device;
     } catch (error) {
       return { receipt: getErrorMessage(error), started: null };
     }
@@ -513,8 +452,11 @@ async function startBuildFromSettings(
         }),
       mode: request.mode,
       dimensions: space.dimensions,
+      quant: space.quantization,
       root,
       keepAfterExit,
+      ...(device === undefined ? {} : { device }),
+      profile,
       ...(detachedCommand === null || detachedCommand === undefined
         ? {}
         : { detachedCommand }),
@@ -650,6 +592,9 @@ async function readRuntimeStatus(
 ): Promise<EmbeddingRuntimeStatus | null> {
   const settings = settingsOf(deps);
   const root = recallRoot(deps);
+  // One-time rename of a pre-48-4 directory, so the status face shows the space
+  // the user already built instead of "not built yet".
+  migrateLegacyEmbeddingSpace(scope.agentId, settings, { root });
   const space = resolveEmbeddingSpace(scope.agentId, settings, { root });
   const summary = readEmbeddingSpaceSummary(space.spaceDir);
   const usable = hasUsableEmbeddingSpace(space.spaceDir);

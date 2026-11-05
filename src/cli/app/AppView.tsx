@@ -82,7 +82,7 @@ import { experimentManager } from "@/experiments/manager";
 import type { ExperimentId } from "@/experiments/types";
 import type { ApprovalContext } from "@/permissions/analyzer";
 import type { PermissionMode } from "@/permissions/mode";
-import { readRecallSettings } from "@/recall-settings";
+import { readEmbeddingSettings, readRecallSettings } from "@/recall-settings";
 import { settingsManager } from "@/settings-manager";
 import type { ToolsetName, ToolsetPreference } from "@/tools/toolset";
 import type { QueuedMessage } from "@/utils/message-queue-bridge";
@@ -632,6 +632,9 @@ export function AppView(props: AppViewRenderProps) {
             {activeOverlay === "recall" && (
               <RecallOverlay
                 settings={readRecallSettings()}
+                embeddingSettings={readEmbeddingSettings()}
+                agentId={agentId}
+                conversationId={conversationId}
                 onSave={handleRecallOverlaySave}
                 onCancel={closeOverlay}
               />

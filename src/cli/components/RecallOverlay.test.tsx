@@ -8,13 +8,20 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   buildDisplayRows,
   buildDiversityRows,
+  buildEmbeddingRows,
   buildRecallPickerRows,
   RECALL_DISPLAY_ROW_KEY,
   RECALL_DIVERSITY_ROW_KEY,
+  RECALL_EMBEDDING_ROW_KEY,
   RECALL_TOGGLE_ROW_KEY,
   RecallOverlay,
+  type RecallOverlayProps,
 } from "@/cli/components/RecallOverlay";
-import { RECALL_SETTING_DEFAULTS } from "@/recall-settings";
+import type { EmbeddingModelRow } from "@/cli/helpers/embedding-models";
+import {
+  EMBEDDING_SETTING_DEFAULTS,
+  RECALL_SETTING_DEFAULTS,
+} from "@/recall-settings";
 import type { Settings } from "@/settings-manager";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
 
@@ -27,8 +34,10 @@ describe("the picker rows", () => {
     expect(keys.at(-1)).toBe(RECALL_DIVERSITY_ROW_KEY);
     expect(new Set(keys).size).toBe(keys.length);
 
-    // The seven numeric knobs plus the toggle, the display and the diversity.
-    expect(keys).toHaveLength(10);
+    // The seven numeric knobs plus the toggle, display, embedding block and
+    // diversity.
+    expect(keys).toHaveLength(11);
+    expect(keys).toContain(RECALL_EMBEDDING_ROW_KEY);
     for (const key of [
       "recallLimit",
       "recallTimeoutMs",
@@ -67,6 +76,41 @@ describe("the picker rows", () => {
     });
     expect(on[0]?.description).toContain("Enter to turn off");
     expect(off[0]?.description).toContain("Enter to turn on");
+  });
+});
+
+describe("the embedding block", () => {
+  test("offers the action set and names the direction of the toggle", () => {
+    const on = buildEmbeddingRows({
+      ...EMBEDDING_SETTING_DEFAULTS,
+      enabled: true,
+    });
+    expect(on.map((row) => row.key)).toEqual([
+      "toggle",
+      "status",
+      "build",
+      "connect",
+      "model",
+    ]);
+    expect(on[0]?.label).toContain("off");
+    expect(on[0]?.description).toContain("builtin");
+
+    const off = buildEmbeddingRows({
+      ...EMBEDDING_SETTING_DEFAULTS,
+      enabled: false,
+    });
+    expect(off[0]?.label).toContain("on");
+  });
+
+  test("the picker row shows whether the vector arm is on", () => {
+    const rows = buildRecallPickerRows(RECALL_SETTING_DEFAULTS, {
+      ...EMBEDDING_SETTING_DEFAULTS,
+      enabled: true,
+      model: "bge-small-zh-v1.5",
+    });
+    const row = rows.find((item) => item.key === RECALL_EMBEDDING_ROW_KEY);
+    expect(row?.description).toContain("on ·");
+    expect(row?.description).toContain("bge-small-zh-v1.5");
   });
 });
 
@@ -128,7 +172,7 @@ async function pressKeysSlowly(
   }
 }
 
-function mountOverlay(): {
+function mountOverlay(overrides: Partial<RecallOverlayProps> = {}): {
   tty: ReturnType<typeof mountInkTty>;
   saved: Partial<Settings>[];
   cancels: string[];
@@ -140,6 +184,7 @@ function mountOverlay(): {
       settings={RECALL_SETTING_DEFAULTS}
       onSave={(updates) => saved.push(updates)}
       onCancel={() => cancels.push("cancel")}
+      {...overrides}
     />,
     { columns: 90, rows: 30 },
   );
@@ -213,6 +258,132 @@ describe("the overlay's keys", () => {
       const painted = await tty.text();
       expect(painted).toContain("Enter a number the setting accepts.");
       expect(saved).toEqual([]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the embedding block runs the command and shows its receipt", async () => {
+    const calls: string[][] = [];
+    const { tty } = mountOverlay({
+      embeddingSettings: { ...EMBEDDING_SETTING_DEFAULTS, enabled: false },
+      agentId: "agent-1",
+      conversationId: "conv-1",
+      runEmbeddingCommand: async (args) => {
+        calls.push(args);
+        return `RESULT:${args.join(" ")}`;
+      },
+    });
+    try {
+      // The block sits after the seven numeric rows (toggle, display = 0..1).
+      await pressKeysSlowly(
+        tty,
+        HOME,
+        DOWN,
+        DOWN,
+        DOWN,
+        DOWN,
+        DOWN,
+        DOWN,
+        DOWN,
+        DOWN,
+        DOWN,
+        ENTER,
+      );
+      expect(await tty.text()).toContain("Turn vector recall on");
+
+      // The sub-picker reuses the list's picker instance, so its cursor is
+      // wherever the list left it; Home pins the first action before moving.
+      await pressKeysSlowly(tty, HOME, DOWN, ENTER);
+      expect(await tty.text()).toContain("RESULT:status");
+      expect(calls).toEqual([["status"]]);
+
+      // Escape walks back to the block, not out of the overlay.
+      await pressKeysSlowly(tty, ESC);
+      expect(await tty.text()).toContain("Index status");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the model row opens the picker and Enter/D/P run the command", async () => {
+    const calls: string[][] = [];
+    const rows: EmbeddingModelRow[] = [
+      {
+        index: 1,
+        spaceId: "space-1",
+        model: "bge-m3",
+        dimensions: 1024,
+        quantization: "int8",
+        chunks: 5_618,
+        builtAt: "2026-11-05T10:00:00.000Z",
+        bytes: 23 * 1024 * 1024,
+        active: false,
+        pinned: false,
+        legacy: false,
+      },
+      {
+        index: 2,
+        spaceId: "space-2",
+        model: "bge-small-zh-v1.5",
+        dimensions: 512,
+        quantization: "float32",
+        chunks: 1_200,
+        builtAt: null,
+        bytes: null,
+        active: true,
+        pinned: true,
+        legacy: false,
+      },
+    ];
+    const { tty } = mountOverlay({
+      embeddingSettings: { ...EMBEDDING_SETTING_DEFAULTS, enabled: true },
+      agentId: "agent-1",
+      runEmbeddingCommand: async (args) => {
+        calls.push(args);
+        return `RESULT:${args.join(" ")}`;
+      },
+      loadEmbeddingModels: async () => rows,
+    });
+    try {
+      // Toggle, display, seven numbers → embedding; then toggle, status, build,
+      // connect → model.
+      await pressKeysSlowly(
+        tty,
+        HOME,
+        DOWN,
+        DOWN,
+        DOWN,
+        DOWN,
+        DOWN,
+        DOWN,
+        DOWN,
+        DOWN,
+        DOWN,
+        ENTER,
+      );
+      expect(await tty.text()).toContain("Turn vector recall off");
+      await pressKeysSlowly(tty, HOME, DOWN, DOWN, DOWN, DOWN, ENTER);
+      const frame = await tty.text();
+      expect(frame).toContain("Stored vector models");
+      expect(frame).toContain("#1 bge-m3");
+      expect(frame).toContain("D delete");
+
+      await pressKeysSlowly(tty, ENTER);
+      await settle();
+      expect(calls).toEqual([["model", "--select", "1"]]);
+
+      await pressKeysSlowly(tty, "p");
+      await settle();
+      expect(calls.at(-1)).toEqual(["model", "--pin", "1"]);
+
+      // D previews once; the second D confirms. Nothing is deleted before it.
+      await pressKeysSlowly(tty, "d");
+      expect(calls.filter((args) => args[1] === "--delete")).toHaveLength(0);
+      expect(await tty.text()).toContain("Press D again");
+      await pressKeysSlowly(tty, "d");
+      await settle();
+      expect(calls.at(-1)).toEqual(["model", "--delete", "1", "--confirm"]);
     } finally {
       tty.stop();
     }

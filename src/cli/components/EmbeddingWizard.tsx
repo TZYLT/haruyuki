@@ -71,6 +71,7 @@ import {
   embeddingWizardGpuRoleOptions,
   embeddingWizardModelOption,
   embeddingWizardModelOptions,
+  embeddingWizardPrecisionOptions,
   embeddingWizardStepTitle,
   formatEmbeddingWizardBytes,
 } from "@/cli/helpers/embedding-wizard-facts";
@@ -302,11 +303,15 @@ export function EmbeddingWizard({
     );
   }, [state.step, state.builtin.installCheck.phase, runAction, stateReader]);
 
-  // Entering step 4 starts the list cursor on the first option row.
+  // Entering step 4 starts the list cursor on the action row, not on the first
+  // option. The previous step ends with Enter, so an Enter on arrival must mean
+  // "continue", not "toggle the row under the cursor": with the cursor on the
+  // keep switch it silently opted every wizard run into a detached build
+  // (R-34 says the default is off and only an explicit toggle turns it on).
   useEffect(() => {
     if (state.step !== "finish") return;
-    finishCursorRef.current = 0;
-    setFinishCursor(0);
+    finishCursorRef.current = FINISH_ITEM_COUNT - 1;
+    setFinishCursor(FINISH_ITEM_COUNT - 1);
   }, [state.step]);
 
   const startDownload = useCallback(() => {
@@ -357,6 +362,7 @@ export function EmbeddingWizard({
   const isPickerStep =
     state.step === "backend" ||
     state.step === "gpu-role" ||
+    state.step === "precision" ||
     state.step === "builtin-model" ||
     state.step === "builtin-download" ||
     state.step === "endpoint-kind";
@@ -612,6 +618,37 @@ export function EmbeddingWizard({
           dispatch({
             type: "choose-gpu",
             role: key === "off" || key === "index-only" ? key : "auto",
+          })
+        }
+        onCancel={back}
+        footer="Enter select · ↑↓ move · Esc back"
+        width={width}
+      />
+    );
+  }
+
+  // ── Step 2: storage precision ───────────────────────────────────────────
+  if (state.step === "precision") {
+    const items: SingleSelectItem[] = embeddingWizardPrecisionOptions().map(
+      (option) => ({
+        key: option.id,
+        label: option.label,
+        description: option.description,
+        isCurrent: state.precision === option.id,
+      }),
+    );
+    return (
+      <PickerStep
+        key="precision"
+        command={COMMAND}
+        title={embeddingWizardStepTitle("precision")}
+        hint="How the index stores its vectors. Changing this later creates a new space and needs a rebuild; the old space is kept until retention removes it."
+        items={items}
+        initialCursorIndex={cursorIndexFor(items, state.precision)}
+        onSelect={(key) =>
+          dispatch({
+            type: "choose-precision",
+            precision: key === "int8" ? "int8" : "float32",
           })
         }
         onCancel={back}

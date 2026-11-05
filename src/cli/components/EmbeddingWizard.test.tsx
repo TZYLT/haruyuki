@@ -33,6 +33,7 @@ const ENTER = String.fromCharCode(13);
 const ESCAPE = String.fromCharCode(27);
 const CTRL_C = String.fromCharCode(3);
 const DOWN = "\u001B[B";
+const UP = "\u001B[A";
 
 const MODEL_ID = "bge-small-zh-v1.5";
 const RUNTIME_DIR = "/tmp/runtime/1.31.1";
@@ -167,13 +168,13 @@ async function painted(tty: ReturnType<typeof mountInkTty>): Promise<string> {
 }
 
 /**
- * Backend (built-in) → GPU role (Auto) → model picker → cached-install check →
+ * Backend (built-in) → GPU role (Auto) → precision (float32) → model picker →
  * the download confirmation (the fake cache reports "nothing installed").
  */
 async function toBuiltinDownload(
   tty: ReturnType<typeof mountInkTty>,
 ): Promise<void> {
-  await tty.press(ENTER, ENTER, ENTER);
+  await tty.press(ENTER, ENTER, ENTER, ENTER);
   await settle();
   await settle();
 }
@@ -197,11 +198,13 @@ async function startBuildFromFinish(
   await settle();
 }
 
-/** Backend (endpoint row) → GPU → protocol (OpenAI) → URL screen. */
+/** Backend (endpoint row) → GPU → precision → protocol (OpenAI) → URL screen. */
 async function toEndpointUrl(
   tty: ReturnType<typeof mountInkTty>,
 ): Promise<void> {
   await tty.press("j", ENTER);
+  await settle();
+  await tty.press(ENTER);
   await settle();
   await tty.press(ENTER);
   await settle();
@@ -227,13 +230,13 @@ afterEach(() => {
   resetInkTtyState();
 });
 
-describe("the embedding setup wizard", () => {
+describe("the embedding connect wizard", () => {
   test("opens on the backend choice with four numbered steps", async () => {
     expect(embeddingWizardStepCount()).toBe(4);
     const { tty } = mount();
     try {
       const frame = await painted(tty);
-      expect(frame).toContain("> /recall embedding setup");
+      expect(frame).toContain("> /recall embedding connect");
       expect(frame).toContain("1/4 Backend");
       expect(frame).toContain("Built-in model");
       expect(frame).toContain("External endpoint");
@@ -253,13 +256,13 @@ describe("the embedding setup wizard", () => {
       expect(gpuFrame).toContain("2/4 GPU");
       expect(gpuFrame).toContain("Auto (default)");
       expect(gpuFrame).toContain("CPU only");
-      if (process.platform === "win32") {
-        expect(gpuFrame).toContain("Index build only");
-      } else {
-        expect(gpuFrame).toContain(
-          "CPU only (this platform cannot build the index on a GPU)",
-        );
-      }
+      expect(gpuFrame).not.toContain("Index build only");
+
+      await tty.press(ENTER);
+      const precisionFrame = await painted(tty);
+      expect(precisionFrame).toContain("2/4 Precision");
+      expect(precisionFrame).toContain("float32");
+      expect(precisionFrame).toContain("int8");
 
       await tty.press(ENTER);
       const modelFrame = await painted(tty);
@@ -277,7 +280,7 @@ describe("the embedding setup wizard", () => {
       expect(downloadFrame).toContain("Model download: ~24.5 MB");
       expect(downloadFrame).toContain("Runtime download: ~115 MB");
       expect(downloadFrame).toContain("License: MIT");
-      expect(downloadFrame).toContain("sha256 not recorded");
+      expect(downloadFrame).toContain("every required file is sha256-pinned");
       expect(saves).toEqual([]);
 
       await tty.press(ENTER);
@@ -309,6 +312,7 @@ describe("the embedding setup wizard", () => {
           backend: "builtin",
           model: MODEL_ID,
           gpu: "auto",
+          quantization: "float32",
           calibration: {
             fingerprint: "fp-1",
             measuredAt: "2026-11-04T00:00:00.000Z",
@@ -344,7 +348,7 @@ describe("the embedding setup wizard", () => {
     });
     try {
       await painted(tty);
-      await tty.press(ENTER, ENTER, ENTER);
+      await tty.press(ENTER, ENTER, ENTER, ENTER);
       await settle();
       await settle();
       const frame = await painted(tty);
@@ -368,7 +372,7 @@ describe("the embedding setup wizard", () => {
     });
     try {
       await painted(tty);
-      await tty.press(ENTER, ENTER, ENTER);
+      await tty.press(ENTER, ENTER, ENTER, ENTER);
       await settle();
       await settle();
       expect(await painted(tty)).toContain("2/4 Download");
@@ -407,35 +411,52 @@ describe("the embedding setup wizard", () => {
     }
   });
 
-  test("step 4's rows take the cursor, Space/Enter toggles them and Start build runs", async () => {
+  test("step 4 opens on the action row, so Enter continues with the defaults", async () => {
+    const { tty, builds } = mount();
+    try {
+      await toFinish(tty);
+      // Arrival cursor is "Start build". The previous step ended with Enter, so
+      // this Enter must continue rather than toggle a row (the old first-row
+      // cursor silently turned on detached builds).
+      await tty.press(ENTER);
+      await settle();
+      expect(builds).toHaveLength(1);
+      expect(builds[0]?.keepAfterExit).toBe(false);
+      expect(builds[0]?.mode).toBe("incremental");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("step 4's option rows still take the cursor and Space/Enter toggles them", async () => {
     const { tty, builds, saves } = mount();
     try {
       await toFinish(tty);
-      // Row 0: Enter toggles the keep switch.
-      await tty.press(ENTER);
-      let frame = await painted(tty);
-      expect(frame).toContain("[x] Keep building after you exit");
-      expect(frame).toContain("[x] Build mode: incremental");
 
-      // Row 1: Space selects incremental (already on) — a no-op this time.
-      await tty.press(DOWN, " ");
+      // Row 2: Space selects the full build mode.
+      await tty.press(UP, " ");
+      let frame = await painted(tty);
+      expect(frame).toContain("[ ] Build mode: incremental");
+      expect(frame).toContain("[x] Build mode: full");
+
+      // Row 1: Enter selects incremental again.
+      await tty.press(UP, ENTER);
       frame = await painted(tty);
       expect(frame).toContain("[x] Build mode: incremental");
       expect(frame).toContain("[ ] Build mode: full");
 
-      // Row 2: Space selects the full build mode.
-      await tty.press(DOWN, " ");
+      // Row 0: Space toggles the keep switch.
+      await tty.press(UP, " ");
       frame = await painted(tty);
-      expect(frame).toContain("[ ] Build mode: incremental");
-      expect(frame).toContain("[x] Build mode: full");
+      expect(frame).toContain("[x] Keep building after you exit");
       expect(saves).toEqual([]);
 
-      // Row 3: the action row.
-      await tty.press(DOWN, ENTER);
+      // Back down to the action row.
+      await tty.press(DOWN, DOWN, DOWN, ENTER);
       await settle();
       expect(builds).toHaveLength(1);
       expect(builds[0]?.keepAfterExit).toBe(true);
-      expect(builds[0]?.mode).toBe("full");
+      expect(builds[0]?.mode).toBe("incremental");
     } finally {
       tty.stop();
     }
@@ -471,7 +492,7 @@ describe("the embedding setup wizard", () => {
     });
     try {
       await painted(tty);
-      await tty.press(ENTER, ENTER, ENTER);
+      await tty.press(ENTER, ENTER, ENTER, ENTER);
       await settle();
       await settle();
       expect(await painted(tty)).toContain("3/4 Calibration");
@@ -569,6 +590,7 @@ describe("the embedding setup wizard", () => {
           dimensions: 768,
         },
         gpu: "auto",
+        quantization: "float32",
         calibration: {
           fingerprint: "fp-1",
           measuredAt: "2026-11-04T00:00:00.000Z",
@@ -679,7 +701,7 @@ describe("the embedding setup wizard", () => {
     try {
       const frame = await painted(tty);
       expect(frame).toContain("1/4 Backend");
-      await tty.press(ENTER, ENTER, ENTER);
+      await tty.press(ENTER, ENTER, ENTER, ENTER);
       await settle();
       await settle();
       const download = await painted(tty);
@@ -698,12 +720,12 @@ describe("the embedding setup wizard", () => {
         calls.push([overlay, input, opening, dismiss]);
       },
     );
-    expect(opener("/recall embedding setup")).toBe(true);
+    expect(opener("/recall embedding connect")).toBe(true);
     expect(calls).toEqual([
       [
         "embedding-wizard",
-        "/recall embedding setup",
-        "Opening the embedding setup wizard...",
+        "/recall embedding connect",
+        "Opening the embedding connect wizard...",
         "Embedding setup closed",
       ],
     ]);

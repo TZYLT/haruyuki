@@ -13,7 +13,7 @@
  *    `readEmbeddingRuntimeManifest`) instead of re-deriving "installed": a
  *    second definition would drift the moment the downloader changes.
  * 3. **What should we tell the user?** {@link formatEmbeddingAssetsMissing}
- *    produces the actionable line that points at `/recall embedding setup`.
+ *    produces the actionable line that points at `/recall embedding connect`.
  *
  * This module performs no download, no spawn and no network access. It reads
  * only stat/JSON metadata through the downloader helpers.
@@ -189,5 +189,5 @@ export function formatEmbeddingAssetsMissing(
       `the ONNX runtime ${check.assets.runtimeVersion} (${check.assets.runtimeDir})`,
     );
   }
-  return `Built-in embedding is not ready: missing ${parts.join(" and ")}. Run /recall embedding setup to download ${check.missing.length === 1 ? "it" : "them"}.`;
+  return `Built-in embedding is not ready: missing ${parts.join(" and ")}. Run /recall embedding connect to download ${check.missing.length === 1 ? "it" : "them"}.`;
 }

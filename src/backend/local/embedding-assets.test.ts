@@ -219,7 +219,7 @@ describe("formatEmbeddingAssetsMissing", () => {
     const message = formatEmbeddingAssetsMissing(check);
     expect(message).toContain("bge-small-zh-v1.5");
     expect(message).toContain("ONNX runtime");
-    expect(message).toContain("/recall embedding setup");
+    expect(message).toContain("/recall embedding connect");
   });
 
   test("is empty when nothing is missing", async () => {

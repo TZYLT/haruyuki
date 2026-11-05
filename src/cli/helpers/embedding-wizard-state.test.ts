@@ -17,7 +17,6 @@ import {
 import {
   EMBEDDING_WIZARD_COMMAND,
   EMBEDDING_WIZARD_STEP_COUNT,
-  embeddingWizardAllowsIndexOnlyGpu,
   embeddingWizardGpuMismatch,
   embeddingWizardGpuRoleOptions,
   embeddingWizardModelOptions,
@@ -69,10 +68,10 @@ function atGpuRole(): EmbeddingWizardState {
 function atBuiltinModel(
   state: EmbeddingWizardState = atGpuRole(),
 ): EmbeddingWizardState {
-  return applyEmbeddingWizardEvent(state, {
-    type: "choose-gpu",
-    role: "auto",
-  });
+  return applyEmbeddingWizardEvent(
+    applyEmbeddingWizardEvent(state, { type: "choose-gpu", role: "auto" }),
+    { type: "choose-precision", precision: "float32" },
+  );
 }
 
 function checkSucceeded(
@@ -114,6 +113,10 @@ function atEndpointKey(): EmbeddingWizardState {
   state = applyEmbeddingWizardEvent(state, {
     type: "choose-gpu",
     role: "auto",
+  });
+  state = applyEmbeddingWizardEvent(state, {
+    type: "choose-precision",
+    precision: "float32",
   });
   state = applyEmbeddingWizardEvent(state, {
     type: "choose-endpoint-kind",
@@ -267,7 +270,7 @@ const apply = applyEmbeddingWizardEvent;
 describe("the embedding wizard state machine", () => {
   test("opens on the backend choice with four numbered steps", () => {
     expect(EMBEDDING_WIZARD_STEP_COUNT).toBe(4);
-    expect(EMBEDDING_WIZARD_COMMAND).toBe("/recall embedding setup");
+    expect(EMBEDDING_WIZARD_COMMAND).toBe("/recall embedding connect");
     const state = start();
     expect(state.step).toBe("backend");
     expect(state.outcome).toBe("active");
@@ -315,7 +318,9 @@ describe("the embedding wizard state machine", () => {
       },
     });
     expect(state.backend).toBe("endpoint");
-    expect(state.gpu).toBe("index-only");
+    // 48-4 D-01: an old stored `index-only` is read as `auto`.
+    expect(state.gpu).toBe("auto");
+    expect(state.precision).toBe("float32");
     expect(state.endpoint.kind).toBe("ollama");
     expect(state.endpoint.baseUrl).toBe("http://localhost:11434");
     expect(state.endpoint.model).toBe("nomic-embed-text");
@@ -354,12 +359,15 @@ describe("the embedding wizard state machine", () => {
     expect(apply(busyCheck, { type: "cancel" }).outcome).toBe("active");
   });
 
-  test("the built-in branch asks for a GPU role before the model, and the check before any download", () => {
+  test("the built-in branch asks for a GPU role and precision before the model", () => {
     let state = chooseBuiltin();
     expect(state.step).toBe("gpu-role");
     state = apply(state, { type: "choose-gpu", role: "off" });
-    expect(state.step).toBe("builtin-model");
+    expect(state.step).toBe("precision");
     expect(state.gpu).toBe("off");
+    state = apply(state, { type: "choose-precision", precision: "int8" });
+    expect(state.step).toBe("builtin-model");
+    expect(state.precision).toBe("int8");
     state = apply(state, { type: "choose-model", modelId: MODEL_ID });
     expect(state.step).toBe("builtin-check");
     expect(state.builtin.installCheck.phase).toBe("idle");
@@ -534,6 +542,8 @@ describe("the embedding wizard state machine", () => {
     let state = apply(start(), { type: "choose-backend", backend: "endpoint" });
     expect(state.step).toBe("gpu-role");
     state = apply(state, { type: "choose-gpu", role: "auto" });
+    expect(state.step).toBe("precision");
+    state = apply(state, { type: "choose-precision", precision: "float32" });
     expect(state.step).toBe("endpoint-kind");
     state = apply(state, { type: "choose-endpoint-kind", kind: "openai" });
     expect(state.step).toBe("endpoint-url");
@@ -699,6 +709,7 @@ describe("the embedding wizard state machine", () => {
       backend: "builtin",
       model: MODEL_ID,
       gpu: "auto",
+      quantization: "float32",
     });
 
     const { deps: failing } = fakeDeps({
@@ -762,6 +773,7 @@ describe("the embedding wizard state machine", () => {
         backend: "builtin",
         model: MODEL_ID,
         gpu: "index-only",
+        quantization: "float32",
         calibration: {
           fingerprint: "fp-1",
           measuredAt: "2026-11-04T00:00:00.000Z",
@@ -962,21 +974,12 @@ describe("the embedding wizard state machine", () => {
     expect(embeddingWizardCalibrationLatencyLine(measured)).toContain("128/s");
   });
 
-  test("the GPU picker lets index-only be chosen on Windows only", () => {
-    expect(embeddingWizardAllowsIndexOnlyGpu("win32")).toBe(true);
-    expect(embeddingWizardAllowsIndexOnlyGpu("linux")).toBe(false);
-    expect(embeddingWizardAllowsIndexOnlyGpu("darwin")).toBe(false);
-
-    const win = embeddingWizardGpuRoleOptions("win32");
-    expect(win.map((row) => row.role)).toEqual(["auto", "off", "index-only"]);
-    expect(win.every((row) => !row.disabled)).toBe(true);
-
-    const linux = embeddingWizardGpuRoleOptions("linux");
-    const indexOnly = linux.find((row) => row.role === "index-only");
-    expect(indexOnly?.disabled).toBe(true);
-    expect(indexOnly?.description).toContain("CPU only");
-    expect(linux.find((row) => row.role === "auto")?.disabled).toBe(false);
-    expect(linux.find((row) => row.role === "off")?.disabled).toBe(false);
+  test("the GPU picker offers auto and off only (48-4 D-01)", () => {
+    for (const platform of ["win32", "linux", "darwin"] as const) {
+      const options = embeddingWizardGpuRoleOptions(platform);
+      expect(options.map((row) => row.role)).toEqual(["auto", "off"]);
+      expect(options.every((row) => !row.disabled)).toBe(true);
+    }
   });
 
   test("a calibration measured under another GPU role is reported honestly", () => {

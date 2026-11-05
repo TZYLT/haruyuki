@@ -338,6 +338,7 @@ export function CalibrationStep({
         text={`GPU: ${embeddingWizardGpuRoleLabel(state.gpu)}`}
         width={width}
       />
+      <InfoLine text={`Precision: ${state.precision}`} width={width} />
       {mismatch === null ? null : (
         <InfoLine text={mismatch} tone="dim" width={width} />
       )}
@@ -447,6 +448,7 @@ export function FinishStep({
         text={`GPU: ${embeddingWizardGpuRoleLabel(state.gpu)}`}
         width={width}
       />
+      <InfoLine text={`Precision: ${state.precision}`} width={width} />
       {mismatch === null ? null : (
         <InfoLine text={mismatch} tone="dim" width={width} />
       )}

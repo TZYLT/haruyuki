@@ -1,7 +1,7 @@
 /**
  * The TUI seam that raises the vector-recall setup wizard (48-2 §4.9 D5).
  *
- * `/recall embedding setup` (and a first-run `/recall embedding on`) reaches D4's
+ * `/recall embedding connect` (and a first-run `/recall embedding on`) reaches D4's
  * command handler, which owns the text and asks its host whether it can open a
  * setup face (`EmbeddingCommandDeps.openSetup`). This module is that face's
  * shell half: it owns the overlay id, the command row's opening/dismiss text and
@@ -19,7 +19,7 @@ import type { ActiveOverlay } from "@/cli/app/types";
 export const EMBEDDING_WIZARD_OVERLAY = "embedding-wizard";
 
 /** The command row the overlay belongs to. */
-export const EMBEDDING_WIZARD_COMMAND = "/recall embedding setup";
+export const EMBEDDING_WIZARD_COMMAND = "/recall embedding connect";
 
 /** The four `openOverlay` arguments, narrowed to what this seam needs. */
 export type EmbeddingWizardOpenOverlay = (
@@ -42,7 +42,7 @@ export function openEmbeddingWizard(
   openOverlay(
     EMBEDDING_WIZARD_OVERLAY,
     commandInput,
-    "Opening the embedding setup wizard...",
+    "Opening the embedding connect wizard...",
     "Embedding setup closed",
   );
   return true;

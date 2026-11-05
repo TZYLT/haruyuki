@@ -405,7 +405,7 @@ async function defaultCalibrationSnapshot(
   const check = await checkEmbeddingBuiltinAssets(settings.model, {});
   if (!check.installed) {
     throw new Error(
-      `Built-in embedding assets are not installed (missing ${check.missing.join(" and ")}); run /recall embedding setup first.`,
+      `Built-in embedding assets are not installed (missing ${check.missing.join(" and ")}); run /recall embedding connect first.`,
     );
   }
   const { result, probe } = await runEmbeddingCalibration({

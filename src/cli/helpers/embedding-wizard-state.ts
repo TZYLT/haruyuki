@@ -1,37 +1,21 @@
 /**
- * The first-run vector-recall setup wizard's state machine (48-2 §4.9, D5).
+ * The vector-recall connect wizard's state machine (48-2 §4.9, D5).
  *
- * The requirement fixes four steps — backend → configuration (GPU role, cached
- * install check, built-in download **or** endpoint test) → calibration → finish
- * — and three properties that are the reason this module exists apart from the
- * component:
+ * Four numbered steps — backend → configuration (GPU, precision, install check,
+ * built-in download or endpoint test) → calibration → finish. Three properties
+ * are why this lives apart from the component:
  *
- * - **Cancel writes nothing.** Every answer lives here until the final step, and
- *   that step performs the only writes (`saveSettings` + `saveApiKey` + the build
- *   start) in one injected call. Leaving halfway cannot leave a half-configured
- *   agent behind; `outcome: "cancelled"` is the whole of a cancel.
- * - **A failed step keeps the current step.** A download that throws, a probe
- *   that refuses the URL, a calibration that times out and a settings write that
- *   fails all land as state on the step they happened, with every earlier answer
- *   intact, and `next`/the retry key resume from there.
- * - **The key is never rendered.** The endpoint form keeps the typed key and the
- *   environment-variable name in memory; only the latter is painted, and the
- *   former is painted masked by the component. `resolveEmbeddingWizardApiKey`
- *   and the finish path never put a key into a user-facing string.
+ * - **Cancel writes nothing.** Answers stay here until the final step, whose
+ *   `saveSettings` + `saveApiKey` + build start is the only write path.
+ * - **A failed step keeps its answers.** A thrown download, refused URL, timed
+ *   out calibration or failed settings write lands as state on that step.
+ * - **The key is never rendered.** Only the env-var name is painted; the typed
+ *   key is masked by the component and never enters a user-facing string.
  *
- * The transitions are pure: `applyEmbeddingWizardEvent(state, event)` is the
- * reducer, and the async runners that call the injected dependencies live in
- * `./embedding-wizard-actions`, feeding their outcomes back through this same
- * reducer. Both halves are tested without React
- * (`embedding-wizard-state.test.ts`); `EmbeddingWizard.tsx` only draws the state
- * and dispatches events.
- *
- * The injected dependency contract (`EmbeddingWizardDeps`) is declared here
- * beside the state it serves: `downloadModel` (C4), `isModelInstalled` (C4's
- * cache check), `isRuntimeInstalled`/`downloadRuntime` (C2), `probeEndpoint`
- * (C6), `calibrate` (C5), `startBuild` (A4's host), `saveSettings` (D3's single
- * writer) and `saveApiKey` (D3's secret store). Nothing here reads the network,
- * the model cache or the settings file by itself.
+ * Transitions are pure; the async runners live in `embedding-wizard-actions`
+ * and feed outcomes back through `applyEmbeddingWizardEvent`. The injected
+ * dependency contract (`EmbeddingWizardDeps`) is declared here beside the state
+ * it serves; nothing here reads the network, the model cache or settings.
  */
 
 import {
@@ -161,6 +145,8 @@ export interface EmbeddingWizardState {
   backend: EmbeddingBackendKind | null;
   /** The GPU role step 2 asks for, written to the settings patch. */
   gpu: EmbeddingGpuRole;
+  /** Storage precision step 2 asks for, written to the settings patch. */
+  precision: EmbeddingQuantization;
   builtin: {
     modelId: string;
     installCheck: EmbeddingWizardInstallCheckState;
@@ -180,6 +166,7 @@ export interface EmbeddingWizardState {
 export type EmbeddingWizardEvent =
   | { type: "choose-backend"; backend: EmbeddingBackendKind | "later" }
   | { type: "choose-gpu"; role: EmbeddingGpuRole }
+  | { type: "choose-precision"; precision: EmbeddingQuantization }
   | { type: "choose-model"; modelId: string }
   | { type: "install-check-started" }
   | {
@@ -386,7 +373,8 @@ export function createEmbeddingWizardState(
   return {
     step: "backend",
     backend: settings.backend,
-    gpu: settings.gpu,
+    gpu: settings.gpu === "index-only" ? "auto" : settings.gpu,
+    precision: settings.quantization,
     builtin: {
       modelId,
       installCheck: initialInstallCheck(),
@@ -448,14 +436,16 @@ export function embeddingWizardBackStep(
       return null;
     case "gpu-role":
       return "backend";
-    case "builtin-model":
+    case "precision":
       return "gpu-role";
+    case "builtin-model":
+      return "precision";
     case "builtin-check":
       return "builtin-model";
     case "builtin-download":
       return "builtin-model";
     case "endpoint-kind":
-      return "gpu-role";
+      return "precision";
     case "endpoint-url":
       return "endpoint-kind";
     case "endpoint-model":
@@ -564,6 +554,15 @@ export function applyEmbeddingWizardEvent(
       return {
         ...state,
         gpu: event.role,
+        step: "precision",
+        error: null,
+      };
+    }
+    case "choose-precision": {
+      if (state.step !== "precision") return state;
+      return {
+        ...state,
+        precision: event.precision,
         step: state.backend === "endpoint" ? "endpoint-kind" : "builtin-model",
         error: null,
       };

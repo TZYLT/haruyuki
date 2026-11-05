@@ -50,62 +50,79 @@ describe("parsing a /recall invocation", () => {
       kind: "probe",
       query: "how did we bill",
     });
-    expect(parseRecallCommand(["timeout", "0"])).toMatchObject({
+    expect(parseRecallCommand(["config"])).toEqual({ kind: "config" });
+    expect(parseRecallCommand(["config", "timeout"])).toEqual({
+      kind: "config",
+      key: "timeout",
+    });
+    expect(parseRecallCommand(["config", "timeout", "0"])).toMatchObject({
       kind: "set",
       updates: { recallTimeoutMs: 0 },
     });
-    expect(parseRecallCommand(["dedup", "25"])).toMatchObject({
+    expect(parseRecallCommand(["config", "dedup", "25"])).toMatchObject({
       updates: { recallDedupTurns: 25 },
     });
-    expect(parseRecallCommand(["limit", "5"])).toMatchObject({
+    expect(parseRecallCommand(["config", "limit", "5"])).toMatchObject({
       updates: { recallLimit: 5 },
     });
-    expect(parseRecallCommand(["excerpt", "3"])).toMatchObject({
+    expect(parseRecallCommand(["config", "excerpt", "3"])).toMatchObject({
       updates: { recallExcerptLines: 3 },
     });
-    expect(parseRecallCommand(["ratio", "0.5"])).toMatchObject({
+    expect(parseRecallCommand(["config", "ratio", "0.5"])).toMatchObject({
       updates: { recallMinScoreRatio: 0.5 },
     });
-    expect(parseRecallCommand(["diversity", "split"])).toMatchObject({
+    expect(parseRecallCommand(["config", "diversity", "split"])).toMatchObject({
       updates: { recallDiversity: "split" },
     });
-    expect(parseRecallCommand(["display", "full"])).toMatchObject({
+    expect(parseRecallCommand(["config", "display", "full"])).toMatchObject({
       updates: { recallDisplay: "full" },
+    });
+    expect(parseRecallCommand(["config", "weight", "0.5"])).toMatchObject({
+      updates: { recallEmbeddingWeight: 0.5 },
+    });
+    expect(parseRecallCommand(["config", "depth", "50"])).toMatchObject({
+      updates: { recallEmbeddingCandidateDepth: 50 },
     });
   });
 
   test("chars takes one or both budgets", () => {
-    expect(parseRecallCommand(["chars", "200"])).toMatchObject({
+    expect(parseRecallCommand(["config", "chars", "200"])).toMatchObject({
       updates: { recallExcerptCharacters: 200 },
     });
-    expect(parseRecallCommand(["chars", "200", "900"])).toMatchObject({
-      updates: {
-        recallExcerptCharacters: 200,
-        recallTotalCharacters: 900,
+    expect(parseRecallCommand(["config", "chars", "200", "900"])).toMatchObject(
+      {
+        updates: {
+          recallExcerptCharacters: 200,
+          recallTotalCharacters: 900,
+        },
       },
-    });
-    expect(parseRecallCommand(["chars", "200", "900", "1"])).toMatchObject({
+    );
+    expect(
+      parseRecallCommand(["config", "chars", "200", "900", "1"]),
+    ).toMatchObject({
       kind: "error",
     });
-    expect(parseRecallCommand(["chars"])).toMatchObject({ kind: "error" });
+    expect(parseRecallCommand(["config", "chars"])).toMatchObject({
+      kind: "config",
+      key: "chars",
+    });
   });
 
   test("refuses a value it cannot use instead of guessing", () => {
     for (const args of [
-      ["timeout"],
-      ["timeout", "soon"],
-      ["timeout", "-1"],
-      ["timeout", "1.5"],
-      ["dedup"],
-      ["limit", "many"],
-      ["excerpt", ""],
-      ["ratio"],
-      ["ratio", "1.5"],
-      ["ratio", "high"],
-      ["diversity"],
-      ["diversity", "every-file"],
-      ["display"],
-      ["display", "quiet"],
+      ["config", "timeout", "soon"],
+      ["config", "timeout", "-1"],
+      ["config", "timeout", "1.5"],
+      ["config", "limit", "many"],
+      ["config", "excerpt", ""],
+      ["config", "ratio", "1.5"],
+      ["config", "ratio", "high"],
+      ["config", "diversity", "every-file"],
+      ["config", "display", "quiet"],
+      ["config", "weight", "2"],
+      ["config", "depth", "many"],
+      ["config", "nonsense"],
+      ["config", "nonsense", "1"],
       ["now"],
       ["nonsense"],
       ["status", "extra"],
@@ -153,13 +170,35 @@ describe("the /recall handlers", () => {
   });
 
   test("writes a setting and reports the effective parameters", async () => {
-    const output = await handleRecallCommand(["limit", "250"]);
+    const output = await handleRecallCommand(["config", "limit", "250"]);
     expect(output).toContain("Updated limit.");
     expect(output).toContain("limit 250");
     expect(readRecallSettings().limit).toBe(250);
     expect(output).toBe(
       `Updated limit.\n  ${formatRecallSettingsLine(readRecallSettings())}`,
     );
+  });
+
+  test("the bare config command lists every key with its value", async () => {
+    const output = await handleRecallCommand(["config"]);
+    expect(output).toContain("Recall config");
+    for (const key of [
+      "timeout",
+      "dedup",
+      "limit",
+      "excerpt",
+      "chars",
+      "ratio",
+      "diversity",
+      "display",
+      "weight",
+      "depth",
+    ]) {
+      expect(output).toContain(key);
+    }
+    const one = await handleRecallCommand(["config", "weight"]);
+    expect(one).toContain("weight:");
+    expect(one).toContain("vector recall");
   });
 
   test("off stops the search, and on also clears the breaker", async () => {
@@ -186,7 +225,7 @@ describe("the /recall handlers", () => {
   });
 
   test("a bad argument comes back with the usage", async () => {
-    const output = await handleRecallCommand(["display", "loud"]);
+    const output = await handleRecallCommand(["config", "display", "loud"]);
     expect(output).toContain("silent, summary, full");
     expect(output.endsWith(RECALL_COMMAND_USAGE)).toBe(true);
   });

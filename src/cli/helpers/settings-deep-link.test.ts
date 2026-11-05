@@ -122,26 +122,32 @@ describe("the set command table", () => {
   test("every editing row the schema owns has a fallback", () => {
     const items: ReadonlyArray<readonly [string, string]> = [
       ["recallEmbeddingEnabled", "/recall embedding on|off"],
-      ["recallEmbeddingBackend", "/recall embedding setup"],
-      ["recallEmbeddingModel", "/recall embedding setup"],
-      ["recallEmbeddingEndpoint", "/recall embedding setup"],
-      ["recallEmbeddingApiKey", "/recall embedding setup"],
-      ["recallEmbeddingWeight", "/recall embedding weight <0..1>"],
-      ["recallEmbeddingCandidateDepth", "/recall embedding depth <n>"],
-      ["recallEmbeddingChunkTarget", "/recall embedding chunk <tokens>"],
-      ["recallEmbeddingChunkMax", "/recall embedding chunk-max <tokens>"],
+      ["recallEmbeddingBackend", "/recall embedding connect"],
+      ["recallEmbeddingModel", "/recall embedding connect"],
+      ["recallEmbeddingEndpoint", "/recall embedding connect"],
+      ["recallEmbeddingApiKey", "/recall embedding connect"],
+      ["recallEmbeddingWeight", "/recall config weight <0..1>"],
+      ["recallEmbeddingCandidateDepth", "/recall config depth <n>"],
+      [
+        "recallEmbeddingChunkTarget",
+        "/recall embedding config chunk-target <tokens>",
+      ],
+      [
+        "recallEmbeddingChunkMax",
+        "/recall embedding config chunk-max <tokens>",
+      ],
       [
         "recallEmbeddingChunkOverlap",
-        "/recall embedding chunk-overlap <tokens>",
+        "/recall embedding config chunk-overlap <tokens>",
       ],
       [
         "recallEmbeddingMaxChunksPerMessage",
-        "/recall embedding max-chunks <n>",
+        "/recall embedding config max-chunks <n>",
       ],
-      ["recallEmbeddingThreads", "/recall embedding threads <n>"],
-      ["recallEmbeddingGpu", "/recall embedding gpu auto|off|index-only"],
-      ["recallEmbeddingQuantization", "/recall embedding quant float32|int8"],
-      ["recallEmbeddingKeepSpaces", "/recall embedding spaces <n>"],
+      ["recallEmbeddingThreads", "/recall embedding config threads <n>"],
+      ["recallEmbeddingGpu", "/recall embedding config gpu auto|off"],
+      ["recallEmbeddingQuantization", "/recall embedding connect"],
+      ["recallEmbeddingKeepSpaces", "/recall embedding model"],
     ];
     for (const [item, expected] of items) {
       expect(embeddingSetCommand(item, "legacy")).toBe(expected);

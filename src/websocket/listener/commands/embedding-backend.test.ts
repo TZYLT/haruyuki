@@ -106,6 +106,7 @@ const BUILD_SNAPSHOT: EmbeddingBuildStateSnapshot = {
   rate: { chunksPerSecond: 2, windowMs: 1_000, sampleCount: 2 },
   eta: { remainingChunks: 75, remainingMs: 3_000 },
   failures: [],
+  device: null,
 };
 
 interface BackendHarness {
@@ -447,7 +448,7 @@ describe("production backend", () => {
     const h = backendHarness({
       runtime: { readStatus: async () => runtimeStatus({ space: null }) },
       buildReceipt:
-        "Built-in embedding is not ready: missing model. Run /recall embedding setup first.",
+        "Built-in embedding is not ready: missing model. Run /recall embedding connect first.",
     });
     expect(await h.buildBackend().enable(AGENT)).toEqual({
       ok: true,
@@ -457,7 +458,7 @@ describe("production backend", () => {
         // The launcher's first line explains why nothing started; without it
         // the client cannot tell "already built" from "cannot build yet".
         reason:
-          "Built-in embedding is not ready: missing model. Run /recall embedding setup first.",
+          "Built-in embedding is not ready: missing model. Run /recall embedding connect first.",
       },
     });
     expect(h.settings().enabled).toBe(true);

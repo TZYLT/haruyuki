@@ -20,7 +20,6 @@
  * Layer: `cli/helpers/`. Imports `backend/local/` (allowed for the CLI); no UI.
  */
 
-import { spawn } from "node:child_process";
 import { join } from "node:path";
 
 import type { EmbeddingCalibrationBudget } from "@/backend/local/embedding/calibration";
@@ -30,15 +29,21 @@ import {
 } from "@/backend/local/embedding/model-download-install";
 import type { EmbeddingEmbedCallback } from "@/backend/local/embedding-build";
 import type {
+  EmbeddingBuildDeviceSnapshot,
   EmbeddingBuildIdentity,
   EmbeddingBuildStateSnapshot,
 } from "@/backend/local/embedding-build-state";
-import { getRecallVectorsRoot } from "@/backend/local/embedding-format";
+import {
+  type EmbeddingIndexQuant,
+  getRecallVectorsRoot,
+} from "@/backend/local/embedding-format";
 import {
   type EmbeddingBuildLockEnvironment,
   type EmbeddingBuildLockInspection,
   inspectEmbeddingBuildLock,
 } from "@/backend/local/embedding-lock";
+import type { EmbeddingProfile } from "@/backend/local/embedding-profile";
+import { writeEmbeddingProfileBestEffort } from "@/backend/local/embedding-profile";
 import {
   type EmbeddingRunError,
   type EmbeddingRunnerOptions,
@@ -53,6 +58,12 @@ import type {
 } from "@/types/embedding-protocol";
 import { debugWarn } from "@/utils/debug";
 import { getErrorMessage } from "@/utils/error";
+import {
+  type EmbeddingDetachedChild,
+  type EmbeddingDetachedCommand,
+  type EmbeddingDetachedSpawner,
+  spawnDetachedBuildChild,
+} from "./embedding-detached-child";
 
 /** How long a host waits for the runner to reach its next checkpoint on exit. */
 export const EMBEDDING_BUILD_HOST_EXIT_WAIT_MS = 200;
@@ -118,7 +129,7 @@ function modelMissingError(modelId: string): EmbeddingBuildHostError {
   return hostError(
     "model_missing",
     `Embedding model ${modelId} is not installed; the build will not download it automatically.`,
-    `Run "/recall embedding setup" (or "haruyuki recall embedding setup") to download it${
+    `Run "/recall embedding connect" (or "haruyuki recall embedding setup") to download it${
       modelDir === null ? "" : ` into ${modelDir}`
     }, then start the build again. A manual import works too.`,
   );
@@ -192,52 +203,6 @@ async function resolveCalibration(
   }
 }
 
-export interface EmbeddingDetachedChild {
-  readonly pid?: number;
-  unref(): void;
-  /** Used by {@link cancelEmbeddingBuild} while this host still owns the child. */
-  kill?(signal?: "SIGTERM" | "SIGKILL"): boolean;
-}
-
-/** Literal so a test can assert the Windows-relevant three without a real child. */
-export interface EmbeddingDetachedSpawnOptions {
-  detached: true;
-  windowsHide: true;
-  stdio: "ignore";
-  env: NodeJS.ProcessEnv;
-  cwd?: string;
-}
-
-/** Test seam: capture the call and return a fake child instead of spawning. */
-export type EmbeddingDetachedSpawner = (
-  command: string,
-  args: readonly string[],
-  options: EmbeddingDetachedSpawnOptions,
-) => EmbeddingDetachedChild;
-
-export interface EmbeddingDetachedCommand {
-  command: string;
-  args?: readonly string[];
-  cwd?: string;
-  /** Extra child environment, merged over this process's environment. */
-  env?: Record<string, string | undefined>;
-}
-
-function spawnDetachedBuildChild(
-  command: string,
-  args: readonly string[],
-  options: EmbeddingDetachedSpawnOptions,
-): EmbeddingDetachedChild {
-  const child = spawn(command, [...args], options);
-  child.once("error", (error) => {
-    debugWarn(
-      "embedding",
-      `detached build "${command}" could not start: ${getErrorMessage(error)}`,
-    );
-  });
-  return child;
-}
-
 // ── Embed adapters (C3 / C6 → A3) ───────────────────────────────────────────
 
 export interface EmbeddingBuiltinEmbedSource {
@@ -245,13 +210,6 @@ export interface EmbeddingBuiltinEmbedSource {
     texts: readonly string[],
     options?: { batchSize?: number; signal?: AbortSignal },
   ): Promise<{ vectors: readonly (Float32Array | null)[]; cancelled: boolean }>;
-}
-
-export interface EmbeddingEndpointEmbedSource {
-  embed(
-    texts: readonly string[],
-    options?: { signal?: AbortSignal },
-  ): Promise<readonly Float32Array[]>;
 }
 
 function assertVectors(
@@ -296,25 +254,6 @@ export function createBuiltinEmbedAdapter(
   };
 }
 
-/** A3's `embed` for the endpoint backend: one batch of chunks → C6's client. */
-export function createEndpointEmbedAdapter(
-  source: EmbeddingEndpointEmbedSource,
-  options: { signal?: AbortSignal } = {},
-): EmbeddingEmbedCallback {
-  return async (chunks) => {
-    const vectors = await source.embed(
-      chunks.map((chunk) => chunk.text),
-      options,
-    );
-    return assertVectors(
-      vectors,
-      chunks.length,
-      false,
-      "The embedding endpoint",
-    );
-  };
-}
-
 // ── Host options ────────────────────────────────────────────────────────────
 
 /** Units handed over materialised, or produced lazily right before the run. */
@@ -344,6 +283,8 @@ export interface EmbeddingBuildHostOptions {
   units?: EmbeddingBuildUnitsSource;
   mode?: EmbeddingBuildMode;
   dimensions?: number;
+  /** Storage precision of the target space; defaults to `f32`. */
+  quant?: EmbeddingIndexQuant;
   /** Recall-vectors root; defaults to B2's call-time resolver. */
   root?: string;
   /** Space directory; defaults to `<root>/<agentId>/<spaceId>`. */
@@ -368,6 +309,10 @@ export interface EmbeddingBuildHostOptions {
   runBuild?: (options: EmbeddingRunnerOptions) => Promise<EmbeddingRunResult>;
   /** Spawn seam for the detached child. Defaults to the real `spawn`. */
   spawnDetached?: EmbeddingDetachedSpawner;
+  /** Device facts of this run, forwarded to A2's checkpoint (48-4 D-02). */
+  device?: EmbeddingBuildDeviceSnapshot;
+  /** Space profile written once the lock is held (48-4 D-10). */
+  profile?: EmbeddingProfile;
 }
 
 // ── Host state and results ──────────────────────────────────────────────────
@@ -576,7 +521,7 @@ export async function startEmbeddingBuild(
     return refuse(
       "not_configured",
       "The build needs a non-empty embedding model id.",
-      "Pick a model in /recall embedding setup first.",
+      "Pick a model in /recall embedding connect first.",
     );
   }
 
@@ -627,7 +572,7 @@ export async function startEmbeddingBuild(
       return refuse(
         "not_configured",
         `The embedding model install could not be verified: ${getErrorMessage(error)}`,
-        "Run /recall embedding setup to check or reinstall the model.",
+        "Run /recall embedding connect to check or reinstall the model.",
       );
     }
     if (!installed) {
@@ -731,7 +676,17 @@ function startDetachedChild(
   }
   child.unref();
 
+  // `spawn` reports ENOENT/EACCES as an async `error` event, not a throw, and
+  // leaves `pid` undefined. Reporting "detached" there would tell the user a
+  // build is running when nothing started.
   const detachedPid = child.pid ?? null;
+  if (detachedPid === null) {
+    return refuse(
+      "worker_failed",
+      `The detached build process "${command.command}" did not start (no pid was assigned).`,
+      "Check that the command exists, or run the build in-process instead.",
+    );
+  }
   const generation = hostGeneration + 1;
   hostGeneration = generation;
   const run = createRun(generation, child, timers);
@@ -817,13 +772,20 @@ async function executeInProcess(
     ...(options.dimensions === undefined
       ? {}
       : { dimensions: options.dimensions }),
+    ...(options.quant === undefined ? {} : { quant: options.quant }),
     ...(calibration.status === "used" ? { budget: calibration.budget } : {}),
     ...(options.lockEnvironment === undefined
       ? {}
       : { lockEnvironment: options.lockEnvironment }),
+    ...(options.device === undefined ? {} : { device: options.device }),
   };
 
   let result: EmbeddingRunResult;
+  // The profile describes the space; writing it before the run makes the space
+  // selectable even if the runner refuses (a lock held by a stale process).
+  if (options.profile !== undefined) {
+    await writeEmbeddingProfileBestEffort(spaceDir, options.profile);
+  }
   try {
     result = await (options.runBuild ?? runEmbeddingBuild)(runnerOptions);
   } catch (error) {

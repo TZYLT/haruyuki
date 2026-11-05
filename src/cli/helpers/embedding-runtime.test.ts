@@ -250,6 +250,7 @@ function progressSnapshot(
     rate: { chunksPerSecond: 1, windowMs: 2_000, sampleCount: 2 },
     eta: { remainingChunks: 2, remainingMs: 2_000 },
     failures: [],
+    device: null,
     ...overrides,
   };
 }
@@ -306,7 +307,7 @@ describe("buildEmbeddingFromSettings", () => {
         },
       },
     );
-    expect(receipt).toContain("/recall embedding setup");
+    expect(receipt).toContain("/recall embedding connect");
     expect(receipt).toContain("missing model");
     expect(receipt).not.toContain("start must not be called");
   });
@@ -332,7 +333,7 @@ describe("buildEmbeddingFromSettings", () => {
       },
     );
     expect(receipt).toContain("missing runtime");
-    expect(receipt).toContain("/recall embedding setup");
+    expect(receipt).toContain("/recall embedding connect");
   });
 
   test("refuses a non-local backend with the local-only copy", async () => {
@@ -424,6 +425,47 @@ describe("buildEmbeddingFromSettings", () => {
 
     // Headless awaits the outcome, then releases the worker.
     expect(capture.disposed).toBe(1);
+  });
+
+  test("initialises the build worker with the manifest's pooling", async () => {
+    const root = makeRoot();
+    const capture = newCapture();
+    const manifest = getBuiltinModelManifest("bge-m3");
+    const assets: EmbeddingBuiltinAssets = {
+      ...builtinAssets(root),
+      modelId: manifest.id,
+      manifest,
+    };
+    const deps: EmbeddingRuntimeDeps = {
+      ...runtimeDeps({
+        root,
+        storageDir: join(root, "local-backend"),
+        capture,
+      }),
+      readSettings: () => settings({ model: manifest.id }),
+      checkAssets: async () => ({
+        installed: true,
+        modelInstalled: true,
+        runtimeInstalled: true,
+        assets,
+        missing: [],
+      }),
+    };
+
+    await buildEmbeddingFromSettings(
+      {
+        agentId: AGENT_ID,
+        mode: "full",
+        keepAfterExit: false,
+        lifecycle: "headless",
+      },
+      deps,
+    );
+
+    expect(capture.adapters[0]?.init).toMatchObject({
+      modelPath: assets.modelPath,
+      pooling: "cls",
+    });
   });
 
   test("headless reports the terminal counts", async () => {

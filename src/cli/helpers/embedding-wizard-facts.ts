@@ -19,6 +19,7 @@ import { getErrorMessage } from "@/utils/error";
 export type EmbeddingWizardStep =
   | "backend"
   | "gpu-role"
+  | "precision"
   | "builtin-model"
   | "builtin-check"
   | "builtin-download"
@@ -35,7 +36,7 @@ export type EmbeddingWizardStep =
 export const EMBEDDING_WIZARD_STEP_COUNT = 4;
 
 /** The command whose overlay frame names the wizard; the TUI seam reuses it. */
-export const EMBEDDING_WIZARD_COMMAND = "/recall embedding setup";
+export const EMBEDDING_WIZARD_COMMAND = "/recall embedding connect";
 
 /** Every screen with the slot it is numbered by (labels differ per sub-step). */
 export const EMBEDDING_WIZARD_STEPS: readonly {
@@ -45,6 +46,7 @@ export const EMBEDDING_WIZARD_STEPS: readonly {
 }[] = [
   { id: "backend", slot: 1, label: "Backend" },
   { id: "gpu-role", slot: 2, label: "GPU" },
+  { id: "precision", slot: 2, label: "Precision" },
   { id: "builtin-model", slot: 2, label: "Built-in model" },
   { id: "builtin-check", slot: 2, label: "Model check" },
   { id: "builtin-download", slot: 2, label: "Download" },
@@ -151,23 +153,38 @@ export interface EmbeddingWizardGpuRoleOption {
   readonly disabled: boolean;
 }
 
-/**
- * `index-only` is the one role with a platform gate: the ONNX runtime can build
- * an index on a GPU only where the worker has a DirectML/CUDA execution
- * provider, which this build wires on Windows; elsewhere queries *and* the
- * index build are CPU-only and the row says so.
- */
-export function embeddingWizardAllowsIndexOnlyGpu(
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  return platform === "win32";
+/** One row of the precision picker (48-4 D-14). */
+export interface EmbeddingWizardPrecisionOption {
+  readonly id: "float32" | "int8";
+  readonly label: string;
+  readonly description: string;
 }
 
-/** The three roles, with `index-only` disabled where the platform forbids it. */
+/** Storage precision choices; int8 is the same space only after a build. */
+export function embeddingWizardPrecisionOptions(): EmbeddingWizardPrecisionOption[] {
+  return [
+    {
+      id: "float32",
+      label: "float32",
+      description: "full precision; about 4 bytes per dimension",
+    },
+    {
+      id: "int8",
+      label: "int8",
+      description:
+        "a quarter of the size with negligible recall loss; a different space, so it builds once",
+    },
+  ];
+}
+
+/**
+ * The two roles the UI offers (48-4 D-01). `index-only` was the same behaviour
+ * as `auto` in every code path, so it is no longer a choice; an old stored
+ * value is read as `auto` by the settings resolver.
+ */
 export function embeddingWizardGpuRoleOptions(
-  platform: NodeJS.Platform = process.platform,
+  _platform: NodeJS.Platform = process.platform,
 ): EmbeddingWizardGpuRoleOption[] {
-  const indexOnlyAllowed = embeddingWizardAllowsIndexOnlyGpu(platform);
   return [
     {
       role: "auto",
@@ -183,23 +200,12 @@ export function embeddingWizardGpuRoleOptions(
         "Never use a GPU; the index build and every query run on the CPU",
       disabled: false,
     },
-    {
-      role: "index-only",
-      label: "Index build only",
-      description: indexOnlyAllowed
-        ? "Build the index on the GPU; every query always stays on the CPU"
-        : "CPU only (this platform cannot build the index on a GPU)",
-      disabled: !indexOnlyAllowed,
-    },
   ];
 }
 
 /** One-line summary of a GPU role, used by the step-4 recap. */
 export function embeddingWizardGpuRoleLabel(role: EmbeddingGpuRole): string {
   if (role === "off") return "off (CPU only)";
-  if (role === "index-only") {
-    return "index-only (the index build may use a GPU; queries stay on the CPU)";
-  }
   return "auto (probed during calibration; CPU fallback)";
 }
 

@@ -173,102 +173,49 @@ export const TOPIC_COMMAND_SPECS = [
 // ── /recall ─────────────────────────────────────────────────────────
 
 /**
- * `/recall embedding`'s words (48-1 §7.1, 48-2 §4.9 D4).
+ * `/recall embedding`'s words (48-4 D-07…D-13).
  *
- * The seven entrances are the requirement's command face; the ten tuning rows
- * are the setters D3's settings deep links fall back to
- * (`/recall embedding <knob> <value>`), so a fallback command printed by the
- * settings page is offered by completion too.
+ * Eight entrances, one `config` table instead of one command per knob, and one
+ * `connect` instead of a backend/endpoint/model/quant set of commands.
  */
 export const EMBEDDING_COMMAND_SPECS = [
-  { name: "on", desc: "Enable vector recall; first run opens setup" },
+  { name: "on", desc: "Enable vector recall; unconfigured opens connect" },
   { name: "off", desc: "Disable vector recall; stored vectors stay on disk" },
   {
     name: "status",
-    desc: "Backend, space, coverage, calibration and build state",
+    desc: "Backend, space, coverage, device, calibration and build state",
+  },
+  {
+    name: "connect",
+    desc: "Connect a vector source (model, endpoint, precision, build)",
+  },
+  {
+    name: "model",
+    args: "[--select|--delete|--pin|--unpin <n>] [--confirm] [--json]",
+    desc: "Choose, delete or pin a stored model",
+    textArg: true,
   },
   {
     name: "build",
-    args: "[--full] [--keep-after-exit]",
-    desc: "Build or refresh the vector index",
+    args: "[--full] [--keep-after-exit] [--cancel]",
+    desc: "Build or refresh the vector index; --cancel stops it",
     textArg: true,
   },
   {
-    name: "cancel",
-    desc: "Stop a running build; finished chunks stay",
-  },
-  {
-    name: "reset",
-    args: "[--all|--model <id>] [--confirm]",
-    desc: "Delete stored vector spaces (previews, then --confirm)",
-    textArg: true,
-  },
-  { name: "setup", desc: "Re-run first-run setup with the current values" },
-  {
-    name: "weight",
-    args: "<0..1>",
-    desc: "Vector-arm weight (0 = lexical only)",
+    name: "config",
+    args: "[<key> [value]]",
+    desc: "Build keys: chunk-target, chunk-max, chunk-overlap, max-chunks, threads, gpu",
     textArg: true,
   },
   {
-    name: "depth",
-    args: "<n>",
-    desc: "Candidates per arm",
-    textArg: true,
-  },
-  {
-    name: "chunk",
-    args: "<tokens>",
-    desc: "Target chunk window",
-    textArg: true,
-  },
-  {
-    name: "chunk-max",
-    args: "<tokens>",
-    desc: "Hard chunk ceiling",
-    textArg: true,
-  },
-  {
-    name: "chunk-overlap",
-    args: "<tokens>",
-    desc: "Chunk overlap",
-    textArg: true,
-  },
-  {
-    name: "max-chunks",
-    args: "<n>",
-    desc: "Chunks embedded per message cap",
-    textArg: true,
-  },
-  {
-    name: "threads",
-    args: "<n>",
-    desc: "Encode/build threads (0 = automatic)",
-    textArg: true,
-  },
-  {
-    name: "gpu",
-    args: "auto|off|index-only",
-    desc: "GPU role",
-    options: ["auto", "off", "index-only"],
-  },
-  {
-    name: "quant",
-    args: "float32|int8",
-    desc: "Vector precision",
-    options: ["float32", "int8"],
-  },
-  {
-    name: "spaces",
-    args: "<n>",
-    desc: "Model spaces kept on disk",
-    textArg: true,
+    name: "device",
+    args: "[--test]",
+    desc: "Show the build device, or measure it read-only",
   },
 ] as const satisfies readonly SubcommandSpec[];
 
 /**
- * `/recall`'s full table (O-04: complete the whole command, not just the new
- * part). The thirteen feature-② words come from `parseRecallCommand`; the
+ * `/recall`'s full table (O-04). The lexical knobs live under `config`; the
  * embedding branch owns everything below its row.
  */
 export const RECALL_COMMAND_SPECS = [
@@ -283,57 +230,15 @@ export const RECALL_COMMAND_SPECS = [
     textArg: true,
   },
   {
-    name: "timeout",
-    args: "<ms>",
-    desc: "Wall-clock budget (0 = no limit)",
+    name: "config",
+    args: "[<key> [value]]",
+    desc: "Tuning: timeout, dedup, limit, excerpt, chars, ratio, diversity, display, weight, depth",
     textArg: true,
-  },
-  {
-    name: "dedup",
-    args: "<turns>",
-    desc: "How long a passage stays suppressed",
-    textArg: true,
-  },
-  {
-    name: "limit",
-    args: "<n>",
-    desc: "Passages injected per turn",
-    textArg: true,
-  },
-  {
-    name: "excerpt",
-    args: "<lines>",
-    desc: "Memory context around a hit",
-    textArg: true,
-  },
-  {
-    name: "chars",
-    args: "<per> [total]",
-    desc: "Per-passage and total character budget",
-    textArg: true,
-  },
-  {
-    name: "ratio",
-    args: "<0..1>",
-    desc: "Relative score floor",
-    textArg: true,
-  },
-  {
-    name: "diversity",
-    args: "none|file|split",
-    desc: "How the slots are shared out",
-    options: ["none", "file", "split"],
-  },
-  {
-    name: "display",
-    args: "silent|summary|full",
-    desc: "How much of an injected block the transcript shows",
-    options: ["silent", "summary", "full"],
   },
   {
     name: "embedding",
     args: "[command]",
-    desc: "Vector recall: on, off, status, build, cancel, reset, setup, tuning",
+    desc: "Vector recall: status, on, off, connect, model, build, config, device",
     children: EMBEDDING_COMMAND_SPECS,
   },
 ] as const satisfies readonly SubcommandSpec[];

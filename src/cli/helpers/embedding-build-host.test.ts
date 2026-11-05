@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { EmbeddingCalibrationBudget } from "@/backend/local/embedding/calibration";
 import type { EmbeddingEmbedCallback } from "@/backend/local/embedding-build";
+import { createEndpointEmbedAdapter } from "@/backend/local/embedding-build-embed";
 import type {
   EmbeddingBuildIdentity,
   EmbeddingBuildStateSnapshot,
@@ -31,19 +32,20 @@ import type {
 import {
   cancelEmbeddingBuild,
   createBuiltinEmbedAdapter,
-  createEndpointEmbedAdapter,
   EMBEDDING_BUILD_HOST_EXIT_WAIT_MS,
   type EmbeddingBuildHostOptions,
   type EmbeddingBuildHostStartResult,
   type EmbeddingBuildHostTimers,
-  type EmbeddingDetachedChild,
-  type EmbeddingDetachedSpawner,
-  type EmbeddingDetachedSpawnOptions,
   getEmbeddingBuildHostState,
   resetEmbeddingBuildHost,
   shouldKeepAfterExit,
   startEmbeddingBuild,
 } from "@/cli/helpers/embedding-build-host";
+import type {
+  EmbeddingDetachedChild,
+  EmbeddingDetachedSpawner,
+  EmbeddingDetachedSpawnOptions,
+} from "@/cli/helpers/embedding-detached-child";
 import {
   createEmbeddingFixtureDirs,
   type EmbeddingFixtureDirs,
@@ -154,6 +156,7 @@ function snapshot(
     rate: { chunksPerSecond: 2, windowMs: 1_000, sampleCount: 2 },
     eta: { remainingChunks: 2, remainingMs: null },
     failures: [],
+    device: null,
     ...overrides,
   };
 }
@@ -362,7 +365,7 @@ describe("startEmbeddingBuild refusals", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe("model_missing");
-    expect(result.error.action).toContain("/recall embedding setup");
+    expect(result.error.action).toContain("/recall embedding connect");
     expect(runner.calls).toHaveLength(0);
   });
 

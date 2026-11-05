@@ -202,9 +202,9 @@ export function createEmbeddingWizardDefaultDeps(
     downloadModel: async (request) => {
       const result = await fetchEmbeddingModel({
         modelId: request.modelId,
-        // C4's manifest for bge-small carries sha256 for the weights but not
-        // for the three non-LFS JSON files; the confirmation screen discloses
-        // that before this runs, and the install marker records what landed.
+        // bge-small is fully pinned; the experimental bge-m3/Qwen manifests are
+        // not, and the confirmation screen discloses that before this runs. The
+        // install marker records exactly which digests were verified.
         allowUnpinnedIntegrity: true,
         ...(request.signal === undefined ? {} : { signal: request.signal }),
         onProgress: (progress) => {

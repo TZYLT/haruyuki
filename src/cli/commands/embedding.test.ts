@@ -129,74 +129,104 @@ describe("parsing /recall embedding", () => {
     expect(parseEmbeddingCommand(["status"])).toEqual({ kind: "status" });
     expect(parseEmbeddingCommand(["on"])).toEqual({ kind: "on" });
     expect(parseEmbeddingCommand(["off"])).toEqual({ kind: "off" });
-    expect(parseEmbeddingCommand(["setup"])).toEqual({ kind: "setup" });
-    expect(parseEmbeddingCommand(["cancel"])).toEqual({ kind: "cancel" });
+    expect(parseEmbeddingCommand(["connect"])).toEqual({ kind: "connect" });
+    expect(parseEmbeddingCommand(["model"])).toEqual({
+      kind: "model",
+      action: "list",
+      json: false,
+      confirmed: false,
+    });
     expect(parseEmbeddingCommand(["build"])).toEqual({
       kind: "build",
       mode: "incremental",
       keepAfterExit: false,
+      cancel: false,
     });
     expect(parseEmbeddingCommand(["build", "--full"])).toEqual({
       kind: "build",
       mode: "full",
       keepAfterExit: false,
+      cancel: false,
     });
     expect(
       parseEmbeddingCommand(["build", "--keep-after-exit", "--full"]),
-    ).toEqual({ kind: "build", mode: "full", keepAfterExit: true });
+    ).toEqual({
+      kind: "build",
+      mode: "full",
+      keepAfterExit: true,
+      cancel: false,
+    });
+    expect(parseEmbeddingCommand(["build", "--cancel"])).toEqual({
+      kind: "build",
+      mode: "incremental",
+      keepAfterExit: false,
+      cancel: true,
+    });
   });
 
-  test("reset previews by default and understands --all, --model and --confirm", () => {
-    expect(parseEmbeddingCommand(["reset"])).toEqual({
-      kind: "reset",
-      target: { kind: "current" },
+  test("model takes select/delete/pin/unpin plus --confirm and --json", () => {
+    expect(parseEmbeddingCommand(["model", "--select", "2"])).toEqual({
+      kind: "model",
+      action: "select",
+      index: 2,
+      json: false,
       confirmed: false,
     });
-    expect(parseEmbeddingCommand(["reset", "--all", "--confirm"])).toEqual({
-      kind: "reset",
-      target: { kind: "all" },
+    expect(
+      parseEmbeddingCommand(["model", "--delete", "3", "--confirm"]),
+    ).toEqual({
+      kind: "model",
+      action: "delete",
+      index: 3,
+      json: false,
       confirmed: true,
     });
-    expect(
-      parseEmbeddingCommand(["reset", "--model", "bge-m3", "--confirm"]),
-    ).toEqual({
-      kind: "reset",
-      target: { kind: "model", model: "bge-m3" },
-      confirmed: true,
+    expect(parseEmbeddingCommand(["model", "--pin", "1"])).toMatchObject({
+      action: "pin",
+      index: 1,
+    });
+    expect(parseEmbeddingCommand(["model", "--json"])).toMatchObject({
+      action: "list",
+      json: true,
     });
   });
 
-  test("tuning words carry the same keys the settings page stores", () => {
-    expect(parseEmbeddingCommand(["weight", "0.75"])).toMatchObject({
-      kind: "set",
-      updates: { weight: 0.75 },
+  test("config carries the six build keys and gpu accepts auto/off", () => {
+    expect(parseEmbeddingCommand(["config"])).toEqual({ kind: "config" });
+    expect(parseEmbeddingCommand(["config", "threads"])).toEqual({
+      kind: "config",
+      key: "threads",
     });
-    expect(parseEmbeddingCommand(["depth", "80"])).toMatchObject({
-      updates: { candidateDepth: 80 },
-    });
-    expect(parseEmbeddingCommand(["chunk", "200"])).toMatchObject({
-      updates: { chunkTarget: 200 },
-    });
-    expect(parseEmbeddingCommand(["chunk-max", "256"])).toMatchObject({
-      updates: { chunkMax: 256 },
-    });
-    expect(parseEmbeddingCommand(["chunk-overlap", "32"])).toMatchObject({
-      updates: { chunkOverlap: 32 },
-    });
-    expect(parseEmbeddingCommand(["max-chunks", "512"])).toMatchObject({
-      updates: { maxChunksPerMessage: 512 },
-    });
-    expect(parseEmbeddingCommand(["threads", "4"])).toMatchObject({
+    expect(
+      parseEmbeddingCommand(["config", "chunk-target", "200"]),
+    ).toMatchObject({ updates: { chunkTarget: 200 } });
+    expect(parseEmbeddingCommand(["config", "chunk-max", "256"])).toMatchObject(
+      {
+        updates: { chunkMax: 256 },
+      },
+    );
+    expect(
+      parseEmbeddingCommand(["config", "chunk-overlap", "32"]),
+    ).toMatchObject({ updates: { chunkOverlap: 32 } });
+    expect(
+      parseEmbeddingCommand(["config", "max-chunks", "512"]),
+    ).toMatchObject({ updates: { maxChunksPerMessage: 512 } });
+    expect(parseEmbeddingCommand(["config", "threads", "4"])).toMatchObject({
       updates: { threads: 4 },
     });
-    expect(parseEmbeddingCommand(["gpu", "index-only"])).toMatchObject({
-      updates: { gpu: "index-only" },
+    expect(parseEmbeddingCommand(["config", "gpu", "off"])).toMatchObject({
+      updates: { gpu: "off" },
     });
-    expect(parseEmbeddingCommand(["quant", "int8"])).toMatchObject({
-      updates: { quantization: "int8" },
+  });
+
+  test("device takes at most --test", () => {
+    expect(parseEmbeddingCommand(["device"])).toEqual({
+      kind: "device",
+      test: false,
     });
-    expect(parseEmbeddingCommand(["spaces", "3"])).toMatchObject({
-      updates: { keepSpaces: 3 },
+    expect(parseEmbeddingCommand(["device", "--test"])).toEqual({
+      kind: "device",
+      test: true,
     });
   });
 
@@ -206,22 +236,20 @@ describe("parsing /recall embedding", () => {
       ["status", "extra"],
       ["on", "extra"],
       ["off", "extra"],
-      ["setup", "extra"],
-      ["cancel", "extra"],
+      ["connect", "extra"],
       ["build", "--incremental"],
       ["build", "--full", "extra"],
-      ["reset", "--all", "--model", "x"],
-      ["reset", "--model"],
-      ["reset", "--everything"],
-      ["weight"],
-      ["weight", "1.5"],
-      ["depth", "many"],
-      ["depth", "-1"],
-      ["chunk-overlap", "1.5"],
-      ["gpu"],
-      ["gpu", "cuda"],
-      ["quant"],
-      ["quant", "int4"],
+      ["build", "--cancel", "--full"],
+      ["model", "--select"],
+      ["model", "--select", "0"],
+      ["model", "--delete", "2", "--select", "1"],
+      ["model", "--nonsense"],
+      ["config", "nonsense"],
+      ["config", "nonsense", "1"],
+      ["config", "threads", "many"],
+      ["config", "gpu", "index-only"],
+      ["config", "chunk-target", "1.5"],
+      ["device", "--everything"],
       ["help", "extra"],
     ];
     for (const args of refusals) {
@@ -232,25 +260,22 @@ describe("parsing /recall embedding", () => {
     }
   });
 
-  test("the usage text names every entrance and the tuning words", () => {
+  test("the usage text names every entrance and config key", () => {
     for (const word of [
       "status",
       "on",
       "off",
+      "connect",
+      "model",
       "build",
-      "cancel",
-      "reset",
-      "setup",
-      "weight",
-      "depth",
-      "chunk",
+      "config",
+      "device",
+      "chunk-target",
       "chunk-max",
       "chunk-overlap",
       "max-chunks",
       "threads",
       "gpu",
-      "quant",
-      "spaces",
     ]) {
       expect(EMBEDDING_COMMAND_USAGE).toContain(word);
     }
@@ -269,7 +294,7 @@ describe("the /recall embedding handler", () => {
     expect(h.writes).toHaveLength(0);
   });
 
-  test("first enable with a wizard drops into setup instead of writing", async () => {
+  test("first enable with a wizard drops into connect instead of writing", async () => {
     const opened: string[] = [];
     const h = harness({
       readRawSettings: () => ({}),
@@ -279,8 +304,8 @@ describe("the /recall embedding handler", () => {
       },
     });
     const output = await handleEmbeddingCommand(["on"], SCOPE, h.deps);
-    expect(output).toContain("Opening the embedding setup wizard");
-    expect(opened).toEqual(["/recall embedding setup"]);
+    expect(output).toContain("Opening the embedding connect wizard");
+    expect(opened).toEqual(["/recall embedding connect"]);
     expect(h.writes).toHaveLength(0);
   });
 
@@ -293,7 +318,7 @@ describe("the /recall embedding handler", () => {
 
     const off = await handleEmbeddingCommand(["off"], SCOPE, h.deps);
     expect(off).toContain("Vector recall is off.");
-    expect(off).toContain("/recall embedding reset");
+    expect(off).toContain("/recall embedding model");
     expect(h.settings().enabled).toBe(false);
   });
 
@@ -450,89 +475,77 @@ describe("the /recall embedding handler", () => {
     expect(output).toContain("vector recall is off");
   });
 
-  test("cancel and reset both require a runtime and an agent", async () => {
+  test("build --cancel requires a runtime and an agent", async () => {
     const h = harness({ runtime: fakeRuntime() });
-    expect(await handleEmbeddingCommand(["cancel"], SCOPE, h.deps)).toContain(
-      "Build cancelled.",
-    );
+    expect(
+      await handleEmbeddingCommand(["build", "--cancel"], SCOPE, h.deps),
+    ).toContain("Build cancelled.");
 
     const noRuntime = harness();
     expect(
-      await handleEmbeddingCommand(["cancel"], SCOPE, noRuntime.deps),
+      await handleEmbeddingCommand(
+        ["build", "--cancel"],
+        SCOPE,
+        noRuntime.deps,
+      ),
     ).toContain("nothing to cancel");
     expect(
-      await handleEmbeddingCommand(["cancel"], undefined, noRuntime.deps),
+      await handleEmbeddingCommand(
+        ["build", "--cancel"],
+        undefined,
+        noRuntime.deps,
+      ),
     ).toContain("needs an active agent");
   });
 
-  test("reset previews, then deletes only with --confirm", async () => {
-    const targets: string[] = [];
-    const h = harness({
-      runtime: fakeRuntime({
-        reset: async (_scope, target) => {
-          targets.push(JSON.stringify(target));
-          return "Deleted the space.";
-        },
-      }),
-    });
-
-    const preview = await handleEmbeddingCommand(
-      ["reset", "--all"],
-      SCOPE,
-      h.deps,
-    );
-    expect(preview).toContain("Nothing was deleted");
-    expect(preview).toContain("/recall embedding reset --all --confirm");
-    expect(targets).toEqual([]);
-
-    const confirmed = await handleEmbeddingCommand(
-      ["reset", "--model", "bge-m3", "--confirm"],
-      SCOPE,
-      h.deps,
-    );
-    expect(confirmed).toContain("Deleted the space.");
-    expect(targets).toEqual([
-      JSON.stringify({ kind: "model", model: "bge-m3" }),
-    ]);
+  test("config prints the six build keys and one key on request", async () => {
+    const h = harness();
+    const table = await handleEmbeddingCommand(["config"], SCOPE, h.deps);
+    expect(table).toContain("Embedding config");
+    for (const key of [
+      "chunk-target",
+      "chunk-max",
+      "chunk-overlap",
+      "max-chunks",
+      "threads",
+      "gpu",
+    ]) {
+      expect(table).toContain(key);
+    }
+    const one = await handleEmbeddingCommand(["config", "gpu"], SCOPE, h.deps);
+    expect(one).toContain("gpu:");
   });
 
-  test("reset refuses without a runtime instead of claiming success", async () => {
+  test("a config write asks for a rebuild when the space moves", async () => {
     const h = harness();
-    const output = await handleEmbeddingCommand(
-      ["reset", "--confirm"],
+    const threads = await handleEmbeddingCommand(
+      ["config", "threads", "4"],
       SCOPE,
       h.deps,
     );
-    expect(output).toContain("Nothing was deleted");
-    expect(h.writes).toHaveLength(0);
-  });
+    expect(threads).toContain("Updated threads.");
+    expect(h.writes).toEqual([{ threads: 4 }]);
+    expect(threads).not.toContain("changes the vector space");
 
-  test("a tuning row writes once and asks for a rebuild when the space moves", async () => {
-    const h = harness();
-    const weight = await handleEmbeddingCommand(
-      ["weight", "0.7"],
+    const chunk = await handleEmbeddingCommand(
+      ["config", "chunk-target", "100"],
       SCOPE,
       h.deps,
     );
-    expect(weight).toContain("Updated vector weight.");
-    expect(h.writes).toEqual([{ weight: 0.7 }]);
-    expect(weight).not.toContain("rebuild");
-
-    const chunk = await handleEmbeddingCommand(["chunk", "100"], SCOPE, h.deps);
     expect(chunk).toContain("changes the vector space");
     expect(chunk).toContain("build --full");
   });
 
-  test("setup opens the wizard, or prints the commands when there is none", async () => {
+  test("connect opens the wizard, or prints the commands when there is none", async () => {
     const h = harness({ openSetup: () => true });
-    expect(await handleEmbeddingCommand(["setup"], SCOPE, h.deps)).toContain(
-      "Opening the embedding setup wizard",
+    expect(await handleEmbeddingCommand(["connect"], SCOPE, h.deps)).toContain(
+      "Opening the embedding connect wizard",
     );
 
     const headless = harness();
-    expect(await handleEmbeddingCommand(["setup"], SCOPE, headless.deps)).toBe(
-      formatEmbeddingFirstRunHint(),
-    );
+    expect(
+      await handleEmbeddingCommand(["connect"], SCOPE, headless.deps),
+    ).toBe(formatEmbeddingFirstRunHint());
   });
 
   test("a bad argument comes back with the usage", async () => {
@@ -581,25 +594,31 @@ describe("the command writes through the D3 settings writer", () => {
   });
 
   test("a diagnostic value is persisted and read back by the resolver", async () => {
-    const output = await handleEmbeddingCommand(["weight", "0.7"]);
-    expect(output).toContain("Updated vector weight.");
-    expect(readEmbeddingSettings().weight).toBe(0.7);
+    const output = await handleEmbeddingCommand(["config", "threads", "3"]);
+    expect(output).toContain("Updated threads.");
+    expect(readEmbeddingSettings().threads).toBe(3);
   });
 
   test("the writer's refusal is surfaced verbatim and writes nothing", async () => {
     // The value parses (a whole number) but is outside the writer's range, so
     // the refusal has to come from D3 rather than a second range copy here.
-    const output = await handleEmbeddingCommand(["depth", "0"]);
-    expect(output).toBe(
-      "Not saved: candidate depth must be between 1 and 1000",
-    );
-    expect(readEmbeddingSettings().candidateDepth).toBe(
-      EMBEDDING_SETTING_DEFAULTS.candidateDepth,
+    const output = await handleEmbeddingCommand([
+      "config",
+      "chunk-target",
+      "0",
+    ]);
+    expect(output).toBe("Not saved: chunk target must be between 1 and 4096");
+    expect(readEmbeddingSettings().chunkTarget).toBe(
+      EMBEDDING_SETTING_DEFAULTS.chunkTarget,
     );
   });
 
   test("cross-field validation comes from the one writer, not a copy here", async () => {
-    const output = await handleEmbeddingCommand(["chunk", "300"]);
+    const output = await handleEmbeddingCommand([
+      "config",
+      "chunk-target",
+      "300",
+    ]);
     expect(output).toBe(
       "Not saved: chunk max must be at least the chunk target",
     );
@@ -665,12 +684,28 @@ describe("the command writes through the D3 settings writer", () => {
     ];
     for (const item of fallbackItems) {
       const command = embeddingSetCommand(item, "legacy");
+      const inRecallConfig = command.startsWith("/recall config ");
+      const prefix = inRecallConfig ? "/recall config " : "/recall embedding ";
       expect({ item, command }).toMatchObject({
         item,
-        command: expect.stringMatching(/^\/recall embedding /),
+        command: expect.stringMatching(
+          inRecallConfig ? /^\/recall config / : /^\/recall embedding /,
+        ),
       });
-      const word =
-        command.slice("/recall embedding ".length).split(/[ |]/)[0] ?? "";
+      const word = command.slice(prefix.length).split(/[ |]/)[0] ?? "";
+      if (inRecallConfig) {
+        // 48-4 D-05 moved the fusion knobs to `/recall config`.
+        expect({
+          item,
+          word,
+          allowed: ["weight", "depth"].includes(word),
+        }).toEqual({
+          item,
+          word,
+          allowed: true,
+        });
+        continue;
+      }
       if (word === "on" || word === "off") continue;
       expect({ item, word, offered: words.has(word) }).toEqual({
         item,
@@ -865,43 +900,25 @@ function fillerFor(row: SubcommandSpecRow): string[] {
   if (row.path[0] === "embedding") {
     switch (row.spec.name) {
       case "build":
-      case "cancel":
+      case "connect":
+      case "device":
       case "off":
       case "on":
-      case "reset":
-      case "setup":
       case "status":
         return [];
-      case "weight":
-        return ["0.5"];
-      case "gpu":
-        return ["auto"];
-      case "quant":
-        return ["int8"];
+      case "model":
+        return ["--json"];
+      case "config":
+        return [];
       default:
-        // The numeric tuning rows need one word.
-        return ["64"];
+        return [];
     }
   }
   switch (row.spec.name) {
     case "now":
       return ["ledger"];
-    case "timeout":
-      return ["1000"];
-    case "dedup":
-      return ["5"];
-    case "limit":
-      return ["3"];
-    case "excerpt":
-      return ["2"];
-    case "chars":
-      return ["200", "900"];
-    case "ratio":
-      return ["0.5"];
-    case "diversity":
-      return ["split"];
-    case "display":
-      return ["full"];
+    case "config":
+      return [];
     default:
       return [];
   }
@@ -912,7 +929,7 @@ describe("/recall completion", () => {
     expect(completionLabels("/recall ")).toEqual(
       RECALL_COMMAND_SPECS.map((spec) => spec.name),
     );
-    expect(RECALL_COMMAND_SPECS).toHaveLength(14);
+    expect(RECALL_COMMAND_SPECS).toHaveLength(7);
   });
 
   test("embedding offers its second level", () => {
@@ -920,22 +937,13 @@ describe("/recall completion", () => {
     expect(completionLabels("/recall embedding ")).toEqual(
       EMBEDDING_COMMAND_SPECS.map((spec) => spec.name),
     );
-    expect(EMBEDDING_COMMAND_SPECS).toHaveLength(17);
+    expect(EMBEDDING_COMMAND_SPECS).toHaveLength(8);
   });
 
-  test("enumerated values complete at level 3", () => {
-    expect(completionLabels("/recall embedding gpu ")).toEqual([
-      "auto",
-      "off",
-      "index-only",
-    ]);
-    expect(completionLabels("/recall embedding quant i")).toEqual(["int8"]);
+  test("prefixes still narrow the entrances", () => {
     expect(completionLabels("/recall embedding o")).toEqual(["on", "off"]);
-    expect(completionLabels("/recall diversity ")).toEqual([
-      "none",
-      "file",
-      "split",
-    ]);
+    expect(completionLabels("/recall embedding conn")).toEqual(["connect"]);
+    expect(completionLabels("/recall config ")).toEqual([]);
   });
 
   test("every row the popup offers is accepted by the parser (G-2)", () => {
@@ -957,12 +965,14 @@ describe("/recall completion", () => {
     const build = EMBEDDING_COMMAND_SPECS.find((row) => row.name === "build");
     expect(build?.args).toContain("--full");
     expect(build?.args).toContain("--keep-after-exit");
+    expect(build?.args).toContain("--cancel");
     expect(
       parseEmbeddingCommand(["build", "--full", "--keep-after-exit"]),
     ).toEqual({
       kind: "build",
       mode: "full",
       keepAfterExit: true,
+      cancel: false,
     });
   });
 });

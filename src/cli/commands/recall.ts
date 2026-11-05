@@ -22,6 +22,7 @@ import { setRecallDisplay } from "@/cli/components/transcript-display-state";
 import { createEmbeddingRuntimePort } from "@/cli/helpers/embedding-runtime";
 import {
   formatRecallSettingsLine,
+  type ResolvedEmbeddingSettings,
   type ResolvedRecallSettings,
   readEmbeddingSettings,
   readRecallSettings,
@@ -40,7 +41,7 @@ import {
 import { type Settings, settingsManager } from "@/settings-manager";
 
 export const RECALL_COMMAND_USAGE = [
-  "/recall [setting] [value]",
+  "/recall [command]",
   "",
   "Passive recall: earlier conversations and memory files the agent has not",
   "been shown are searched before each turn, and what matches is injected with",
@@ -52,15 +53,22 @@ export const RECALL_COMMAND_USAGE = [
   "  /recall on | off              switch passive recall on or off",
   "  /recall build                 build the transcript index it needs",
   "  /recall now <query>           run a search and show the passages",
-  "  /recall timeout <ms>          wall-clock budget (0 = no limit)",
-  "  /recall dedup <turns>         how long a passage stays suppressed",
-  "  /recall limit <n>             passages injected per turn",
-  "  /recall excerpt <±lines>      memory context around a hit",
-  "  /recall chars <per> [total]   per-passage and total character budget",
-  "  /recall ratio <0..1>          relative score floor",
-  "  /recall diversity <mode>      none | file | split",
-  "  /recall display <tier>        silent | summary | full",
-  "  /recall embedding <command>   vector recall: on, off, status, build, cancel, reset, setup",
+  "  /recall config                list every tuning key and its value",
+  "  /recall config <key>          show one key",
+  "  /recall config <key> <value>  set one key",
+  "  /recall embedding <command>   vector recall (status, on, off, connect, model, build, config, device)",
+  "",
+  "KEYS",
+  "  timeout <ms>                  wall-clock budget (0 = no limit)",
+  "  dedup <turns>                 how long a passage stays suppressed",
+  "  limit <n>                     passages injected per turn",
+  "  excerpt <±lines>              memory context around a hit",
+  "  chars <per> [total]           per-passage and total character budget",
+  "  ratio <0..1>                  relative score floor (lexical and fused)",
+  "  diversity <mode>              none | file | split",
+  "  display <tier>                silent | summary | full",
+  "  weight <0..1>                 vector-arm weight (needs vector recall on)",
+  "  depth <n>                     candidates per arm (needs vector recall on)",
 ].join("\n");
 
 export type RecallCommand =
@@ -69,6 +77,8 @@ export type RecallCommand =
   | { kind: "status" }
   | { kind: "build" }
   | { kind: "probe"; query: string }
+  /** `/recall config` with no key, or one key to print. */
+  | { kind: "config"; key?: RecallConfigKey }
   /**
    * `/recall embedding …` (feature ③): parsed here so the two command groups
    * share one dispatcher, then handed to `cli/commands/embedding.ts` whole. The
@@ -80,6 +90,41 @@ export type RecallCommand =
   /** `/recall on` also clears the breaker (《26》§6.6: manual recovery only). */
   | { kind: "enable" }
   | { kind: "disable" };
+
+/** Every key `/recall config` accepts (48-4 D-05/D-16). */
+export type RecallConfigKey =
+  | "timeout"
+  | "dedup"
+  | "limit"
+  | "excerpt"
+  | "chars"
+  | "ratio"
+  | "diversity"
+  | "display"
+  | "weight"
+  | "depth";
+
+const RECALL_CONFIG_KEYS: readonly RecallConfigKey[] = [
+  "timeout",
+  "dedup",
+  "limit",
+  "excerpt",
+  "chars",
+  "ratio",
+  "diversity",
+  "display",
+  "weight",
+  "depth",
+];
+
+function isRecallConfigKey(
+  value: string | undefined,
+): value is RecallConfigKey {
+  return (
+    value !== undefined &&
+    (RECALL_CONFIG_KEYS as readonly string[]).includes(value)
+  );
+}
 
 /**
  * A non-negative whole number, or `null` when the text is not one.
@@ -153,11 +198,38 @@ export function parseRecallCommand(args: string[]): RecallCommand {
         ? error("`/recall now` needs a query: /recall now <text>.")
         : { kind: "probe", query };
     }
+    case "config":
+      return parseRecallConfig(rest);
+    case "embedding":
+      // No validation here: `parseEmbeddingCommand` owns that vocabulary and
+      // reports its own errors, so this dispatcher only splits the command.
+      return { kind: "embedding", args: rest };
+    default:
+      return error(`Unknown recall command: ${head}. Try /recall config.`);
+  }
+}
+
+/** `/recall config …`: no key lists everything, one key prints it. */
+function parseRecallConfig(args: string[]): RecallCommand {
+  const [key, ...rest] = args;
+  if (key === undefined) return { kind: "config" };
+  if (!isRecallConfigKey(key)) {
+    return error(
+      `Unknown recall config key: ${key}. Keys: ${RECALL_CONFIG_KEYS.join(", ")}.`,
+    );
+  }
+  if (rest.length === 0) return { kind: "config", key };
+  return parseRecallKnob(key, rest);
+}
+
+/** One key's value; the accepted shape is per key, not "anything goes". */
+function parseRecallKnob(key: RecallConfigKey, rest: string[]): RecallCommand {
+  switch (key) {
     case "timeout": {
       const value = parseRecallCount(oneValue(rest));
       return value === null
         ? error(
-            "`/recall timeout` needs milliseconds: /recall timeout 1000 (0 = no limit).",
+            "`/recall config timeout` needs milliseconds: /recall config timeout 1000 (0 = no limit).",
           )
         : {
             kind: "set",
@@ -169,7 +241,7 @@ export function parseRecallCommand(args: string[]): RecallCommand {
       const value = parseRecallCount(oneValue(rest));
       return value === null
         ? error(
-            "`/recall dedup` needs a number of turns: /recall dedup 10 (0 = no window).",
+            "`/recall config dedup` needs a number of turns: /recall config dedup 10 (0 = no window).",
           )
         : {
             kind: "set",
@@ -181,7 +253,7 @@ export function parseRecallCommand(args: string[]): RecallCommand {
       const value = parseRecallCount(oneValue(rest));
       return value === null
         ? error(
-            "`/recall limit` needs a number of passages: /recall limit 3 (0 = none).",
+            "`/recall config limit` needs a number of passages: /recall config limit 3 (0 = none).",
           )
         : { kind: "set", label: "limit", updates: { recallLimit: value } };
     }
@@ -189,7 +261,7 @@ export function parseRecallCommand(args: string[]): RecallCommand {
       const value = parseRecallCount(oneValue(rest));
       return value === null
         ? error(
-            "`/recall excerpt` needs a line count: /recall excerpt 2 (0 = the hit line only).",
+            "`/recall config excerpt` needs a line count: /recall config excerpt 2 (0 = the hit line only).",
           )
         : {
             kind: "set",
@@ -201,7 +273,7 @@ export function parseRecallCommand(args: string[]): RecallCommand {
       const value = parseRecallRatio(oneValue(rest));
       return value === null
         ? error(
-            "`/recall ratio` needs a number from 0 to 1: /recall ratio 0.35.",
+            "`/recall config ratio` needs a number from 0 to 1: /recall config ratio 0.35.",
           )
         : {
             kind: "set",
@@ -217,7 +289,7 @@ export function parseRecallCommand(args: string[]): RecallCommand {
             label: "diversity",
             updates: { recallDiversity: value },
           }
-        : error("`/recall diversity` needs one of: none, file, split.");
+        : error("`/recall config diversity` needs one of: none, file, split.");
     }
     case "display": {
       const value = oneValue(rest);
@@ -227,21 +299,43 @@ export function parseRecallCommand(args: string[]): RecallCommand {
             label: "display",
             updates: { recallDisplay: value },
           }
-        : error("`/recall display` needs one of: silent, summary, full.");
+        : error(
+            "`/recall config display` needs one of: silent, summary, full.",
+          );
     }
-    case "embedding":
-      // No validation here: `parseEmbeddingCommand` owns that vocabulary and
-      // reports its own errors, so this dispatcher only splits the command.
-      return { kind: "embedding", args: rest };
+    case "weight": {
+      const value = parseRecallRatio(oneValue(rest));
+      return value === null
+        ? error(
+            "`/recall config weight` needs a number from 0 to 1: /recall config weight 0.5.",
+          )
+        : {
+            kind: "set",
+            label: "vector weight",
+            updates: { recallEmbeddingWeight: value },
+          };
+    }
+    case "depth": {
+      const value = parseRecallCount(oneValue(rest));
+      return value === null
+        ? error(
+            "`/recall config depth` needs a candidate count: /recall config depth 50.",
+          )
+        : {
+            kind: "set",
+            label: "candidate depth",
+            updates: { recallEmbeddingCandidateDepth: value },
+          };
+    }
     case "chars": {
       const perEntry = parseRecallCount(rest[0]);
       if (perEntry === null) {
         return error(
-          "`/recall chars` needs a per-passage budget: /recall chars 400 [total].",
+          "`/recall config chars` needs a per-passage budget: /recall config chars 400 [total].",
         );
       }
       if (rest.length > 2) {
-        return error("`/recall chars` takes at most two numbers.");
+        return error("`/recall config chars` takes at most two numbers.");
       }
       if (rest.length === 1) {
         return {
@@ -253,7 +347,7 @@ export function parseRecallCommand(args: string[]): RecallCommand {
       const total = parseRecallCount(rest[1]);
       if (total === null) {
         return error(
-          "`/recall chars` needs a total budget as its second number.",
+          "`/recall config chars` needs a total budget as its second number.",
         );
       }
       return {
@@ -265,9 +359,45 @@ export function parseRecallCommand(args: string[]): RecallCommand {
         },
       };
     }
-    default:
-      return error(`Unknown recall setting: ${head}`);
   }
+}
+
+/**
+ * `/recall config` output (48-4 D-05).
+ *
+ * One table instead of one command per knob: the values are what the user came
+ * for, and `weight`/`depth` are marked as vector-only so a lexical-only setup
+ * does not look broken.
+ */
+export function formatRecallConfigLines(
+  recall: ResolvedRecallSettings,
+  embedding: ResolvedEmbeddingSettings,
+  key?: RecallConfigKey,
+): string {
+  const note = embedding.enabled ? "vector recall on" : "vector recall off";
+  const rows: Record<RecallConfigKey, string> = {
+    timeout:
+      recall.timeoutMs === 0 ? "0 ms (no limit)" : `${recall.timeoutMs} ms`,
+    dedup: `${recall.dedupTurns} turns`,
+    limit: `${recall.limit}`,
+    excerpt: `${recall.excerptLines} lines`,
+    chars: `${recall.excerptCharacters} / ${recall.totalCharacters}`,
+    ratio: `${recall.minScoreRatio}`,
+    diversity: recall.diversity,
+    display: recall.display,
+    weight: `${embedding.weight} (${note})`,
+    depth: `${embedding.candidateDepth} (${note})`,
+  };
+  if (key !== undefined) {
+    return `${key}: ${rows[key]}\nSet it with /recall config ${key} <value>.`;
+  }
+  const width = Math.max(...RECALL_CONFIG_KEYS.map((name) => name.length));
+  const lines = ["Recall config"];
+  for (const name of RECALL_CONFIG_KEYS) {
+    lines.push(`  ${name.padEnd(width)}  ${rows[name]}`);
+  }
+  lines.push("Set one with /recall config <key> <value>.");
+  return lines.join("\n");
 }
 
 const RECALL_LOCAL_ONLY =
@@ -363,6 +493,16 @@ export async function handleRecallCommand(
     });
   }
 
+  if (command.kind === "config") {
+    const unloaded = requireSettings();
+    if (unloaded) return unloaded;
+    return formatRecallConfigLines(
+      readRecallSettings(),
+      readEmbeddingSettings(),
+      command.key,
+    );
+  }
+
   if (
     command.kind === "set" ||
     command.kind === "enable" ||
@@ -383,7 +523,20 @@ export async function handleRecallCommand(
         : command.kind === "enable"
           ? "Passive recall is on."
           : "Passive recall is off: nothing is searched.";
-    return `${what}\n  ${formatRecallSettingsLine(updated)}`;
+    const lines = [what, `  ${formatRecallSettingsLine(updated)}`];
+    // weight/depth live on the embedding settings record, so the recall summary
+    // above cannot show them; print the vector side when one of them changed.
+    if (
+      command.kind === "set" &&
+      ("recallEmbeddingWeight" in command.updates ||
+        "recallEmbeddingCandidateDepth" in command.updates)
+    ) {
+      const embedding = readEmbeddingSettings();
+      lines.push(
+        `  Vector arm: weight ${embedding.weight} · depth ${embedding.candidateDepth} (${embedding.enabled ? "on" : "off"})`,
+      );
+    }
+    return lines.join("\n");
   }
 
   // Everything below needs the local store. A cloud backend manages context

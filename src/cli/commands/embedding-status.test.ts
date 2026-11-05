@@ -75,6 +75,7 @@ function buildSnapshot(
     rate: { chunksPerSecond: 42.5, windowMs: 30_000, sampleCount: 12 },
     eta: { remainingChunks: 2_400, remainingMs: 480_000 },
     failures: [],
+    device: null,
     ...overrides,
   };
 }
@@ -140,8 +141,20 @@ describe("formatEmbeddingMetricsLines", () => {
     const lines = formatEmbeddingMetricsLines(recorder.snapshot());
     const degraded = lines.at(-1) ?? "";
     expect(degraded).toBe(
-      "  Degraded: 2/3 rounds (timedOut ×2, unavailable ×1)",
+      "  Degraded: last round clean · 2/3 rounds since start (timedOut ×2, unavailable ×1)",
     );
+  });
+
+  test("a degraded last round reports the current streak, not the lifetime count", () => {
+    const recorder = createEmbeddingMetricsRecorder();
+    recorder.record(round());
+    recorder.record(round({ degrade: ["timedOut"] }));
+    recorder.record(round({ degrade: ["degraded"] }));
+    const degraded =
+      formatEmbeddingMetricsLines(recorder.snapshot()).at(-1) ?? "";
+    expect(degraded).toContain("2 rounds in a row");
+    expect(degraded).toContain("last: degraded");
+    expect(degraded).toContain("2/3 rounds since start");
   });
 });
 
@@ -194,6 +207,65 @@ describe("formatEmbeddingBuildSnapshotLines", () => {
     expect(lines[0]).toContain("coverage unknown");
     expect(lines[0]).toContain("rate unknown");
     expect(lines).toHaveLength(1);
+  });
+
+  test("a finished build never prints an ETA (48-4 P0-4)", () => {
+    const lines = formatEmbeddingBuildSnapshotLines(
+      buildSnapshot({
+        phase: "completed",
+        progress: {
+          embeddedChunks: 3_600,
+          totalChunks: 3_600,
+          processedConversations: 40,
+          totalConversations: 40,
+          remainingChunks: 0,
+          fraction: 1,
+        },
+        eta: { remainingChunks: 0, remainingMs: 0 },
+      }),
+    );
+    expect(lines.some((line) => line.includes("Remaining:"))).toBe(false);
+  });
+
+  test("prints the device the build actually initialised (48-4 D-02)", () => {
+    const lines = formatEmbeddingBuildSnapshotLines(
+      buildSnapshot({
+        device: {
+          backend: "builtin",
+          requested: ["dml", "cpu"],
+          initialized: ["dml", "cpu"],
+          gpu: true,
+          degraded: false,
+          threads: 4,
+          warmupMs: 900,
+          measuredAt: "2026-11-05T13:19:07.272Z",
+        },
+      }),
+    );
+    expect(lines[1]).toContain("Device: builtin · dml+cpu (gpu)");
+    expect(lines[1]).toContain("4 threads");
+    expect(lines[1]).toContain("warmup 900ms");
+  });
+
+  test("a CPU fallback keeps the requested providers visible", () => {
+    const lines = formatEmbeddingBuildSnapshotLines(
+      buildSnapshot({
+        device: {
+          backend: "builtin",
+          requested: ["dml", "cpu"],
+          initialized: ["cpu"],
+          gpu: false,
+          degraded: true,
+          degradedReason: "dml provider not found",
+          threads: 0,
+          warmupMs: 0,
+          measuredAt: "2026-11-05T13:19:07.272Z",
+        },
+      }),
+    );
+    expect(lines[1]).toContain("cpu fallback: dml provider not found");
+    expect(lines[1]).toContain("requested dml+cpu");
+    expect(lines[1]).toContain("threads auto");
   });
 });
 

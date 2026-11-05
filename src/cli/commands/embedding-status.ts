@@ -14,7 +14,11 @@
  */
 
 import type { EmbeddingBuildStateSnapshot } from "@/backend/local/embedding-build-state";
-import type { EmbeddingCalibrationSettings } from "@/recall-settings";
+import type { EmbeddingConfigKey } from "@/cli/commands/embedding-command-parser";
+import type {
+  EmbeddingCalibrationSettings,
+  ResolvedEmbeddingSettings,
+} from "@/recall-settings";
 import {
   EMBEDDING_DEGRADE_REASONS,
   type EmbeddingMetricsSnapshot,
@@ -52,6 +56,11 @@ function plural(value: number, singular: string): string {
  * window is what absorbs a single slow turn. The lifetime denominator is used
  * rather than the window's length so the figure does not move backwards when
  * the ring wraps.
+ *
+ * Degradation reads differently on purpose (48-4 D-02): the lifetime count is
+ * background, while **the last round and the current streak are the answer** to
+ * "is it broken right now". A lifetime-only counter never clears after a good
+ * round, which is exactly what made the status face look stale on a real run.
  */
 export function formatEmbeddingMetricsLines(
   snapshot: EmbeddingMetricsSnapshot | null,
@@ -62,7 +71,7 @@ export function formatEmbeddingMetricsLines(
   const summary = summarizeEmbeddingMetrics(snapshot);
   const lines = [
     `Arms: ${plural(summary.rounds, "round")} · lexical ${compact(summary.lexicalPerRound)} · vector ${compact(summary.vectorPerRound)} candidates/round · ${compact(summary.injectedPerRound)} injected · both arms ${compact(summary.bothArmsPerRound)}/round`,
-    `  Chunks: ${compact(summary.chunksPerRound)} hits/round after parent aggregation · ${compact(summary.skipVectorPerRound)} skipped for having no prose`,
+    `  Chunks: ${compact(summary.chunksPerRound)} hits/round before parent aggregation · ${compact(summary.skipVectorPerRound)} skipped for having no prose`,
     `  Timing: lexical ${ms(summary.averageTimings.lexicalMs)} · vector ${ms(summary.averageTimings.vectorMs)} · fusion ${ms(summary.averageTimings.fusionMs)} · total ${ms(summary.averageTimings.totalMs)} per round`,
   ];
   if (summary.degradedRounds === 0) {
@@ -75,9 +84,22 @@ export function formatEmbeddingMetricsLines(
     .filter(([, count]) => count > 0)
     .map(([reason, count]) => `${reason} ×${count}`)
     .join(", ");
-  lines.push(
-    `  Degraded: ${summary.degradedRounds}/${summary.rounds} rounds (${reasons})`,
-  );
+  const rounds = snapshot.rounds;
+  const last = rounds[rounds.length - 1];
+  const lastDegrade = last?.degrade ?? [];
+  let streak = 0;
+  for (let index = rounds.length - 1; index >= 0; index -= 1) {
+    if ((rounds[index]?.degrade.length ?? 0) === 0) break;
+    streak += 1;
+  }
+  const background = `${summary.degradedRounds}/${summary.rounds} rounds since start (${reasons})`;
+  if (lastDegrade.length === 0) {
+    lines.push(`  Degraded: last round clean · ${background}`);
+  } else {
+    lines.push(
+      `  Degraded: ${plural(streak, "round")} in a row · last: ${lastDegrade.join(", ")} · ${background}`,
+    );
+  }
   return lines;
 }
 
@@ -104,7 +126,13 @@ export function formatEmbeddingBuildSnapshotLines(
   const lines = [
     `Build (state.json): ${snapshot.phase} · ${progress.embeddedChunks}/${progress.totalChunks} chunks · ${progress.processedConversations}/${progress.totalConversations} conversations · ${coveragePart} · ${ratePart}`,
   ];
-  if (eta.remainingMs !== null) {
+  const deviceLine = formatEmbeddingDeviceLine(snapshot);
+  if (deviceLine !== null) lines.push(deviceLine);
+  // A finished build has nothing left to wait for; an ETA of "1m" next to
+  // "Remaining: 0 chunks" was a real status-face bug (48-4 P0-4).
+  const active =
+    snapshot.phase === "running" || snapshot.phase === "cancelling";
+  if (active && eta.remainingChunks > 0 && eta.remainingMs !== null) {
     const minutes = Math.max(1, Math.round(eta.remainingMs / 60_000));
     lines.push(
       `  Remaining: ${plural(eta.remainingChunks, "chunk")} · ETA ${minutes}m`,
@@ -121,6 +149,74 @@ export function formatEmbeddingBuildSnapshotLines(
     );
   }
   return lines;
+}
+
+/**
+ * `/recall embedding config` output (48-4 D-16).
+ *
+ * One table for the six build keys. The ones that create a new space say so, so
+ * a user changing `chunk-target` is not surprised by an empty index.
+ */
+export function formatEmbeddingConfigLines(
+  settings: ResolvedEmbeddingSettings,
+  key?: EmbeddingConfigKey,
+): string {
+  const rows: Record<EmbeddingConfigKey, string> = {
+    "chunk-target": `${settings.chunkTarget} tokens (new space)`,
+    "chunk-max": `${settings.chunkMax} tokens (new space)`,
+    "chunk-overlap": `${settings.chunkOverlap} tokens (new space)`,
+    "max-chunks": `${settings.maxChunksPerMessage} /message (new space)`,
+    threads: settings.threads === 0 ? "auto" : `${settings.threads}`,
+    gpu:
+      settings.gpu === "off"
+        ? "off"
+        : "auto (tries DirectML on Windows for index builds)",
+  };
+  const keys: readonly EmbeddingConfigKey[] = [
+    "chunk-target",
+    "chunk-max",
+    "chunk-overlap",
+    "max-chunks",
+    "threads",
+    "gpu",
+  ];
+  if (key !== undefined) {
+    return `${key}: ${rows[key]}\nSet it with /recall embedding config ${key} <value>.`;
+  }
+  const width = Math.max(...keys.map((name) => name.length));
+  const lines = ["Embedding config"];
+  for (const name of keys) lines.push(`  ${name.padEnd(width)}  ${rows[name]}`);
+  lines.push("Set one with /recall embedding config <key> <value>.");
+  return lines.join("\n");
+}
+
+/**
+ * The one durable answer to "what did the build actually run on" (48-4 D-02).
+ *
+ * `requested` is the plan; `initialized` is what the worker accepted. A
+ * per-node ONNX fallback can still put work on the CPU, so this line reports
+ * both instead of claiming the requested provider was used.
+ */
+export function formatEmbeddingDeviceLine(
+  snapshot: EmbeddingBuildStateSnapshot,
+): string | null {
+  const device = snapshot.device;
+  if (device === null) return null;
+  const providers =
+    device.initialized.length === 0 ? "unknown" : device.initialized.join("+");
+  const state = device.gpu
+    ? "gpu"
+    : device.degraded
+      ? `cpu fallback: ${device.degradedReason ?? "gpu refused"}`
+      : "cpu";
+  const threads =
+    device.threads === 0 ? "threads auto" : `${device.threads} threads`;
+  const warmup = device.warmupMs > 0 ? ` · warmup ${ms(device.warmupMs)}` : "";
+  const requested =
+    device.requested.join("+") === providers
+      ? ""
+      : ` · requested ${device.requested.join("+")}`;
+  return `  Device: ${device.backend} · ${providers} (${state})${requested} · ${threads}${warmup} · ${device.measuredAt}`;
 }
 
 /**

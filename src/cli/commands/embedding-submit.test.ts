@@ -114,7 +114,7 @@ describe("runEmbeddingSubmitCommand", () => {
         },
       }),
     );
-    expect(output).toContain("Opening the embedding setup wizard");
+    expect(output).toContain("Opening the embedding connect wizard");
     expect(writes).toHaveLength(0);
     expect(runner.outputs).toHaveLength(1);
   });
@@ -150,12 +150,12 @@ describe("runEmbeddingSubmitCommand", () => {
     resetUiV2Resolution();
     try {
       const output = await runEmbeddingSubmitCommand(
-        "/recall embedding setup",
+        "/recall embedding connect",
         SCOPE,
         runner,
         deps({ readRawSettings: () => ({}) }),
       );
-      expect(output).toContain("Opening the embedding setup wizard");
+      expect(output).toContain("Opening the embedding connect wizard");
     } finally {
       if (previous === undefined) delete process.env.HARUYUKI_UI_V2;
       else process.env.HARUYUKI_UI_V2 = previous;

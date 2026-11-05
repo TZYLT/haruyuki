@@ -41,9 +41,13 @@ import type { EmbeddingSetupFlags } from "@/cli/args";
 import {
   embeddingCalibrationMeasured,
   formatEmbeddingBuildSnapshotLines,
+  formatEmbeddingConfigLines,
+  formatEmbeddingDeviceLine,
   formatEmbeddingMetricsLines,
   formatEmbeddingStoredCalibrationLine,
 } from "@/cli/commands/embedding-status";
+import { runEmbeddingDeviceTest } from "@/cli/helpers/embedding-device";
+import { handleEmbeddingModelCommand } from "@/cli/helpers/embedding-models";
 import { embeddingSetCommand } from "@/cli/helpers/settings-deep-link";
 import {
   type ResolvedEmbeddingSettings,
@@ -54,97 +58,26 @@ import {
   embeddingMetrics,
 } from "@/reminders/embedding-metrics";
 import { settingsManager } from "@/settings-manager";
-import type { EmbeddingBuildMode } from "@/types/embedding-protocol";
+import {
+  EMBEDDING_COMMAND_USAGE,
+  type EmbeddingCommand,
+  parseEmbeddingCommand,
+} from "./embedding-command-parser";
 
-// ── Copy ────────────────────────────────────────────────────────────
+export type {
+  EmbeddingCommand,
+  EmbeddingConfigKey,
+} from "./embedding-command-parser";
+export {
+  EMBEDDING_COMMAND_USAGE,
+  parseEmbeddingCommand,
+  parseEmbeddingCount,
+  parseEmbeddingRatio,
+} from "./embedding-command-parser";
 
-/** The usage table. Kept beside the parser so a new spelling updates both. */
-export const EMBEDDING_COMMAND_USAGE = [
-  "/recall embedding [command]",
-  "",
-  "Vector recall embeds the parts of earlier conversations and memory files",
-  "that passive recall may inject, and searches them by meaning instead of",
-  "words alone. It is off by default; the first enable needs a setup step.",
-  "",
-  "USAGE",
-  "  /recall embedding                 what vector recall is doing right now",
-  "  /recall embedding status          same, spelled out",
-  "  /recall embedding on              enable; first run opens setup",
-  "  /recall embedding off             disable; stored vectors stay on disk",
-  "  /recall embedding build [--full] [--keep-after-exit]",
-  "                                    build or refresh the vector index",
-  "  /recall embedding cancel          stop a running build",
-  "  /recall embedding reset [--all|--model <id>] [--confirm]",
-  "                                    delete stored vector spaces",
-  "  /recall embedding setup           re-run first-run setup (current values)",
-  "",
-  "TUNING",
-  "  /recall embedding weight <0..1>   vector-arm weight (0 = lexical only)",
-  "  /recall embedding depth <n>       candidates per arm",
-  "  /recall embedding chunk <tokens>  target chunk window",
-  "  /recall embedding chunk-max <tokens>",
-  "  /recall embedding chunk-overlap <tokens>",
-  "  /recall embedding max-chunks <n>  chunks embedded per message cap",
-  "  /recall embedding threads <n>     encode/build threads (0 = automatic)",
-  "  /recall embedding gpu auto|off|index-only",
-  "  /recall embedding quant float32|int8",
-  "  /recall embedding spaces <n>      model spaces kept on disk",
-  "",
-  "WITHOUT A TUI",
-  "  haruyuki recall embedding status",
-  "  haruyuki --recall-embedding on --recall-embedding-backend builtin",
-].join("\n");
-
-/** Every setting changes a stored key; the writer validates before any write. */
-const EMBEDDING_KNOB_LABEL: Readonly<Record<string, string>> = {
-  weight: "vector weight",
-  depth: "candidate depth",
-  chunk: "chunk target",
-  "chunk-max": "chunk ceiling",
-  "chunk-overlap": "chunk overlap",
-  "max-chunks": "chunks per message cap",
-  threads: "threads",
-  gpu: "GPU role",
-  quant: "vector precision",
-  spaces: "model spaces kept",
-};
-
-const NEEDS_AGENT =
-  "Embedding recall needs an active agent for this action; pass --agent <id> or run it in a session.";
-
-const RUNTIME_UNAVAILABLE = {
-  status:
-    "Space and build status are not available in this process: the embedding runtime is not wired here yet. The settings above are live.",
-  build:
-    "Starting an embedding build needs the background runner, which this process does not have. Nothing was started.",
-  cancel:
-    "No build runner is available in this process, so there is nothing to cancel.",
-  reset:
-    "Deleting vector spaces needs the index store, which this process does not have. Nothing was deleted.",
-  endpoint:
-    "Testing an endpoint needs the embedding runtime, which this process does not have. Nothing was written. Run /recall embedding setup in the TUI.",
-} as const;
-
-// ── Command parser ──────────────────────────────────────────────────
-
-/** One parsed `/recall embedding` invocation. */
-export type EmbeddingCommand =
-  | { kind: "status" }
-  | { kind: "on" }
-  | { kind: "off" }
-  | { kind: "build"; mode: EmbeddingBuildMode; keepAfterExit: boolean }
-  | { kind: "cancel" }
-  | { kind: "reset"; target: EmbeddingResetTarget; confirmed: boolean }
-  | { kind: "setup" }
-  | { kind: "set"; label: string; updates: EmbeddingSettingsPatch }
-  | { kind: "usage" }
-  | { kind: "error"; message: string };
-
-/** A non-negative whole number, or `null` when the text is not one. */
-// The runtime contract lives in its own module so this parser/renderer stays
-// under the file-size ceiling; these re-exports keep the public import site.
+// The runtime contract lives in its own module so the parser/handler stay under
+// the file-size ceiling; these re-exports keep the public import site.
 import type {
-  EmbeddingResetTarget,
   EmbeddingRuntimeBuildProgress,
   EmbeddingRuntimeCalibration,
   EmbeddingRuntimePort,
@@ -166,217 +99,23 @@ export type {
   EmbeddingRuntimeStatus,
 } from "@/cli/commands/embedding-runtime-contract";
 
-export function parseEmbeddingCount(raw: string | undefined): number | null {
-  if (raw === undefined) return null;
-  const text = raw.trim();
-  if (text === "" || !/^\d+$/.test(text)) return null;
-  const value = Number(text);
-  return Number.isSafeInteger(value) ? value : null;
-}
+const NEEDS_AGENT =
+  "Embedding recall needs an active agent for this action; pass --agent <id> or run it in a session.";
 
-/** A ratio in `[0, 1]`; above 1 is refused rather than clamped. */
-export function parseEmbeddingRatio(raw: string | undefined): number | null {
-  if (raw === undefined) return null;
-  const text = raw.trim();
-  if (text === "") return null;
-  const value = Number(text);
-  if (!Number.isFinite(value) || value < 0 || value > 1) return null;
-  return value;
-}
+// ── Copy ────────────────────────────────────────────────────────────
 
-function error(message: string): EmbeddingCommand {
-  return { kind: "error", message };
-}
-
-/** The single argument of a one-value knob, or `undefined` when it has company. */
-function oneValue(rest: string[]): string | undefined {
-  return rest.length === 1 ? rest[0] : undefined;
-}
-
-function parseReset(rest: string[]): EmbeddingCommand {
-  let all = false;
-  let model: string | undefined;
-  let confirmed = false;
-  for (let index = 0; index < rest.length; index += 1) {
-    const word = rest[index];
-    if (word === "--all") {
-      all = true;
-      continue;
-    }
-    if (word === "--confirm") {
-      confirmed = true;
-      continue;
-    }
-    if (word === "--model") {
-      const value = rest[index + 1]?.trim();
-      if (value === undefined || value === "") {
-        return error("`/recall embedding reset --model` needs a model id.");
-      }
-      model = value;
-      index += 1;
-      continue;
-    }
-    return error(`\`/recall embedding reset\` does not take "${word}".`);
-  }
-  if (all && model !== undefined) {
-    return error("`/recall embedding reset` takes --all or --model, not both.");
-  }
-  const target: EmbeddingResetTarget = all
-    ? { kind: "all" }
-    : model === undefined
-      ? { kind: "current" }
-      : { kind: "model", model };
-  return { kind: "reset", target, confirmed };
-}
-
-/**
- * Parse `build`'s flags: `--full` rebuilds every chunk, `--keep-after-exit`
- * opts into a detached child (48-1 R-34's only exception to "the build dies with
- * its host"). Both are optional and order-independent; an unknown word is
- * refused rather than ignored.
- */
-function parseBuild(rest: string[]): EmbeddingCommand {
-  let full = false;
-  let keepAfterExit = false;
-  for (const word of rest) {
-    if (word === "--full") {
-      full = true;
-      continue;
-    }
-    if (word === "--keep-after-exit") {
-      keepAfterExit = true;
-      continue;
-    }
-    return error(
-      "`/recall embedding build` takes only --full and --keep-after-exit: /recall embedding build [--full] [--keep-after-exit].",
-    );
-  }
-  return {
-    kind: "build",
-    mode: full ? "full" : "incremental",
-    keepAfterExit,
-  };
-}
-
-/**
- * Parse the words after `/recall embedding`.
- *
- * A bare invocation answers the status, because opening an overlay is the TUI
- * submit layer's job (D5/D6) and every other channel can only print. Every
- * spelling the completion table offers has a branch here; the drift test in
- * `embedding.test.ts` walks the table and feeds each row through this function.
- */
-export function parseEmbeddingCommand(args: string[]): EmbeddingCommand {
-  const [head, ...rest] = args;
-  if (head === undefined) return { kind: "status" };
-  if (head === "help" || head === "--help" || head === "-h") {
-    if (rest.length > 0)
-      return error("`/recall embedding help` takes no arguments.");
-    return { kind: "usage" };
-  }
-
-  switch (head) {
-    case "status":
-      return rest.length === 0
-        ? { kind: "status" }
-        : error("`/recall embedding status` takes no arguments.");
-    case "on":
-      return rest.length === 0
-        ? { kind: "on" }
-        : error("`/recall embedding on` takes no arguments.");
-    case "off":
-      return rest.length === 0
-        ? { kind: "off" }
-        : error("`/recall embedding off` takes no arguments.");
-    case "setup":
-      return rest.length === 0
-        ? { kind: "setup" }
-        : error("`/recall embedding setup` takes no arguments.");
-    case "build": {
-      const parsed = parseBuild(rest);
-      return parsed;
-    }
-    case "cancel":
-      return rest.length === 0
-        ? { kind: "cancel" }
-        : error("`/recall embedding cancel` takes no arguments.");
-    case "reset":
-      return parseReset(rest);
-    case "weight": {
-      const value = parseEmbeddingRatio(oneValue(rest));
-      return value === null
-        ? error(
-            "`/recall embedding weight` needs a number from 0 to 1: /recall embedding weight 0.5.",
-          )
-        : {
-            kind: "set",
-            label: EMBEDDING_KNOB_LABEL.weight ?? "weight",
-            updates: { weight: value },
-          };
-    }
-    case "depth":
-    case "chunk":
-    case "chunk-max":
-    case "max-chunks":
-    case "threads":
-    case "spaces":
-    case "chunk-overlap": {
-      const value = parseEmbeddingCount(oneValue(rest));
-      if (value === null) {
-        return error(
-          `\`/recall embedding ${head}\` needs a whole number: /recall embedding ${head} <n>.`,
-        );
-      }
-      const label = EMBEDDING_KNOB_LABEL[head] ?? head;
-      switch (head) {
-        case "depth":
-          return { kind: "set", label, updates: { candidateDepth: value } };
-        case "chunk":
-          return { kind: "set", label, updates: { chunkTarget: value } };
-        case "chunk-max":
-          return { kind: "set", label, updates: { chunkMax: value } };
-        case "chunk-overlap":
-          return { kind: "set", label, updates: { chunkOverlap: value } };
-        case "max-chunks":
-          return {
-            kind: "set",
-            label,
-            updates: { maxChunksPerMessage: value },
-          };
-        case "threads":
-          return { kind: "set", label, updates: { threads: value } };
-        default:
-          return { kind: "set", label, updates: { keepSpaces: value } };
-      }
-    }
-    case "gpu": {
-      const value = oneValue(rest);
-      if (value !== "auto" && value !== "off" && value !== "index-only") {
-        return error(
-          "`/recall embedding gpu` needs one of: auto, off, index-only.",
-        );
-      }
-      return {
-        kind: "set",
-        label: EMBEDDING_KNOB_LABEL.gpu ?? "gpu",
-        updates: { gpu: value },
-      };
-    }
-    case "quant": {
-      const value = oneValue(rest);
-      if (value !== "float32" && value !== "int8") {
-        return error("`/recall embedding quant` needs one of: float32, int8.");
-      }
-      return {
-        kind: "set",
-        label: EMBEDDING_KNOB_LABEL.quant ?? "quant",
-        updates: { quantization: value },
-      };
-    }
-    default:
-      return error(`Unknown embedding command: ${head}.`);
-  }
-}
+const RUNTIME_UNAVAILABLE = {
+  status:
+    "Space and build status are not available in this process: the embedding runtime is not wired here yet. The settings above are live.",
+  build:
+    "Starting an embedding build needs the background runner, which this process does not have. Nothing was started.",
+  cancel:
+    "No build runner is available in this process, so there is nothing to cancel.",
+  reset:
+    "Deleting vector spaces needs the index store, which this process does not have. Nothing was deleted.",
+  endpoint:
+    "Testing an endpoint needs the embedding runtime, which this process does not have. Nothing was written. Run /recall embedding connect in the TUI.",
+} as const;
 
 // ── Dependencies ────────────────────────────────────────────────────
 
@@ -577,7 +316,7 @@ function formatCalibration(calibration: EmbeddingRuntimeCalibration): string {
       throughputPerSecond: calibration.throughputPerSecond,
     })
   ) {
-    return `Calibration: not measured — the documented default budget is in use (recorded ${calibration.measuredAt}); re-run /recall embedding setup to measure it.`;
+    return `Calibration: not measured — the documented default budget is in use (recorded ${calibration.measuredAt}); re-run /recall embedding connect to measure it.`;
   }
   return `Calibration: ${calibration.measuredAt} · p50 ${calibration.queryLatencyP50Ms}ms · p90 ${calibration.queryLatencyP90Ms}ms · ${calibration.throughputPerSecond}/s · ${calibration.gpuRole} gpu · ${calibration.threads} threads · ${calibration.quantization}`;
 }
@@ -594,7 +333,7 @@ function formatStatus(
   lines.push(
     configured
       ? `Vector recall: ${enabled}`
-      : `Vector recall: ${enabled} — setup is incomplete: run /recall embedding setup`,
+      : `Vector recall: ${enabled} — setup is incomplete: run /recall embedding connect`,
   );
   lines.push(`Backend: ${formatEndpoint(settings)}`);
   lines.push(
@@ -664,11 +403,57 @@ function runtimeScope(
   return { agentId, conversationId: scope?.conversationId ?? null };
 }
 
-function runOn(deps: ResolvedDeps): string {
+/**
+ * R-26 / 48-1 §6.10: turning the feature back on catches a stale index up in
+ * the background instead of leaving the user to notice and run `build`.
+ *
+ * Only measured staleness starts work: no space, an unmeasurable coverage, or
+ * coverage below 1 (embedded/recallable characters). A running build is not
+ * duplicated. The CLI subcommand (headless) does not start long work from `on`;
+ * it keeps its explicit-build contract.
+ */
+async function catchUpEmbeddingIndex(
+  scope: DreamCommandScope | undefined,
+  deps: ResolvedDeps,
+): Promise<string | null> {
+  if (deps.lifecycle === "headless") return null;
+  const runtime = deps.runtime;
+  if (runtime?.readStatus === undefined || runtime.build === undefined) {
+    return null;
+  }
+  const runtimeScopeValue = runtimeScope(scope);
+  if (runtimeScopeValue === null) return null;
+  try {
+    const status = await runtime.readStatus(runtimeScopeValue);
+    if (status === null) return null;
+    const build = status.build;
+    if (build?.state === "running" || build?.state === "cancelling") {
+      return "  The index is already being built in the background.";
+    }
+    const behind =
+      status.space === null ||
+      status.space.coverage === null ||
+      status.space.coverage < 1;
+    if (!behind) return null;
+    const receipt = await runtime.build(runtimeScopeValue, "incremental", {
+      lifecycle: deps.lifecycle,
+    });
+    return `  ${receipt}`;
+  } catch {
+    // A status/build failure must not fail the enable; the user can still run
+    // `/recall embedding build` explicitly.
+    return null;
+  }
+}
+
+async function runOn(
+  scope: DreamCommandScope | undefined,
+  deps: ResolvedDeps,
+): Promise<string> {
   if (!isEmbeddingConfigured(deps.readRawSettings)) {
-    const opened = deps.openSetup?.("/recall embedding setup") ?? false;
+    const opened = deps.openSetup?.("/recall embedding connect") ?? false;
     return opened
-      ? "Opening the embedding setup wizard. Nothing is written until you finish it."
+      ? "Opening the embedding connect wizard. Nothing is written until you finish it."
       : formatEmbeddingFirstRunHint();
   }
   const updated = deps.writeSettings({ enabled: true });
@@ -679,8 +464,10 @@ function runOn(deps: ResolvedDeps): string {
   if (endpointLeavesMachine(updated)) {
     lines.push("  Endpoint queries leave this machine.");
   }
+  const catchUp = await catchUpEmbeddingIndex(scope, deps);
   lines.push(
-    "  Build the index with /recall embedding build if it has never run.",
+    catchUp ??
+      "  Build the index with /recall embedding build if it has never run.",
   );
   return lines.join("\n");
 }
@@ -691,7 +478,7 @@ function runOff(deps: ResolvedDeps): string {
     "Vector recall is off.",
     `  ${formatEmbeddingSettingsSummary(updated)}`,
     "Stored vectors stay on disk and are reused when you turn it back on.",
-    "Remove them with /recall embedding reset.",
+    "Remove them with /recall embedding model.",
   ].join("\n");
 }
 
@@ -741,49 +528,6 @@ async function runCancel(
   return deps.runtime.cancel(runtimeScopeValue);
 }
 
-function describeResetTarget(target: EmbeddingResetTarget): string {
-  switch (target.kind) {
-    case "all":
-      return "every stored vector space for this agent";
-    case "model":
-      return `the stored vector space for model "${target.model}"`;
-    default:
-      return "the stored vector space for the current model";
-  }
-}
-
-async function runReset(
-  command: Extract<EmbeddingCommand, { kind: "reset" }>,
-  scope: DreamCommandScope | undefined,
-  deps: ResolvedDeps,
-): Promise<string> {
-  const runtimeScopeValue = runtimeScope(scope);
-  if (runtimeScopeValue === null) return NEEDS_AGENT;
-  const target = describeResetTarget(command.target);
-  if (!command.confirmed) {
-    const commandText =
-      command.target.kind === "all"
-        ? "/recall embedding reset --all --confirm"
-        : command.target.kind === "model"
-          ? `/recall embedding reset --model ${command.target.model} --confirm`
-          : "/recall embedding reset --confirm";
-    return [
-      `This deletes ${target} and leaves transcripts, memory files and settings untouched.`,
-      "Nothing was deleted. To confirm, run:",
-      `  ${commandText}`,
-    ].join("\n");
-  }
-  if (deps.runtime?.reset === undefined) return RUNTIME_UNAVAILABLE.reset;
-  return deps.runtime.reset(runtimeScopeValue, command.target);
-}
-
-function runSetup(deps: ResolvedDeps): string {
-  const opened = deps.openSetup?.("/recall embedding setup") ?? false;
-  return opened
-    ? "Opening the embedding setup wizard with the current values."
-    : formatEmbeddingFirstRunHint();
-}
-
 function runSet(
   command: Extract<EmbeddingCommand, { kind: "set" }>,
   deps: ResolvedDeps,
@@ -809,6 +553,46 @@ function runSet(
   return lines.join("\n");
 }
 
+/** Add/connect a vector source; the wizard owns the actual write (48-4 D-07). */
+function runConnect(deps: ResolvedDeps): string {
+  const opened = deps.openSetup?.("/recall embedding connect") ?? false;
+  return opened
+    ? "Opening the embedding connect wizard with the current values."
+    : formatEmbeddingFirstRunHint();
+}
+
+/** `/recall embedding model …` (48-4 D-09). */
+async function runModelCommand(
+  command: Extract<EmbeddingCommand, { kind: "model" }>,
+  scope: DreamCommandScope | undefined,
+  _deps: ResolvedDeps,
+): Promise<string> {
+  return handleEmbeddingModelCommand(command, scope?.agentId);
+}
+
+/** `/recall embedding device [--test]` (48-4 D-03). */
+async function runDeviceCommand(
+  command: Extract<EmbeddingCommand, { kind: "device" }>,
+  scope: DreamCommandScope | undefined,
+  deps: ResolvedDeps,
+): Promise<string> {
+  if (command.test) return runEmbeddingDeviceTest(deps.readSettings());
+  const runtimeScopeValue = runtimeScope(scope);
+  if (runtimeScopeValue === null) return NEEDS_AGENT;
+  if (deps.runtime?.readStatus === undefined) {
+    return "No build has been recorded in this process. Run /recall embedding build, or device --test for a read-only measurement.";
+  }
+  const status = await deps.runtime.readStatus(runtimeScopeValue);
+  const snapshot = status?.buildSnapshot ?? null;
+  if (snapshot === null) {
+    return "No build has been recorded yet. Run /recall embedding build, or device --test for a read-only measurement.";
+  }
+  const line = formatEmbeddingDeviceLine(snapshot);
+  return line === null
+    ? "This state file predates device reporting; run a build to record it."
+    : line.trim();
+}
+
 /** Run one `/recall embedding` invocation; the reply is the user-facing text. */
 export async function handleEmbeddingCommand(
   args: string[],
@@ -824,19 +608,23 @@ export async function handleEmbeddingCommand(
   const resolved = resolveDeps(deps);
   switch (command.kind) {
     case "on":
-      return runOn(resolved);
+      return runOn(scope, resolved);
     case "off":
       return runOff(resolved);
     case "status":
       return runStatus(scope, resolved);
     case "build":
-      return runBuild(command, scope, resolved);
-    case "cancel":
-      return runCancel(scope, resolved);
-    case "reset":
-      return runReset(command, scope, resolved);
-    case "setup":
-      return runSetup(resolved);
+      return command.cancel
+        ? runCancel(scope, resolved)
+        : runBuild(command, scope, resolved);
+    case "connect":
+      return runConnect(resolved);
+    case "config":
+      return formatEmbeddingConfigLines(resolved.readSettings(), command.key);
+    case "model":
+      return runModelCommand(command, scope, resolved);
+    case "device":
+      return runDeviceCommand(command, scope, resolved);
     case "set":
       return runSet(command, resolved);
   }
@@ -911,7 +699,7 @@ export async function applyEmbeddingCliFlags(
     flags.backend === "endpoint" &&
     resolved.readSettings().endpoint === null
   ) {
-    return "The endpoint backend needs an endpoint: add --recall-embedding-endpoint <url> (or run /recall embedding setup). Nothing was written.";
+    return "The endpoint backend needs an endpoint: add --recall-embedding-endpoint <url> (or run /recall embedding connect). Nothing was written.";
   }
 
   const validationError = validateEmbeddingSettingsPatch(

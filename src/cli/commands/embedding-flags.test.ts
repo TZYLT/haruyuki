@@ -12,8 +12,11 @@ import {
   type EmbeddingSettingsPatch,
   previewEmbeddingSettings,
 } from "@/cli/app/pages/settings/embedding-settings";
-import type { EmbeddingCommandDeps } from "@/cli/commands/embedding";
-import { applyEmbeddingSetupFlags } from "@/cli/commands/embedding-flags";
+import type { EmbeddingRuntimePort } from "@/cli/commands/embedding";
+import {
+  applyEmbeddingSetupFlags,
+  type EmbeddingSetupFlagDeps,
+} from "@/cli/commands/embedding-flags";
 import {
   EMBEDDING_SETTING_DEFAULTS,
   type ResolvedEmbeddingSettings,
@@ -22,18 +25,18 @@ import {
 const CONFIGURED_RAW = { recallEmbeddingBackend: "builtin" };
 
 interface Harness {
-  deps: EmbeddingCommandDeps;
+  deps: EmbeddingSetupFlagDeps;
   writes: EmbeddingSettingsPatch[];
   settings: () => ResolvedEmbeddingSettings;
 }
 
 function harness(
-  overrides: Partial<EmbeddingCommandDeps> = {},
+  overrides: Partial<EmbeddingSetupFlagDeps> = {},
   start: ResolvedEmbeddingSettings = EMBEDDING_SETTING_DEFAULTS,
 ): Harness {
   let settings = { ...start };
   const writes: EmbeddingSettingsPatch[] = [];
-  const deps: EmbeddingCommandDeps = {
+  const deps: EmbeddingSetupFlagDeps = {
     readSettings: () => settings,
     writeSettings: (patch) => {
       writes.push(patch);
@@ -41,6 +44,7 @@ function harness(
       return settings;
     },
     readRawSettings: () => CONFIGURED_RAW,
+    saveApiKey: async () => undefined,
     ...overrides,
   };
   return { deps, writes, settings: () => settings };
@@ -102,7 +106,11 @@ describe("applyEmbeddingSetupFlags", () => {
   });
 
   test("enabling through a backend the runtime cannot probe writes nothing", async () => {
-    const h = harness();
+    const h = harness({
+      createRuntime: () => {
+        throw new Error("no runtime in this process");
+      },
+    });
     const outcome = await applyEmbeddingSetupFlags(
       {
         "recall-embedding": "on",
@@ -118,6 +126,37 @@ describe("applyEmbeddingSetupFlags", () => {
       "Testing an endpoint needs the embedding runtime",
     );
     expect(h.writes).toHaveLength(0);
+  });
+
+  test("the endpoint flag probes through the port the seam creates", async () => {
+    let probed = false;
+    const h = harness({
+      env: { MY_KEY: "sk-test" },
+      createRuntime: (): EmbeddingRuntimePort => ({
+        readStatus: async () => null,
+        build: async () => "",
+        cancel: async () => "",
+        reset: async () => "",
+        configureEndpoint: async () => {
+          probed = true;
+          return { kind: "openai", model: "m", dimensions: 8 };
+        },
+      }),
+    });
+    const outcome = await applyEmbeddingSetupFlags(
+      {
+        "recall-embedding": "on",
+        "recall-embedding-backend": "endpoint",
+        "recall-embedding-endpoint": "https://api.example.com/v1",
+        "recall-embedding-api-key-env": "MY_KEY",
+      },
+      { agentId: "agent-1", conversationId: null },
+      h.deps,
+    );
+    expect(outcome.ok).toBe(true);
+    expect(probed).toBe(true);
+    expect(h.writes).toHaveLength(1);
+    expect(h.writes[0]?.backend).toBe("endpoint");
   });
 
   test("off disables the feature through the same writer", async () => {

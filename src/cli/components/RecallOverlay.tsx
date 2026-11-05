@@ -13,6 +13,8 @@
 import { Box } from "ink";
 import { memo, useCallback, useMemo, useState } from "react";
 import { parseRecallCount, parseRecallRatio } from "@/cli/commands/recall";
+import { EmbeddingModelPicker } from "@/cli/components/EmbeddingModelPicker";
+import type { EmbeddingModelRow } from "@/cli/helpers/embedding-models";
 import { useKeyBindings } from "@/cli/hooks/use-input-router";
 import {
   type SingleSelectItem,
@@ -21,7 +23,10 @@ import {
 import { OverlayFrame } from "@/cli/overlay/frame";
 import { OverlayTextField } from "@/cli/overlay/text-view";
 import { useWizard, wizardBindings } from "@/cli/overlay/wizard";
-import type { ResolvedRecallSettings } from "@/recall-settings";
+import type {
+  ResolvedEmbeddingSettings,
+  ResolvedRecallSettings,
+} from "@/recall-settings";
 import {
   isRecallDisplay,
   type RecallDisplay,
@@ -29,6 +34,7 @@ import {
 import type { RecallDiversity } from "@/reminders/recall-port";
 import { isRecallDiversity } from "@/reminders/recall-port";
 import type { Settings } from "@/settings-manager";
+import { getErrorMessage } from "@/utils/error";
 import { Text } from "./Text";
 
 export interface RecallOverlayProps {
@@ -36,6 +42,21 @@ export interface RecallOverlayProps {
   /** Writes the change; the caller owns persistence and the receipt. */
   onSave: (updates: Partial<Settings>) => void;
   onCancel: () => void;
+  /** Feature 48's live settings for the embedding block's labels. */
+  embeddingSettings?: ResolvedEmbeddingSettings;
+  /** Scope passed to `/recall embedding …`; the overlay may not know it. */
+  agentId?: string;
+  conversationId?: string;
+  /**
+   * Test seam: the embedding command runner. Production omits it and uses the
+   * same handler `/recall embedding` uses, with the TUI lifecycle.
+   */
+  runEmbeddingCommand?: (args: string[]) => Promise<string>;
+  /**
+   * Test seam for the model picker's listing. Production omits it and reads the
+   * spaces on disk.
+   */
+  loadEmbeddingModels?: (agentId: string) => Promise<EmbeddingModelRow[]>;
 }
 
 type RecallSettingKey = keyof Settings & `recall${string}`;
@@ -112,6 +133,57 @@ const NUMBER_ROWS: readonly RecallNumberRow[] = [
 export const RECALL_TOGGLE_ROW_KEY = "recallEnabled";
 export const RECALL_DISPLAY_ROW_KEY = "recallDisplay";
 export const RECALL_DIVERSITY_ROW_KEY = "recallDiversity";
+/** Feature 48's block: status, on/off, build, reset and setup, one screen in. */
+export const RECALL_EMBEDDING_ROW_KEY = "embedding";
+
+/** `builtin · model` or `endpoint · model`, the one line the rows show. */
+function embeddingBackendLabel(settings: ResolvedEmbeddingSettings): string {
+  return settings.backend === "endpoint"
+    ? `endpoint · ${settings.endpoint?.model ?? "unconfigured"}`
+    : `builtin · ${settings.model}`;
+}
+
+/**
+ * The embedding block's actions (48-1 §7.4: "现有 RecallOverlay 增加 embedding
+ * 区块"). They are command dispatches rather than settings writes, so every
+ * write still goes through the embedding handler's own validator (D3).
+ */
+export function buildEmbeddingRows(
+  settings: ResolvedEmbeddingSettings | undefined,
+): SingleSelectItem[] {
+  const enabled = settings?.enabled === true;
+  const backend =
+    settings === undefined
+      ? "not available in this process"
+      : embeddingBackendLabel(settings);
+  return [
+    {
+      key: "toggle",
+      label: enabled ? "Turn vector recall off" : "Turn vector recall on",
+      description: `${backend} — Enter to ${enabled ? "disable" : "enable"}`,
+    },
+    {
+      key: "status",
+      label: "Index status",
+      description: "space, coverage, build state, arm counters",
+    },
+    {
+      key: "build",
+      label: "Build index now",
+      description: "incremental; runs in the background",
+    },
+    {
+      key: "connect",
+      label: "Connect a vector source",
+      description: "model, endpoint, precision, then build",
+    },
+    {
+      key: "model",
+      label: "Stored models",
+      description: "list, select or delete a model (48-4 D-09)",
+    },
+  ];
+}
 
 function numberRowValue(row: RecallNumberRow, value: number): string {
   return row.unit === undefined ? String(value) : `${value} ${row.unit}`;
@@ -123,6 +195,7 @@ function numberRowValue(row: RecallNumberRow, value: number): string {
  */
 export function buildRecallPickerRows(
   settings: ResolvedRecallSettings,
+  embedding?: ResolvedEmbeddingSettings,
 ): SingleSelectItem[] {
   const rows: SingleSelectItem[] = [
     {
@@ -146,6 +219,14 @@ export function buildRecallPickerRows(
       description: `${numberRowValue(row, row.read(settings))} — Enter to change`,
     });
   }
+  rows.push({
+    key: RECALL_EMBEDDING_ROW_KEY,
+    label: "Vector recall (embedding)",
+    description:
+      embedding === undefined
+        ? "semantic arm — Enter for status, build, setup"
+        : `${embedding.enabled ? "on" : "off"} · ${embeddingBackendLabel(embedding)} — Enter for status, build, setup`,
+  });
   rows.push({
     key: RECALL_DIVERSITY_ROW_KEY,
     label: "Diversity",
@@ -266,20 +347,91 @@ function RowEditor({ row, current, onSave }: RowEditorProps) {
   );
 }
 
-type SubPicker = "display" | "diversity";
+type SubPicker = "display" | "diversity" | "embedding" | "models";
 
 /** Which of the overlay's views is on screen. */
-type RecallStep = "list" | SubPicker | "edit";
+type RecallStep = "list" | SubPicker | "edit" | "embedding-output";
 
 export const RecallOverlay = memo(function RecallOverlay({
   settings,
   onSave,
   onCancel,
+  embeddingSettings,
+  agentId,
+  conversationId,
+  runEmbeddingCommand,
+  loadEmbeddingModels,
 }: RecallOverlayProps) {
   const wizard = useWizard<RecallStep>({ initial: "list" });
   const { canGoBack, back, goTo } = wizard;
   const [editing, setEditing] = useState<RecallNumberRow | null>(null);
-  const rows = useMemo(() => buildRecallPickerRows(settings), [settings]);
+  const [embeddingOutput, setEmbeddingOutput] = useState<{
+    title: string;
+    text: string;
+  } | null>(null);
+  const rows = useMemo(
+    () => buildRecallPickerRows(settings, embeddingSettings),
+    [embeddingSettings, settings],
+  );
+
+  /**
+   * Run one `/recall embedding …` action through the same handler the typed
+   * command uses. The runtime port is imported lazily: opening this picker must
+   * not load the worker/ONNX modules unless the user actually runs an action.
+   */
+  const runEmbedding = useCallback(
+    async (args: string[]): Promise<string> => {
+      if (runEmbeddingCommand !== undefined) {
+        return await runEmbeddingCommand(args);
+      }
+      const [{ handleEmbeddingCommand }, { createEmbeddingRuntimePort }] =
+        await Promise.all([
+          import("@/cli/commands/embedding"),
+          import("@/cli/helpers/embedding-runtime"),
+        ]);
+      const scope =
+        agentId === undefined
+          ? undefined
+          : { agentId, conversationId: conversationId ?? null };
+      return await handleEmbeddingCommand(args, scope, {
+        runtime: createEmbeddingRuntimePort({ lifecycle: "tui" }),
+      });
+    },
+    [agentId, conversationId, runEmbeddingCommand],
+  );
+
+  const runEmbeddingAction = useCallback(
+    (key: string) => {
+      // The model row opens its own picker instead of printing the table: the
+      // cursor, D and P are the whole reason it exists (48-4 D-09).
+      if (key === "model") {
+        goTo("models");
+        return;
+      }
+      const enabled = embeddingSettings?.enabled === true;
+      const args =
+        key === "toggle"
+          ? [enabled ? "off" : "on"]
+          : key === "status"
+            ? ["status"]
+            : key === "build"
+              ? ["build"]
+              : ["connect"];
+      void (async () => {
+        try {
+          const text = await runEmbedding(args);
+          setEmbeddingOutput({ title: `Vector recall · ${args[0]}`, text });
+        } catch (error) {
+          setEmbeddingOutput({
+            title: "Vector recall",
+            text: `Could not run it: ${getErrorMessage(error)}`,
+          });
+        }
+        goTo("embedding-output");
+      })();
+    },
+    [embeddingSettings?.enabled, goTo, runEmbedding],
+  );
 
   /**
    * Escape from a view that has one below it, and the close when it does not.
@@ -319,6 +471,10 @@ export const RecallOverlay = memo(function RecallOverlay({
       }
       if (key === RECALL_DIVERSITY_ROW_KEY) {
         goTo("diversity");
+        return;
+      }
+      if (key === RECALL_EMBEDDING_ROW_KEY) {
+        goTo("embedding");
         return;
       }
       const row = findNumberRow(key);
@@ -373,6 +529,50 @@ export const RecallOverlay = memo(function RecallOverlay({
           onCancel={leave}
           footer=" Enter select · ↑↓/jk navigate · Esc back"
         />
+      </OverlayFrame>
+    );
+  }
+
+  if (wizard.step === "embedding") {
+    return (
+      <OverlayFrame command="/recall" title="Vector recall">
+        <SingleSelectPicker
+          items={buildEmbeddingRows(embeddingSettings)}
+          onSelect={(key) => runEmbeddingAction(key)}
+          onCancel={leave}
+          footer=" Enter run · ↑↓/jk navigate · Esc back"
+        />
+      </OverlayFrame>
+    );
+  }
+
+  if (wizard.step === "models") {
+    return (
+      <EmbeddingModelPicker
+        agentId={agentId}
+        runCommand={runEmbedding}
+        {...(loadEmbeddingModels === undefined
+          ? {}
+          : { loadModels: loadEmbeddingModels })}
+      />
+    );
+  }
+
+  if (wizard.step === "embedding-output") {
+    return (
+      <OverlayFrame
+        command="/recall"
+        title={embeddingOutput?.title ?? "Vector recall"}
+      >
+        <Box flexDirection="column">
+          {(embeddingOutput?.text ?? "").split("\n").map((line, index) => (
+            // Status lines are stable text; their position is the identity.
+            <Text key={`${index}-${line}`}>{line}</Text>
+          ))}
+          <Box marginTop={1}>
+            <Text dimColor>Esc back · Ctrl-C close</Text>
+          </Box>
+        </Box>
       </OverlayFrame>
     );
   }

@@ -29,7 +29,7 @@ import type { SettingsGroup, SettingsItem } from "./settings-model";
  * - **Endpoint** is one form with a tested credential (`setup` owns it): editing
  *   a URL here without a test-embed round trip is exactly the state 48-1 §7.2
  *   says must not become reachable. The row summarises it and `Enter` fills
- *   `/recall embedding setup` into the composer.
+ *   `/recall embedding connect` into the composer.
  * - **Calibration** is measured, not typed; it is re-derived when the hardware
  *   fingerprint changes (48-2 §4.5).
  * - The **endpoint API key** *is* editable, but as a `secret` row: it paints
@@ -131,8 +131,8 @@ export const EMBEDDING_SETTINGS_ITEMS: readonly SettingsItem[] = [
     kind: "text",
     scope: "global",
     editable: false,
-    jump: "/recall embedding setup",
-    reason: "use /recall embedding setup (tests the endpoint)",
+    jump: "/recall embedding connect",
+    reason: "use /recall embedding connect (tests the endpoint)",
     read: endpointSummary,
   },
   {
