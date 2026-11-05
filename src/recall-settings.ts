@@ -413,6 +413,10 @@ export function isEmbeddingQuantization(
   );
 }
 
+function normalizeGpuRole(role: EmbeddingGpuRole): EmbeddingGpuRole {
+  return role === "index-only" ? "auto" : role;
+}
+
 function oneOf<T extends string>(
   value: unknown,
   allowed: readonly T[],
@@ -580,7 +584,11 @@ export function resolveEmbeddingSettings(
       0,
       256,
     ),
-    gpu: oneOf(record.recallEmbeddingGpu, EMBEDDING_GPU_ROLES, defaults.gpu),
+    // 48-4 D-01: the UI only offers `auto | off`. `index-only` was the same
+    // behaviour as `auto` in every code path, so an old value is read as `auto`.
+    gpu: normalizeGpuRole(
+      oneOf(record.recallEmbeddingGpu, EMBEDDING_GPU_ROLES, defaults.gpu),
+    ),
     quantization: oneOf(
       record.recallEmbeddingQuantization,
       EMBEDDING_QUANTIZATIONS,

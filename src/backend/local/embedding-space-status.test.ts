@@ -110,6 +110,7 @@ describe("readEmbeddingSpaceSummary", () => {
       memoryFiles: 0,
       dimensions: null,
       quant: null,
+      modelId: null,
       builtAt: null,
       coverage: null,
     });

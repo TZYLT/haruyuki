@@ -52,6 +52,8 @@ export interface EmbeddingSpaceSummary {
   readonly dimensions: number | null;
   /** Storage precision when every unit agrees; otherwise `null`. */
   readonly quant: EmbeddingIndexQuant | null;
+  /** Model id when every unit agrees; otherwise `null` (legacy files lack it). */
+  readonly modelId: string | null;
   /** Newest `updatedAt` among committed units (ISO string), or `null`. */
   readonly builtAt: string | null;
   /** Aggregate embedded/recallable char ratio, or `null` when unread. */
@@ -79,6 +81,8 @@ export function readEmbeddingSpaceSummary(
   let dimensionsConflict = false;
   let quant: EmbeddingIndexQuant | null = null;
   let quantConflict = false;
+  let modelId: string | null = null;
+  let modelConflict = false;
   let builtAt: string | null = null;
   let embeddedChars = 0;
   let recallableChars = 0;
@@ -100,11 +104,17 @@ export function readEmbeddingSpaceSummary(
     if (builtAt === null || pointer.updatedAt > builtAt) {
       builtAt = pointer.updatedAt;
     }
-    const coverage = readGenerationCoverage(unit.dir, pointer.generation);
-    if (coverage !== null) {
-      coverageSeen = true;
-      embeddedChars += coverage.embeddedChars;
-      recallableChars += coverage.recallableChars;
+    const meta = readGenerationMeta(unit.dir, pointer.generation);
+    if (meta !== null) {
+      if (meta.modelId !== null) {
+        if (modelId === null) modelId = meta.modelId;
+        else if (modelId !== meta.modelId) modelConflict = true;
+      }
+      if (meta.coverage !== null) {
+        coverageSeen = true;
+        embeddedChars += meta.coverage.embeddedChars;
+        recallableChars += meta.coverage.recallableChars;
+      }
     }
   }
 
@@ -114,6 +124,7 @@ export function readEmbeddingSpaceSummary(
     memoryFiles,
     dimensions: dimensionsConflict ? null : dimensions,
     quant: quantConflict ? null : quant,
+    modelId: modelConflict ? null : modelId,
     builtAt,
     coverage:
       coverageSeen && recallableChars > 0
@@ -175,10 +186,13 @@ function listUnitDirectories(spaceDir: string): UnitDirectory[] {
   return units;
 }
 
-function readGenerationCoverage(
+function readGenerationMeta(
   unitDir: string,
   generation: string,
-): { embeddedChars: number; recallableChars: number } | null {
+): {
+  modelId: string | null;
+  coverage: { embeddedChars: number; recallableChars: number } | null;
+} | null {
   let raw: string;
   try {
     const generationDir = embeddingGenerationDir(unitDir, generation);
@@ -196,14 +210,21 @@ function readGenerationCoverage(
     return null;
   }
   if (typeof parsed !== "object" || parsed === null) return null;
-  const coverage = (parsed as Record<string, unknown>).coverage;
-  if (typeof coverage !== "object" || coverage === null) return null;
-  const record = coverage as Record<string, unknown>;
-  const embeddedChars = record.embeddedChars;
-  const recallableChars = record.recallableChars;
-  if (!isNonNegativeFinite(embeddedChars)) return null;
-  if (!isNonNegativeFinite(recallableChars)) return null;
-  return { embeddedChars, recallableChars };
+  const record = parsed as Record<string, unknown>;
+  const modelId =
+    typeof record.modelId === "string" && record.modelId.length > 0
+      ? record.modelId
+      : null;
+  const coverage = record.coverage;
+  if (typeof coverage !== "object" || coverage === null) {
+    return { modelId, coverage: null };
+  }
+  const counts = coverage as Record<string, unknown>;
+  const embeddedChars = counts.embeddedChars;
+  const recallableChars = counts.recallableChars;
+  if (!isNonNegativeFinite(embeddedChars)) return { modelId, coverage: null };
+  if (!isNonNegativeFinite(recallableChars)) return { modelId, coverage: null };
+  return { modelId, coverage: { embeddedChars, recallableChars } };
 }
 
 function isNonNegativeFinite(value: unknown): value is number {

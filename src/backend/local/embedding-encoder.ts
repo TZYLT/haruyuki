@@ -66,6 +66,10 @@ import {
   resolveEmbeddingBuiltinAssets,
 } from "@/backend/local/embedding-assets";
 import {
+  endpointFingerprint,
+  endpointSecretId,
+} from "@/backend/local/embedding-profile";
+import {
   type ResolvedEmbeddingSettings,
   readEmbeddingSettings,
 } from "@/recall-settings";
@@ -443,7 +447,7 @@ export function createEndpointQueryEncoder(
   const endpoint = settings.endpoint;
   if (endpoint === null) {
     throw new Error(
-      'The embedding backend is "endpoint" but no endpoint is configured; run /recall embedding setup and complete the endpoint form first.',
+      'The embedding backend is "endpoint" but no endpoint is configured; run /recall embedding connect and complete the endpoint form first.',
     );
   }
   const id = `endpoint:${endpoint.kind}:${endpoint.baseUrl}:${endpoint.model}`;
@@ -451,7 +455,10 @@ export function createEndpointQueryEncoder(
     options.client === undefined ? null : Promise.resolve(options.client);
   const resolveClient = async (): Promise<EmbeddingEndpointClient> => {
     if (clientPromise === null) {
-      const apiKey = await getEmbeddingEndpointApiKey().catch(() => null);
+      const apiKey = await getEmbeddingEndpointApiKey(
+        undefined,
+        endpointSecretId(endpointFingerprint(endpoint.baseUrl)),
+      ).catch(() => null);
       clientPromise = Promise.resolve(
         createEmbeddingEndpointClient({
           kind: endpoint.kind,

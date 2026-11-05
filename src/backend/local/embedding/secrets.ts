@@ -251,17 +251,37 @@ export async function getEmbeddingSecretStorageDisclosure(): Promise<EmbeddingSe
  */
 export async function getEmbeddingEndpointApiKey(
   agentId?: string,
+  profileId?: string,
 ): Promise<string | null> {
   // Reading is also a chance to repair the permissions of a file written by an
   // older build (or under a permissive umask) before its value is used.
   hardenEmbeddingSecretFile();
   const entries = await refreshAndListSecrets(agentId);
+  const name =
+    profileId === undefined || profileId.length === 0
+      ? EMBEDDING_ENDPOINT_SECRET_NAME
+      : `${EMBEDDING_ENDPOINT_SECRET_NAME}.${profileId}`;
   for (const entry of entries) {
-    if (entry.key === EMBEDDING_ENDPOINT_SECRET_NAME) {
+    if (entry.key === name) {
       return entry.value.length > 0 ? entry.value : null;
     }
   }
+  // A profile-scoped read falls back to the pre-48-4 single-key name, so an
+  // endpoint configured before this change keeps working.
+  if (name !== EMBEDDING_ENDPOINT_SECRET_NAME) {
+    for (const entry of entries) {
+      if (entry.key === EMBEDDING_ENDPOINT_SECRET_NAME) {
+        return entry.value.length > 0 ? entry.value : null;
+      }
+    }
+  }
   return null;
+}
+
+function endpointSecretName(profileId?: string): string {
+  return profileId === undefined || profileId.length === 0
+    ? EMBEDDING_ENDPOINT_SECRET_NAME
+    : `${EMBEDDING_ENDPOINT_SECRET_NAME}.${profileId}`;
 }
 
 /**
@@ -272,6 +292,7 @@ export async function getEmbeddingEndpointApiKey(
 export async function saveEmbeddingEndpointApiKey(
   value: string,
   agentId?: string,
+  profileId?: string,
 ): Promise<EmbeddingSecretStorage> {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
@@ -279,7 +300,8 @@ export async function saveEmbeddingEndpointApiKey(
   }
 
   const keychainAvailable = await isKeychainAvailable();
-  await setSecretOnServer(EMBEDDING_ENDPOINT_SECRET_NAME, trimmed, agentId);
+  const name = endpointSecretName(profileId);
+  await setSecretOnServer(name, trimmed, agentId);
   hardenEmbeddingSecretFile();
 
   if (keychainAvailable) {
@@ -288,9 +310,7 @@ export async function saveEmbeddingEndpointApiKey(
     // agent-scoped, so an agent-domain write read back as null and the
     // disclosure wrongly fell back to "plaintext-file".
     const entries = await refreshAndListSecrets(agentId);
-    const stored = entries.find(
-      (entry) => entry.key === EMBEDDING_ENDPOINT_SECRET_NAME,
-    );
+    const stored = entries.find((entry) => entry.key === name);
     if (stored?.value === trimmed) return "keychain";
   }
   return "plaintext-file";
@@ -302,9 +322,10 @@ export async function saveEmbeddingEndpointApiKey(
  */
 export async function clearEmbeddingEndpointApiKey(
   agentId?: string,
+  profileId?: string,
 ): Promise<boolean> {
   const deleted = await deleteSecretOnServer(
-    EMBEDDING_ENDPOINT_SECRET_NAME,
+    endpointSecretName(profileId),
     agentId,
   );
   hardenEmbeddingSecretFile();

@@ -37,6 +37,7 @@ import {
   type EmbeddingIndexQuant,
   getRecallVectorsRoot,
 } from "@/backend/local/embedding-format";
+import { endpointFingerprint } from "@/backend/local/embedding-profile";
 import type { ResolvedEmbeddingSettings } from "@/recall-settings";
 
 /** How many hex characters of the sha256 become the space directory name. */
@@ -75,6 +76,16 @@ export interface EmbeddingSpaceIdInput {
   readonly chunkMax?: number;
   /** Chunk overlap in estimated tokens; defaults to the chunker default. */
   readonly chunkOverlap?: number;
+  /**
+   * Where the vectors come from. Part of the identity since 48-4 D-11: a
+   * built-in model and an endpoint that happens to use the same model name must
+   * not share a directory.
+   */
+  readonly backend?: "builtin" | "endpoint";
+  /** Endpoint identity (scheme+host+port+path); required for `endpoint`. */
+  readonly endpointFingerprint?: string;
+  /** Chunks per message cap; changing it changes the chunk set (48-4 D-16). */
+  readonly maxChunks?: number;
 }
 
 /** One agent's resolved space, including the directory it lives in. */
@@ -169,6 +180,50 @@ export function resolveEmbeddingSpaceId(input: EmbeddingSpaceIdInput): string {
   );
   const payload = [
     `domain=${SPACE_HASH_DOMAIN}`,
+    `backend=${input.backend ?? "builtin"}`,
+    `modelId=${input.modelId}`,
+    `dimensions=${dimensions}`,
+    `quantization=${quantization}`,
+    `chunkerVersion=${chunkerVersion}`,
+    `chunkTarget=${chunkTarget}`,
+    `chunkMax=${chunkMax}`,
+    `chunkOverlap=${chunkOverlap}`,
+    `maxChunks=${input.maxChunks ?? EMBEDDING_CHUNK_DEFAULTS.maxChunksPerParent ?? 1024}`,
+    `endpoint=${input.endpointFingerprint ?? "-"}`,
+  ].join("\n");
+  return createHash("sha256")
+    .update(payload, "utf8")
+    .digest("hex")
+    .slice(0, SPACE_ID_HEX_LENGTH);
+}
+
+/**
+ * The pre-48-4 formula, kept **only** so an existing directory can be renamed
+ * instead of re-embedded. New code must call {@link resolveEmbeddingSpaceId}.
+ */
+export function resolveLegacyEmbeddingSpaceId(
+  input: EmbeddingSpaceIdInput,
+): string {
+  const dimensions = requirePositiveInteger(input.dimensions, "dimensions");
+  const quantization = requireQuantization(input.quantization);
+  const chunkerVersion = requirePositiveInteger(
+    input.chunkerVersion ?? EMBEDDING_INDEX_CHUNKER_VERSION,
+    "chunkerVersion",
+  );
+  const chunkTarget = requirePositiveInteger(
+    input.chunkTarget ?? EMBEDDING_CHUNK_DEFAULTS.targetTokens,
+    "chunkTarget",
+  );
+  const chunkMax = requirePositiveInteger(
+    input.chunkMax ?? EMBEDDING_CHUNK_DEFAULTS.maxTokens,
+    "chunkMax",
+  );
+  const chunkOverlap = requireNonNegativeInteger(
+    input.chunkOverlap ?? EMBEDDING_CHUNK_DEFAULTS.overlapTokens,
+    "chunkOverlap",
+  );
+  const payload = [
+    `domain=${SPACE_HASH_DOMAIN}`,
     `modelId=${input.modelId}`,
     `dimensions=${dimensions}`,
     `quantization=${quantization}`,
@@ -211,6 +266,11 @@ export function resolveEmbeddingSpace(
     chunkTarget: settings.chunkTarget,
     chunkMax: settings.chunkMax,
     chunkOverlap: settings.chunkOverlap,
+    backend: settings.backend,
+    ...(settings.backend === "endpoint" && settings.endpoint !== null
+      ? { endpointFingerprint: endpointFingerprint(settings.endpoint.baseUrl) }
+      : {}),
+    maxChunks: settings.maxChunksPerMessage,
   });
   const root = options.root ?? getRecallVectorsRoot();
   return {
@@ -239,7 +299,7 @@ function resolveEndpointSpaceModel(settings: ResolvedEmbeddingSettings): {
   const endpoint = settings.endpoint;
   if (endpoint === null) {
     throw new Error(
-      'The embedding backend is "endpoint" but no endpoint is configured; run /recall embedding setup and complete the endpoint form first.',
+      'The embedding backend is "endpoint" but no endpoint is configured; run /recall embedding connect and complete the endpoint form first.',
     );
   }
   return { modelId: endpoint.model, dimensions: endpoint.dimensions };
