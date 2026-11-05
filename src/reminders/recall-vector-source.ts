@@ -33,6 +33,7 @@ import { join } from "node:path";
 import {
   type EmbeddingIndexExpectation,
   loadEmbeddingIndex,
+  loadEmbeddingQuantIndex,
 } from "@/backend/local/embedding-cache";
 import {
   type EmbeddingVectorUnit,
@@ -44,6 +45,7 @@ import {
   parseMemoryVectorParentId,
   readMemoryVectorParentText,
 } from "@/backend/local/embedding-memory";
+import { searchEmbeddingQuantIndex } from "@/backend/local/embedding-quant";
 import {
   EMBEDDING_SEARCH_DEFAULT_TOP_K,
   type EmbeddingSearchHit,
@@ -188,6 +190,8 @@ export type RecallVectorSearchResult =
       hits: readonly RecallVectorSearchHit[];
       /** Chunks actually scored, for diagnostics. */
       chunks: number;
+      /** Chunks that cleared the cosine floor, before parent aggregation. */
+      chunkHits?: number;
       truncated?: boolean;
       reason?: string;
     }
@@ -315,8 +319,12 @@ export function createEmbeddingIndexSearch(
     let usableUnits = 0;
     let unusableUnits = 0;
     let chunks = 0;
+    let chunkHits = 0;
     let truncated = false;
     let firstProblem: string | undefined;
+    // The space names its precision; an int8 space stores codes only, so it is
+    // scored straight from the codes (no float32 view is ever built).
+    const quant = expectation.quant === "int8";
 
     for (const unit of units) {
       if (input.shouldStop()) {
@@ -329,27 +337,61 @@ export function createEmbeddingIndexSearch(
           root,
         },
       );
-      const loaded = loadEmbeddingIndex(unitDir, { expectation });
-      if (!loaded.ok) {
-        unusableUnits += 1;
-        firstProblem ??= problemText(loaded.problem, loaded.detail);
-        continue;
+      let searched: ReturnType<typeof searchEmbeddingIndex>;
+      let unitChunks: number;
+      if (quant) {
+        const loaded = loadEmbeddingQuantIndex(unitDir, { expectation });
+        if (!loaded.ok) {
+          unusableUnits += 1;
+          firstProblem ??= problemText(loaded.problem, loaded.detail);
+          continue;
+        }
+        unitChunks = loaded.index.records.length;
+        const quantSearched = searchEmbeddingQuantIndex(
+          {
+            dimensions: loaded.index.meta.dimensions,
+            records: loaded.index.records,
+            codes: loaded.index.codes,
+            scales: loaded.index.scales,
+            ...(loaded.index.exactVectors === undefined
+              ? {}
+              : { exactVectors: loaded.index.exactVectors }),
+          },
+          input.query,
+          { topK: input.topK, minScore },
+        );
+        searched = quantSearched.ok
+          ? {
+              ok: true,
+              hits: quantSearched.hits,
+              scannedChunks: quantSearched.scannedChunks,
+              chunkHits: quantSearched.chunkHits,
+            }
+          : quantSearched;
+      } else {
+        const loaded = loadEmbeddingIndex(unitDir, { expectation });
+        if (!loaded.ok) {
+          unusableUnits += 1;
+          firstProblem ??= problemText(loaded.problem, loaded.detail);
+          continue;
+        }
+        unitChunks = loaded.index.records.length;
+        searched = searchEmbeddingIndex(loaded.index, input.query, {
+          topK: input.topK,
+          minScore,
+        });
       }
-      usableUnits += 1;
-      const searched = searchEmbeddingIndex(loaded.index, input.query, {
-        topK: input.topK,
-        minScore,
-      });
       if (!searched.ok) {
         // A width mismatch is a space-level problem: one unit's answer cannot
         // be trusted against a query of another width, and mixing widths would
         // silently compare unrelated geometry.
-        usableUnits -= 1;
         unusableUnits += 1;
         firstProblem ??= problemText(searched.problem, searched.detail);
         continue;
       }
-      chunks += loaded.index.records.length;
+      usableUnits += 1;
+      chunks += unitChunks;
+      chunkHits += searched.chunkHits ?? 0;
       for (const hit of searched.hits) hits.push(taggedHit(unit, hit));
     }
 
@@ -362,6 +404,7 @@ export function createEmbeddingIndexSearch(
           status: "searched",
           hits: [],
           chunks,
+          chunkHits,
           truncated: true,
           reason: "the vector search budget expired",
         };
@@ -384,6 +427,7 @@ export function createEmbeddingIndexSearch(
       status: "searched",
       hits: depth === 0 ? [] : hits.slice(0, depth),
       chunks,
+      chunkHits,
       ...(truncated ? { truncated: true } : {}),
       ...(reasons.length === 0 ? {} : { reason: reasons.join("; ") }),
     };
@@ -646,12 +690,18 @@ async function searchVectorArm(
   const truncated = mapped.stopped || found.truncated === true || shouldStop();
   if (truncated) {
     reasons.push("the vector arm ran out of its own query budget");
-    return vectorOutcome("degraded", candidates, reasons.join("; "));
+    return vectorOutcome(
+      "degraded",
+      candidates,
+      reasons.join("; "),
+      found.chunkHits,
+    );
   }
   return vectorOutcome(
     candidates.length > 0 ? "searched" : "empty",
     candidates,
     reasons.length > 0 ? reasons.join("; ") : undefined,
+    found.chunkHits,
   );
 }
 
@@ -926,6 +976,7 @@ function vectorOutcome(
   status: RecallSourceStatus,
   candidates: readonly RecallVectorCandidate[],
   reason: string | undefined,
+  chunkHits?: number,
 ): RecallSourceOutcome {
   return {
     candidates: [...candidates],
@@ -934,6 +985,7 @@ function vectorOutcome(
       status,
       candidates: candidates.length,
       ...(reason === undefined ? {} : { reason }),
+      ...(chunkHits === undefined ? {} : { chunkHits }),
     },
   };
 }

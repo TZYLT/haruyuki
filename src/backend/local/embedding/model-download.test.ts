@@ -29,10 +29,12 @@ import {
   readEmbeddingModelNegativeCache,
   uninstallEmbeddingModel,
 } from "./model-download";
+import { BGE_ZH_LICENSE } from "./model-license";
 import {
-  BGE_ZH_LICENSE,
   type EmbeddingModelFile,
   type EmbeddingModelManifest,
+  getBuiltinModelManifest,
+  getModelIntegrityStatus,
 } from "./model-manifest";
 
 // ---------------------------------------------------------------------------
@@ -442,18 +444,14 @@ describe("fetchEmbeddingModel", () => {
     expect(existsSync(join(root, "model"))).toBe(false);
   });
 
-  test("the built-in manifest is refused by default until its digests are pinned", async () => {
-    const root = makeTempDir("hryk-model-download-");
-    const error = await rejectionKind(
-      fetchEmbeddingModel({
-        modelDir: join(root, "bge-small-zh-v1.5"),
-        stateFile: join(root, "state.json"),
-        diskFreeBytes: false,
-        env: {},
-      }),
-    );
-    expect(error.kind).toBe("unverified");
-    expect(error.modelId).toBe("bge-small-zh-v1.5");
+  test("the built-in manifest is fully pinned, so its fetch is never refused", () => {
+    const manifest = getBuiltinModelManifest();
+    expect(manifest.integrityPinned).toBe(true);
+    expect(getModelIntegrityStatus(manifest)).toEqual({
+      integrity: "sha256",
+      missingSha256: [],
+      missingBytes: [],
+    });
   });
 
   test("size-only opt-in downloads, warns and records computed digests", async () => {

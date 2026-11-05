@@ -71,6 +71,7 @@ import {
   readEmbeddingIndexPointer,
   writeEmbeddingIndex,
 } from "./embedding-format";
+import { copyQuantUnitIndex } from "./embedding-unit-copy-quant";
 
 /** Marker written by `markEmbeddingUnitDirty` inside the unit directory. */
 export const EMBEDDING_UNIT_DIRTY_FILE_NAME = ".dirty.json";
@@ -762,16 +763,47 @@ export function copyEmbeddingUnitIndex(
   if (sourceResolved.unitDir === targetResolved.unitDir) {
     return failure("unsafe-unit-key", "source and target are the same unit");
   }
+  const pointer = readEmbeddingIndexPointer(sourceResolved.unitDir);
+  if (!pointer.ok) {
+    return failure(
+      "source-index-unavailable",
+      pointer.detail ?? pointer.problem,
+    );
+  }
+  const unit = vectorUnitFor(target.spaceDir, targetResolved.parsed);
+  if (unit === undefined) {
+    return failure("unsafe-unit-key", "target space is not under an agent id");
+  }
+  if (pointer.pointer.quant === "int8") {
+    // An int8-only space has no float32 generation to copy; the quant helper
+    // decodes the source rows and commits an int8 generation for the target.
+    const copied = copyQuantUnitIndex({
+      sourceUnitDir: sourceResolved.unitDir,
+      targetUnitDir: targetResolved.unitDir,
+      targetUnit: unit,
+    });
+    if (!copied.ok) {
+      return failure(
+        copied.problem === "write-failed"
+          ? "io-error"
+          : "source-index-unavailable",
+        copied.detail,
+      );
+    }
+    return {
+      ok: true,
+      sourceGeneration: copied.sourceGeneration,
+      targetGeneration: copied.targetGeneration,
+      targetUnitDir: targetResolved.unitDir,
+      records: copied.records,
+    };
+  }
   const sourceIndex = readEmbeddingIndex(sourceResolved.unitDir);
   if (!sourceIndex.ok) {
     return failure(
       "source-index-unavailable",
       sourceIndex.detail ?? sourceIndex.problem,
     );
-  }
-  const unit = vectorUnitFor(target.spaceDir, targetResolved.parsed);
-  if (unit === undefined) {
-    return failure("unsafe-unit-key", "target space is not under an agent id");
   }
   const { snapshot } = sourceIndex;
   const { meta, vectors } = snapshot;

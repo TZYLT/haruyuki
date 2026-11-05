@@ -217,6 +217,12 @@ export type RecallSourceDiagnostic = {
   status: RecallSourceStatus;
   /** Candidates the source produced, after its own scope filtering. */
   candidates: number;
+  /**
+   * Vector arm only: chunks that cleared the cosine floor before parent
+   * aggregation (48-1 §7.5's "块级命中数"). Absent on sources that have no
+   * chunk layer.
+   */
+  chunkHits?: number;
   reason?: string;
 };
 

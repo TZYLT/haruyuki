@@ -1,10 +1,10 @@
-/**
+﻿/**
  * Brute-force vector search for the recall index (feature 48, package B2).
  *
  * Phase 1 scans every chunk of a space with a dot product. Vectors are stored
  * L2-normalized (the encoder normalizes before they reach the index), so the
  * dot product *is* cosine similarity and no per-query norm pass is needed. The
- * planned 10× corpus still fits in a linear scan; ANN is phase ③ (B6/B7/A6)
+ * planned 10脳 corpus still fits in a linear scan; ANN is phase 鈶?(B6/B7/A6)
  * and only starts above 200k chunks, at which point this module stays the
  * fallback.
  *
@@ -28,7 +28,7 @@ import type {
   EmbeddingParentLineSpan,
 } from "./embedding-format";
 
-/** Default number of parent hits a query arm requests (48-2 §4.7: 50). */
+/** Default number of parent hits a query arm requests (48-2 搂4.7: 50). */
 export const EMBEDDING_SEARCH_DEFAULT_TOP_K = 50;
 
 /** Why a search could not run. Both cases mean "use lexical recall". */
@@ -59,6 +59,11 @@ export type EmbeddingSearchResult =
       hits: EmbeddingSearchHit[];
       /** Chunks actually scored; lets the caller report scan cost. */
       scannedChunks: number;
+      /**
+       * Chunks that cleared `minScore`, before parent aggregation. Optional so
+       * existing fixtures keep compiling; production always sets it.
+       */
+      chunkHits?: number;
     }
   | { ok: false; problem: EmbeddingSearchProblem; detail?: string };
 
@@ -113,11 +118,13 @@ export function searchEmbeddingIndex(
     };
   }
   if (records.length === 0) {
-    return { ok: true, hits: [], scannedChunks: 0 };
+    return { ok: true, hits: [], scannedChunks: 0, chunkHits: 0 };
   }
 
+  const minScore = options.minScore ?? Number.NEGATIVE_INFINITY;
   const bestByParent = new Map<string, ParentBest>();
   let scannedChunks = 0;
+  let chunkHits = 0;
   for (const record of records) {
     const offset = record.vectorOffset;
     if (!Number.isInteger(offset) || offset < 0 || offset % 4 !== 0) {
@@ -140,6 +147,7 @@ export function searchEmbeddingIndex(
       };
     }
     scannedChunks += 1;
+    if (score >= minScore) chunkHits += 1;
     const previous = bestByParent.get(record.parentId);
     if (previous === undefined || score > previous.score) {
       bestByParent.set(record.parentId, { record, score });
@@ -147,7 +155,6 @@ export function searchEmbeddingIndex(
   }
 
   const topK = resolveTopK(options.topK);
-  const minScore = options.minScore ?? Number.NEGATIVE_INFINITY;
   const hits: EmbeddingSearchHit[] = [];
   for (const { record, score } of bestByParent.values()) {
     if (score < minScore) continue;
@@ -157,7 +164,7 @@ export function searchEmbeddingIndex(
     (left, right) =>
       right.score - left.score || left.parentId.localeCompare(right.parentId),
   );
-  return { ok: true, hits: hits.slice(0, topK), scannedChunks };
+  return { ok: true, hits: hits.slice(0, topK), scannedChunks, chunkHits };
 }
 
 function hitFromRecord(

@@ -50,9 +50,11 @@
 
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-
 import type { EmbeddingCalibrationBudget } from "@/backend/local/embedding/calibration";
 import type { EmbeddingBuildMode } from "@/types/embedding-protocol";
+import { debugWarn } from "@/utils/debug";
+import { ANN_TRIGGER_CHUNK_COUNT } from "./embedding-ann-index";
+import { writeAnnShardSidecar } from "./embedding-ann-search-sidecar";
 
 import {
   buildEmbeddingIndex,
@@ -60,6 +62,7 @@ import {
   type EmbeddingEmbedCallback,
 } from "./embedding-build";
 import {
+  type EmbeddingBuildDeviceSnapshot,
   type EmbeddingBuildIdentity,
   type EmbeddingBuildProgressUpdate,
   type EmbeddingBuildStateRecord,
@@ -72,6 +75,7 @@ import {
 } from "./embedding-build-state";
 import type { EmbeddingChunk, EmbeddingChunkPlan } from "./embedding-chunk";
 import {
+  type EmbeddingIndexQuant,
   type EmbeddingIndexSnapshot,
   type EmbeddingParentLineSpan,
   type EmbeddingVectorUnit,
@@ -91,6 +95,12 @@ import {
   type EmbeddingBuildLockEnvironment,
   type EmbeddingBuildLockHandle,
 } from "./embedding-lock";
+import { dequantizeEmbeddingVectors } from "./embedding-quant";
+import {
+  type EmbeddingQuantIndexSnapshot,
+  readEmbeddingQuantIndex,
+  writeEmbeddingQuantIndex,
+} from "./embedding-quant-format";
 
 /** Chunks per `embed` call when no other limit applies (48-2 §4.4). */
 export const EMBEDDING_RUN_MAX_CHUNKS_PER_BATCH = 32;
@@ -287,6 +297,12 @@ export type EmbeddingRunnerOptions = {
   /** Explicit target latency for the throughput inference. */
   targetBatchLatencyMs?: number;
   /**
+   * Storage precision of the space being built. `int8` writes codes only (no
+   * float32 originals: the `int8-only` mode chosen for 0.6.0), so an existing
+   * int8 generation is dequantized for reuse. Defaults to `f32`.
+   */
+  quant?: EmbeddingIndexQuant;
+  /**
    * `false` forces a full rebuild (`--full`, model/space switch). Defaults to
    * `true`, except under `mode: "full"` where it defaults to `false`.
    */
@@ -303,8 +319,18 @@ export type EmbeddingRunnerOptions = {
   isAborted?: () => boolean;
   /** Called after every checkpoint with the frozen A2 projection. */
   onProgress?: (snapshot: EmbeddingBuildStateSnapshot) => void;
+  /**
+   * Test seam for 48-2 §4.10's ANN sidecar trigger (200,000 chunks). Production
+   * leaves it unset; only the sidecar write consults it.
+   */
+  annTriggerChunkCount?: number;
   /** Injectable lock environment (clock/pid/host/token/isPidAlive). */
   lockEnvironment?: EmbeddingBuildLockEnvironment;
+  /**
+   * Device facts of this run (48-4 D-02). Written with every checkpoint so a
+   * status read can prove which execution providers the worker accepted.
+   */
+  device?: EmbeddingBuildDeviceSnapshot;
 };
 
 /**
@@ -503,7 +529,9 @@ export async function runEmbeddingBuild(
         const updated = await updateEmbeddingBuildState(
           statePath,
           { agentId: identity.agentId, spaceId: identity.spaceId, clock },
-          update,
+          options.device === undefined
+            ? update
+            : { ...update, device: options.device },
           { clock },
         );
         lastState = updated.state;
@@ -661,8 +689,19 @@ export async function runEmbeddingBuild(
       // the unit is simply rebuilt (never guessed, 48-1 §6.3).
       let previous: EmbeddingIndexSnapshot | null = null;
       try {
-        const loaded = readEmbeddingIndex(unitDir);
-        if (loaded.ok) previous = loaded.snapshot;
+        if ((options.quant ?? "f32") === "int8") {
+          // Int8-only storage keeps no float32 originals; the reuse lookup still
+          // needs row vectors, so this unit's codes are decoded here (one unit,
+          // not the space). The approximation is bounded by the same quantizer
+          // the query path uses.
+          const loaded = readEmbeddingQuantIndex(unitDir, {
+            includeFloat32: false,
+          });
+          if (loaded.ok) previous = floatSnapshotFromQuant(loaded.snapshot);
+        } else {
+          const loaded = readEmbeddingIndex(unitDir);
+          if (loaded.ok) previous = loaded.snapshot;
+        }
       } catch {
         previous = null;
       }
@@ -713,33 +752,45 @@ export async function runEmbeddingBuild(
         built.vectors[0]?.length ??
         previous?.meta.dimensions;
       try {
+        const writeGeneration = (
+          width: number,
+          records: typeof built.records,
+          vectors: typeof built.vectors,
+        ): void => {
+          if ((options.quant ?? "f32") === "int8") {
+            writeEmbeddingQuantIndex({
+              unitDir,
+              unit,
+              modelId: options.modelId,
+              dimensions: width,
+              records,
+              vectors,
+              coverage: built.coverage,
+              rescore: false,
+            });
+            return;
+          }
+          writeEmbeddingIndex({
+            unitDir,
+            unit,
+            modelId: options.modelId,
+            dimensions: width,
+            records,
+            vectors,
+            coverage: built.coverage,
+          });
+        };
         if (built.records.length > 0) {
           if (dimensions === undefined || !isPositiveInteger(dimensions)) {
             throw new Error(
               "Cannot write an index without the space dimensions.",
             );
           }
-          writeEmbeddingIndex({
-            unitDir,
-            unit,
-            modelId: options.modelId,
-            dimensions,
-            records: built.records,
-            vectors: built.vectors,
-            coverage: built.coverage,
-          });
+          writeGeneration(dimensions, built.records, built.vectors);
         } else if (dimensions !== undefined && isPositiveInteger(dimensions)) {
           // A now lexical-only unit still gets an empty generation so the old
           // vectors cannot be mistaken for current ones.
-          writeEmbeddingIndex({
-            unitDir,
-            unit,
-            modelId: options.modelId,
-            dimensions,
-            records: [],
-            vectors: [],
-            coverage: built.coverage,
-          });
+          writeGeneration(dimensions, [], []);
         }
       } catch (error) {
         const stateError = await unitFailure(
@@ -804,10 +855,60 @@ export async function runEmbeddingBuild(
     if (terminalError !== null) {
       return result("failed", { error: terminalError });
     }
+    if (!aborted) {
+      maybeWriteAnnSidecar(options, units, root, identity, totalChunks);
+    }
     return result(aborted ? "aborted" : "completed");
   } finally {
     await lease.release().catch(() => false);
     await lock.release().catch(() => false);
+  }
+}
+
+/**
+ * Writes the ANN sidecar for a space big enough to need one (48-2 §4.10).
+ *
+ * Below the trigger the exact B2 scan is the answer, so the build writes
+ * nothing extra; at or above it the query path can use A6 after this file
+ * exists. Best effort: a sidecar failure never fails a build that already
+ * committed its vectors (the query path simply keeps scanning flat).
+ *
+ * int8-only spaces are skipped: the sidecar format carries float32 vectors, and
+ * an int8 space's query path scores codes directly (no float32 view exists to
+ * build one from without paying the memory int8 was chosen to avoid).
+ */
+function maybeWriteAnnSidecar(
+  options: EmbeddingRunnerOptions,
+  units: readonly EmbeddingRunUnit[],
+  root: string,
+  identity: EmbeddingBuildIdentity,
+  totalChunks: number,
+): void {
+  if ((options.quant ?? "f32") !== "f32") return;
+  const trigger = options.annTriggerChunkCount ?? ANN_TRIGGER_CHUNK_COUNT;
+  if (totalChunks <= trigger || units.length === 0) return;
+  const annUnits = units.map(({ unit }) =>
+    "memoryFileKey" in unit
+      ? { kind: "memory" as const, file: "", memoryFileKey: unit.memoryFileKey }
+      : { kind: "transcript" as const, conversationKey: unit.conversationKey },
+  );
+  try {
+    const written = writeAnnShardSidecar({
+      space: { agentId: identity.agentId, spaceId: identity.spaceId },
+      units: annUnits,
+      root,
+    });
+    if (!written.ok) {
+      debugWarn(
+        "embedding",
+        `ANN sidecar not written (${written.problem}${written.detail === undefined ? "" : `: ${written.detail}`}); queries keep scanning flat.`,
+      );
+    }
+  } catch (error) {
+    debugWarn(
+      "embedding",
+      `ANN sidecar could not be written: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
@@ -864,4 +965,31 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error) return truncateMessage(error.message);
   if (typeof error === "string") return truncateMessage(error);
   return "unknown error";
+}
+
+/**
+ * A float32 view of an int8-only generation, for B3's reuse lookup.
+ *
+ * The lookup's contract is "same parent, same textHash, same spans → copy the
+ * old vector". The row is decoded from its codes and scale; the approximation
+ * is the storage format's own, and a reused vector is immediately re-quantized
+ * by the writer, so no exactness is lost beyond what int8-only already chose.
+ */
+function floatSnapshotFromQuant(
+  index: EmbeddingQuantIndexSnapshot,
+): EmbeddingIndexSnapshot {
+  const dimensions = index.meta.dimensions;
+  return {
+    unitDir: index.unitDir,
+    generation: index.generation,
+    pointer: index.pointer,
+    meta: { ...index.meta, quant: "f32" },
+    records: index.records.map(({ vectorScale: _scale, ...record }) => record),
+    vectors: dequantizeEmbeddingVectors({
+      dimensions,
+      count: index.records.length,
+      codes: index.codes,
+      scales: index.scales,
+    }),
+  };
 }

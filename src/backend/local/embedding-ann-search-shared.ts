@@ -86,6 +86,13 @@ export type AnnSearchResult =
       status: "searched";
       hits: readonly AnnSearchTaggedHit[];
       chunks: number;
+      /**
+       * Chunk hits before parent aggregation. The flat path counts chunks that
+       * clear the score floor; the ANN path counts the chunk refs the ANN scan
+       * selected (A6 has no floor to apply before B2 aggregation). Absent only
+       * when no shard could report a count.
+       */
+      chunkHits?: number;
       truncated?: boolean;
       reason?: string;
       degraded?: typeof ANN_SEARCH_DEGRADED;

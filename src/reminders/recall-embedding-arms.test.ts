@@ -53,6 +53,7 @@ import {
   maybeCreateRecallEmbeddingArms,
   type RecallEmbeddingArmsBackend,
   recallFusionOptionsFor,
+  resetRecallEmbeddingArmsEncoderCacheForTests,
 } from "@/reminders/recall-embedding-arms";
 import { RECALL_FUSION_DEFAULTS } from "@/reminders/recall-fusion";
 import type { RecallEntry } from "@/reminders/recall-port";
@@ -587,6 +588,147 @@ describe("createRecallEmbeddingArms", () => {
       });
       const arms = armsFor(fixture, settings, targetText);
       expect(arms?.fusion.vectorWeight).toBe(0);
+    });
+  });
+
+  test("the cosine safety floor still applies through the ANN-aware port", async () => {
+    await withRecallFixture(async (fixture) => {
+      const settings = endpointSettings();
+      const space = spaceFor(fixture.agentId, settings);
+      const { targetText } = writeTranscriptUnit({
+        storageDir: fixture.storageDir,
+        agentId: fixture.agentId,
+        spaceId: space.spaceId,
+        conversationKey: fixture.historyDirectory,
+        generation: "floor-transcript-1",
+      });
+      void targetText;
+      const unrelated = "zzzz completely unrelated words";
+      const encoder: EmbeddingQueryEncoder = {
+        id: "fake:floor",
+        async encodeQuery() {
+          return fakeEmbeddingVector(unrelated, DIMENSIONS);
+        },
+        async encodeBatch(texts: readonly string[]) {
+          return texts.map(() => fakeEmbeddingVector(unrelated, DIMENSIONS));
+        },
+        async dispose() {
+          // Nothing to release.
+        },
+      };
+      const arms = createRecallEmbeddingArms({
+        agentId: fixture.agentId,
+        settings,
+        storageDir: fixture.storageDir,
+        memoryDir: getLocalBackendMemoryFilesystemRoot(
+          fixture.agentId,
+          fixture.storageDir,
+        ),
+        root: VECTOR_ROOT,
+        encoder,
+        now: () => 0,
+      });
+      expect(arms).not.toBeNull();
+      if (arms === null) return;
+      const outcome = await arms.vectorSource.search({
+        terms: { rawText: unrelated, terms: ["zzzz"], phrases: [] },
+        scope: {
+          agentId: fixture.agentId,
+          currentConversationId: fixture.currentConversationId,
+        },
+      });
+      // The arm ran; the 0.35 floor removed the unrelated parent before
+      // fusion could see it.
+      expect(outcome.diagnostic.status).not.toBe("failed");
+      expect(outcome.candidates).toHaveLength(0);
+    });
+  });
+
+  test("one encoder per agent configuration; a switch stops the previous one", async () => {
+    await withRecallFixture(async (fixture) => {
+      const settings = endpointSettings();
+      const space = spaceFor(fixture.agentId, settings);
+      const { targetText } = writeTranscriptUnit({
+        storageDir: fixture.storageDir,
+        agentId: fixture.agentId,
+        spaceId: space.spaceId,
+        conversationKey: fixture.historyDirectory,
+        generation: "shared-encoder-1",
+      });
+      void targetText;
+      const built: string[] = [];
+      const disposed: string[] = [];
+      const factory = (
+        next: ResolvedEmbeddingSettings,
+      ): EmbeddingQueryEncoder => {
+        const id = `fake:encoder-${built.length}`;
+        built.push(id);
+        void next;
+        return {
+          id,
+          async encodeQuery() {
+            return null;
+          },
+          async encodeBatch(texts: readonly string[]) {
+            return texts.map(() => null);
+          },
+          async dispose() {
+            disposed.push(id);
+          },
+        };
+      };
+      const input = {
+        agentId: fixture.agentId,
+        settings,
+        storageDir: fixture.storageDir,
+        memoryDir: getLocalBackendMemoryFilesystemRoot(
+          fixture.agentId,
+          fixture.storageDir,
+        ),
+        root: VECTOR_ROOT,
+        encoderFactory: factory,
+        now: () => 0,
+      };
+      try {
+        // Two turns with the same settings share one handle: no per-turn ref
+        // growth and no second worker.
+        expect(createRecallEmbeddingArms(input)).not.toBeNull();
+        expect(createRecallEmbeddingArms(input)).not.toBeNull();
+        expect(built).toHaveLength(1);
+        expect(disposed).toHaveLength(0);
+
+        // A configuration change (another endpoint URL) replaces it and stops
+        // the old one. Since 48-4 D-11 the endpoint is part of the space
+        // identity, so the new configuration needs its own index.
+        const nextSettings: ResolvedEmbeddingSettings = {
+          ...settings,
+          endpoint: {
+            kind: "openai",
+            baseUrl: "http://127.0.0.1:2/v1",
+            model: MODEL_ID,
+            dimensions: DIMENSIONS,
+            timeoutMs: 1_000,
+          },
+        };
+        writeTranscriptUnit({
+          storageDir: fixture.storageDir,
+          agentId: fixture.agentId,
+          spaceId: spaceFor(fixture.agentId, nextSettings).spaceId,
+          conversationKey: fixture.historyDirectory,
+          generation: "shared-encoder-2",
+        });
+        expect(
+          createRecallEmbeddingArms({
+            ...input,
+            settings: nextSettings,
+          }),
+        ).not.toBeNull();
+        expect(built).toHaveLength(2);
+        expect(disposed).toEqual(["fake:encoder-0"]);
+      } finally {
+        await resetRecallEmbeddingArmsEncoderCacheForTests();
+      }
+      expect(disposed).toHaveLength(2);
     });
   });
 });

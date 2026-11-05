@@ -39,6 +39,7 @@
 
 import { type Dirent, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
+import { createAnnAwareIndexSearch } from "@/backend/local/embedding-ann-search";
 import {
   createEmbeddingQueryEncoder,
   type EmbeddingQueryEncoder,
@@ -63,6 +64,7 @@ import {
 import {
   type ResolvedEmbeddingSettings,
   readEmbeddingSettings,
+  readRecallSettings,
 } from "@/recall-settings";
 import {
   RECALL_FUSION_DEFAULTS,
@@ -74,8 +76,10 @@ import {
   createLocalVectorParentPort,
   createVectorRecallSource,
   type RecallEncoderPort,
+  type RecallVectorSearchPort,
   type RecallVectorUnit,
   VECTOR_RECALL_DEFAULT_BUDGET_MS,
+  VECTOR_RECALL_MIN_COSINE,
 } from "./recall-vector-source";
 
 /** One safe path component for a unit directory; same rule as the writer. */
@@ -107,8 +111,20 @@ export type CreateRecallEmbeddingArmsInput = {
    * worker lazily on the first encode.
    */
   encoder?: EmbeddingQueryEncoder;
+  /**
+   * Test seam for the per-agent encoder cache: builds the encoder when the
+   * agent's configuration changes. Production omits it.
+   */
+  encoderFactory?: (
+    settings: ResolvedEmbeddingSettings,
+  ) => EmbeddingQueryEncoder;
   /** Clock for the arm's own budget; tests inject one so nothing waits. */
   now?: () => number;
+  /**
+   * Relative score floor applied to the fused result (48-4 D-06). Defaults to
+   * `readRecallSettings().minScoreRatio`, the same knob the lexical arm uses.
+   */
+  minScoreRatio?: number;
 };
 
 /**
@@ -153,14 +169,11 @@ export function createRecallEmbeddingArms(
     }
 
     const encoder =
-      input.encoder ?? createEmbeddingQueryEncoder(input.settings);
+      input.encoder ??
+      sharedQueryEncoder(input.agentId, input.settings, input.encoderFactory);
     const vectorSource = createVectorRecallSource({
       encoder: encoder as RecallEncoderPort,
-      search: createEmbeddingIndexSearch({
-        space: { agentId: space.agentId, spaceId: space.spaceId },
-        root: space.root,
-        units,
-      }),
+      search: createSpaceSearch(space, units),
       parentReader: createLocalVectorParentPort({
         storageDir: input.storageDir,
         memoryDir: input.memoryDir,
@@ -173,10 +186,54 @@ export function createRecallEmbeddingArms(
       budgetMs: VECTOR_RECALL_DEFAULT_BUDGET_MS,
       ...(input.now === undefined ? {} : { now: input.now }),
     });
-    return { vectorSource, fusion: recallFusionOptionsFor(input.settings) };
+    return {
+      vectorSource,
+      fusion: recallFusionOptionsFor(input.settings, input.minScoreRatio),
+    };
   } catch {
     return null;
   }
+}
+
+/**
+ * The query port for one space.
+ *
+ * A float32 space uses A6: below the ANN trigger it runs the same flat scan
+ * (a missing sidecar is the normal flat path), above it reads the sidecar the
+ * build wrote. A6 has no score floor of its own, so the arm's cosine safety
+ * valve is applied here to the same parent score B2 filters on. An int8-only
+ * space keeps the code-scoring B2 reader: the sidecar format carries float32
+ * vectors, and an int8 space has no float32 view to build one from.
+ */
+function createSpaceSearch(
+  space: EmbeddingSpaceIdentity,
+  units: readonly RecallVectorUnit[],
+): RecallVectorSearchPort {
+  const expectation = { quant: space.quantization };
+  if (space.quantization === "int8") {
+    return createEmbeddingIndexSearch({
+      space: { agentId: space.agentId, spaceId: space.spaceId },
+      root: space.root,
+      units,
+      expectation,
+    });
+  }
+  const ann = createAnnAwareIndexSearch({
+    space: { agentId: space.agentId, spaceId: space.spaceId },
+    units,
+    root: space.root,
+    expectation,
+  });
+  return (input) => {
+    const result = ann(input);
+    if (result.status !== "searched") return result;
+    return {
+      ...result,
+      hits: result.hits.filter(
+        (hit) => hit.hit.score >= VECTOR_RECALL_MIN_COSINE,
+      ),
+    };
+  };
 }
 
 /** Input for {@link maybeCreateRecallEmbeddingArms}. */
@@ -195,6 +252,8 @@ export type MaybeCreateRecallEmbeddingArmsInput = {
   root?: string;
   /** Clock override forwarded to {@link createRecallEmbeddingArms}. */
   now?: () => number;
+  /** Fusion floor override; defaults to the recall settings value. */
+  minScoreRatio?: number;
 };
 
 /**
@@ -231,6 +290,9 @@ export function maybeCreateRecallEmbeddingArms(
       ...(input.root === undefined ? {} : { root: input.root }),
       ...(input.encoder === undefined ? {} : { encoder: input.encoder }),
       ...(input.now === undefined ? {} : { now: input.now }),
+      ...(input.minScoreRatio === undefined
+        ? {}
+        : { minScoreRatio: input.minScoreRatio }),
     });
   } catch {
     return null;
@@ -253,20 +315,89 @@ export function isRecallEmbeddingArmsRequested(
   return settings.backend === "builtin";
 }
 
+/** One live query encoder per agent, tagged with the configuration it serves. */
+type SharedQueryEncoder = {
+  key: string;
+  encoder: EmbeddingQueryEncoder;
+};
+
+const sharedEncodersByAgent = new Map<string, SharedQueryEncoder>();
+
+/**
+ * Everything about a settings record that decides which worker/model serves a
+ * query. The agent is the map key, so it is deliberately absent here.
+ */
+function encoderConfigurationKey(settings: ResolvedEmbeddingSettings): string {
+  if (settings.backend === "endpoint") {
+    const endpoint = settings.endpoint;
+    return JSON.stringify([
+      "endpoint",
+      endpoint?.kind ?? "",
+      endpoint?.baseUrl ?? "",
+      endpoint?.model ?? "",
+      endpoint?.dimensions ?? 0,
+    ]);
+  }
+  return JSON.stringify(["builtin", settings.model, settings.threads]);
+}
+
+/**
+ * The process-wide encoder for one agent, rebuilt only when the configuration
+ * changes.
+ *
+ * The turn path asks for arms once per turn. Creating a fresh encoder each time
+ * acquired a new reference on the shared worker and never released it, so the
+ * refcount grew without bound and a settings change left the old worker (its
+ * entry, model and RSS) alive for the life of the process. Keeping one handle
+ * per agent makes the reference stable and lets the previous configuration be
+ * shut down when the user switches model or backend.
+ */
+function sharedQueryEncoder(
+  agentId: string,
+  settings: ResolvedEmbeddingSettings,
+  factory:
+    | ((settings: ResolvedEmbeddingSettings) => EmbeddingQueryEncoder)
+    | undefined,
+): EmbeddingQueryEncoder {
+  const key = encoderConfigurationKey(settings);
+  const existing = sharedEncodersByAgent.get(agentId);
+  if (existing !== undefined && existing.key === key) return existing.encoder;
+  if (existing !== undefined) {
+    sharedEncodersByAgent.delete(agentId);
+    // A turn still holding the old handle degrades to lexical recall; the
+    // alternative is leaking one worker per configuration for the process life.
+    void existing.encoder.dispose().catch(() => undefined);
+  }
+  const encoder = factory?.(settings) ?? createEmbeddingQueryEncoder(settings);
+  sharedEncodersByAgent.set(agentId, { key, encoder });
+  return encoder;
+}
+
+/**
+ * Drop every shared query encoder and stop its worker. Tests call this between
+ * cases so a fake or a previous model can never serve the next one.
+ */
+export async function resetRecallEmbeddingArmsEncoderCacheForTests(): Promise<void> {
+  const encoders = [...sharedEncodersByAgent.values()];
+  sharedEncodersByAgent.clear();
+  await Promise.allSettled(encoders.map((entry) => entry.encoder.dispose()));
+}
+
 /**
  * The fusion tunables for a settings record.
  *
- * `vectorWeight` and the per-arm depth are the user's (D3); `k` and the
- * relative floor stay at the requirement's values (E1's defaults), because
- * neither is exposed as a knob.
+ * `vectorWeight`, the per-arm depth and the relative floor are all the user's:
+ * the first two from the embedding record, the floor from `/recall config
+ * ratio` (48-4 D-06), so one value governs both the lexical arm and fusion.
  */
 export function recallFusionOptionsFor(
   settings: ResolvedEmbeddingSettings,
+  minScoreRatio: number = readRecallSettings().minScoreRatio,
 ): RecallFusionOptions {
   return {
     vectorWeight: settings.weight,
     k: RECALL_FUSION_DEFAULTS.k,
-    minScoreRatio: RECALL_FUSION_DEFAULTS.minScoreRatio,
+    minScoreRatio,
     candidateDepth: settings.candidateDepth,
   };
 }

@@ -701,23 +701,46 @@ interface OnnxModule {
   ) => unknown;
 }
 
+interface OnnxModuleCandidate {
+  readonly InferenceSession?: unknown;
+  readonly Tensor?: unknown;
+  readonly default?: unknown;
+}
+
+/**
+ * A CJS exports object and an ESM namespace are both plain objects, but the
+ * real ORT package exposes `InferenceSession` as a **class** (a function with a
+ * static `create`), so a bare `typeof === "object"` test rejected every genuine
+ * module. Accept both a callable and an object export.
+ */
+function asModuleCandidate(value: unknown): OnnxModuleCandidate | null {
+  if (typeof value === "function") {
+    return value as unknown as OnnxModuleCandidate;
+  }
+  return isRecord(value) ? (value as OnnxModuleCandidate) : null;
+}
+
+function isSessionFactory(value: unknown): boolean {
+  if (typeof value !== "function" && !isRecord(value)) return false;
+  return typeof (value as { create?: unknown }).create === "function";
+}
+
 function resolveOnnxModule(loaded: unknown): OnnxModule {
-  for (const candidate of [
-    loaded,
-    isRecord(loaded) ? loaded.default : undefined,
-  ]) {
-    if (!isRecord(candidate)) continue;
-    const inferenceSession = candidate.InferenceSession;
+  const direct = asModuleCandidate(loaded);
+  const fromDefault = asModuleCandidate(direct?.default);
+  for (const candidate of [direct, fromDefault]) {
+    if (candidate === null) continue;
     if (
-      isRecord(inferenceSession) &&
-      typeof inferenceSession.create === "function" &&
+      isSessionFactory(candidate.InferenceSession) &&
       typeof candidate.Tensor === "function"
     ) {
       return candidate as unknown as OnnxModule;
     }
   }
+  const keys =
+    direct === null ? "none" : Object.keys(direct).slice(0, 12).join(",");
   throw new Error(
-    "The installed onnxruntime-node module does not expose InferenceSession/Tensor.",
+    `The installed onnxruntime-node module does not expose InferenceSession/Tensor (exports: ${keys}).`,
   );
 }
 

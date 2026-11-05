@@ -35,7 +35,13 @@ import type {
 import { searchEmbeddingIndex } from "./embedding-search";
 
 export type ShardAnnResult =
-  | { ok: true; hits: AnnSearchTaggedHit[]; scannedChunks: number }
+  | {
+      ok: true;
+      hits: AnnSearchTaggedHit[];
+      scannedChunks: number;
+      /** Chunk refs the ANN scan selected, before parent aggregation. */
+      chunkHits: number;
+    }
   | { ok: false; problem: AnnSearchDegradedReason; detail?: string };
 
 /** One selected chunk id, resolved back to its unit and records row. */
@@ -226,5 +232,6 @@ export function searchShardAnn(
     ok: true,
     hits: aggregated.hits,
     scannedChunks: searched.scannedVectors,
+    chunkHits: refs.length,
   };
 }

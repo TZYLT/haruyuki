@@ -141,6 +141,26 @@ describe("brute-force search", () => {
     expect(result.hits[0]?.chunkIndex).toBe(target.chunkIndex);
   });
 
+  test("chunkHits counts chunks that clear the floor, before aggregation", () => {
+    const text = EMBEDDING_FIXTURE_TEXTS.longTable;
+    const plan = buildEmbeddingChunkPlan({ parentId: "msg-long", text });
+    const snapshot = writeAndLoad([{ parentId: "msg-long", text }]);
+    const target = plan.chunks[1];
+    expect(target).toBeDefined();
+    if (target === undefined) return;
+
+    const result = searchEmbeddingIndex(
+      snapshot,
+      fakeEmbeddingVector(target.text),
+      { minScore: 0.99 },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.hits).toHaveLength(1);
+    expect(result.chunkHits).toBe(1);
+    expect(result.scannedChunks).toBe(plan.chunks.length);
+  });
+
   test("top-k limits parent hits and sorts by score", () => {
     const parents: ParentInput[] = [
       { parentId: "msg-a", text: EMBEDDING_FIXTURE_TEXTS.chineseProse },

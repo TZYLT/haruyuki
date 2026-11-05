@@ -346,6 +346,8 @@ export function createAnnShardedSearch(
     const observedP95 = percentile95(state.samples);
     const hits: AnnSearchTaggedHit[] = [];
     let scannedChunks = 0;
+    let chunkHits = 0;
+    let chunkHitsKnown = false;
     let scoredShards = 0;
     let annShards = 0;
     let truncated = false;
@@ -392,6 +394,8 @@ export function createAnnShardedSearch(
             annShards += 1;
             scoredShards += 1;
             scannedChunks += ann.scannedChunks;
+            chunkHits += ann.chunkHits;
+            chunkHitsKnown = true;
             hits.push(...ann.hits);
           } else {
             firstDegraded ??= { problem: ann.problem, detail: ann.detail };
@@ -408,6 +412,8 @@ export function createAnnShardedSearch(
       const flat = searchShardFlat(loaded, query, topK);
       recordFlatSample(state, resolved, startedAt);
       scannedChunks += flat.scannedChunks;
+      chunkHits += flat.chunkHits;
+      chunkHitsKnown = true;
       hits.push(...flat.hits);
       if (flat.scoredUnits > 0) scoredShards += 1;
       for (const problem of flat.problems) reasons.push(problem);
@@ -445,6 +451,7 @@ export function createAnnShardedSearch(
       status: "searched",
       hits: resultHits,
       chunks: totalChunks,
+      ...(chunkHitsKnown ? { chunkHits } : {}),
       ...(truncated ? { truncated: true } : {}),
       ...(reason.length === 0 ? {} : { reason: reason.join("; ") }),
       ...(firstDegraded === undefined ? {} : { degraded: ANN_SEARCH_DEGRADED }),

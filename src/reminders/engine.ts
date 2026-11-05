@@ -631,6 +631,25 @@ async function buildRecallReminder(
           agentId: context.agent.id,
           settings: embeddingSettings,
         });
+        // 48-1 §6.8/§6.10: the previous turn's messages are on disk now, so one
+        // debounced incremental catch-up runs in the background. Fire-and-forget
+        // by contract; the module owns its cooldown and never throws.
+        void import("./recall-embedding-autobuild")
+          .then(({ maybeScheduleEmbeddingCatchUp }) =>
+            maybeScheduleEmbeddingCatchUp({
+              backend,
+              agentId: context.agent.id,
+              settings: embeddingSettings,
+            }),
+          )
+          .catch((error: unknown) => {
+            debugLog(
+              "recall",
+              `Embedding catch-up not scheduled: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          });
       } catch (error) {
         debugLog(
           "recall",

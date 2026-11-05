@@ -4,9 +4,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
-  assertSafeModelRelativePath,
   BGE_M3_LICENSE,
   BGE_ZH_LICENSE,
+  QWEN3_EMBEDDING_LICENSE,
+} from "./model-license";
+import {
+  assertSafeModelRelativePath,
   BUILTIN_EMBEDDING_MODELS,
   buildModelFileUrl,
   defaultModelId,
@@ -17,7 +20,6 @@ import {
   getModelIntegrityStatus,
   getModelLicenseInfo,
   listBuiltinModelIds,
-  QWEN3_EMBEDDING_LICENSE,
   resolveModelFileAt,
   resolveModelFiles,
   validateModelManifest,
@@ -124,25 +126,26 @@ describe("built-in model table", () => {
     expect(byPath.get("onnx/model_quantized.onnx")?.sha256).toBe(
       "15b717c382bcb518ba457b93ea6850ede7f4f1cd8937454aa06972366cd19bcc",
     );
-    // Non-LFS JSON files: HF publishes no sha256 for them, so they stay null.
+    // Every required file is pinned, including the non-LFS JSON blobs whose
+    // digests were computed from the hf-mirror files.
     for (const path of [
       "config.json",
       "tokenizer.json",
       "tokenizer_config.json",
     ]) {
-      expect(byPath.get(path)?.sha256).toBeNull();
+      expect(byPath.get(path)?.sha256).toMatch(/^[0-9a-f]{64}$/);
       expect(byPath.get(path)?.sourceUrl).toStartWith(
         "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/",
       );
     }
   });
 
-  test("reports itself as unpinned until every required digest exists", () => {
+  test("reports itself as pinned once every required digest exists", () => {
     const manifest = getBuiltinModelManifest();
-    expect(manifest.integrityPinned).toBe(false);
+    expect(manifest.integrityPinned).toBe(true);
     expect(getModelIntegrityStatus(manifest)).toEqual({
-      integrity: "unverified",
-      missingSha256: ["config.json", "tokenizer.json", "tokenizer_config.json"],
+      integrity: "sha256",
+      missingSha256: [],
       missingBytes: [],
     });
   });

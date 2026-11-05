@@ -100,6 +100,34 @@ export interface EmbeddingBuildCoverage {
 }
 
 /**
+ * Which device the build actually ran on (48-4 D-02).
+ *
+ * `requested` is what the plan asked for; `initialized` is what the worker
+ * accepted. ONNX Runtime may fall back per node, so these are the only durable
+ * evidence that a GPU was used — the settings value alone proves nothing.
+ */
+export interface EmbeddingBuildDeviceSnapshot {
+  /** `builtin` runs a local worker; `endpoint` encodes over HTTP (CPU label). */
+  backend: "builtin" | "endpoint";
+  /** Providers the build asked for, in order. */
+  requested: readonly string[];
+  /** Providers the worker initialised with. */
+  initialized: readonly string[];
+  /** True when a non-CPU provider was accepted. */
+  gpu: boolean;
+  /** True when a GPU attempt failed and the CPU path took over. */
+  degraded: boolean;
+  /** Redacted fallback reason; present only with {@link degraded}. */
+  degradedReason?: string;
+  /** Intra-op threads requested; `0` means the runtime chose. */
+  threads: number;
+  /** Cold model load + warmup reported by the worker, in ms. */
+  warmupMs: number;
+  /** ISO timestamp of the run that recorded this block. */
+  measuredAt: string;
+}
+
+/**
  * The persisted shape of `state.json`.
  *
  * `phase` reuses the app-server protocol's `EmbeddingBuildState` union so the
@@ -122,6 +150,8 @@ export interface EmbeddingBuildStateRecord {
   finishedAt: number | null;
   /** Clock time of the last merge/write; `lastUpdated` in 48-2 §3.1 terms. */
   updatedAt: number;
+  /** Device facts of the latest run; absent on files written before 48-4. */
+  device?: EmbeddingBuildDeviceSnapshot;
 }
 
 export type EmbeddingBuildStateReadStatus =
@@ -190,6 +220,8 @@ export interface EmbeddingBuildStateSnapshot {
   rate: EmbeddingBuildRateSnapshot;
   eta: EmbeddingBuildEtaSnapshot;
   failures: readonly EmbeddingBuildFailure[];
+  /** Device facts of the latest run, or `null` when none were recorded. */
+  device: EmbeddingBuildDeviceSnapshot | null;
 }
 
 /** Absolute path of `state.json` for one space directory. */
@@ -337,6 +369,8 @@ export interface EmbeddingBuildProgressUpdate {
   finishedAt?: number | null;
   /** Appended to the failure list (which is bounded by max failures). */
   failure?: Omit<EmbeddingBuildFailure, "at">;
+  /** Device facts of this run; once set it is carried by later checkpoints. */
+  device?: EmbeddingBuildDeviceSnapshot;
 }
 
 export interface EmbeddingBuildMergeOptions {
@@ -449,6 +483,11 @@ export function mergeEmbeddingBuildProgress(
     startedAt,
     finishedAt,
     updatedAt: now,
+    ...(update.device !== undefined
+      ? { device: update.device }
+      : state.device !== undefined
+        ? { device: state.device }
+        : {}),
   };
 }
 
@@ -563,6 +602,14 @@ export function snapshotEmbeddingBuildState(
     rate: Object.freeze(rate),
     eta: Object.freeze(eta),
     failures,
+    device:
+      state.device === undefined
+        ? null
+        : Object.freeze({
+            ...state.device,
+            requested: Object.freeze([...state.device.requested]),
+            initialized: Object.freeze([...state.device.initialized]),
+          }),
   });
 }
 
@@ -620,6 +667,7 @@ function parseEmbeddingBuildStateRecord(value: unknown): ParsedState {
   if (!rateSamples) {
     return { ok: false, detail: "state file has an invalid rate sample list" };
   }
+  const device = parseDeviceSnapshot(record.device);
   return {
     ok: true,
     state: {
@@ -640,8 +688,59 @@ function parseEmbeddingBuildStateRecord(value: unknown): ParsedState {
         Number.isFinite(record.updatedAt)
           ? record.updatedAt
           : 0,
+      ...(device === null ? {} : { device }),
     },
   };
+}
+
+/**
+ * Tolerant parse of the additive `device` block.
+ *
+ * A malformed device block is dropped rather than declaring the whole state
+ * corrupt: it is diagnostic evidence, not progress. Old files simply lack it.
+ */
+function parseDeviceSnapshot(
+  value: unknown,
+): EmbeddingBuildDeviceSnapshot | null {
+  if (value === undefined) return null;
+  if (!isPlainObject(value)) return null;
+  const backend = value.backend === "endpoint" ? "endpoint" : "builtin";
+  const requested = stringList(value.requested);
+  const initialized = stringList(value.initialized);
+  if (requested === null || initialized === null) return null;
+  if (typeof value.threads !== "number" || !Number.isFinite(value.threads)) {
+    return null;
+  }
+  if (typeof value.warmupMs !== "number" || !Number.isFinite(value.warmupMs)) {
+    return null;
+  }
+  if (typeof value.measuredAt !== "string" || value.measuredAt.length === 0) {
+    return null;
+  }
+  return {
+    backend,
+    requested,
+    initialized,
+    gpu: value.gpu === true,
+    degraded: value.degraded === true,
+    ...(typeof value.degradedReason === "string" &&
+    value.degradedReason.length > 0
+      ? { degradedReason: value.degradedReason }
+      : {}),
+    threads: Math.max(0, Math.trunc(value.threads)),
+    warmupMs: Math.max(0, value.warmupMs),
+    measuredAt: value.measuredAt,
+  };
+}
+
+function stringList(value: unknown): readonly string[] | null {
+  if (!Array.isArray(value)) return null;
+  const list: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") return null;
+    list.push(entry);
+  }
+  return list;
 }
 
 function parseProgressCounters(

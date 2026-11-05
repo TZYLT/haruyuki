@@ -27,24 +27,27 @@
  * below; no per-file size or sha256 was verified for either, so those fields stay
  * `null`, `integrityPinned` is `false`, and the default fetch path refuses them.
  *
- * **Where the built-in numbers come from (2026-11-04).** The sizes and the q8
- * weights' sha256 were read from the Hugging Face model-file metadata JSON for
- * `Xenova/bge-small-zh-v1.5` (the transformers.js ONNX conversion of
- * `BAAI/bge-small-zh-v1.5`), served by the hf-mirror deployment:
+ * **Where the built-in numbers come from.** `Xenova/bge-small-zh-v1.5` (the
+ * transformers.js ONNX conversion of `BAAI/bge-small-zh-v1.5`) is fully pinned:
+ * sizes and the weights digest came from
+ * `https://hf-mirror.com/api/models/Xenova/bge-small-zh-v1.5?blobs=true`, and
+ * the three non-LFS JSON digests were computed from files fetched from the same
+ * mirror. The experimental m3/Qwen entries stay unpinned until verified.
  *
- *   https://hf-mirror.com/api/models/Xenova/bge-small-zh-v1.5?blobs=true
+ * Licence constants live in `./model-license` (this file is at the size
+ * ceiling).
  *
- * The three JSON files are stored as ordinary git blobs, not LFS objects, so
- * that API reports no sha256 for them; their digests stay `null` until a trusted
- * source supplies them (ModelScope's repo-files API does list a `Sha256`, and a
- * manual import records the hash it computed). No weights were downloaded to
- * produce this table; only the metadata JSON above was read.
- *
- * Layer: `backend/local/`. Imports only the sibling cache-path resolver
- * (`./secrets`) and `node:path`; no higher-layer or domain imports.
+ * Layer: `backend/local/`. Imports only sibling modules and `node:path`; no
+ * higher-layer or domain imports.
  */
 
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  BGE_M3_LICENSE,
+  BGE_ZH_LICENSE,
+  type EmbeddingModelLicense,
+  QWEN3_EMBEDDING_LICENSE,
+} from "./model-license";
 import { getEmbeddingModelDir } from "./secrets";
 
 /**
@@ -127,21 +130,6 @@ export interface EmbeddingModelFile {
   readonly sourceUrl?: string;
   /** Optional files may be missing without failing the install. */
   readonly optional?: boolean;
-}
-
-/** Licence metadata shown by the wizard before a download (48-1 §6.4). */
-export interface EmbeddingModelLicense {
-  /** SPDX identifier (`MIT`, `Apache-2.0`). */
-  readonly id: string;
-  readonly name: string;
-  /** Canonical licence URL (https). */
-  readonly url: string;
-  /** Whether the weights may be redistributed; true only for permissive terms. */
-  readonly redistributable: boolean;
-  /** One-line disclosure surfaced next to the download confirmation. */
-  readonly notice: string;
-  /** Full licence text when it is short enough to embed (`MIT`). */
-  readonly text: string | null;
 }
 
 /** Everything the downloader and the UI need to know about one model. */
@@ -242,60 +230,6 @@ export interface EmbeddingModelIntegrityStatus {
 }
 
 /**
- * The MIT licence under which `BAAI/bge-small-zh-v1.5` is published. The ONNX
- * conversion (`Xenova/*`) is a derivative of those weights and keeps the same
- * terms; the notice names the upstream authors, not the converter.
- */
-export const BGE_ZH_LICENSE: EmbeddingModelLicense = {
-  id: "MIT",
-  name: "MIT License",
-  url: "https://opensource.org/licenses/MIT",
-  redistributable: true,
-  notice:
-    "MIT. Weights are downloaded, never shipped in the npm package; attribution: BAAI/bge-small-zh-v1.5.",
-  text: `MIT License
-
-Copyright (c) 2023 Beijing Academy of Artificial Intelligence (BAAI)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-`,
-};
-
-/** MIT terms for `BAAI/bge-m3`; the Xenova ONNX conversion keeps them. */
-export const BGE_M3_LICENSE: EmbeddingModelLicense = {
-  ...BGE_ZH_LICENSE,
-  notice:
-    "MIT. Weights are downloaded, never shipped in the npm package; attribution: BAAI/bge-m3.",
-};
-
-/** Apache-2.0 terms of `Qwen/Qwen3-Embedding-0.6B` (48-1 §5.2/§6.4). */
-export const QWEN3_EMBEDDING_LICENSE: EmbeddingModelLicense = {
-  id: "Apache-2.0",
-  name: "Apache License 2.0",
-  url: "https://www.apache.org/licenses/LICENSE-2.0",
-  redistributable: true,
-  notice:
-    "Apache-2.0. Weights are downloaded, never shipped in the npm package; attribution: Qwen/Qwen3-Embedding-0.6B.",
-  text: null,
-};
-
-/**
  * Source templates. Kept as named values so a manifest and a test refer to the
  * same template instead of duplicating URL syntax. The npm template is present
  * for an npm-hosted copy of the weights; no built-in model uses it yet because
@@ -351,8 +285,10 @@ function modelFile(
 
 /**
  * `bge-small-zh-v1.5` (512d, MIT). The ONNX repository is the `Xenova/…`
- * conversion the 48-2 reconnaissance measured; sizes and the q8 sha256 are the
- * 2026-11-04 hf-mirror metadata values and the three JSON files stay `null`.
+ * conversion the 48-2 reconnaissance measured. Sizes are the 2026-11-04
+ * hf-mirror metadata values; all four digests were computed from files fetched
+ * from that same mirror (the q8 weights digest matches the metadata one), so
+ * this is the first fully pinned built-in model.
  */
 const BGE_SMALL_ZH_REPOSITORY = "Xenova/bge-small-zh-v1.5";
 
@@ -369,9 +305,24 @@ const BGE_SMALL_ZH_MANIFEST: EmbeddingModelManifest = {
   documentInstruction: null,
   license: BGE_ZH_LICENSE,
   files: [
-    modelFile("config.json", BGE_SMALL_ZH_REPOSITORY, 716, null),
-    modelFile("tokenizer.json", BGE_SMALL_ZH_REPOSITORY, 439_125, null),
-    modelFile("tokenizer_config.json", BGE_SMALL_ZH_REPOSITORY, 367, null),
+    modelFile(
+      "config.json",
+      BGE_SMALL_ZH_REPOSITORY,
+      716,
+      "d4193ead3a810fd694fa8a31d7fc72fbaebc0668b603e398734bf2f6538ff42f",
+    ),
+    modelFile(
+      "tokenizer.json",
+      BGE_SMALL_ZH_REPOSITORY,
+      439_125,
+      "48cea5d44424912a6fd1ea647bf4fe50b55ab8b1e5879c3275f80e339e8fae26",
+    ),
+    modelFile(
+      "tokenizer_config.json",
+      BGE_SMALL_ZH_REPOSITORY,
+      367,
+      "e6f3b96db926a37d4039995fbf5ad17de158dfb8f6343d607e4dbaad18d75f5a",
+    ),
     modelFile(
       "onnx/model_quantized.onnx",
       BGE_SMALL_ZH_REPOSITORY,
@@ -382,10 +333,10 @@ const BGE_SMALL_ZH_MANIFEST: EmbeddingModelManifest = {
   sources: BUILTIN_MODEL_SOURCES,
   quantization: "q8",
   variants: ["q8", "fp32"],
-  integrityPinned: false,
+  integrityPinned: true,
   notes: [
-    "Sizes and the q8 sha256 read from https://hf-mirror.com/api/models/Xenova/bge-small-zh-v1.5?blobs=true on 2026-11-04; no weights were downloaded.",
-    "config.json/tokenizer.json/tokenizer_config.json are non-LFS blobs, so that API exposes no sha256; they stay null until pinned (ModelScope lists a Sha256, or record a manual import's computed hash).",
+    "Sizes and the q8 weights sha256 read from https://hf-mirror.com/api/models/Xenova/bge-small-zh-v1.5?blobs=true on 2026-11-04.",
+    "The three non-LFS JSON digests are the sha256 of the files fetched from hf-mirror on 2026-11-05; the weights digest computed from the same fetch matched the metadata value, so the source is the manifest's own repository.",
     "ModelScope mirrors this repo; hf-mirror and ModelScope serve the same LFS object for onnx/model_quantized.onnx.",
   ],
 };

@@ -14,6 +14,8 @@ import { searchEmbeddingIndex } from "./embedding-search";
 export type ShardFlatResult = {
   hits: AnnSearchTaggedHit[];
   scannedChunks: number;
+  /** Chunks that cleared the score floor, before parent aggregation. */
+  chunkHits: number;
   /** Units whose B2 scan actually ran (dimension drift skips one). */
   scoredUnits: number;
   problems: string[];
@@ -28,6 +30,7 @@ export function searchShardFlat(
   const hits: AnnSearchTaggedHit[] = [];
   const problems: string[] = [];
   let scannedChunks = 0;
+  let chunkHits = 0;
   let scoredUnits = 0;
   for (const entry of loaded.entries) {
     const searched = searchEmbeddingIndex(entry.snapshot, query, { topK });
@@ -39,7 +42,8 @@ export function searchShardFlat(
     }
     scoredUnits += 1;
     scannedChunks += searched.scannedChunks;
+    chunkHits += searched.chunkHits ?? 0;
     for (const hit of searched.hits) hits.push(tagHit(entry.unit, hit));
   }
-  return { hits, scannedChunks, scoredUnits, problems };
+  return { hits, scannedChunks, chunkHits, scoredUnits, problems };
 }

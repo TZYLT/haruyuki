@@ -291,6 +291,8 @@ export type EmbeddingQuantSearchResult =
       hits: EmbeddingSearchHit[];
       /** Chunks visited by the int8 coarse scan. */
       scannedChunks: number;
+      /** Chunks that cleared `minScore`, before parent aggregation. */
+      chunkHits: number;
       /** Candidates re-computed from float32 originals; `0` for int8-only. */
       rescoredChunks: number;
       /** Mode actually used. */
@@ -360,6 +362,7 @@ export function searchEmbeddingQuantIndex(
   const minScore = options.minScore ?? Number.NEGATIVE_INFINITY;
 
   const coarse: { row: number; score: number }[] = [];
+  let chunkHits = 0;
   for (let row = 0; row < count; row += 1) {
     const scale = scales[row] ?? 0;
     if (!Number.isFinite(scale) || scale < 0) {
@@ -382,6 +385,7 @@ export function searchEmbeddingQuantIndex(
         detail: `record ${row} produced a non-finite score`,
       };
     }
+    if (score >= minScore) chunkHits += 1;
     coarse.push({ row, score });
   }
   if (count === 0) {
@@ -389,6 +393,7 @@ export function searchEmbeddingQuantIndex(
       ok: true,
       hits: [],
       scannedChunks: 0,
+      chunkHits: 0,
       rescoredChunks: 0,
       mode,
       rescoreUnavailable,
@@ -452,6 +457,7 @@ export function searchEmbeddingQuantIndex(
     ok: true,
     hits: hits.slice(0, topK),
     scannedChunks: count,
+    chunkHits,
     rescoredChunks,
     mode,
     rescoreUnavailable,

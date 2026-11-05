@@ -378,9 +378,9 @@ function degradeReasonFor(
  * breaker in `recall-runtime.ts` (which reads `timedOut`/`status` only) is
  * untouched by this function.
  *
- * Chunk-level counts (`chunks.hits`) are not visible at this layer: E2/B2 report
- * parent hits after aggregation, so only `parents` is recorded and the
- * pre-aggregation hit count stays `0`.
+ * Chunk-level counts come from the vector diagnostic: E2 reports how many
+ * chunks cleared the cosine floor before parent aggregation, so `chunks.hits`
+ * answers "did the vector arm find passages the budget then dropped" (S-04).
  */
 function recordRecallMetrics(input: {
   fused: FusedRecallCandidates;
@@ -402,8 +402,10 @@ function recordRecallMetrics(input: {
       return arms === undefined ? arm === "lexical" : arms.includes(arm);
     }).length;
   const degrade: EmbeddingDegradeReason[] = [];
+  let chunkHits = 0;
   for (const diagnostic of input.diagnostics) {
     if (diagnostic.source !== "vector") continue;
+    chunkHits += diagnostic.chunkHits ?? 0;
     const reason = degradeReasonFor(diagnostic.status);
     if (reason !== undefined) degrade.push(reason);
   }
@@ -417,7 +419,7 @@ function recordRecallMetrics(input: {
       candidates: input.fused.vector.length,
       injected: injectedByArm("vector"),
     },
-    chunks: { parents: input.fused.vector.length },
+    chunks: { hits: chunkHits, parents: input.fused.vector.length },
     bothArms:
       fusedResult === null
         ? 0

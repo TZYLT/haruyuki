@@ -232,6 +232,9 @@ describe("flat path below the trigger", () => {
     if (result.status !== "searched") return;
     expect(result.hits.length).toBe(5);
     expect(result.chunks).toBe(12);
+    // The flat path must report chunk hits: a status face showing 0 here while
+    // the vector arm returned candidates is the 48-4 P0-1 bug.
+    expect(result.chunkHits).toBeGreaterThan(0);
     expect(result.degraded).toBeUndefined();
     for (let index = 1; index < result.hits.length; index += 1) {
       expect(result.hits[index - 1]?.hit.score ?? 0).toBeGreaterThanOrEqual(
@@ -322,6 +325,8 @@ describe("ANN path (injected trigger)", () => {
     }
     expect(annResult.degraded).toBeUndefined();
     expect(parentIds(annResult.hits)).toEqual(parentIds(flatResult.hits));
+    // The ANN path reports the chunk refs it selected, never a hard 0.
+    expect(annResult.chunkHits).toBeGreaterThan(0);
     for (const [index, hit] of annResult.hits.entries()) {
       expect(hit.hit.score).toBeCloseTo(
         flatResult.hits[index]?.hit.score ?? 0,
