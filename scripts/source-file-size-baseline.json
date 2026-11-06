@@ -9,7 +9,7 @@
   "src/cli/app/AppView.tsx": 1423,
   "src/cli/app/use-approval-flow.ts": 1063,
   "src/cli/app/use-configuration-handlers.ts": 1367,
-  "src/cli/app/use-conversation-loop.ts": 2790,
+  "src/cli/app/use-conversation-loop.ts": 2798,
   "src/cli/app/use-submit-handler.ts": 2915,
   "src/cli/components/InputRich.tsx": 1945,
   "src/cli/components/ModelSelector.tsx": 1210,
@@ -17,7 +17,7 @@
   "src/cli/helpers/accumulator.ts": 1601,
   "src/cli/mods/local-mod-loader.test.ts": 1043,
   "src/cli/subcommands/skills.ts": 1266,
-  "src/headless.ts": 4894,
+  "src/headless.ts": 4900,
   "src/hooks/integration.test.ts": 1147,
   "src/index.ts": 2053,
   "src/mods/learning-harness.ts": 2435,
@@ -33,10 +33,10 @@
   "src/settings-manager.ts": 2205,
   "src/tools/manager.ts": 2615,
   "src/tools/tool-execution-context.test.ts": 1092,
-  "src/types/protocol_v2.ts": 2693,
+  "src/types/protocol_v2.ts": 2705,
   "src/websocket/listen-client-concurrency.test.ts": 2555,
   "src/websocket/listen-client-protocol.test.ts": 5624,
   "src/websocket/listener/commands/memory.ts": 1113,
   "src/websocket/listener/file-commands.ts": 1052,
-  "src/websocket/listener/protocol-inbound.ts": 2158
+  "src/websocket/listener/protocol-inbound.ts": 2170
 }
