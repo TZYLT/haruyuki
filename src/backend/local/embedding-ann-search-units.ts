@@ -21,17 +21,48 @@ import {
 import {
   type EmbeddingIndexExpectation,
   loadEmbeddingIndex,
+  loadEmbeddingQuantIndex,
 } from "./embedding-cache";
 import {
+  type EmbeddingIndexQuant,
   type EmbeddingIndexSnapshot,
   embeddingVectorUnitDir,
 } from "./embedding-format";
+import type { EmbeddingQuantIndexSnapshot } from "./embedding-quant-format";
+
+/** A B2 snapshot: float32 (`vectors.bin`) or native int8 (codes + scales). */
+export type LoadedUnitSnapshot =
+  | EmbeddingIndexSnapshot
+  | EmbeddingQuantIndexSnapshot;
 
 export type LoadedUnit = {
   unit: AnnSearchUnit;
   key: string;
+  snapshot: LoadedUnitSnapshot;
+};
+
+/** A unit whose resident snapshot carries float32 vectors. */
+export type FlatLoadedUnit = Omit<LoadedUnit, "snapshot"> & {
   snapshot: EmbeddingIndexSnapshot;
 };
+
+/** A unit whose resident snapshot carries int8 codes and per-row scales. */
+export type QuantLoadedUnit = Omit<LoadedUnit, "snapshot"> & {
+  snapshot: EmbeddingQuantIndexSnapshot;
+};
+
+/** The encoding of a loaded unit's snapshot (`int8` spaces use codes). */
+export function unitSnapshotQuant(entry: LoadedUnit): EmbeddingIndexQuant {
+  return entry.snapshot.meta.quant === "int8" ? "int8" : "f32";
+}
+
+export function isFlatUnit(entry: LoadedUnit): entry is FlatLoadedUnit {
+  return entry.snapshot.meta.quant !== "int8";
+}
+
+export function isQuantUnit(entry: LoadedUnit): entry is QuantLoadedUnit {
+  return entry.snapshot.meta.quant === "int8";
+}
 
 export type LoadedShard = {
   agentId: string;
@@ -80,6 +111,23 @@ export function loadShard(
       unitDir = embeddingVectorUnitDir(unitIdentity(unit, space), { root });
     } catch (error) {
       problems.push(`${unit.kind}:${key}: ${errorMessage(error)}`);
+      continue;
+    }
+    if ((expectation?.quant ?? "f32") === "int8") {
+      // Native int8: the resident snapshot is codes + scales, never a float32
+      // view (the memory int8 exists to avoid). `int8-only` also keeps a
+      // legacy rescore file out of memory.
+      const loaded = loadEmbeddingQuantIndex(unitDir, {
+        mode: "int8-only",
+        expectation,
+      });
+      if (!loaded.ok) {
+        problems.push(
+          `${unit.kind}:${key}: ${loaded.problem}${loaded.detail === undefined ? "" : ` (${loaded.detail})`}`,
+        );
+        continue;
+      }
+      entries.push({ unit, key, snapshot: loaded.index });
       continue;
     }
     const loaded = loadEmbeddingIndex(unitDir, { expectation });

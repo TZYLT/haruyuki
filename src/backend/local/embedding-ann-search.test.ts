@@ -19,6 +19,7 @@ import { generateAnnBenchDataset } from "@/backend/local/embedding/ann-bench";
 import { resolveAnnIvfOptions } from "@/backend/local/embedding-ann-index";
 import {
   ANN_SEARCH_DEGRADED,
+  ANN_SEARCH_MANIFEST_FILE_NAME,
   type AnnSearchTaggedHit,
   type AnnSearchUnit,
   annShardSidecarDir,
@@ -34,6 +35,7 @@ import {
   hashEmbeddingText,
   writeEmbeddingIndex,
 } from "@/backend/local/embedding-format";
+import { writeEmbeddingQuantIndex } from "@/backend/local/embedding-quant-format";
 import type { RecallVectorSearchPort } from "@/reminders/recall-vector-source";
 import {
   createEmbeddingFixtureDirs,
@@ -158,6 +160,30 @@ function writeUnit(
       recallableChars: unitRows.length * 12,
       ratio: 1,
     },
+  });
+}
+
+/** Writes one real B2 int8 generation (codes only, no float32 originals). */
+function writeInt8Unit(
+  space: { agentId: string; spaceId: string },
+  unit: AnnSearchUnit,
+  data: Corpus,
+  unitRows: readonly number[],
+): void {
+  const identity = embeddingUnitOf(space, unit);
+  writeEmbeddingQuantIndex({
+    unitDir: embeddingVectorUnitDir(identity, { root: dirs.root }),
+    unit: identity,
+    modelId: "fake-bge-small-zh",
+    dimensions: data.dimensions,
+    records: unitRows.map((row) => recordFor(row)),
+    vectors: unitRows.map((row) => rowVector(data, row)),
+    coverage: {
+      embeddedChars: unitRows.length * 12,
+      recallableChars: unitRows.length * 12,
+      ratio: 1,
+    },
+    rescore: false,
   });
 }
 
@@ -556,6 +582,118 @@ describe("sidecar fallbacks", () => {
     expect(() => search({ query: new Float32Array(3), topK: 4 })).not.toThrow();
     const result = search({ query: new Float32Array(3), topK: 4 });
     expect(result.status).toBe("unavailable");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Native int8 spaces (48-4 D-23)
+// ---------------------------------------------------------------------------
+
+describe("native int8 spaces", () => {
+  test("the int8 sidecar carries quant and matches the flat code scan", () => {
+    const data = dataset(120);
+    const units = [transcriptUnit("conv-1"), transcriptUnit("conv-2")];
+    writeInt8Unit(SPACE, units[0] as AnnSearchUnit, data, rows(0, 60));
+    writeInt8Unit(SPACE, units[1] as AnnSearchUnit, data, rows(60, 120));
+    const written = writeAnnShardSidecar({
+      space: SPACE,
+      units,
+      root: dirs.root,
+      expectation: { quant: "int8" },
+      ivf: exactIvf(120),
+    });
+    expect(written.ok).toBe(true);
+    if (!written.ok) return;
+    expect(written.manifest.quant).toBe("int8");
+    expect(written.manifest.kind).toBe("ivf");
+
+    const query = queryOf(data);
+    const flat = createAnnAwareIndexSearch({
+      space: SPACE,
+      units,
+      root: dirs.root,
+      expectation: { quant: "int8" },
+    });
+    const ann = createAnnAwareIndexSearch({
+      space: SPACE,
+      units,
+      root: dirs.root,
+      expectation: { quant: "int8" },
+      trigger: { chunkCount: 1 },
+    });
+    const flatResult = flat({ query, topK: 5 });
+    const annResult = ann({ query, topK: 5 });
+    expect(flatResult.status).toBe("searched");
+    expect(annResult.status).toBe("searched");
+    if (flatResult.status !== "searched" || annResult.status !== "searched") {
+      return;
+    }
+    expect(annResult.degraded).toBeUndefined();
+    expect(parentIds(annResult.hits)).toEqual(parentIds(flatResult.hits));
+    expect(annResult.chunkHits).toBeGreaterThan(0);
+    for (const [index, hit] of annResult.hits.entries()) {
+      expect(hit.hit.score).toBeCloseTo(
+        flatResult.hits[index]?.hit.score ?? 0,
+        6,
+      );
+    }
+    expect(ann.stats().kind).toBe("ann");
+    expect(flat.stats().kind).toBe("flat");
+  });
+
+  test("a float32 manifest cannot serve an int8 space", () => {
+    const data = dataset(40);
+    const units = [transcriptUnit("conv-1")];
+    writeInt8Unit(SPACE, units[0] as AnnSearchUnit, data, rows(0, 40));
+    const written = writeAnnShardSidecar({
+      space: SPACE,
+      units,
+      root: dirs.root,
+      expectation: { quant: "int8" },
+      ivf: exactIvf(40),
+    });
+    expect(written.ok).toBe(true);
+    if (!written.ok) return;
+    const manifestPath = join(written.dir, ANN_SEARCH_MANIFEST_FILE_NAME);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    manifest.quant = "f32";
+    writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
+
+    const ann = createAnnAwareIndexSearch({
+      space: SPACE,
+      units,
+      root: dirs.root,
+      expectation: { quant: "int8" },
+      trigger: { chunkCount: 1 },
+    });
+    const result = ann({ query: queryOf(data), topK: 3 });
+    expect(result.status).toBe("searched");
+    if (result.status !== "searched") return;
+    expect(result.degraded).toBe(ANN_SEARCH_DEGRADED);
+    expect(result.reason ?? "").toContain("quant-mismatch");
+  });
+
+  test("an int8 space below the trigger scans codes and reports chunk hits", () => {
+    const data = dataset(30);
+    const units = [transcriptUnit("conv-1")];
+    writeInt8Unit(SPACE, units[0] as AnnSearchUnit, data, rows(0, 30));
+    const search = createAnnAwareIndexSearch({
+      space: SPACE,
+      units,
+      root: dirs.root,
+      expectation: { quant: "int8" },
+    });
+    const result = search({ query: queryOf(data), topK: 5 });
+    expect(result.status).toBe("searched");
+    if (result.status !== "searched") return;
+    expect(result.degraded).toBeUndefined();
+    expect(result.hits).toHaveLength(5);
+    expect(result.chunkHits).toBeGreaterThan(0);
+    expect(search.stats().kind).toBe("flat");
+    expect(search.stats().scannedChunks).toBe(30);
   });
 });
 

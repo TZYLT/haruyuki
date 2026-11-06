@@ -27,11 +27,19 @@ import {
   sidecarSignature,
   sidecarUnitOf,
 } from "./embedding-ann-search-sidecar";
-import type { LoadedShard, LoadedUnit } from "./embedding-ann-search-units";
+import {
+  isFlatUnit,
+  isQuantUnit,
+  type LoadedShard,
+  type LoadedUnit,
+  unitSnapshotQuant,
+} from "./embedding-ann-search-units";
 import type {
   EmbeddingChunkRecord,
   EmbeddingIndexSnapshot,
 } from "./embedding-format";
+import type { EmbeddingQuantChunkRecord } from "./embedding-quant";
+import { searchEmbeddingQuantIndex } from "./embedding-quant";
 import { searchEmbeddingIndex } from "./embedding-search";
 
 export type ShardAnnResult =
@@ -82,6 +90,10 @@ export function refsFromAnnHits(
   return refs;
 }
 
+type ChunkBucket = { entry: LoadedUnit; rows: number[] };
+
+const unitSnapshotQuantOf = unitSnapshotQuant;
+
 /**
  * Aggregates selected chunks per unit through B2's `searchEmbeddingIndex`.
  *
@@ -95,23 +107,14 @@ export function aggregateChunks(
   refs: readonly ChunkRef[],
   query: Float32Array,
 ): { hits: AnnSearchTaggedHit[]; problem?: string } {
-  const byUnit = new Map<string, { entry: LoadedUnit; rows: number[] }>();
-  for (const ref of refs) {
-    const key = unitIdentityKey({
-      kind: ref.entry.unit.kind,
-      key: ref.entry.key,
-    });
-    const bucket = byUnit.get(key);
-    if (bucket === undefined)
-      byUnit.set(key, { entry: ref.entry, rows: [ref.row] });
-    else bucket.rows.push(ref.row);
-  }
   const hits: AnnSearchTaggedHit[] = [];
-  for (const bucket of byUnit.values()) {
+  for (const bucket of chunkBuckets(refs)) {
     const { entry } = bucket;
+    if (!isFlatUnit(entry)) {
+      return { hits, problem: `unit ${entry.key} is not a float32 snapshot` };
+    }
     const dimensions = entry.snapshot.meta.dimensions;
-    const rows = [...new Set(bucket.rows)].sort((left, right) => left - right);
-    if (rows.length === 0) continue;
+    const rows = bucket.rows;
     const vectors = new Float32Array(rows.length * dimensions);
     const records: EmbeddingChunkRecord[] = [];
     for (const [position, row] of rows.entries()) {
@@ -153,6 +156,81 @@ export function aggregateChunks(
     for (const hit of aggregated.hits) hits.push(tagHit(entry.unit, hit));
   }
   return { hits };
+}
+
+/**
+ * The int8 twin of {@link aggregateChunks}: the synthetic snapshot carries
+ * codes and per-row scales instead of float32 rows, and B2's
+ * `searchEmbeddingQuantIndex` runs the same parent aggregation (best chunk per
+ * parent, its tie-breaks, its ordering). Scores are the code-scan inner
+ * products, which is what the int8 index itself ranks by — so ANN and flat
+ * agree on every chunk they both visit.
+ */
+export function aggregateChunksInt8(
+  refs: readonly ChunkRef[],
+  query: Float32Array,
+): { hits: AnnSearchTaggedHit[]; problem?: string } {
+  const hits: AnnSearchTaggedHit[] = [];
+  for (const bucket of chunkBuckets(refs)) {
+    const { entry } = bucket;
+    if (!isQuantUnit(entry)) {
+      return { hits, problem: `unit ${entry.key} is not an int8 snapshot` };
+    }
+    const dimensions = entry.snapshot.meta.dimensions;
+    const rows = bucket.rows;
+    const codes = new Int8Array(rows.length * dimensions);
+    const scales = new Float32Array(rows.length);
+    const records: EmbeddingQuantChunkRecord[] = [];
+    for (const [position, row] of rows.entries()) {
+      const record = entry.snapshot.records[row];
+      if (record === undefined) {
+        return { hits, problem: `missing record row ${row} in ${entry.key}` };
+      }
+      const source = row * dimensions;
+      for (let axis = 0; axis < dimensions; axis += 1) {
+        codes[position * dimensions + axis] =
+          entry.snapshot.codes[source + axis] ?? 0;
+      }
+      scales[position] = entry.snapshot.scales[row] ?? 0;
+      records.push({ ...record, vectorOffset: position * dimensions });
+    }
+    const aggregated = searchEmbeddingQuantIndex(
+      { dimensions, records, codes, scales },
+      query,
+      { topK: records.length, mode: "int8-only" },
+    );
+    if (!aggregated.ok) {
+      return {
+        hits,
+        problem: `${entry.key}: ${aggregated.problem}${aggregated.detail === undefined ? "" : ` (${aggregated.detail})`}`,
+      };
+    }
+    for (const hit of aggregated.hits) hits.push(tagHit(entry.unit, hit));
+  }
+  return { hits };
+}
+
+/** Shared grouping: de-duplicated rows per unit, ascending row order. */
+function chunkBuckets(refs: readonly ChunkRef[]): ChunkBucket[] {
+  const byUnit = new Map<string, ChunkBucket>();
+  for (const ref of refs) {
+    const key = unitIdentityKey({
+      kind: ref.entry.unit.kind,
+      key: ref.entry.key,
+    });
+    const bucket = byUnit.get(key);
+    if (bucket === undefined) {
+      byUnit.set(key, { entry: ref.entry, rows: [ref.row] });
+    } else {
+      bucket.rows.push(ref.row);
+    }
+  }
+  const buckets: ChunkBucket[] = [];
+  for (const bucket of byUnit.values()) {
+    const rows = [...new Set(bucket.rows)].sort((left, right) => left - right);
+    if (rows.length > 0) buckets.push({ entry: bucket.entry, rows });
+  }
+  return buckets;
 }
 
 export function searchShardAnn(
@@ -220,7 +298,19 @@ export function searchShardAnn(
       detail: "ANN hit id is outside the sidecar's chunk rows",
     };
   }
-  const aggregated = aggregateChunks(refs, query);
+  const quant =
+    ordered[0] === undefined ? "f32" : unitSnapshotQuantOf(ordered[0]);
+  if (ordered.some((entry) => unitSnapshotQuantOf(entry) !== quant)) {
+    return {
+      ok: false,
+      problem: "sidecar-stale",
+      detail: "shard mixes float32 and int8 units",
+    };
+  }
+  const aggregated =
+    quant === "int8"
+      ? aggregateChunksInt8(refs, query)
+      : aggregateChunks(refs, query);
   if (aggregated.problem !== undefined) {
     return {
       ok: false,

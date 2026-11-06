@@ -241,13 +241,11 @@ function normalizeRow(
   }
 }
 
-type TopKCollector = { ids: number[]; scores: number[]; limit: number };
+export type TopKCollector = { ids: number[]; scores: number[]; limit: number };
 
-const createTopKCollector = (limit: number): TopKCollector => ({
-  ids: [],
-  scores: [],
-  limit,
-});
+export function createTopKCollector(limit: number): TopKCollector {
+  return { ids: [], scores: [], limit };
+}
 
 function isBetter(
   score: number,
@@ -258,7 +256,11 @@ function isBetter(
   return score > otherScore || (score === otherScore && id < otherId);
 }
 
-function offerTopK(collector: TopKCollector, id: number, score: number): void {
+export function offerTopK(
+  collector: TopKCollector,
+  id: number,
+  score: number,
+): void {
   const { ids, scores, limit } = collector;
   if (limit <= 0) return;
   if (ids.length === limit) {
@@ -279,14 +281,14 @@ function offerTopK(collector: TopKCollector, id: number, score: number): void {
   scores.splice(position, 0, score);
 }
 
-function hitsFromCollector(collector: TopKCollector): AnnSearchHit[] {
+export function hitsFromCollector(collector: TopKCollector): AnnSearchHit[] {
   return collector.ids.map((id, index) => ({
     id,
     score: collector.scores[index] ?? 0,
   }));
 }
 
-function validateSearchInput(
+export function validateSearchInput(
   query: ArrayLike<number>,
   dimensions: number,
   k: number,
@@ -332,7 +334,7 @@ function nearestCentroid(
   return best;
 }
 
-function trainCentroids(
+export function trainCentroids(
   vectors: Float32Array,
   count: number,
   dimensions: number,
@@ -390,7 +392,7 @@ function trainCentroids(
   return centroids;
 }
 
-function ivfPayloadBytes(
+export function ivfPayloadBytes(
   count: number,
   dimensions: number,
   options: AnnIvfOptions,
@@ -399,7 +401,7 @@ function ivfPayloadBytes(
   return options.nlist * dimensions * 4 + (options.nlist + 1) * 4 + count * 4;
 }
 
-type IvfParts = {
+export type IvfParts = {
   centroids: Float32Array;
   listOffsets: Uint32Array;
   listIds: Uint32Array;
@@ -546,7 +548,7 @@ export function buildFlatAnnIndex(input: AnnIndexBuildInput): AnnIndex {
   };
 }
 
-function fnv1a(bytes: Uint8Array, start: number): number {
+export function fnv1a(bytes: Uint8Array, start: number): number {
   let hash = 0x811c9dc5;
   for (let index = start; index < bytes.length; index += 1) {
     hash ^= bytes[index] ?? 0;
@@ -555,7 +557,7 @@ function fnv1a(bytes: Uint8Array, start: number): number {
   return hash;
 }
 
-function writeSerialHeader(
+export function writeSerialHeader(
   view: DataView,
   kind: number,
   count: number,

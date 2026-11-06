@@ -39,6 +39,7 @@ import {
   buildMemoryVectorFilePlan,
   memoryFileKey,
 } from "@/backend/local/embedding-memory";
+import { writeEmbeddingQuantIndex } from "@/backend/local/embedding-quant-format";
 import { resolveEmbeddingSpace } from "@/backend/local/embedding-space";
 import { getLocalBackendMemoryFilesystemRoot } from "@/backend/local/paths";
 import { readRecallMessageTexts } from "@/backend/local/recall-snippets";
@@ -201,6 +202,57 @@ function writeTranscriptUnit(input: {
     records: plans.flatMap((plan) => embeddingChunkRecordsFromPlan(plan)),
     vectors: chunks.map((chunk) => fakeEmbeddingVector(chunk.text, DIMENSIONS)),
     coverage: aggregateCoverage(plans),
+    generation: input.generation,
+  });
+  const messageId = messages[0]?.id;
+  if (messageId === undefined) {
+    throw new Error("the fixture conversation has no message id");
+  }
+  return { targetText, messageId };
+}
+
+/** The int8 twin of {@link writeTranscriptUnit}: codes only, no f32 originals. */
+function writeTranscriptUnitInt8(input: {
+  storageDir: string;
+  agentId: string;
+  spaceId: string;
+  conversationKey: string;
+  generation: string;
+}): { targetText: string; messageId: string } {
+  const messages = readRecallMessageTexts(
+    join(input.storageDir, "conversations", input.conversationKey),
+  );
+  if (messages.length === 0) {
+    throw new Error("the fixture conversation has no recallable text");
+  }
+  const plans = messages.map((message) =>
+    buildEmbeddingChunkPlan({ parentId: message.id, text: message.text }),
+  );
+  const chunks = plans.flatMap((plan) => plan.chunks);
+  const targetText = chunks[0]?.text;
+  if (targetText === undefined) {
+    throw new Error("the fixture conversation produced no chunk");
+  }
+  writeEmbeddingQuantIndex({
+    unitDir: embeddingVectorUnitDir(
+      {
+        agentId: input.agentId,
+        spaceId: input.spaceId,
+        conversationKey: input.conversationKey,
+      },
+      { root: VECTOR_ROOT },
+    ),
+    unit: {
+      agentId: input.agentId,
+      spaceId: input.spaceId,
+      conversationKey: input.conversationKey,
+    },
+    modelId: MODEL_ID,
+    dimensions: DIMENSIONS,
+    records: plans.flatMap((plan) => embeddingChunkRecordsFromPlan(plan)),
+    vectors: chunks.map((chunk) => fakeEmbeddingVector(chunk.text, DIMENSIONS)),
+    coverage: aggregateCoverage(plans),
+    rescore: false,
     generation: input.generation,
   });
   const messageId = messages[0]?.id;
@@ -572,6 +624,42 @@ describe("createRecallEmbeddingArms", () => {
       expect(hit).toBeDefined();
       expect(hit?.arm).toBe("vector");
       expect(hit?.source).toBe("transcript");
+    });
+  });
+
+  test("an int8 space searches through the shared A6 port", async () => {
+    await withRecallFixture(async (fixture) => {
+      const settings = endpointSettings({ quantization: "int8" });
+      const space = spaceFor(fixture.agentId, settings);
+      const { targetText, messageId } = writeTranscriptUnitInt8({
+        storageDir: fixture.storageDir,
+        agentId: fixture.agentId,
+        spaceId: space.spaceId,
+        conversationKey: fixture.historyDirectory,
+        generation: "int8-transcript-1",
+      });
+      const arms = armsFor(fixture, settings, targetText);
+      expect(arms).not.toBeNull();
+      if (arms === null) return;
+      const outcome = await arms.vectorSource.search({
+        terms: {
+          rawText: "财务系统是怎么记账的",
+          terms: ["财务系统", "记账"],
+          phrases: [],
+        },
+        scope: {
+          agentId: fixture.agentId,
+          currentConversationId: fixture.currentConversationId,
+        },
+      });
+      expect(outcome.diagnostic.status).toBe("searched");
+      const hit = outcome.candidates.find(
+        (candidate) =>
+          candidate.fingerprint ===
+          `transcript:${fixture.historyDirectory}:${messageId}`,
+      );
+      expect(hit).toBeDefined();
+      expect(hit?.arm).toBe("vector");
     });
   });
 

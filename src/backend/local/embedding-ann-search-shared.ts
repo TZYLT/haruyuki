@@ -75,6 +75,7 @@ export type AnnSearchDegradedReason =
   | "sidecar-stale"
   | "sidecar-corrupt"
   | "sidecar-dimension-mismatch"
+  | "sidecar-quant-mismatch"
   | "search-failed";
 
 /**

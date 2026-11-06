@@ -1,10 +1,11 @@
 /**
  * The build-side half of A6 (feature 48 §4.10): a completed build writes the
- * ANN sidecar only when the space is big enough, and never for int8-only (the
- * format carries float32 vectors).
+ * ANN sidecar only when the space is big enough. Both encodings are indexed —
+ * float32 through B7's IVF, int8 through the native int8 IVF (D-23) — and the
+ * manifest's `quant` says which layout the bytes are.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ANN_SEARCH_MANIFEST_FILE_NAME,
@@ -88,11 +89,26 @@ describe("the ANN sidecar at build time", () => {
     expect(existsSync(sidecarManifestPath())).toBe(false);
   });
 
-  test("int8-only never writes the float32 sidecar", async () => {
+  test("an int8 build above the trigger writes a native int8 sidecar", async () => {
     const result = await build({
       quant: "int8",
       annTriggerChunkCount: 1,
     });
+    expect(result.status).toBe("completed");
+    const path = sidecarManifestPath();
+    expect(existsSync(path)).toBe(true);
+    const manifest = JSON.parse(readFileSync(path, "utf8")) as {
+      quant?: string;
+      kind?: string;
+      chunkCount?: number;
+    };
+    expect(manifest.quant).toBe("int8");
+    expect(manifest.kind).toBe("ivf");
+    expect(manifest.chunkCount).toBeGreaterThan(0);
+  });
+
+  test("an int8 build below the trigger writes nothing", async () => {
+    const result = await build({ quant: "int8" });
     expect(result.status).toBe("completed");
     expect(existsSync(sidecarManifestPath())).toBe(false);
   });

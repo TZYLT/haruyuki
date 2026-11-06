@@ -39,6 +39,11 @@ import {
   deserializeAnnIndex,
 } from "./embedding-ann-index";
 import {
+  type AnnInt8UnitRows,
+  buildAnnInt8Index,
+  deserializeAnnInt8Index,
+} from "./embedding-ann-int8";
+import {
   type AnnSearchDegradedReason,
   type AnnSearchSpace,
   type AnnSearchUnit,
@@ -51,15 +56,20 @@ import {
   unitKeyOf,
 } from "./embedding-ann-search-shared";
 import {
+  type FlatLoadedUnit,
+  isFlatUnit,
+  isQuantUnit,
   type LoadedShard,
   type LoadedUnit,
+  type LoadedUnitSnapshot,
   loadShard,
   resolveUnitSource,
+  unitSnapshotQuant,
 } from "./embedding-ann-search-units";
 import type { EmbeddingIndexExpectation } from "./embedding-cache";
 import {
   type EmbeddingChunkRecord,
-  type EmbeddingIndexSnapshot,
+  type EmbeddingIndexQuant,
   getRecallVectorsRoot,
 } from "./embedding-format";
 
@@ -95,6 +105,8 @@ export type AnnShardSidecarManifest = {
   units: readonly AnnSidecarUnit[];
   indexBytes: number;
   kind: AnnIndexKind;
+  /** Encoding of the vector data the index was built from. */
+  quant: EmbeddingIndexQuant;
   params: Readonly<Record<string, number>>;
   createdAt: string;
 };
@@ -130,6 +142,26 @@ export type WriteAnnShardSidecarResult =
       indexPath: string;
     }
   | { ok: false; problem: AnnSidecarWriteProblem; detail?: string };
+function flatEntries(entries: readonly LoadedUnit[]): FlatLoadedUnit[] {
+  const flat: FlatLoadedUnit[] = [];
+  for (const entry of entries) if (isFlatUnit(entry)) flat.push(entry);
+  return flat;
+}
+
+/** The int8 row arrays `buildAnnInt8Index` / `deserializeAnnInt8Index` take. */
+function int8UnitRows(entries: readonly LoadedUnit[]): AnnInt8UnitRows[] {
+  const rows: AnnInt8UnitRows[] = [];
+  for (const entry of entries) {
+    if (!isQuantUnit(entry)) continue;
+    rows.push({
+      codes: entry.snapshot.codes,
+      scales: entry.snapshot.scales,
+      count: entry.snapshot.meta.chunkCount,
+    });
+  }
+  return rows;
+}
+
 export type Signature = { size: number; mtimeMs: number; ctimeMs: number };
 
 const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -201,7 +233,7 @@ export function annShardIndexPath(dir: string, signature: string): string {
 
 export function sidecarUnitOf(
   unit: AnnSearchUnit,
-  snapshot: EmbeddingIndexSnapshot,
+  snapshot: LoadedUnitSnapshot,
 ): AnnSidecarUnit {
   return {
     kind: unit.kind,
@@ -286,6 +318,9 @@ export function parseManifest(
     !isNonNegativeInteger(value.chunkCount) ||
     !isNonNegativeInteger(value.indexBytes) ||
     (value.kind !== "ivf" && value.kind !== "flat") ||
+    (value.quant !== undefined &&
+      value.quant !== "f32" &&
+      value.quant !== "int8") ||
     typeof value.createdAt !== "string" ||
     !isRecord(value.params)
   ) {
@@ -314,6 +349,8 @@ export function parseManifest(
     units,
     indexBytes: value.indexBytes,
     kind: value.kind,
+    // Manifests written before int8 ANN existed are float32.
+    quant: value.quant === "int8" ? "int8" : "f32",
     params,
     createdAt: value.createdAt,
   };
@@ -416,9 +453,9 @@ export function orderedEntries(
   return ordered;
 }
 
-/** Concatenates B2 vectors/records in manifest order (cold path only). */
+/** Concatenates B2 float32 vectors/records in manifest order (cold path only). */
 export function concatShard(
-  entries: readonly LoadedUnit[],
+  entries: readonly FlatLoadedUnit[],
   dimensions: number,
 ): { vectors: Float32Array; records: EmbeddingChunkRecord[] } {
   const count = entries.reduce(
@@ -562,19 +599,51 @@ export function loadSidecar(
       detail: `index file is ${bytes.byteLength} bytes, manifest says ${manifest.indexBytes}`,
     };
   }
-  const { vectors } = concatShard(ordered, manifest.dimensions);
+  const first = ordered[0];
+  if (first === undefined) {
+    return {
+      ok: false,
+      problem: "sidecar-corrupt",
+      detail: "empty sidecar units",
+    };
+  }
+  const liveQuant = unitSnapshotQuant(first);
+  if (
+    ordered.some((entry) => unitSnapshotQuant(entry) !== liveQuant) ||
+    manifest.quant !== liveQuant
+  ) {
+    return {
+      ok: false,
+      problem: "sidecar-quant-mismatch",
+      detail: `sidecar was built for ${manifest.quant}, live space is ${liveQuant}`,
+    };
+  }
+  const meta = {
+    agentId: manifest.agentId,
+    spaceId: manifest.spaceId,
+    generation: manifest.signature,
+  };
   let index: AnnIndex;
   try {
-    index = deserializeAnnIndex(bytes, {
-      vectors,
-      count: manifest.chunkCount,
-      dimensions: manifest.dimensions,
-      meta: {
-        agentId: manifest.agentId,
-        spaceId: manifest.spaceId,
-        generation: manifest.signature,
-      },
-    });
+    if (manifest.quant === "int8") {
+      index = deserializeAnnInt8Index(bytes, {
+        units: int8UnitRows(ordered),
+        count: manifest.chunkCount,
+        dimensions: manifest.dimensions,
+        meta,
+      });
+    } else {
+      const { vectors } = concatShard(
+        flatEntries(ordered),
+        manifest.dimensions,
+      );
+      index = deserializeAnnIndex(bytes, {
+        vectors,
+        count: manifest.chunkCount,
+        dimensions: manifest.dimensions,
+        meta,
+      });
+    }
   } catch (error) {
     return {
       ok: false,
@@ -652,26 +721,46 @@ export function writeAnnShardSidecar(
       compareText(left.key, right.key),
   );
   const dimensions = loaded.dimensions;
-  const { vectors } = concatShard(ordered, dimensions);
+  const first = ordered[0];
+  if (first === undefined) return failWrite("no-units", "no ordered units");
+  const quant = unitSnapshotQuant(first);
+  if (ordered.some((entry) => unitSnapshotQuant(entry) !== quant)) {
+    return failWrite(
+      "dimension-mismatch",
+      "the shard mixes float32 and int8 units",
+    );
+  }
   const sidecarUnits = ordered.map((entry) =>
     sidecarUnitOf(entry.unit, entry.snapshot),
   );
   const signature = sidecarSignature(sidecarUnits);
+  const meta = {
+    agentId: space.agentId,
+    spaceId: space.spaceId,
+    generation: signature,
+  };
   let built: AnnIndex;
   try {
-    built = buildAnnIndex(
-      {
-        vectors,
-        count: loaded.chunkCount,
-        dimensions,
-        meta: {
-          agentId: space.agentId,
-          spaceId: space.spaceId,
-          generation: signature,
-        },
-      },
-      { ivf: options.ivf },
-    );
+    built =
+      quant === "int8"
+        ? buildAnnInt8Index(
+            {
+              units: int8UnitRows(ordered),
+              count: loaded.chunkCount,
+              dimensions,
+              meta,
+            },
+            { ivf: options.ivf },
+          )
+        : buildAnnIndex(
+            {
+              vectors: concatShard(flatEntries(ordered), dimensions).vectors,
+              count: loaded.chunkCount,
+              dimensions,
+              meta,
+            },
+            { ivf: options.ivf },
+          );
   } catch (error) {
     return failWrite("write-failed", errorMessage(error));
   }
@@ -688,6 +777,7 @@ export function writeAnnShardSidecar(
     units: sidecarUnits,
     indexBytes: stats.indexBytes,
     kind: stats.kind,
+    quant,
     params: { ...stats.params },
     createdAt: new Date().toISOString(),
   };
@@ -709,7 +799,8 @@ export function writeAnnShardSidecar(
     if (
       existing.ok &&
       existing.manifest.signature === signature &&
-      existing.manifest.indexBytes === stats.indexBytes
+      existing.manifest.indexBytes === stats.indexBytes &&
+      existing.manifest.quant === quant
     ) {
       return {
         ok: true,

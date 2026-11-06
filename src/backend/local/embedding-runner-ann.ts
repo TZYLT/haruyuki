@@ -36,9 +36,10 @@ export type AnnSidecarIdentity = { agentId: string; spaceId: string };
 /**
  * Write the sidecar when the space is big enough to need one.
  *
- * Below the trigger the exact B2 scan is the answer. int8-only spaces are
- * skipped: the sidecar carries float32 vectors, and an int8 space has no float32
- * view to build one from without paying the memory int8 was chosen to avoid.
+ * Below the trigger the exact B2 scan is the answer. Both encodings are
+ * indexed: a float32 space uses B7's IVF over `vectors.bin`, an int8 space
+ * uses the native int8 IVF over its codes (D-23), and the manifest's `quant`
+ * tells the reader which layout the bytes are.
  */
 export function maybeWriteAnnSidecar(
   options: AnnSidecarRunnerOptions,
@@ -47,7 +48,7 @@ export function maybeWriteAnnSidecar(
   identity: AnnSidecarIdentity,
   totalChunks: number,
 ): void {
-  if ((options.quant ?? "f32") !== "f32") return;
+  const quant = options.quant ?? "f32";
   const trigger = options.annTriggerChunkCount ?? ANN_TRIGGER_CHUNK_COUNT;
   if (totalChunks <= trigger || units.length === 0) return;
   const annUnits = units.map(({ unit }) =>
@@ -67,6 +68,7 @@ export function maybeWriteAnnSidecar(
       space: { agentId: identity.agentId, spaceId: identity.spaceId },
       units: annUnits,
       root,
+      expectation: { quant },
     });
     if (!written.ok) {
       debugWarn(

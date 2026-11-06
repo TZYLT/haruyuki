@@ -72,7 +72,6 @@ import {
 } from "./recall-fusion";
 import type { RecallSourcePort } from "./recall-port";
 import {
-  createEmbeddingIndexSearch,
   createLocalVectorParentPort,
   createVectorRecallSource,
   type RecallEncoderPort,
@@ -198,26 +197,18 @@ export function createRecallEmbeddingArms(
 /**
  * The query port for one space.
  *
- * A float32 space uses A6: below the ANN trigger it runs the same flat scan
- * (a missing sidecar is the normal flat path), above it reads the sidecar the
- * build wrote. A6 has no score floor of its own, so the arm's cosine safety
- * valve is applied here to the same parent score B2 filters on. An int8-only
- * space keeps the code-scoring B2 reader: the sidecar format carries float32
- * vectors, and an int8 space has no float32 view to build one from.
+ * Every space uses A6: below the ANN trigger it runs the same flat scan as
+ * before (a missing sidecar is the normal flat path), above it reads the
+ * sidecar the build wrote. A float32 space scans `vectors.bin`; an int8 space
+ * scans its codes natively (D-23), never a dequantized copy. A6 has no score
+ * floor of its own, so the arm's cosine safety valve is applied here to the
+ * same parent score B2 filters on.
  */
 function createSpaceSearch(
   space: EmbeddingSpaceIdentity,
   units: readonly RecallVectorUnit[],
 ): RecallVectorSearchPort {
   const expectation = { quant: space.quantization };
-  if (space.quantization === "int8") {
-    return createEmbeddingIndexSearch({
-      space: { agentId: space.agentId, spaceId: space.spaceId },
-      root: space.root,
-      units,
-      expectation,
-    });
-  }
   const ann = createAnnAwareIndexSearch({
     space: { agentId: space.agentId, spaceId: space.spaceId },
     units,
