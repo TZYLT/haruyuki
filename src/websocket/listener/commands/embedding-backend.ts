@@ -16,10 +16,17 @@
  * of the listener already uses — and leaf `backend/local/` modules.
  */
 
+import { rmSync } from "node:fs";
+import { join } from "node:path";
+
 import { checkEmbeddingBuiltinAssets } from "@/backend/local/embedding-assets";
 import type { EmbeddingBuildStateSnapshot } from "@/backend/local/embedding-build-state";
 import { runEmbeddingCalibration } from "@/backend/local/embedding-calibration-probe";
 import { getRecallVectorsRoot } from "@/backend/local/embedding-format";
+import {
+  readEmbeddingProfile,
+  setEmbeddingProfilePinned,
+} from "@/backend/local/embedding-profile";
 import { resolveEmbeddingSpace } from "@/backend/local/embedding-space";
 import { saveEmbeddingApiKey } from "@/cli/app/pages/settings/embedding-secrets";
 import {
@@ -34,6 +41,7 @@ import type {
   EmbeddingRuntimePort,
   EmbeddingRuntimeStatus,
 } from "@/cli/commands/embedding-runtime-contract";
+import { listEmbeddingModels } from "@/cli/helpers/embedding-models";
 import {
   buildEmbeddingFromSettings,
   createEmbeddingRuntimePort,
@@ -47,13 +55,24 @@ import type {
   EmbeddingBuildMode,
   EmbeddingBuildSnapshot,
   EmbeddingCalibrationSnapshot,
-  EmbeddingConfigurePatch,
+  EmbeddingConfigRow,
+  EmbeddingConnectPatch,
+  EmbeddingDeviceSnapshot,
+  EmbeddingProfileRow,
   EmbeddingQuantization,
   EmbeddingSettingsSnapshot,
   EmbeddingSpaceSnapshot,
   EmbeddingStatusSnapshot,
 } from "@/types/embedding-protocol";
 import { getErrorMessage } from "@/utils/error";
+import {
+  configPatchOf,
+  configRows,
+  findProfileRow,
+  profileSelectPatch,
+  toWireDevice,
+  toWireProfileRow,
+} from "@/websocket/listener/commands/embedding-profile-wire";
 
 /** Code used when the embedding runtime cannot answer in this process. */
 export const EMBEDDING_NOT_CONFIGURED = "not_configured";
@@ -83,9 +102,38 @@ export type EmbeddingStatusBackendResult =
   | { configured: true; status: EmbeddingStatusSnapshot }
   | { configured: false; error: string };
 
-export type EmbeddingConfigureBackendValue = {
+export type EmbeddingConnectBackendValue = {
+  settings: EmbeddingSettingsSnapshot;
+  spaceId: string | null;
+  requiresRebuild: boolean;
+};
+export type EmbeddingProfilesListBackendValue = {
+  profiles: EmbeddingProfileRow[];
+};
+export type EmbeddingProfileSelectBackendValue = {
+  settings: EmbeddingSettingsSnapshot | null;
+  requiresRebuild: boolean;
+  reason?: string;
+};
+export type EmbeddingProfileDeleteBackendValue = {
+  removedSpaces: number;
+  requiresRebuild: boolean;
+  requiresConfirmation?: boolean;
+  preview?: string;
+};
+export type EmbeddingProfilePinBackendValue = {
+  profiles: EmbeddingProfileRow[];
+};
+export type EmbeddingConfigGetBackendValue = {
+  keys: EmbeddingConfigRow[];
+  settings: EmbeddingSettingsSnapshot;
+};
+export type EmbeddingConfigSetBackendValue = {
   settings: EmbeddingSettingsSnapshot;
   requiresRebuild: boolean;
+};
+export type EmbeddingDeviceBackendValue = {
+  device: EmbeddingDeviceSnapshot | null;
 };
 export type EmbeddingEnableBackendValue = {
   enabled: boolean;
@@ -100,10 +148,6 @@ export type EmbeddingBuildBackendValue = {
   reason?: string;
 };
 export type EmbeddingCancelBackendValue = { cancelled: boolean };
-export type EmbeddingResetBackendValue = {
-  removedSpaces: number;
-  requiresRebuild: boolean;
-};
 export type EmbeddingCalibrateBackendValue = {
   calibration: EmbeddingCalibrationSnapshot | null;
 };
@@ -112,7 +156,6 @@ export type EmbeddingBuildOptions = {
   mode: EmbeddingBuildMode;
   keepAfterExit: boolean;
 };
-export type EmbeddingResetScope = "index" | "all";
 
 /**
  * The narrow seam between the protocol family and the embedding subsystem.
@@ -123,12 +166,22 @@ export type EmbeddingResetScope = "index" | "all";
  * (disabled, locked, not configured); an unexpected throw is caught by the
  * handler and mapped to the response's `error`.
  */
+import type { EmbeddingProfileSelector } from "./embedding-profile-wire";
+
+export type { EmbeddingProfileSelector } from "./embedding-profile-wire";
+
+export interface EmbeddingProfileDeleteRequest
+  extends EmbeddingProfileSelector {
+  scope: "current" | "all" | "model";
+  confirm: boolean;
+}
+
 export interface EmbeddingCommandBackend {
   status(agentId: string): Promise<EmbeddingStatusBackendResult>;
-  configure(
+  connect(
     agentId: string,
-    patch: EmbeddingConfigurePatch,
-  ): Promise<EmbeddingBackendResult<EmbeddingConfigureBackendValue>>;
+    patch: EmbeddingConnectPatch,
+  ): Promise<EmbeddingBackendResult<EmbeddingConnectBackendValue>>;
   enable(
     agentId: string,
   ): Promise<EmbeddingBackendResult<EmbeddingEnableBackendValue>>;
@@ -143,13 +196,36 @@ export interface EmbeddingCommandBackend {
     agentId: string,
     buildId: string | undefined,
   ): Promise<EmbeddingBackendResult<EmbeddingCancelBackendValue>>;
-  reset(
+  profilesList(
     agentId: string,
-    scope: EmbeddingResetScope,
-  ): Promise<EmbeddingBackendResult<EmbeddingResetBackendValue>>;
-  calibrate(
+  ): Promise<EmbeddingBackendResult<EmbeddingProfilesListBackendValue>>;
+  profileSelect(
     agentId: string,
-    persist: boolean,
+    selector: EmbeddingProfileSelector,
+  ): Promise<EmbeddingBackendResult<EmbeddingProfileSelectBackendValue>>;
+  profileDelete(
+    agentId: string,
+    request: EmbeddingProfileDeleteRequest,
+  ): Promise<EmbeddingBackendResult<EmbeddingProfileDeleteBackendValue>>;
+  profilePin(
+    agentId: string,
+    selector: EmbeddingProfileSelector,
+    pinned: boolean,
+  ): Promise<EmbeddingBackendResult<EmbeddingProfilePinBackendValue>>;
+  configGet(
+    agentId: string,
+    key: string | undefined,
+  ): Promise<EmbeddingBackendResult<EmbeddingConfigGetBackendValue>>;
+  configSet(
+    agentId: string,
+    key: string,
+    value: number | string,
+  ): Promise<EmbeddingBackendResult<EmbeddingConfigSetBackendValue>>;
+  device(
+    agentId: string,
+  ): Promise<EmbeddingBackendResult<EmbeddingDeviceBackendValue>>;
+  deviceTest(
+    agentId: string,
   ): Promise<EmbeddingBackendResult<EmbeddingCalibrateBackendValue>>;
 }
 
@@ -250,9 +326,7 @@ function toWireSettings(
 }
 
 /** The wire patch in D3's resolved field names (`api_key` stays separate). */
-function toSettingsPatch(
-  patch: EmbeddingConfigurePatch,
-): EmbeddingSettingsPatch {
+function toSettingsPatch(patch: EmbeddingConnectPatch): EmbeddingSettingsPatch {
   const next: EmbeddingSettingsPatch = {};
   if (patch.enabled !== undefined) next.enabled = patch.enabled;
   if (patch.backend !== undefined) next.backend = patch.backend;
@@ -301,22 +375,6 @@ function toWireCalibration(
     query_latency_p90_ms: calibration.queryLatencyP90Ms,
     batch_throughput_per_s: calibration.batchThroughputPerSec,
     gpu_role: calibration.gpuRole,
-    threads: calibration.threads,
-    quantization: calibration.quantization,
-  };
-}
-
-/** The D1 snapshot → the D3 record the settings writer persists. */
-function toCalibrationSettings(
-  calibration: EmbeddingCalibrationSnapshot,
-): EmbeddingCalibrationSettings {
-  return {
-    fingerprint: calibration.fingerprint,
-    measuredAt: calibration.measured_at,
-    queryLatencyP50Ms: calibration.query_latency_p50_ms,
-    queryLatencyP90Ms: calibration.query_latency_p90_ms,
-    batchThroughputPerSec: calibration.batch_throughput_per_s,
-    gpuRole: calibration.gpu_role,
     threads: calibration.threads,
     quantization: calibration.quantization,
   };
@@ -510,7 +568,7 @@ export function createEmbeddingCommandBackend(
         },
       };
     },
-    async configure(agentId, wirePatch) {
+    async connect(agentId, wirePatch) {
       const patch = toSettingsPatch(wirePatch);
       const current = readSettings();
       const invalid = validateEmbeddingSettingsPatch(patch, current);
@@ -527,15 +585,23 @@ export function createEmbeddingCommandBackend(
       }
       try {
         // Write-only credential first: a settings write that follows a stored
-        // key is recoverable by re-running configure; the reverse is not.
+        // key is recoverable by re-running connect; the reverse is not.
         if (wirePatch.api_key !== undefined) {
           await saveApiKey(wirePatch.api_key, agentId);
         }
         const updated = writeSettings(patch);
+        let spaceId: string | null = null;
+        try {
+          spaceId = readSpaceId(agentId, updated);
+        } catch {
+          // An unresolvable space is reported as `null`; the settings still
+          // landed and the client can list profiles once assets are ready.
+        }
         return {
           ok: true,
           value: {
             settings: toWireSettings(updated),
+            spaceId,
             requiresRebuild: embeddingPatchInvalidatesSpace(patch),
           },
         };
@@ -644,14 +710,94 @@ export function createEmbeddingCommandBackend(
         return failureOf(error);
       }
     },
-    async reset(agentId, scope) {
-      const reset = runtime.reset;
-      if (reset === undefined) return await unavailable();
+    async profilesList(agentId) {
       try {
+        const rows = await listEmbeddingModels({ agentId });
+        return { ok: true, value: { profiles: rows.map(toWireProfileRow) } };
+      } catch (error) {
+        return failureOf(error);
+      }
+    },
+    async profileSelect(agentId, selector) {
+      try {
+        const rows = await listEmbeddingModels({ agentId });
+        const row = findProfileRow(rows, selector);
+        if (row === null) {
+          return { ok: false, error: "embedding_profile_not_found" };
+        }
+        const spaceDir = join(getRecallVectorsRoot(), agentId, row.spaceId);
+        const profile = await readEmbeddingProfile(spaceDir);
+        if (profile === null) {
+          return {
+            ok: true,
+            value: {
+              settings: null,
+              requiresRebuild: false,
+              reason: "legacy_profile_missing",
+            },
+          };
+        }
+        const updated = writeSettings(profileSelectPatch(profile));
+        return {
+          ok: true,
+          value: { settings: toWireSettings(updated), requiresRebuild: false },
+        };
+      } catch (error) {
+        return failureOf(error);
+      }
+    },
+    async profileDelete(agentId, request) {
+      try {
+        if (request.scope === "model") {
+          const rows = await listEmbeddingModels({ agentId });
+          const row = findProfileRow(rows, request);
+          if (row === null) {
+            return { ok: false, error: "embedding_profile_not_found" };
+          }
+          if (row.active) {
+            return { ok: false, error: "embedding_profile_active" };
+          }
+          const preview = `model #${row.index} (${row.model}, ${row.chunks} chunks)`;
+          if (!request.confirm) {
+            return {
+              ok: true,
+              value: {
+                removedSpaces: 0,
+                requiresRebuild: false,
+                requiresConfirmation: true,
+                preview,
+              },
+            };
+          }
+          rmSync(join(getRecallVectorsRoot(), agentId, row.spaceId), {
+            recursive: true,
+            force: true,
+          });
+          return {
+            ok: true,
+            value: { removedSpaces: 1, requiresRebuild: false },
+          };
+        }
+        if (!request.confirm) {
+          return {
+            ok: true,
+            value: {
+              removedSpaces: 0,
+              requiresRebuild: false,
+              requiresConfirmation: true,
+              preview:
+                request.scope === "all"
+                  ? "all stored vector spaces for this agent"
+                  : "the active vector space",
+            },
+          };
+        }
+        const reset = runtime.reset;
+        if (reset === undefined) return await unavailable();
         const receipt = await reset.call(
           runtime,
           { agentId, conversationId: null },
-          scope === "all" ? { kind: "all" } : { kind: "current" },
+          request.scope === "all" ? { kind: "all" } : { kind: "current" },
         );
         const removedSpaces = removedSpacesOf(receipt);
         return {
@@ -662,19 +808,89 @@ export function createEmbeddingCommandBackend(
         return failureOf(error);
       }
     },
-    async calibrate(_agentId, persist) {
+    async profilePin(agentId, selector, pinned) {
+      try {
+        const rows = await listEmbeddingModels({ agentId });
+        const row = findProfileRow(rows, selector);
+        if (row === null) {
+          return { ok: false, error: "embedding_profile_not_found" };
+        }
+        if (row.legacy) {
+          return { ok: false, error: "embedding_profile_legacy" };
+        }
+        const written = await setEmbeddingProfilePinned(
+          join(getRecallVectorsRoot(), agentId, row.spaceId),
+          pinned,
+        );
+        if (!written) {
+          return { ok: false, error: "embedding_profile_write_failed" };
+        }
+        const refreshed = await listEmbeddingModels({ agentId });
+        return {
+          ok: true,
+          value: { profiles: refreshed.map(toWireProfileRow) },
+        };
+      } catch (error) {
+        return failureOf(error);
+      }
+    },
+    async configGet(_agentId, key) {
+      try {
+        const settings = readSettings();
+        const rows = configRows(settings, key);
+        if (typeof rows === "string") return { ok: false, error: rows };
+        return {
+          ok: true,
+          value: { keys: rows, settings: toWireSettings(settings) },
+        };
+      } catch (error) {
+        return failureOf(error);
+      }
+    },
+    async configSet(_agentId, key, value) {
+      try {
+        const patch = configPatchOf(key, value);
+        if (typeof patch === "string") return { ok: false, error: patch };
+        const current = readSettings();
+        const invalid = validateEmbeddingSettingsPatch(patch, current);
+        if (invalid !== null) return { ok: false, error: invalid };
+        const updated = writeSettings(patch);
+        return {
+          ok: true,
+          value: {
+            settings: toWireSettings(updated),
+            requiresRebuild: embeddingPatchInvalidatesSpace(patch),
+          },
+        };
+      } catch (error) {
+        return failureOf(error);
+      }
+    },
+    async device(agentId) {
+      const readStatus = runtime.readStatus;
+      if (readStatus === undefined) return await unavailable();
+      try {
+        const status = await readStatus.call(runtime, {
+          agentId,
+          conversationId: null,
+        });
+        return {
+          ok: true,
+          value: {
+            device: toWireDevice(status?.buildSnapshot?.device ?? null),
+          },
+        };
+      } catch (error) {
+        return failureOf(error);
+      }
+    },
+    async deviceTest(_agentId) {
       const settings = readSettings();
       if (settings.backend !== "builtin") {
-        return {
-          ok: false,
-          error: "calibration_requires_builtin_backend",
-        };
+        return { ok: false, error: "device_test_requires_builtin_backend" };
       }
       try {
         const calibration = await runCalibration(settings);
-        if (persist) {
-          writeSettings({ calibration: toCalibrationSettings(calibration) });
-        }
         return { ok: true, value: { calibration } };
       } catch (error) {
         return failureOf(error);

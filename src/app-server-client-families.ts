@@ -51,18 +51,30 @@ import type {
   DreamStatusResponseMessage,
   EmbeddingBuildCommand,
   EmbeddingBuildResponseMessage,
-  EmbeddingCalibrateCommand,
-  EmbeddingCalibrateResponseMessage,
   EmbeddingCancelCommand,
   EmbeddingCancelResponseMessage,
-  EmbeddingConfigureCommand,
-  EmbeddingConfigureResponseMessage,
+  EmbeddingConfigGetCommand,
+  EmbeddingConfigGetResponseMessage,
+  EmbeddingConfigSetCommand,
+  EmbeddingConfigSetResponseMessage,
+  EmbeddingConnectCommand,
+  EmbeddingConnectResponseMessage,
+  EmbeddingDeviceCommand,
+  EmbeddingDeviceResponseMessage,
+  EmbeddingDeviceTestCommand,
+  EmbeddingDeviceTestResponseMessage,
   EmbeddingDisableCommand,
   EmbeddingDisableResponseMessage,
   EmbeddingEnableCommand,
   EmbeddingEnableResponseMessage,
-  EmbeddingResetCommand,
-  EmbeddingResetResponseMessage,
+  EmbeddingProfileDeleteCommand,
+  EmbeddingProfileDeleteResponseMessage,
+  EmbeddingProfilePinCommand,
+  EmbeddingProfilePinResponseMessage,
+  EmbeddingProfileSelectCommand,
+  EmbeddingProfileSelectResponseMessage,
+  EmbeddingProfilesListCommand,
+  EmbeddingProfilesListResponseMessage,
   EmbeddingStatusCommand,
   EmbeddingStatusResponseMessage,
   GetDreamSettingsCommand,
@@ -332,13 +344,13 @@ export abstract class AppServerClientFamilies {
     );
   }
 
-  embeddingConfigure(
-    command: AppServerFamilyCommandBody<EmbeddingConfigureCommand>,
-    options: AppServerFamilyCommandOptions<EmbeddingConfigureResponseMessage> = {},
-  ): Promise<EmbeddingConfigureResponseMessage> {
-    return this.requestCommand<EmbeddingConfigureResponseMessage>(
-      { type: "embedding_configure", ...command },
-      "embedding_configure_response",
+  embeddingConnect(
+    command: AppServerFamilyCommandBody<EmbeddingConnectCommand>,
+    options: AppServerFamilyCommandOptions<EmbeddingConnectResponseMessage> = {},
+  ): Promise<EmbeddingConnectResponseMessage> {
+    return this.requestCommand<EmbeddingConnectResponseMessage>(
+      { type: "embedding_connect", ...command },
+      "embedding_connect_response",
       options,
     );
   }
@@ -387,24 +399,90 @@ export abstract class AppServerClientFamilies {
     );
   }
 
-  embeddingReset(
-    command: AppServerFamilyCommandBody<EmbeddingResetCommand>,
-    options: AppServerFamilyCommandOptions<EmbeddingResetResponseMessage> = {},
-  ): Promise<EmbeddingResetResponseMessage> {
-    return this.requestCommand<EmbeddingResetResponseMessage>(
-      { type: "embedding_reset", ...command },
-      "embedding_reset_response",
+  embeddingProfilesList(
+    command: AppServerFamilyCommandBody<EmbeddingProfilesListCommand>,
+    options: AppServerFamilyCommandOptions<EmbeddingProfilesListResponseMessage> = {},
+  ): Promise<EmbeddingProfilesListResponseMessage> {
+    return this.requestCommand<EmbeddingProfilesListResponseMessage>(
+      { type: "embedding_profiles_list", ...command },
+      "embedding_profiles_list_response",
       options,
     );
   }
 
-  embeddingCalibrate(
-    command: AppServerFamilyCommandBody<EmbeddingCalibrateCommand>,
-    options: AppServerFamilyCommandOptions<EmbeddingCalibrateResponseMessage> = {},
-  ): Promise<EmbeddingCalibrateResponseMessage> {
-    return this.requestCommand<EmbeddingCalibrateResponseMessage>(
-      { type: "embedding_calibrate", ...command },
-      "embedding_calibrate_response",
+  embeddingProfileSelect(
+    command: AppServerFamilyCommandBody<EmbeddingProfileSelectCommand>,
+    options: AppServerFamilyCommandOptions<EmbeddingProfileSelectResponseMessage> = {},
+  ): Promise<EmbeddingProfileSelectResponseMessage> {
+    return this.requestCommand<EmbeddingProfileSelectResponseMessage>(
+      { type: "embedding_profile_select", ...command },
+      "embedding_profile_select_response",
+      options,
+    );
+  }
+
+  embeddingProfileDelete(
+    command: AppServerFamilyCommandBody<EmbeddingProfileDeleteCommand>,
+    options: AppServerFamilyCommandOptions<EmbeddingProfileDeleteResponseMessage> = {},
+  ): Promise<EmbeddingProfileDeleteResponseMessage> {
+    return this.requestCommand<EmbeddingProfileDeleteResponseMessage>(
+      { type: "embedding_profile_delete", ...command },
+      "embedding_profile_delete_response",
+      options,
+    );
+  }
+
+  embeddingProfilePin(
+    command: AppServerFamilyCommandBody<EmbeddingProfilePinCommand>,
+    options: AppServerFamilyCommandOptions<EmbeddingProfilePinResponseMessage> = {},
+  ): Promise<EmbeddingProfilePinResponseMessage> {
+    return this.requestCommand<EmbeddingProfilePinResponseMessage>(
+      { type: "embedding_profile_pin", ...command },
+      "embedding_profile_pin_response",
+      options,
+    );
+  }
+
+  embeddingConfigGet(
+    command: AppServerFamilyCommandBody<EmbeddingConfigGetCommand>,
+    options: AppServerFamilyCommandOptions<EmbeddingConfigGetResponseMessage> = {},
+  ): Promise<EmbeddingConfigGetResponseMessage> {
+    return this.requestCommand<EmbeddingConfigGetResponseMessage>(
+      { type: "embedding_config_get", ...command },
+      "embedding_config_get_response",
+      options,
+    );
+  }
+
+  embeddingConfigSet(
+    command: AppServerFamilyCommandBody<EmbeddingConfigSetCommand>,
+    options: AppServerFamilyCommandOptions<EmbeddingConfigSetResponseMessage> = {},
+  ): Promise<EmbeddingConfigSetResponseMessage> {
+    return this.requestCommand<EmbeddingConfigSetResponseMessage>(
+      { type: "embedding_config_set", ...command },
+      "embedding_config_set_response",
+      options,
+    );
+  }
+
+  embeddingDevice(
+    command: AppServerFamilyCommandBody<EmbeddingDeviceCommand>,
+    options: AppServerFamilyCommandOptions<EmbeddingDeviceResponseMessage> = {},
+  ): Promise<EmbeddingDeviceResponseMessage> {
+    return this.requestCommand<EmbeddingDeviceResponseMessage>(
+      { type: "embedding_device", ...command },
+      "embedding_device_response",
+      options,
+    );
+  }
+
+  embeddingDeviceTest(
+    command: AppServerFamilyCommandBody<EmbeddingDeviceTestCommand>,
+    options: AppServerFamilyCommandOptions<EmbeddingDeviceTestResponseMessage> = {},
+  ): Promise<EmbeddingDeviceTestResponseMessage> {
+    return this.requestCommand<EmbeddingDeviceTestResponseMessage>(
+      { type: "embedding_device_test", ...command },
+      "embedding_device_test_response",
       options,
     );
   }

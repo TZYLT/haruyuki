@@ -2,39 +2,63 @@ import type WebSocket from "ws";
 import type {
   EmbeddingBuildCommand,
   EmbeddingBuildResponseMessage,
-  EmbeddingCalibrateCommand,
-  EmbeddingCalibrateResponseMessage,
   EmbeddingCancelCommand,
   EmbeddingCancelResponseMessage,
-  EmbeddingConfigureCommand,
-  EmbeddingConfigurePatch,
-  EmbeddingConfigureResponseMessage,
+  EmbeddingConfigGetCommand,
+  EmbeddingConfigSetCommand,
+  EmbeddingConnectCommand,
+  EmbeddingConnectPatch,
+  EmbeddingConnectResponseMessage,
+  EmbeddingDeviceCommand,
+  EmbeddingDeviceTestCommand,
   EmbeddingDisableCommand,
   EmbeddingDisableResponseMessage,
   EmbeddingEnableCommand,
   EmbeddingEnableResponseMessage,
-  EmbeddingResetCommand,
-  EmbeddingResetResponseMessage,
+  EmbeddingProfileDeleteCommand,
+  EmbeddingProfilePinCommand,
+  EmbeddingProfileSelectCommand,
+  EmbeddingProfilesListCommand,
   EmbeddingStatusCommand,
   EmbeddingStatusResponseMessage,
 } from "@/types/embedding-protocol";
-import type { AgentRuntimeScope } from "@/types/runtime-scope";
 import { getErrorMessage } from "@/utils/error";
 import {
   isEmbeddingBuildCommand,
-  isEmbeddingCalibrateCommand,
   isEmbeddingCancelCommand,
-  isEmbeddingConfigureCommand,
-  isEmbeddingConfigurePatch,
+  isEmbeddingConfigGetCommand,
+  isEmbeddingConfigSetCommand,
+  isEmbeddingConnectCommand,
+  isEmbeddingConnectPatch,
+  isEmbeddingDeviceCommand,
+  isEmbeddingDeviceTestCommand,
   isEmbeddingDisableCommand,
   isEmbeddingEnableCommand,
-  isEmbeddingResetCommand,
+  isEmbeddingProfileDeleteCommand,
+  isEmbeddingProfilePinCommand,
+  isEmbeddingProfileSelectCommand,
+  isEmbeddingProfilesListCommand,
   isEmbeddingStatusCommand,
 } from "@/websocket/listener/embedding-protocol-inbound";
 import {
   createEmbeddingCommandBackend,
   type EmbeddingCommandBackend,
 } from "./embedding-backend";
+import {
+  createEmbeddingSend,
+  EMBEDDING_INVALID_PATCH,
+  requireAgentId,
+} from "./embedding-command-shared";
+import {
+  handleEmbeddingConfigGetCommand,
+  handleEmbeddingConfigSetCommand,
+  handleEmbeddingDeviceCommand,
+  handleEmbeddingDeviceTestCommand,
+  handleEmbeddingProfileDeleteCommand,
+  handleEmbeddingProfilePinCommand,
+  handleEmbeddingProfileSelectCommand,
+  handleEmbeddingProfilesListCommand,
+} from "./embedding-profile-handlers";
 import type { RunDetachedListenerTask, SafeSocketSend } from "./types";
 
 /**
@@ -64,11 +88,6 @@ export type EmbeddingProtocolCommandContext = {
   runDetachedListenerTask: RunDetachedListenerTask;
 };
 
-/** The command's runtime scope is malformed (defense in depth; the guard runs first). */
-export const EMBEDDING_INVALID_SCOPE = "invalid_embedding_scope";
-/** The patch failed the handler-side shape/coherence check. */
-export const EMBEDDING_INVALID_PATCH = "invalid_embedding_patch";
-
 export type {
   EmbeddingBackendFailure,
   EmbeddingBackendResult,
@@ -78,11 +97,18 @@ export type {
   EmbeddingCancelBackendValue,
   EmbeddingCommandBackend,
   EmbeddingCommandBackendDeps,
-  EmbeddingConfigureBackendValue,
+  EmbeddingConfigGetBackendValue,
+  EmbeddingConfigSetBackendValue,
+  EmbeddingConnectBackendValue,
+  EmbeddingDeviceBackendValue,
   EmbeddingDisableBackendValue,
   EmbeddingEnableBackendValue,
-  EmbeddingResetBackendValue,
-  EmbeddingResetScope,
+  EmbeddingProfileDeleteBackendValue,
+  EmbeddingProfileDeleteRequest,
+  EmbeddingProfilePinBackendValue,
+  EmbeddingProfileSelectBackendValue,
+  EmbeddingProfileSelector,
+  EmbeddingProfilesListBackendValue,
   EmbeddingStatusBackendResult,
 } from "./embedding-backend";
 // The backend contract and the production adapter live in their own module
@@ -91,45 +117,26 @@ export {
   createEmbeddingCommandBackend,
   EMBEDDING_NOT_CONFIGURED,
 } from "./embedding-backend";
+export {
+  EMBEDDING_INVALID_PATCH,
+  EMBEDDING_INVALID_SCOPE,
+} from "./embedding-command-shared";
 
 type EmbeddingProtocolCommand =
   | EmbeddingStatusCommand
-  | EmbeddingConfigureCommand
+  | EmbeddingConnectCommand
   | EmbeddingEnableCommand
   | EmbeddingDisableCommand
   | EmbeddingBuildCommand
   | EmbeddingCancelCommand
-  | EmbeddingResetCommand
-  | EmbeddingCalibrateCommand;
-
-/** What a command handler sends on the socket; injected so tests stay local. */
-type EmbeddingSend = (payload: unknown) => boolean;
-
-function createEmbeddingSend(
-  socket: WebSocket,
-  safeSocketSend: SafeSocketSend,
-): EmbeddingSend {
-  return (payload) =>
-    safeSocketSend(
-      socket,
-      payload,
-      "listener_embedding_send_failed",
-      "listener_embedding_protocol",
-    );
-}
-
-/** Reject a runtime scope that is not a complete agent/conversation address. */
-function requireAgentId(scope: AgentRuntimeScope): string {
-  if (
-    typeof scope.agent_id !== "string" ||
-    scope.agent_id.length === 0 ||
-    typeof scope.conversation_id !== "string" ||
-    scope.conversation_id.length === 0
-  ) {
-    throw new Error(EMBEDDING_INVALID_SCOPE);
-  }
-  return scope.agent_id;
-}
+  | EmbeddingProfilesListCommand
+  | EmbeddingProfileSelectCommand
+  | EmbeddingProfileDeleteCommand
+  | EmbeddingProfilePinCommand
+  | EmbeddingConfigGetCommand
+  | EmbeddingConfigSetCommand
+  | EmbeddingDeviceCommand
+  | EmbeddingDeviceTestCommand;
 
 /**
  * Handler-side patch coherence, on top of the D1 shape guard.
@@ -139,9 +146,9 @@ function requireAgentId(scope: AgentRuntimeScope): string {
  * carries both sides of the relation, so a partial patch is never judged
  * against a value it does not set. Endpoint/backend coherence is not checked
  * here at all: it depends on the *stored* settings, so the production backend
- * validates the merged result (see `EmbeddingCommandBackend.configure`).
+ * validates the merged result (see `EmbeddingCommandBackend.connect`).
  */
-function validateConfigurePatch(patch: EmbeddingConfigurePatch): string | null {
+function validateConnectPatch(patch: EmbeddingConnectPatch): string | null {
   if (
     patch.chunk_target !== undefined &&
     patch.chunk_max !== undefined &&
@@ -200,14 +207,15 @@ export async function handleEmbeddingStatusCommand(
 }
 
 /**
- * `embedding_configure`: a patch onto the resolved settings.
+ * `embedding_connect`: a patch onto the resolved settings plus the space id it
+ * addresses (48-4 D-08/D-11).
  *
  * `api_key` is write-only (48-2 O-18): it is validated and forwarded to the
  * backend, which persists it through the secrets store; no branch below copies
  * it into the response.
  */
-export async function handleEmbeddingConfigureCommand(
-  command: EmbeddingConfigureCommand,
+export async function handleEmbeddingConnectCommand(
+  command: EmbeddingConnectCommand,
   socket: WebSocket,
   safeSocketSend: SafeSocketSend,
   backend: EmbeddingCommandBackend = createEmbeddingCommandBackend(),
@@ -215,38 +223,41 @@ export async function handleEmbeddingConfigureCommand(
   const send = createEmbeddingSend(socket, safeSocketSend);
   try {
     const agentId = requireAgentId(command.runtime);
-    if (!isEmbeddingConfigurePatch(command.patch)) {
+    if (!isEmbeddingConnectPatch(command.patch)) {
       throw new Error(EMBEDDING_INVALID_PATCH);
     }
-    const invalid = validateConfigurePatch(command.patch);
+    const invalid = validateConnectPatch(command.patch);
     if (invalid !== null) throw new Error(invalid);
-    const result = await backend.configure(agentId, command.patch);
+    const result = await backend.connect(agentId, command.patch);
     if (!result.ok) {
-      const response: EmbeddingConfigureResponseMessage = {
-        type: "embedding_configure_response",
+      const response: EmbeddingConnectResponseMessage = {
+        type: "embedding_connect_response",
         request_id: command.request_id,
         success: false,
         settings: null,
+        space_id: null,
         requires_rebuild: false,
         error: result.error,
       };
       send(response);
       return;
     }
-    const response: EmbeddingConfigureResponseMessage = {
-      type: "embedding_configure_response",
+    const response: EmbeddingConnectResponseMessage = {
+      type: "embedding_connect_response",
       request_id: command.request_id,
       success: true,
       settings: result.value.settings,
+      space_id: result.value.spaceId,
       requires_rebuild: result.value.requiresRebuild,
     };
     send(response);
   } catch (error) {
-    const response: EmbeddingConfigureResponseMessage = {
-      type: "embedding_configure_response",
+    const response: EmbeddingConnectResponseMessage = {
+      type: "embedding_connect_response",
       request_id: command.request_id,
       success: false,
       settings: null,
+      space_id: null,
       requires_rebuild: false,
       error: getErrorMessage(error),
     };
@@ -449,95 +460,6 @@ export async function handleEmbeddingCancelCommand(
   }
 }
 
-/** `embedding_reset`: drop vector spaces (`index`) and optionally calibration. */
-export async function handleEmbeddingResetCommand(
-  command: EmbeddingResetCommand,
-  socket: WebSocket,
-  safeSocketSend: SafeSocketSend,
-  backend: EmbeddingCommandBackend = createEmbeddingCommandBackend(),
-): Promise<void> {
-  const send = createEmbeddingSend(socket, safeSocketSend);
-  try {
-    const agentId = requireAgentId(command.runtime);
-    const scope = command.scope ?? "index";
-    if (scope !== "index" && scope !== "all") {
-      throw new Error("invalid_embedding_reset_scope");
-    }
-    const result = await backend.reset(agentId, scope);
-    if (!result.ok) {
-      const response: EmbeddingResetResponseMessage = {
-        type: "embedding_reset_response",
-        request_id: command.request_id,
-        success: false,
-        removed_spaces: 0,
-        requires_rebuild: false,
-        error: result.error,
-      };
-      send(response);
-      return;
-    }
-    const response: EmbeddingResetResponseMessage = {
-      type: "embedding_reset_response",
-      request_id: command.request_id,
-      success: true,
-      removed_spaces: result.value.removedSpaces,
-      requires_rebuild: result.value.requiresRebuild,
-    };
-    send(response);
-  } catch (error) {
-    const response: EmbeddingResetResponseMessage = {
-      type: "embedding_reset_response",
-      request_id: command.request_id,
-      success: false,
-      removed_spaces: 0,
-      requires_rebuild: false,
-      error: getErrorMessage(error),
-    };
-    send(response);
-  }
-}
-
-/** `embedding_calibrate`: run the bounded ≤5s pass and optionally persist it. */
-export async function handleEmbeddingCalibrateCommand(
-  command: EmbeddingCalibrateCommand,
-  socket: WebSocket,
-  safeSocketSend: SafeSocketSend,
-  backend: EmbeddingCommandBackend = createEmbeddingCommandBackend(),
-): Promise<void> {
-  const send = createEmbeddingSend(socket, safeSocketSend);
-  try {
-    const agentId = requireAgentId(command.runtime);
-    const result = await backend.calibrate(agentId, command.persist ?? true);
-    if (!result.ok) {
-      const response: EmbeddingCalibrateResponseMessage = {
-        type: "embedding_calibrate_response",
-        request_id: command.request_id,
-        success: false,
-        calibration: null,
-        error: result.error,
-      };
-      send(response);
-      return;
-    }
-    const response: EmbeddingCalibrateResponseMessage = {
-      type: "embedding_calibrate_response",
-      request_id: command.request_id,
-      success: true,
-      calibration: result.value.calibration,
-    };
-    send(response);
-  } catch (error) {
-    const response: EmbeddingCalibrateResponseMessage = {
-      type: "embedding_calibrate_response",
-      request_id: command.request_id,
-      success: false,
-      calibration: null,
-      error: getErrorMessage(error),
-    };
-    send(response);
-  }
-}
-
 async function handleEmbeddingProtocolRequest(
   command: EmbeddingProtocolCommand,
   socket: WebSocket,
@@ -553,8 +475,8 @@ async function handleEmbeddingProtocolRequest(
         backend,
       );
       return;
-    case "embedding_configure":
-      await handleEmbeddingConfigureCommand(
+    case "embedding_connect":
+      await handleEmbeddingConnectCommand(
         command,
         socket,
         safeSocketSend,
@@ -593,16 +515,64 @@ async function handleEmbeddingProtocolRequest(
         backend,
       );
       return;
-    case "embedding_reset":
-      await handleEmbeddingResetCommand(
+    case "embedding_profiles_list":
+      await handleEmbeddingProfilesListCommand(
         command,
         socket,
         safeSocketSend,
         backend,
       );
       return;
-    case "embedding_calibrate":
-      await handleEmbeddingCalibrateCommand(
+    case "embedding_profile_select":
+      await handleEmbeddingProfileSelectCommand(
+        command,
+        socket,
+        safeSocketSend,
+        backend,
+      );
+      return;
+    case "embedding_profile_delete":
+      await handleEmbeddingProfileDeleteCommand(
+        command,
+        socket,
+        safeSocketSend,
+        backend,
+      );
+      return;
+    case "embedding_profile_pin":
+      await handleEmbeddingProfilePinCommand(
+        command,
+        socket,
+        safeSocketSend,
+        backend,
+      );
+      return;
+    case "embedding_config_get":
+      await handleEmbeddingConfigGetCommand(
+        command,
+        socket,
+        safeSocketSend,
+        backend,
+      );
+      return;
+    case "embedding_config_set":
+      await handleEmbeddingConfigSetCommand(
+        command,
+        socket,
+        safeSocketSend,
+        backend,
+      );
+      return;
+    case "embedding_device":
+      await handleEmbeddingDeviceCommand(
+        command,
+        socket,
+        safeSocketSend,
+        backend,
+      );
+      return;
+    case "embedding_device_test":
+      await handleEmbeddingDeviceTestCommand(
         command,
         socket,
         safeSocketSend,
@@ -626,13 +596,19 @@ export function handleEmbeddingProtocolCommand(
 ): boolean {
   if (
     !isEmbeddingStatusCommand(parsed) &&
-    !isEmbeddingConfigureCommand(parsed) &&
+    !isEmbeddingConnectCommand(parsed) &&
     !isEmbeddingEnableCommand(parsed) &&
     !isEmbeddingDisableCommand(parsed) &&
     !isEmbeddingBuildCommand(parsed) &&
     !isEmbeddingCancelCommand(parsed) &&
-    !isEmbeddingResetCommand(parsed) &&
-    !isEmbeddingCalibrateCommand(parsed)
+    !isEmbeddingProfilesListCommand(parsed) &&
+    !isEmbeddingProfileSelectCommand(parsed) &&
+    !isEmbeddingProfileDeleteCommand(parsed) &&
+    !isEmbeddingProfilePinCommand(parsed) &&
+    !isEmbeddingConfigGetCommand(parsed) &&
+    !isEmbeddingConfigSetCommand(parsed) &&
+    !isEmbeddingDeviceCommand(parsed) &&
+    !isEmbeddingDeviceTestCommand(parsed)
   ) {
     return false;
   }

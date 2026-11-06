@@ -7,12 +7,18 @@
 import { describe, expect, test } from "bun:test";
 import {
   isEmbeddingBuildCommand,
-  isEmbeddingCalibrateCommand,
   isEmbeddingCancelCommand,
-  isEmbeddingConfigureCommand,
+  isEmbeddingConfigGetCommand,
+  isEmbeddingConfigSetCommand,
+  isEmbeddingConnectCommand,
+  isEmbeddingDeviceCommand,
+  isEmbeddingDeviceTestCommand,
   isEmbeddingDisableCommand,
   isEmbeddingEnableCommand,
-  isEmbeddingResetCommand,
+  isEmbeddingProfileDeleteCommand,
+  isEmbeddingProfilePinCommand,
+  isEmbeddingProfileSelectCommand,
+  isEmbeddingProfilesListCommand,
   isEmbeddingStatusCommand,
 } from "./embedding-protocol-inbound";
 import { parseServerMessage } from "./protocol-inbound";
@@ -25,6 +31,22 @@ type CommandCase = {
   guard: (value: unknown) => boolean;
 };
 
+/** Fields a minimal valid frame of the same type carries. */
+function minimalExtra(type: string): Record<string, unknown> {
+  switch (type) {
+    case "embedding_connect":
+      return { patch: {} };
+    case "embedding_profile_select":
+      return { index: 1 };
+    case "embedding_profile_pin":
+      return { index: 1, pinned: true };
+    case "embedding_config_set":
+      return { key: "threads", value: 2 };
+    default:
+      return {};
+  }
+}
+
 const COMMANDS: CommandCase[] = [
   {
     name: "embedding_status",
@@ -32,9 +54,9 @@ const COMMANDS: CommandCase[] = [
     guard: isEmbeddingStatusCommand,
   },
   {
-    name: "embedding_configure",
-    type: "embedding_configure",
-    guard: isEmbeddingConfigureCommand,
+    name: "embedding_connect",
+    type: "embedding_connect",
+    guard: isEmbeddingConnectCommand,
   },
   {
     name: "embedding_enable",
@@ -57,28 +79,61 @@ const COMMANDS: CommandCase[] = [
     guard: isEmbeddingCancelCommand,
   },
   {
-    name: "embedding_reset",
-    type: "embedding_reset",
-    guard: isEmbeddingResetCommand,
+    name: "embedding_profiles_list",
+    type: "embedding_profiles_list",
+    guard: isEmbeddingProfilesListCommand,
   },
   {
-    name: "embedding_calibrate",
-    type: "embedding_calibrate",
-    guard: isEmbeddingCalibrateCommand,
+    name: "embedding_profile_select",
+    type: "embedding_profile_select",
+    guard: isEmbeddingProfileSelectCommand,
+  },
+  {
+    name: "embedding_profile_delete",
+    type: "embedding_profile_delete",
+    guard: isEmbeddingProfileDeleteCommand,
+  },
+  {
+    name: "embedding_profile_pin",
+    type: "embedding_profile_pin",
+    guard: isEmbeddingProfilePinCommand,
+  },
+  {
+    name: "embedding_config_get",
+    type: "embedding_config_get",
+    guard: isEmbeddingConfigGetCommand,
+  },
+  {
+    name: "embedding_config_set",
+    type: "embedding_config_set",
+    guard: isEmbeddingConfigSetCommand,
+  },
+  {
+    name: "embedding_device",
+    type: "embedding_device",
+    guard: isEmbeddingDeviceCommand,
+  },
+  {
+    name: "embedding_device_test",
+    type: "embedding_device_test",
+    guard: isEmbeddingDeviceTestCommand,
   },
 ];
 
 function frame(type: string, extra: Record<string, unknown> = {}) {
-  return { type, request_id: "req-1", runtime, ...extra };
+  return {
+    type,
+    request_id: "req-1",
+    runtime,
+    ...minimalExtra(type),
+    ...extra,
+  };
 }
 
 describe("embedding command guards: envelope", () => {
   test("each guard accepts its minimal command", () => {
     for (const command of COMMANDS) {
-      const extra = command.type === "embedding_configure" ? { patch: {} } : {};
-      expect(command.guard(frame(command.type, extra)), command.name).toBe(
-        true,
-      );
+      expect(command.guard(frame(command.type)), command.name).toBe(true);
     }
   });
 
@@ -87,7 +142,7 @@ describe("embedding command guards: envelope", () => {
       for (const other of COMMANDS) {
         if (other.type === command.type) continue;
         expect(
-          command.guard(frame(other.type, { patch: {} })),
+          command.guard(frame(other.type)),
           `${command.name} accepted ${other.type}`,
         ).toBe(false);
       }
@@ -96,14 +151,12 @@ describe("embedding command guards: envelope", () => {
 
   test("rejects a missing or malformed agent runtime scope", () => {
     for (const command of COMMANDS) {
-      const extra = command.type === "embedding_configure" ? { patch: {} } : {};
-      expect(
-        command.guard(frame(command.type, { ...extra, runtime: undefined })),
-      ).toBe(false);
+      expect(command.guard(frame(command.type, { runtime: undefined }))).toBe(
+        false,
+      );
       expect(
         command.guard(
           frame(command.type, {
-            ...extra,
             runtime: { agent_id: null, conversation_id: "conv-1" },
           }),
         ),
@@ -111,7 +164,6 @@ describe("embedding command guards: envelope", () => {
       expect(
         command.guard(
           frame(command.type, {
-            ...extra,
             runtime: { agent_id: "agent-1", conversation_id: 7 },
           }),
         ),
@@ -121,37 +173,30 @@ describe("embedding command guards: envelope", () => {
 
   test("rejects an empty or non-string request id", () => {
     for (const command of COMMANDS) {
-      const extra = command.type === "embedding_configure" ? { patch: {} } : {};
       expect(
-        command.guard({
-          type: command.type,
-          request_id: "",
-          runtime,
-          ...extra,
-        }),
+        command.guard(frame(command.type, { request_id: "" })),
+        command.name,
       ).toBe(false);
       expect(
-        command.guard({ type: command.type, request_id: 1, runtime, ...extra }),
+        command.guard(frame(command.type, { request_id: 1 })),
+        command.name,
       ).toBe(false);
     }
   });
 });
 
-describe("embedding_configure patch validation", () => {
+describe("embedding_connect patch validation", () => {
   test("accepts an empty patch", () => {
     expect(
-      isEmbeddingConfigureCommand(frame("embedding_configure", { patch: {} })),
+      isEmbeddingConnectCommand(frame("embedding_connect", { patch: {} })),
     ).toBe(true);
   });
 
   test("requires a patch object", () => {
-    expect(isEmbeddingConfigureCommand(frame("embedding_configure"))).toBe(
-      false,
-    );
+    const missing = { type: "embedding_connect", request_id: "req-1", runtime };
+    expect(isEmbeddingConnectCommand(missing)).toBe(false);
     expect(
-      isEmbeddingConfigureCommand(
-        frame("embedding_configure", { patch: null }),
-      ),
+      isEmbeddingConnectCommand(frame("embedding_connect", { patch: null })),
     ).toBe(false);
   });
 
@@ -194,7 +239,7 @@ describe("embedding_configure patch validation", () => {
     ];
     for (const patch of invalidPatches) {
       expect(
-        isEmbeddingConfigureCommand(frame("embedding_configure", { patch })),
+        isEmbeddingConnectCommand(frame("embedding_connect", { patch })),
         JSON.stringify(patch),
       ).toBe(false);
     }
@@ -225,7 +270,7 @@ describe("embedding_configure patch validation", () => {
       keep_spaces: 2,
     };
     expect(
-      isEmbeddingConfigureCommand(frame("embedding_configure", { patch })),
+      isEmbeddingConnectCommand(frame("embedding_connect", { patch })),
     ).toBe(true);
   });
 });
@@ -234,9 +279,7 @@ describe("embedding optional fields", () => {
   test("embedding_build accepts its mode and keep_after_exit flags", () => {
     expect(isEmbeddingBuildCommand(frame("embedding_build"))).toBe(true);
     expect(
-      isEmbeddingBuildCommand(
-        frame("embedding_build", { mode: "incremental" }),
-      ),
+      isEmbeddingBuildCommand(frame("embedding_build", { mode: "full" })),
     ).toBe(true);
     expect(
       isEmbeddingBuildCommand(
@@ -254,13 +297,6 @@ describe("embedding optional fields", () => {
   test("embedding_cancel accepts an optional build id", () => {
     expect(isEmbeddingCancelCommand(frame("embedding_cancel"))).toBe(true);
     expect(
-      isEmbeddingCancelCommand(
-        frame("embedding_cancel", { build_id: "build-1" }),
-      ),
-    ).toBe(true);
-    // The status snapshot's "no id assigned" sentinel round-trips as the
-    // omitted form instead of being dropped (and timing out) on the client.
-    expect(
       isEmbeddingCancelCommand(frame("embedding_cancel", { build_id: "" })),
     ).toBe(true);
     expect(
@@ -268,31 +304,61 @@ describe("embedding optional fields", () => {
     ).toBe(false);
   });
 
-  test("embedding_reset accepts index/all scopes only", () => {
-    expect(isEmbeddingResetCommand(frame("embedding_reset"))).toBe(true);
+  test("embedding_profile_delete accepts its scopes and confirm flag", () => {
     expect(
-      isEmbeddingResetCommand(frame("embedding_reset", { scope: "index" })),
+      isEmbeddingProfileDeleteCommand(frame("embedding_profile_delete")),
     ).toBe(true);
+    for (const scope of ["current", "all", "model"]) {
+      expect(
+        isEmbeddingProfileDeleteCommand(
+          frame("embedding_profile_delete", { scope }),
+        ),
+      ).toBe(true);
+    }
     expect(
-      isEmbeddingResetCommand(frame("embedding_reset", { scope: "all" })),
-    ).toBe(true);
+      isEmbeddingProfileDeleteCommand(
+        frame("embedding_profile_delete", { scope: "vectors" }),
+      ),
+    ).toBe(false);
     expect(
-      isEmbeddingResetCommand(frame("embedding_reset", { scope: "vectors" })),
+      isEmbeddingProfileDeleteCommand(
+        frame("embedding_profile_delete", { confirm: "yes" }),
+      ),
     ).toBe(false);
   });
 
-  test("embedding_calibrate accepts an optional persist flag", () => {
-    expect(isEmbeddingCalibrateCommand(frame("embedding_calibrate"))).toBe(
-      true,
-    );
+  test("profile select and pin need a selector", () => {
+    const selectorless = {
+      type: "embedding_profile_select",
+      request_id: "req-1",
+      runtime,
+    };
+    expect(isEmbeddingProfileSelectCommand(selectorless)).toBe(false);
     expect(
-      isEmbeddingCalibrateCommand(
-        frame("embedding_calibrate", { persist: false }),
+      isEmbeddingProfileSelectCommand(
+        frame("embedding_profile_select", { space_id: "space-1" }),
       ),
     ).toBe(true);
     expect(
-      isEmbeddingCalibrateCommand(
-        frame("embedding_calibrate", { persist: "no" }),
+      isEmbeddingProfilePinCommand(
+        frame("embedding_profile_pin", { pinned: "yes" }),
+      ),
+    ).toBe(false);
+  });
+
+  test("config commands validate key and value types", () => {
+    expect(isEmbeddingConfigGetCommand(frame("embedding_config_get"))).toBe(
+      true,
+    );
+    expect(
+      isEmbeddingConfigGetCommand(frame("embedding_config_get", { key: "" })),
+    ).toBe(false);
+    expect(isEmbeddingConfigSetCommand(frame("embedding_config_set"))).toBe(
+      true,
+    );
+    expect(
+      isEmbeddingConfigSetCommand(
+        frame("embedding_config_set", { value: { n: 1 } }),
       ),
     ).toBe(false);
   });
@@ -312,27 +378,26 @@ describe("embedding optional fields", () => {
  * so this block exercises the real inbound entry point, not the guards.
  */
 describe("embedding commands reach parseServerMessage", () => {
-  function frameFor(command: CommandCase): Record<string, unknown> {
-    const extra = command.type === "embedding_configure" ? { patch: {} } : {};
-    return {
-      type: command.type,
-      request_id: "req-parse",
-      runtime,
-      ...extra,
-    };
-  }
-
   function parsedType(value: unknown): string | null {
     if (value === null || typeof value !== "object") return null;
     const type = (value as { type?: unknown }).type;
     return typeof type === "string" ? type : null;
   }
 
-  test("each of the eight commands survives the inbound OR-chain unchanged", () => {
+  test("each of the fourteen commands survives the inbound OR-chain unchanged", () => {
     for (const command of COMMANDS) {
       expect(
         parsedType(
-          parseServerMessage(Buffer.from(JSON.stringify(frameFor(command)))),
+          parseServerMessage(
+            Buffer.from(
+              JSON.stringify({
+                type: command.type,
+                request_id: "req-parse",
+                runtime,
+                ...minimalExtra(command.type),
+              }),
+            ),
+          ),
         ),
         command.name,
       ).toBe(command.type);
@@ -342,7 +407,7 @@ describe("embedding commands reach parseServerMessage", () => {
   test("a frame the family guard rejects is not routed as an embedding command", () => {
     const malformed: Record<string, unknown>[] = [
       {
-        type: "embedding_configure",
+        type: "embedding_connect",
         request_id: "req-bad",
         runtime,
         patch: { weight: 2 },
@@ -356,13 +421,15 @@ describe("embedding commands reach parseServerMessage", () => {
       { type: "embedding_status", request_id: "req-bad", runtime: {} },
       { type: "embedding_nope", request_id: "req-bad", runtime },
     ];
-    for (const frame of malformed) {
+    for (const malformedFrame of malformed) {
       const type = parsedType(
-        parseServerMessage(Buffer.from(JSON.stringify(frame))),
+        parseServerMessage(Buffer.from(JSON.stringify(malformedFrame))),
       );
-      expect(type, JSON.stringify(frame)).not.toBe("embedding_status");
-      expect(type, JSON.stringify(frame)).not.toBe("embedding_configure");
-      expect(type, JSON.stringify(frame)).not.toBe("embedding_build");
+      expect(type, JSON.stringify(malformedFrame)).not.toBe("embedding_status");
+      expect(type, JSON.stringify(malformedFrame)).not.toBe(
+        "embedding_connect",
+      );
+      expect(type, JSON.stringify(malformedFrame)).not.toBe("embedding_build");
     }
   });
 });

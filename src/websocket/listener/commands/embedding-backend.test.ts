@@ -272,7 +272,7 @@ describe("production backend", () => {
 
   test("configure maps the wire patch into D3 and reports a required rebuild", async () => {
     const h = backendHarness();
-    const result = await h.buildBackend().configure(AGENT, {
+    const result = await h.buildBackend().connect(AGENT, {
       model: "bge-m3",
       weight: 0.7,
       candidate_depth: 80,
@@ -330,7 +330,7 @@ describe("production backend", () => {
 
   test("configure stores the write-only key without echoing it", async () => {
     const h = backendHarness();
-    const result = await h.buildBackend().configure(AGENT, {
+    const result = await h.buildBackend().connect(AGENT, {
       api_key: "sk-listener-test",
       weight: 0.4,
     });
@@ -342,7 +342,7 @@ describe("production backend", () => {
 
   test("configure refuses an invalid patch before anything writes", async () => {
     const h = backendHarness();
-    const result = await h.buildBackend().configure(AGENT, {
+    const result = await h.buildBackend().connect(AGENT, {
       chunk_target: 300,
       chunk_max: 200,
     });
@@ -359,7 +359,7 @@ describe("production backend", () => {
     const h = backendHarness({
       settings: { endpoint: STORED_ENDPOINT },
     });
-    const result = await h.buildBackend().configure(AGENT, {
+    const result = await h.buildBackend().connect(AGENT, {
       backend: "endpoint",
     });
     expect(result).toEqual({ ok: true, value: expect.anything() });
@@ -370,7 +370,7 @@ describe("production backend", () => {
 
   test("configure refuses an endpoint backend with no endpoint anywhere", async () => {
     const h = backendHarness();
-    const result = await h.buildBackend().configure(AGENT, {
+    const result = await h.buildBackend().connect(AGENT, {
       backend: "endpoint",
       api_key: "sk-unusable",
     });
@@ -387,7 +387,7 @@ describe("production backend", () => {
     const h = backendHarness({
       settings: { backend: "endpoint", endpoint: STORED_ENDPOINT },
     });
-    const result = await h.buildBackend().configure(AGENT, { endpoint: null });
+    const result = await h.buildBackend().connect(AGENT, { endpoint: null });
     expect(result).toEqual({
       ok: false,
       error: EMBEDDING_ENDPOINT_CONFIG_REQUIRED,
@@ -401,7 +401,7 @@ describe("production backend", () => {
         throw new EmbeddingSettingsError("settings manager is not initialized");
       },
     });
-    expect(await h.buildBackend().configure(AGENT, { weight: 0.3 })).toEqual({
+    expect(await h.buildBackend().connect(AGENT, { weight: 0.3 })).toEqual({
       ok: false,
       error: "settings manager is not initialized",
     });
@@ -603,7 +603,7 @@ describe("production backend", () => {
     });
   });
 
-  test("reset maps index/all onto A2's targets and parses the receipt", async () => {
+  test("profileDelete maps current/all onto A2's targets and parses the receipt", async () => {
     const scopes: unknown[] = [];
     const h = backendHarness({
       runtime: {
@@ -613,15 +613,41 @@ describe("production backend", () => {
         },
       },
     });
-    expect(await h.buildBackend().reset(AGENT, "all")).toEqual({
+    expect(
+      await h.buildBackend().profileDelete(AGENT, {
+        scope: "all",
+        confirm: true,
+      }),
+    ).toEqual({
       ok: true,
       value: { removedSpaces: 2, requiresRebuild: true },
     });
-    expect(await h.buildBackend().reset(AGENT, "index")).toEqual({
+    expect(
+      await h.buildBackend().profileDelete(AGENT, {
+        scope: "current",
+        confirm: true,
+      }),
+    ).toEqual({
       ok: true,
       value: { removedSpaces: 2, requiresRebuild: true },
     });
     expect(scopes).toEqual([{ kind: "all" }, { kind: "current" }]);
+
+    const unconfirmed = backendHarness();
+    expect(
+      await unconfirmed.buildBackend().profileDelete(AGENT, {
+        scope: "all",
+        confirm: false,
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        removedSpaces: 0,
+        requiresRebuild: false,
+        requiresConfirmation: true,
+        preview: "all stored vector spaces for this agent",
+      },
+    });
 
     const empty = backendHarness({
       runtime: {
@@ -629,39 +655,25 @@ describe("production backend", () => {
           "No matching vector space found; nothing was deleted.",
       },
     });
-    expect(await empty.buildBackend().reset(AGENT, "index")).toEqual({
+    expect(
+      await empty.buildBackend().profileDelete(AGENT, {
+        scope: "current",
+        confirm: true,
+      }),
+    ).toEqual({
       ok: true,
       value: { removedSpaces: 0, requiresRebuild: false },
     });
   });
 
-  test("calibrate returns and persists the measured snapshot", async () => {
+  test("deviceTest returns the measured snapshot without writing", async () => {
     const h = backendHarness();
-    const result = await h.buildBackend().calibrate(AGENT, true);
+    const result = await h.buildBackend().deviceTest(AGENT);
     expect(result).toEqual({ ok: true, value: { calibration: CALIBRATION } });
-    expect(h.writes).toEqual([
-      {
-        calibration: {
-          fingerprint: CALIBRATION.fingerprint,
-          measuredAt: CALIBRATION.measured_at,
-          queryLatencyP50Ms: CALIBRATION.query_latency_p50_ms,
-          queryLatencyP90Ms: CALIBRATION.query_latency_p90_ms,
-          batchThroughputPerSec: CALIBRATION.batch_throughput_per_s,
-          gpuRole: CALIBRATION.gpu_role,
-          threads: CALIBRATION.threads,
-          quantization: CALIBRATION.quantization,
-        },
-      },
-    ]);
-  });
-
-  test("calibrate without persist measures but writes nothing", async () => {
-    const h = backendHarness();
-    await h.buildBackend().calibrate(AGENT, false);
     expect(h.writes).toEqual([]);
   });
 
-  test("calibrate refuses endpoint mode and asset failures without throwing", async () => {
+  test("deviceTest refuses endpoint mode and asset failures without throwing", async () => {
     const endpoint = backendHarness({
       settings: {
         backend: "endpoint",
@@ -673,16 +685,16 @@ describe("production backend", () => {
         },
       },
     });
-    expect(await endpoint.buildBackend().calibrate(AGENT, true)).toEqual({
+    expect(await endpoint.buildBackend().deviceTest(AGENT)).toEqual({
       ok: false,
-      error: "calibration_requires_builtin_backend",
+      error: "device_test_requires_builtin_backend",
     });
 
     const missing = backendHarness();
     missing.deps.runCalibration = async () => {
       throw new Error("Built-in embedding assets are not installed");
     };
-    const failed = await missing.buildBackend().calibrate(AGENT, true);
+    const failed = await missing.buildBackend().deviceTest(AGENT);
     expect(failed.ok).toBe(false);
     if (failed.ok) throw new Error("expected a refusal");
     expect(failed.error).toContain("not installed");
@@ -702,7 +714,9 @@ describe("production backend", () => {
       ok: false,
       error: EMBEDDING_NOT_CONFIGURED,
     });
-    expect(await backend.reset(AGENT, "index")).toEqual({
+    expect(
+      await backend.profileDelete(AGENT, { scope: "current", confirm: true }),
+    ).toEqual({
       ok: false,
       error: EMBEDDING_NOT_CONFIGURED,
     });

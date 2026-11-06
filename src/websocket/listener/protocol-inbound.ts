@@ -139,12 +139,18 @@ import {
 } from "./dream-protocol-inbound";
 import {
   isEmbeddingBuildCommand,
-  isEmbeddingCalibrateCommand,
   isEmbeddingCancelCommand,
-  isEmbeddingConfigureCommand,
+  isEmbeddingConfigGetCommand,
+  isEmbeddingConfigSetCommand,
+  isEmbeddingConnectCommand,
+  isEmbeddingDeviceCommand,
+  isEmbeddingDeviceTestCommand,
   isEmbeddingDisableCommand,
   isEmbeddingEnableCommand,
-  isEmbeddingResetCommand,
+  isEmbeddingProfileDeleteCommand,
+  isEmbeddingProfilePinCommand,
+  isEmbeddingProfileSelectCommand,
+  isEmbeddingProfilesListCommand,
   isEmbeddingStatusCommand,
 } from "./embedding-protocol-inbound";
 import {
@@ -2128,13 +2134,19 @@ export function parseServerMessage(
       isDreamNotesListCommand(parsed) ||
       isDreamNoteRemoveCommand(parsed) ||
       isEmbeddingStatusCommand(parsed) ||
-      isEmbeddingConfigureCommand(parsed) ||
+      isEmbeddingConnectCommand(parsed) ||
       isEmbeddingEnableCommand(parsed) ||
       isEmbeddingDisableCommand(parsed) ||
       isEmbeddingBuildCommand(parsed) ||
       isEmbeddingCancelCommand(parsed) ||
-      isEmbeddingResetCommand(parsed) ||
-      isEmbeddingCalibrateCommand(parsed) ||
+      isEmbeddingProfilesListCommand(parsed) ||
+      isEmbeddingProfileSelectCommand(parsed) ||
+      isEmbeddingProfileDeleteCommand(parsed) ||
+      isEmbeddingProfilePinCommand(parsed) ||
+      isEmbeddingConfigGetCommand(parsed) ||
+      isEmbeddingConfigSetCommand(parsed) ||
+      isEmbeddingDeviceCommand(parsed) ||
+      isEmbeddingDeviceTestCommand(parsed) ||
       isCompactionPrepareCommand(parsed) ||
       isCompactionCommitCommand(parsed) ||
       isCompactionCancelCommand(parsed) ||

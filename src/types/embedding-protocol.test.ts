@@ -79,8 +79,8 @@ const status: EmbeddingStatusSnapshot = {
 const commands: EmbeddingProtocolCommand[] = [
   { type: "embedding_status", request_id: "req-status", runtime },
   {
-    type: "embedding_configure",
-    request_id: "req-configure",
+    type: "embedding_connect",
+    request_id: "req-connect",
     runtime,
     patch: {
       enabled: true,
@@ -121,17 +121,45 @@ const commands: EmbeddingProtocolCommand[] = [
     build_id: "build-1",
   },
   {
-    type: "embedding_reset",
-    request_id: "req-reset",
+    type: "embedding_profiles_list",
+    request_id: "req-profiles",
     runtime,
-    scope: "all",
   },
   {
-    type: "embedding_calibrate",
-    request_id: "req-calibrate",
+    type: "embedding_profile_select",
+    request_id: "req-select",
     runtime,
-    persist: false,
+    index: 1,
   },
+  {
+    type: "embedding_profile_delete",
+    request_id: "req-delete",
+    runtime,
+    scope: "all",
+    confirm: true,
+  },
+  {
+    type: "embedding_profile_pin",
+    request_id: "req-pin",
+    runtime,
+    index: 2,
+    pinned: true,
+  },
+  {
+    type: "embedding_config_get",
+    request_id: "req-config-get",
+    runtime,
+    key: "threads",
+  },
+  {
+    type: "embedding_config_set",
+    request_id: "req-config-set",
+    runtime,
+    key: "gpu",
+    value: "off",
+  },
+  { type: "embedding_device", request_id: "req-device", runtime },
+  { type: "embedding_device_test", request_id: "req-device-test", runtime },
 ];
 
 const responses: EmbeddingProtocolResponseMessage[] = [
@@ -142,10 +170,11 @@ const responses: EmbeddingProtocolResponseMessage[] = [
     status,
   },
   {
-    type: "embedding_configure_response",
-    request_id: "req-configure",
+    type: "embedding_connect_response",
+    request_id: "req-connect",
     success: true,
     settings,
+    space_id: "space-1",
     requires_rebuild: true,
   },
   {
@@ -175,15 +204,77 @@ const responses: EmbeddingProtocolResponseMessage[] = [
     cancelled: true,
   },
   {
-    type: "embedding_reset_response",
-    request_id: "req-reset",
+    type: "embedding_profiles_list_response",
+    request_id: "req-profiles",
+    success: true,
+    profiles: [
+      {
+        index: 1,
+        space_id: "space-1",
+        model: "bge-small-zh-v1.5",
+        dimensions: 512,
+        quantization: "float32",
+        chunks: 11270,
+        bytes: 23_100_000,
+        built_at: "2026-11-03T00:00:00.000Z",
+        active: true,
+        pinned: false,
+        legacy: false,
+      },
+    ],
+  },
+  {
+    type: "embedding_profile_select_response",
+    request_id: "req-select",
+    success: true,
+    settings,
+    requires_rebuild: false,
+  },
+  {
+    type: "embedding_profile_delete_response",
+    request_id: "req-delete",
     success: true,
     removed_spaces: 1,
     requires_rebuild: true,
   },
   {
-    type: "embedding_calibrate_response",
-    request_id: "req-calibrate",
+    type: "embedding_profile_pin_response",
+    request_id: "req-pin",
+    success: true,
+    profiles: [],
+  },
+  {
+    type: "embedding_config_get_response",
+    request_id: "req-config-get",
+    success: true,
+    keys: [{ key: "threads", value: 2 }],
+    settings,
+  },
+  {
+    type: "embedding_config_set_response",
+    request_id: "req-config-set",
+    success: true,
+    settings,
+    requires_rebuild: false,
+  },
+  {
+    type: "embedding_device_response",
+    request_id: "req-device",
+    success: true,
+    device: {
+      backend: "builtin",
+      requested: ["cpu"],
+      initialized: ["cpu"],
+      gpu: false,
+      degraded: false,
+      threads: 2,
+      warmup_ms: 120,
+      measured_at: "2026-11-03T00:00:00.000Z",
+    },
+  },
+  {
+    type: "embedding_device_test_response",
+    request_id: "req-device-test",
     success: true,
     calibration: status.calibration,
   },
@@ -191,7 +282,7 @@ const responses: EmbeddingProtocolResponseMessage[] = [
 
 describe("embedding protocol commands", () => {
   test("every command carries its discriminant and a non-empty request id", () => {
-    expect(new Set(commands.map((command) => command.type)).size).toBe(8);
+    expect(new Set(commands.map((command) => command.type)).size).toBe(14);
     for (const command of commands) {
       expect(command.type).toStartWith("embedding_");
       expect(command.request_id.length).toBeGreaterThan(0);
@@ -209,16 +300,22 @@ describe("embedding protocol commands", () => {
 describe("embedding protocol responses", () => {
   test("every response correlates on its request id", () => {
     const responseTypes = responses.map((response) => response.type);
-    expect(new Set(responseTypes).size).toBe(8);
+    expect(new Set(responseTypes).size).toBe(14);
     for (const expectedType of [
       "embedding_status_response",
-      "embedding_configure_response",
+      "embedding_connect_response",
       "embedding_enable_response",
       "embedding_disable_response",
       "embedding_build_response",
       "embedding_cancel_response",
-      "embedding_reset_response",
-      "embedding_calibrate_response",
+      "embedding_profiles_list_response",
+      "embedding_profile_select_response",
+      "embedding_profile_delete_response",
+      "embedding_profile_pin_response",
+      "embedding_config_get_response",
+      "embedding_config_set_response",
+      "embedding_device_response",
+      "embedding_device_test_response",
     ] as const) {
       expect(responseTypes).toContain(expectedType);
     }

@@ -12,14 +12,14 @@ import { describe, expect, test } from "bun:test";
 import type WebSocket from "ws";
 import type {
   EmbeddingBuildCommand,
-  EmbeddingCalibrateCommand,
   EmbeddingCalibrationSnapshot,
   EmbeddingCancelCommand,
-  EmbeddingConfigureCommand,
-  EmbeddingConfigurePatch,
+  EmbeddingConnectCommand,
+  EmbeddingConnectPatch,
+  EmbeddingDeviceTestCommand,
   EmbeddingDisableCommand,
   EmbeddingEnableCommand,
-  EmbeddingResetCommand,
+  EmbeddingProfileDeleteCommand,
   EmbeddingSettingsSnapshot,
   EmbeddingStatusCommand,
   EmbeddingStatusSnapshot,
@@ -31,15 +31,17 @@ import {
   type EmbeddingBuildOptions,
   type EmbeddingCommandBackend,
   handleEmbeddingBuildCommand,
-  handleEmbeddingCalibrateCommand,
   handleEmbeddingCancelCommand,
-  handleEmbeddingConfigureCommand,
+  handleEmbeddingConnectCommand,
   handleEmbeddingDisableCommand,
   handleEmbeddingEnableCommand,
   handleEmbeddingProtocolCommand,
-  handleEmbeddingResetCommand,
   handleEmbeddingStatusCommand,
 } from "./embedding";
+import {
+  handleEmbeddingDeviceTestCommand,
+  handleEmbeddingProfileDeleteCommand,
+} from "./embedding-profile-handlers";
 import type { SafeSocketSend } from "./types";
 
 const AGENT = "agent-embedding-protocol";
@@ -101,12 +103,12 @@ function statusCommand(): EmbeddingStatusCommand {
   };
 }
 
-function configureCommand(
-  patch: EmbeddingConfigurePatch = { enabled: true },
-): EmbeddingConfigureCommand {
+function connectCommand(
+  patch: EmbeddingConnectPatch = { enabled: true },
+): EmbeddingConnectCommand {
   return {
-    type: "embedding_configure",
-    request_id: "r-configure",
+    type: "embedding_connect",
+    request_id: "r-connect",
     runtime: RUNTIME,
     patch,
   };
@@ -145,19 +147,22 @@ function cancelCommand(buildId?: string): EmbeddingCancelCommand {
   };
 }
 
-function resetCommand(scope?: "index" | "all"): EmbeddingResetCommand {
+function profileDeleteCommand(
+  scope: "current" | "all" | "model" = "all",
+): EmbeddingProfileDeleteCommand {
   return {
-    type: "embedding_reset",
-    request_id: "r-reset",
+    type: "embedding_profile_delete",
+    request_id: "r-delete",
     runtime: RUNTIME,
-    ...(scope === undefined ? {} : { scope }),
+    scope,
+    confirm: true,
   };
 }
 
-function calibrateCommand(): EmbeddingCalibrateCommand {
+function deviceTestCommand(): EmbeddingDeviceTestCommand {
   return {
-    type: "embedding_calibrate",
-    request_id: "r-calibrate",
+    type: "embedding_device_test",
+    request_id: "r-device-test",
     runtime: RUNTIME,
   };
 }
@@ -198,11 +203,15 @@ function createFakeBackend(
       calls.push(`status:${agentId}`);
       return { configured: true, status: statusSnapshot() };
     },
-    configure: async (agentId, patch) => {
-      calls.push(`configure:${agentId}:${JSON.stringify(patch)}`);
+    connect: async (agentId, patch) => {
+      calls.push(`connect:${agentId}:${JSON.stringify(patch)}`);
       return {
         ok: true,
-        value: { settings: SETTINGS, requiresRebuild: false },
+        value: {
+          settings: SETTINGS,
+          spaceId: "space-test",
+          requiresRebuild: false,
+        },
       };
     },
     enable: async (agentId) => {
@@ -221,12 +230,47 @@ function createFakeBackend(
       calls.push(`cancel:${agentId}:${buildId ?? ""}`);
       return { ok: true, value: { cancelled: true } };
     },
-    reset: async (agentId, scope) => {
-      calls.push(`reset:${agentId}:${scope}`);
+    profilesList: async (agentId) => {
+      calls.push(`profilesList:${agentId}`);
+      return { ok: true, value: { profiles: [] } };
+    },
+    profileSelect: async (agentId, selector) => {
+      calls.push(`profileSelect:${agentId}:${JSON.stringify(selector)}`);
+      return {
+        ok: true,
+        value: { settings: SETTINGS, requiresRebuild: false },
+      };
+    },
+    profileDelete: async (agentId, request) => {
+      calls.push(
+        `profileDelete:${agentId}:${request.scope}:${request.confirm}`,
+      );
       return { ok: true, value: { removedSpaces: 2, requiresRebuild: true } };
     },
-    calibrate: async (agentId, persist) => {
-      calls.push(`calibrate:${agentId}:${persist}`);
+    profilePin: async (agentId, selector, pinned) => {
+      calls.push(`profilePin:${agentId}:${JSON.stringify(selector)}:${pinned}`);
+      return { ok: true, value: { profiles: [] } };
+    },
+    configGet: async (agentId, key) => {
+      calls.push(`configGet:${agentId}:${key ?? ""}`);
+      return {
+        ok: true,
+        value: { keys: [], settings: SETTINGS },
+      };
+    },
+    configSet: async (agentId, key, value) => {
+      calls.push(`configSet:${agentId}:${key}:${String(value)}`);
+      return {
+        ok: true,
+        value: { settings: SETTINGS, requiresRebuild: false },
+      };
+    },
+    device: async (agentId) => {
+      calls.push(`device:${agentId}`);
+      return { ok: true, value: { device: null } };
+    },
+    deviceTest: async (agentId) => {
+      calls.push(`deviceTest:${agentId}`);
       return { ok: true, value: { calibration: CALIBRATION } };
     },
     ...overrides,
@@ -235,7 +279,7 @@ function createFakeBackend(
 }
 
 describe("embedding protocol dispatch", () => {
-  test("claims the eight commands and queues one detached task each", async () => {
+  test("claims the fourteen commands and queues one detached task each", async () => {
     const queued: Array<{ name: string; task: () => Promise<void> }> = [];
     const { sent, socket, send } = harness();
     const context = {
@@ -248,13 +292,45 @@ describe("embedding protocol dispatch", () => {
     const { backend } = createFakeBackend();
     const commands: unknown[] = [
       statusCommand(),
-      configureCommand(),
+      connectCommand(),
       enableCommand(),
       disableCommand(),
       buildCommand(),
       cancelCommand(),
-      resetCommand(),
-      calibrateCommand(),
+      profileDeleteCommand(),
+      {
+        type: "embedding_profiles_list",
+        request_id: "r-profiles",
+        runtime: RUNTIME,
+      },
+      {
+        type: "embedding_profile_select",
+        request_id: "r-select",
+        runtime: RUNTIME,
+        index: 1,
+      },
+      {
+        type: "embedding_profile_pin",
+        request_id: "r-pin",
+        runtime: RUNTIME,
+        index: 1,
+        pinned: true,
+      },
+      {
+        type: "embedding_config_get",
+        request_id: "r-config-get",
+        runtime: RUNTIME,
+        key: "threads",
+      },
+      {
+        type: "embedding_config_set",
+        request_id: "r-config-set",
+        runtime: RUNTIME,
+        key: "threads",
+        value: 2,
+      },
+      { type: "embedding_device", request_id: "r-device", runtime: RUNTIME },
+      deviceTestCommand(),
     ];
 
     for (const command of commands) {
@@ -273,13 +349,19 @@ describe("embedding protocol dispatch", () => {
     ).toEqual(
       new Set([
         "embedding_status_response",
-        "embedding_configure_response",
+        "embedding_connect_response",
         "embedding_enable_response",
         "embedding_disable_response",
         "embedding_build_response",
         "embedding_cancel_response",
-        "embedding_reset_response",
-        "embedding_calibrate_response",
+        "embedding_profile_delete_response",
+        "embedding_profiles_list_response",
+        "embedding_profile_select_response",
+        "embedding_profile_pin_response",
+        "embedding_config_get_response",
+        "embedding_config_set_response",
+        "embedding_device_response",
+        "embedding_device_test_response",
       ]),
     );
   });
@@ -348,26 +430,30 @@ describe("embedding_status", () => {
   });
 });
 
-describe("embedding_configure", () => {
+describe("embedding_connect", () => {
   test("forwards the patch (api_key included) and never echoes the credential", async () => {
-    const seen: { patch: EmbeddingConfigurePatch | null } = { patch: null };
+    const seen: { patch: EmbeddingConnectPatch | null } = { patch: null };
     const { backend } = createFakeBackend({
-      configure: async (_agentId, patch) => {
+      connect: async (_agentId, patch) => {
         seen.patch = patch;
         return {
           ok: true,
-          value: { settings: SETTINGS, requiresRebuild: true },
+          value: {
+            settings: SETTINGS,
+            spaceId: "space-test",
+            requiresRebuild: true,
+          },
         };
       },
     });
     const { sent, socket, send } = harness();
-    const patch: EmbeddingConfigurePatch = {
+    const patch: EmbeddingConnectPatch = {
       enabled: true,
       weight: 0.7,
       api_key: "sk-local-test",
     };
-    await handleEmbeddingConfigureCommand(
-      configureCommand(patch),
+    await handleEmbeddingConnectCommand(
+      connectCommand(patch),
       socket,
       send,
       backend,
@@ -375,10 +461,11 @@ describe("embedding_configure", () => {
 
     expect(seen.patch).toEqual(patch);
     expect(lastSent(sent)).toEqual({
-      type: "embedding_configure_response",
-      request_id: "r-configure",
+      type: "embedding_connect_response",
+      request_id: "r-connect",
       success: true,
       settings: SETTINGS,
+      space_id: "space-test",
       requires_rebuild: true,
     });
     expect(JSON.stringify(lastSent(sent))).not.toContain("sk-local-test");
@@ -388,11 +475,11 @@ describe("embedding_configure", () => {
     const { backend, calls } = createFakeBackend();
     const { sent, socket, send } = harness();
     const command = {
-      ...configureCommand(),
+      ...connectCommand(),
       patch: { weight: 2 },
-    } as unknown as EmbeddingConfigureCommand;
+    } as unknown as EmbeddingConnectCommand;
 
-    await handleEmbeddingConfigureCommand(command, socket, send, backend);
+    await handleEmbeddingConnectCommand(command, socket, send, backend);
     expect(lastSent(sent)).toMatchObject({
       success: false,
       settings: null,
@@ -405,8 +492,8 @@ describe("embedding_configure", () => {
   test("cross-field chunk bounds are rejected", async () => {
     const { backend, calls } = createFakeBackend();
     const { sent, socket, send } = harness();
-    await handleEmbeddingConfigureCommand(
-      configureCommand({ chunk_target: 300, chunk_max: 200 }),
+    await handleEmbeddingConnectCommand(
+      connectCommand({ chunk_target: 300, chunk_max: 200 }),
       socket,
       send,
       backend,
@@ -422,16 +509,16 @@ describe("embedding_configure", () => {
     // The handler cannot judge `backend:"endpoint"` on its own: the stored
     // settings may already carry an endpoint (a two-step configure). The
     // backend owns the merged decision, and its error is what the client sees.
-    const seen: EmbeddingConfigurePatch[] = [];
+    const seen: EmbeddingConnectPatch[] = [];
     const { backend } = createFakeBackend({
-      configure: async (_agentId, patch) => {
+      connect: async (_agentId, patch) => {
         seen.push(patch);
         return { ok: false, error: "embedding_endpoint_config_required" };
       },
     });
     const { sent, socket, send } = harness();
-    await handleEmbeddingConfigureCommand(
-      configureCommand({ backend: "endpoint" }),
+    await handleEmbeddingConnectCommand(
+      connectCommand({ backend: "endpoint" }),
       socket,
       send,
       backend,
@@ -446,20 +533,21 @@ describe("embedding_configure", () => {
 
   test("a declined patch answers a typed failure", async () => {
     const { backend } = createFakeBackend({
-      configure: async () => ({ ok: false, error: "settings_locked" }),
+      connect: async () => ({ ok: false, error: "settings_locked" }),
     });
     const { sent, socket, send } = harness();
-    await handleEmbeddingConfigureCommand(
-      configureCommand(),
+    await handleEmbeddingConnectCommand(
+      connectCommand(),
       socket,
       send,
       backend,
     );
     expect(lastSent(sent)).toEqual({
-      type: "embedding_configure_response",
-      request_id: "r-configure",
+      type: "embedding_connect_response",
+      request_id: "r-connect",
       success: false,
       settings: null,
+      space_id: null,
       requires_rebuild: false,
       error: "settings_locked",
     });
@@ -629,45 +717,48 @@ describe("embedding_cancel / reset / calibrate", () => {
     });
   });
 
-  test("reset defaults to the index scope", async () => {
-    const seen: { scope: "index" | "all" | null } = { scope: null };
+  test("profileDelete forwards its scope and confirm flag", async () => {
+    const seen: {
+      scope: "current" | "all" | "model" | null;
+      confirm: boolean | null;
+    } = { scope: null, confirm: null };
     const { backend } = createFakeBackend({
-      reset: async (_agentId, scope) => {
-        seen.scope = scope;
+      profileDelete: async (_agentId, request) => {
+        seen.scope = request.scope;
+        seen.confirm = request.confirm;
         return { ok: true, value: { removedSpaces: 2, requiresRebuild: true } };
       },
     });
     const { sent, socket, send } = harness();
-    await handleEmbeddingResetCommand(resetCommand(), socket, send, backend);
-    expect(seen.scope).toBe("index");
+    await handleEmbeddingProfileDeleteCommand(
+      profileDeleteCommand(),
+      socket,
+      send,
+      backend,
+    );
+    expect(seen.scope).toBe("all");
+    expect(seen.confirm).toBe(true);
     expect(lastSent(sent)).toEqual({
-      type: "embedding_reset_response",
-      request_id: "r-reset",
+      type: "embedding_profile_delete_response",
+      request_id: "r-delete",
       success: true,
       removed_spaces: 2,
       requires_rebuild: true,
     });
   });
 
-  test("calibrate defaults to persisting the result", async () => {
-    const seen: { persist: boolean | null } = { persist: null };
-    const { backend } = createFakeBackend({
-      calibrate: async (_agentId, persist) => {
-        seen.persist = persist;
-        return { ok: true, value: { calibration: CALIBRATION } };
-      },
-    });
+  test("deviceTest answers the measured snapshot", async () => {
+    const { backend } = createFakeBackend();
     const { sent, socket, send } = harness();
-    await handleEmbeddingCalibrateCommand(
-      calibrateCommand(),
+    await handleEmbeddingDeviceTestCommand(
+      deviceTestCommand(),
       socket,
       send,
       backend,
     );
-    expect(seen.persist).toBe(true);
     expect(lastSent(sent)).toEqual({
-      type: "embedding_calibrate_response",
-      request_id: "r-calibrate",
+      type: "embedding_device_test_response",
+      request_id: "r-device-test",
       success: true,
       calibration: CALIBRATION,
     });
@@ -681,13 +772,13 @@ describe("typed backend declines", () => {
       error: string;
     }> => ({ ok: false, error: "declined" });
     const { backend } = createFakeBackend({
-      configure: declined,
+      connect: declined,
       enable: declined,
       disable: declined,
       build: declined,
       cancel: declined,
-      reset: declined,
-      calibrate: declined,
+      profileDelete: declined,
+      deviceTest: declined,
     });
     const cases: Array<{
       type: string;
@@ -695,11 +786,15 @@ describe("typed backend declines", () => {
       run: (socket: WebSocket, send: SafeSocketSend) => Promise<void>;
     }> = [
       {
-        type: "embedding_configure_response",
-        defaults: { settings: null, requires_rebuild: false },
+        type: "embedding_connect_response",
+        defaults: {
+          settings: null,
+          space_id: null,
+          requires_rebuild: false,
+        },
         run: (socket, send) =>
-          handleEmbeddingConfigureCommand(
-            configureCommand(),
+          handleEmbeddingConnectCommand(
+            connectCommand(),
             socket,
             send,
             backend,
@@ -735,17 +830,22 @@ describe("typed backend declines", () => {
           handleEmbeddingCancelCommand(cancelCommand(), socket, send, backend),
       },
       {
-        type: "embedding_reset_response",
+        type: "embedding_profile_delete_response",
         defaults: { removed_spaces: 0, requires_rebuild: false },
         run: (socket, send) =>
-          handleEmbeddingResetCommand(resetCommand(), socket, send, backend),
+          handleEmbeddingProfileDeleteCommand(
+            profileDeleteCommand(),
+            socket,
+            send,
+            backend,
+          ),
       },
       {
-        type: "embedding_calibrate_response",
+        type: "embedding_device_test_response",
         defaults: { calibration: null },
         run: (socket, send) =>
-          handleEmbeddingCalibrateCommand(
-            calibrateCommand(),
+          handleEmbeddingDeviceTestCommand(
+            deviceTestCommand(),
             socket,
             send,
             backend,

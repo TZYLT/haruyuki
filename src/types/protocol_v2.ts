@@ -2554,13 +2554,19 @@ export type WsProtocolCommand =
   | CompactionCommitCommand
   | CompactionCancelCommand
   | EmbeddingProtocol.EmbeddingStatusCommand
-  | EmbeddingProtocol.EmbeddingConfigureCommand
+  | EmbeddingProtocol.EmbeddingConnectCommand
   | EmbeddingProtocol.EmbeddingEnableCommand
   | EmbeddingProtocol.EmbeddingDisableCommand
   | EmbeddingProtocol.EmbeddingBuildCommand
   | EmbeddingProtocol.EmbeddingCancelCommand
-  | EmbeddingProtocol.EmbeddingResetCommand
-  | EmbeddingProtocol.EmbeddingCalibrateCommand
+  | EmbeddingProtocol.EmbeddingProfilesListCommand
+  | EmbeddingProtocol.EmbeddingProfileSelectCommand
+  | EmbeddingProtocol.EmbeddingProfileDeleteCommand
+  | EmbeddingProtocol.EmbeddingProfilePinCommand
+  | EmbeddingProtocol.EmbeddingConfigGetCommand
+  | EmbeddingProtocol.EmbeddingConfigSetCommand
+  | EmbeddingProtocol.EmbeddingDeviceCommand
+  | EmbeddingProtocol.EmbeddingDeviceTestCommand
   | UsageAggregateCommand;
 
 export type WsProtocolCommandType = WsProtocolCommand["type"];
@@ -2679,13 +2685,19 @@ export type WsProtocolMessage =
   | CompactionCancelResponseMessage
   | UsageAggregateResponseMessage
   | EmbeddingProtocol.EmbeddingStatusResponseMessage
-  | EmbeddingProtocol.EmbeddingConfigureResponseMessage
+  | EmbeddingProtocol.EmbeddingConnectResponseMessage
   | EmbeddingProtocol.EmbeddingEnableResponseMessage
   | EmbeddingProtocol.EmbeddingDisableResponseMessage
   | EmbeddingProtocol.EmbeddingBuildResponseMessage
   | EmbeddingProtocol.EmbeddingCancelResponseMessage
-  | EmbeddingProtocol.EmbeddingResetResponseMessage
-  | EmbeddingProtocol.EmbeddingCalibrateResponseMessage
+  | EmbeddingProtocol.EmbeddingProfilesListResponseMessage
+  | EmbeddingProtocol.EmbeddingProfileSelectResponseMessage
+  | EmbeddingProtocol.EmbeddingProfileDeleteResponseMessage
+  | EmbeddingProtocol.EmbeddingProfilePinResponseMessage
+  | EmbeddingProtocol.EmbeddingConfigGetResponseMessage
+  | EmbeddingProtocol.EmbeddingConfigSetResponseMessage
+  | EmbeddingProtocol.EmbeddingDeviceResponseMessage
+  | EmbeddingProtocol.EmbeddingDeviceTestResponseMessage
   | SubagentProtocol.LaunchSubagentResponse;
 
 export type WsProtocolMessageType = WsProtocolMessage["type"];

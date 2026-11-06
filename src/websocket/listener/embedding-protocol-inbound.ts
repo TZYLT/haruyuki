@@ -1,12 +1,18 @@
 import type {
   EmbeddingBuildCommand,
-  EmbeddingCalibrateCommand,
   EmbeddingCancelCommand,
-  EmbeddingConfigureCommand,
-  EmbeddingConfigurePatch,
+  EmbeddingConfigGetCommand,
+  EmbeddingConfigSetCommand,
+  EmbeddingConnectCommand,
+  EmbeddingConnectPatch,
+  EmbeddingDeviceCommand,
+  EmbeddingDeviceTestCommand,
   EmbeddingDisableCommand,
   EmbeddingEnableCommand,
-  EmbeddingResetCommand,
+  EmbeddingProfileDeleteCommand,
+  EmbeddingProfilePinCommand,
+  EmbeddingProfileSelectCommand,
+  EmbeddingProfilesListCommand,
   EmbeddingStatusCommand,
 } from "@/types/embedding-protocol";
 import type { AgentRuntimeScope } from "@/types/runtime-scope";
@@ -25,6 +31,7 @@ const ENDPOINT_KINDS = ["openai", "ollama"] as const;
 const GPU_ROLES = ["auto", "off", "index-only"] as const;
 const QUANTIZATIONS = ["float32", "int8"] as const;
 const BUILD_MODES = ["incremental", "full"] as const;
+const DELETE_SCOPES = ["current", "all", "model"] as const;
 
 type EmbeddingEnvelope = Record<string, unknown> & {
   type: string;
@@ -47,6 +54,10 @@ function isPositiveInteger(value: unknown): value is number {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 /** Shared envelope check: discriminant, non-empty request id, agent scope. */
@@ -77,15 +88,15 @@ function isEmbeddingEndpointConfig(value: unknown): boolean {
 }
 
 /**
- * Validates the `embedding_configure` payload.
+ * Validates the `embedding_connect` payload.
  *
  * `api_key` is accepted here (O-18: same-machine WebSocket, equivalent to the
  * TUI prompt) but is write-only — no response or status echoes it. Cross-field
  * coherence (for example `chunk_max >= chunk_target`) belongs to the handler.
  */
-export function isEmbeddingConfigurePatch(
+export function isEmbeddingConnectPatch(
   value: unknown,
-): value is EmbeddingConfigurePatch {
+): value is EmbeddingConnectPatch {
   if (!isObjectRecord(value)) return false;
   if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
     return false;
@@ -93,10 +104,7 @@ export function isEmbeddingConfigurePatch(
   if (value.backend !== undefined && !isOneOf(value.backend, BACKEND_KINDS)) {
     return false;
   }
-  if (
-    value.model !== undefined &&
-    (typeof value.model !== "string" || value.model.length === 0)
-  ) {
+  if (value.model !== undefined && !isNonEmptyString(value.model)) {
     return false;
   }
   if (
@@ -106,10 +114,7 @@ export function isEmbeddingConfigurePatch(
   ) {
     return false;
   }
-  if (
-    value.api_key !== undefined &&
-    (typeof value.api_key !== "string" || value.api_key.length === 0)
-  ) {
+  if (value.api_key !== undefined && !isNonEmptyString(value.api_key)) {
     return false;
   }
   if (
@@ -149,17 +154,25 @@ export function isEmbeddingConfigurePatch(
   return true;
 }
 
+/** One stored-space selector: an index, a space id, or both (handler checks). */
+function hasProfileSelector(value: EmbeddingEnvelope): boolean {
+  return (
+    (value.index === undefined || isPositiveInteger(value.index)) &&
+    (value.space_id === undefined || isNonEmptyString(value.space_id))
+  );
+}
+
 export function isEmbeddingStatusCommand(
   value: unknown,
 ): value is EmbeddingStatusCommand {
   return hasEmbeddingEnvelope(value, "embedding_status");
 }
 
-export function isEmbeddingConfigureCommand(
+export function isEmbeddingConnectCommand(
   value: unknown,
-): value is EmbeddingConfigureCommand {
-  if (!hasEmbeddingEnvelope(value, "embedding_configure")) return false;
-  return isEmbeddingConfigurePatch(value.patch);
+): value is EmbeddingConnectCommand {
+  if (!hasEmbeddingEnvelope(value, "embedding_connect")) return false;
+  return isEmbeddingConnectPatch(value.patch);
 }
 
 export function isEmbeddingEnableCommand(
@@ -195,16 +208,72 @@ export function isEmbeddingCancelCommand(
   return value.build_id === undefined || typeof value.build_id === "string";
 }
 
-export function isEmbeddingResetCommand(
+export function isEmbeddingProfilesListCommand(
   value: unknown,
-): value is EmbeddingResetCommand {
-  if (!hasEmbeddingEnvelope(value, "embedding_reset")) return false;
-  return value.scope === undefined || isOneOf(value.scope, ["index", "all"]);
+): value is EmbeddingProfilesListCommand {
+  return hasEmbeddingEnvelope(value, "embedding_profiles_list");
 }
 
-export function isEmbeddingCalibrateCommand(
+export function isEmbeddingProfileSelectCommand(
   value: unknown,
-): value is EmbeddingCalibrateCommand {
-  if (!hasEmbeddingEnvelope(value, "embedding_calibrate")) return false;
-  return value.persist === undefined || typeof value.persist === "boolean";
+): value is EmbeddingProfileSelectCommand {
+  if (!hasEmbeddingEnvelope(value, "embedding_profile_select")) return false;
+  return (
+    hasProfileSelector(value) &&
+    (value.index !== undefined || value.space_id !== undefined)
+  );
+}
+
+export function isEmbeddingProfileDeleteCommand(
+  value: unknown,
+): value is EmbeddingProfileDeleteCommand {
+  if (!hasEmbeddingEnvelope(value, "embedding_profile_delete")) return false;
+  if (value.scope !== undefined && !isOneOf(value.scope, DELETE_SCOPES)) {
+    return false;
+  }
+  if (!hasProfileSelector(value)) return false;
+  if (value.confirm !== undefined && typeof value.confirm !== "boolean") {
+    return false;
+  }
+  return true;
+}
+
+export function isEmbeddingProfilePinCommand(
+  value: unknown,
+): value is EmbeddingProfilePinCommand {
+  if (!hasEmbeddingEnvelope(value, "embedding_profile_pin")) return false;
+  return (
+    typeof value.pinned === "boolean" &&
+    hasProfileSelector(value) &&
+    (value.index !== undefined || value.space_id !== undefined)
+  );
+}
+
+export function isEmbeddingConfigGetCommand(
+  value: unknown,
+): value is EmbeddingConfigGetCommand {
+  if (!hasEmbeddingEnvelope(value, "embedding_config_get")) return false;
+  return value.key === undefined || isNonEmptyString(value.key);
+}
+
+export function isEmbeddingConfigSetCommand(
+  value: unknown,
+): value is EmbeddingConfigSetCommand {
+  if (!hasEmbeddingEnvelope(value, "embedding_config_set")) return false;
+  return (
+    isNonEmptyString(value.key) &&
+    (typeof value.value === "number" || typeof value.value === "string")
+  );
+}
+
+export function isEmbeddingDeviceCommand(
+  value: unknown,
+): value is EmbeddingDeviceCommand {
+  return hasEmbeddingEnvelope(value, "embedding_device");
+}
+
+export function isEmbeddingDeviceTestCommand(
+  value: unknown,
+): value is EmbeddingDeviceTestCommand {
+  return hasEmbeddingEnvelope(value, "embedding_device_test");
 }

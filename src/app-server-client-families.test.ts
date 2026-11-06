@@ -13,7 +13,7 @@ import {
   type AppServerSocketOptions,
   createAppServerClient,
 } from "./app-server-client";
-import type { EmbeddingConfigurePatch } from "./types/app-server-protocol";
+import type { EmbeddingConnectPatch } from "./types/app-server-protocol";
 
 type Listener = (event: unknown) => void;
 
@@ -589,11 +589,11 @@ describe("embedding family helpers", () => {
         invoke: (client) => client.embeddingStatus({ runtime }),
       },
       {
-        name: "embeddingConfigure",
-        expectedType: "embedding_configure",
-        responseType: "embedding_configure_response",
+        name: "embeddingConnect",
+        expectedType: "embedding_connect",
+        responseType: "embedding_connect_response",
         invoke: (client) =>
-          client.embeddingConfigure({
+          client.embeddingConnect({
             runtime,
             patch: { enabled: true, weight: 0.5 },
           }),
@@ -629,24 +629,71 @@ describe("embedding family helpers", () => {
           client.embeddingCancel({ runtime, build_id: "build-1" }),
       },
       {
-        name: "embeddingReset",
-        expectedType: "embedding_reset",
-        responseType: "embedding_reset_response",
-        invoke: (client) => client.embeddingReset({ runtime, scope: "index" }),
+        name: "embeddingProfilesList",
+        expectedType: "embedding_profiles_list",
+        responseType: "embedding_profiles_list_response",
+        invoke: (client) => client.embeddingProfilesList({ runtime }),
       },
       {
-        name: "embeddingCalibrate",
-        expectedType: "embedding_calibrate",
-        responseType: "embedding_calibrate_response",
+        name: "embeddingProfileSelect",
+        expectedType: "embedding_profile_select",
+        responseType: "embedding_profile_select_response",
         invoke: (client) =>
-          client.embeddingCalibrate({ runtime, persist: false }),
+          client.embeddingProfileSelect({ runtime, index: 1 }),
+      },
+      {
+        name: "embeddingProfileDelete",
+        expectedType: "embedding_profile_delete",
+        responseType: "embedding_profile_delete_response",
+        invoke: (client) =>
+          client.embeddingProfileDelete({
+            runtime,
+            scope: "current",
+            confirm: true,
+          }),
+      },
+      {
+        name: "embeddingProfilePin",
+        expectedType: "embedding_profile_pin",
+        responseType: "embedding_profile_pin_response",
+        invoke: (client) =>
+          client.embeddingProfilePin({ runtime, index: 1, pinned: true }),
+      },
+      {
+        name: "embeddingConfigGet",
+        expectedType: "embedding_config_get",
+        responseType: "embedding_config_get_response",
+        invoke: (client) => client.embeddingConfigGet({ runtime, key: "gpu" }),
+      },
+      {
+        name: "embeddingConfigSet",
+        expectedType: "embedding_config_set",
+        responseType: "embedding_config_set_response",
+        invoke: (client) =>
+          client.embeddingConfigSet({
+            runtime,
+            key: "gpu",
+            value: "off",
+          }),
+      },
+      {
+        name: "embeddingDevice",
+        expectedType: "embedding_device",
+        responseType: "embedding_device_response",
+        invoke: (client) => client.embeddingDevice({ runtime }),
+      },
+      {
+        name: "embeddingDeviceTest",
+        expectedType: "embedding_device_test",
+        responseType: "embedding_device_test_response",
+        invoke: (client) => client.embeddingDeviceTest({ runtime }),
       },
     ]);
   });
 
-  test("embeddingConfigure forwards the patch, api_key included, and resolves the snapshot", async () => {
+  test("embeddingConnect forwards the patch, api_key included, and resolves the snapshot", async () => {
     const { client, socket } = createFakeClient();
-    const patch: EmbeddingConfigurePatch = {
+    const patch: EmbeddingConnectPatch = {
       enabled: true,
       backend: "endpoint",
       endpoint: {
@@ -658,18 +705,19 @@ describe("embedding family helpers", () => {
       // O-18: the write-only credential travels on the request only.
       api_key: "sk-test",
     };
-    const pending = client.embeddingConfigure({ runtime, patch });
+    const pending = client.embeddingConnect({ runtime, patch });
     const sent = sentCommand(socket);
     expect(sent).toMatchObject({
-      type: "embedding_configure",
+      type: "embedding_connect",
       runtime,
       patch,
     });
     const response = {
-      type: "embedding_configure_response",
+      type: "embedding_connect_response",
       request_id: sent.request_id,
       success: true,
       settings: null,
+      space_id: "space-1",
       requires_rebuild: true,
     };
     socket.receive(response);
@@ -677,11 +725,15 @@ describe("embedding family helpers", () => {
     client.close();
   });
 
-  test("embeddingReset resolves the removed-space count and rebuild flag", async () => {
+  test("embeddingProfileDelete resolves the removed-space count and rebuild flag", async () => {
     const { client, socket } = createFakeClient();
-    const pending = client.embeddingReset({ runtime, scope: "all" });
+    const pending = client.embeddingProfileDelete({
+      runtime,
+      scope: "all",
+      confirm: true,
+    });
     const response = {
-      type: "embedding_reset_response",
+      type: "embedding_profile_delete_response",
       request_id: sentCommand(socket).request_id,
       success: true,
       removed_spaces: 2,
