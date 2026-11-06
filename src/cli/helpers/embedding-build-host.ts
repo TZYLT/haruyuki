@@ -43,7 +43,6 @@ import {
   inspectEmbeddingBuildLock,
 } from "@/backend/local/embedding-lock";
 import type { EmbeddingProfile } from "@/backend/local/embedding-profile";
-import { writeEmbeddingProfileBestEffort } from "@/backend/local/embedding-profile";
 import {
   type EmbeddingRunError,
   type EmbeddingRunnerOptions,
@@ -129,7 +128,7 @@ function modelMissingError(modelId: string): EmbeddingBuildHostError {
   return hostError(
     "model_missing",
     `Embedding model ${modelId} is not installed; the build will not download it automatically.`,
-    `Run "/recall embedding connect" (or "haruyuki recall embedding setup") to download it${
+    `Run "/recall embedding connect" in the TUI to download it${
       modelDir === null ? "" : ` into ${modelDir}`
     }, then start the build again. A manual import works too.`,
   );
@@ -778,14 +777,11 @@ async function executeInProcess(
       ? {}
       : { lockEnvironment: options.lockEnvironment }),
     ...(options.device === undefined ? {} : { device: options.device }),
+    // The runner writes it only after it owns the lock (48-4 D-10).
+    ...(options.profile === undefined ? {} : { profile: options.profile }),
   };
 
   let result: EmbeddingRunResult;
-  // The profile describes the space; writing it before the run makes the space
-  // selectable even if the runner refuses (a lock held by a stale process).
-  if (options.profile !== undefined) {
-    await writeEmbeddingProfileBestEffort(spaceDir, options.profile);
-  }
   try {
     result = await (options.runBuild ?? runEmbeddingBuild)(runnerOptions);
   } catch (error) {

@@ -58,7 +58,7 @@ export const EMBEDDING_AUTOBUILD_CHECK_TTL_MS = 60_000;
 
 /** The backend shape this module needs; `LocalBackend` satisfies it. */
 export type EmbeddingAutobuildBackend = {
-  getLocalStorageDir?: () => string;
+  getLocalStorageDir?: () => string | undefined;
 };
 
 /** Seams for the build itself; every field defaults to the production module. */

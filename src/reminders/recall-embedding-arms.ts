@@ -179,11 +179,11 @@ export function createRecallEmbeddingArms(
         memoryDir: input.memoryDir,
       }),
       topK: input.settings.candidateDepth,
-      // The arm's own budget (48-1 §6.6: 100 ms target, 300 ms cap). The
-      // stored calibration is deliberately not used here: it reports the encode
-      // latency of the last setup, and measuring a query twice per turn to
-      // shave the default would cost more than it saves.
-      budgetMs: VECTOR_RECALL_DEFAULT_BUDGET_MS,
+      // 48-2 §4.5: derive the arm's budget from the measured p90 (×40, clamped
+      // 50–300 ms) instead of the fixed 300. The turn's own deadline stays the
+      // outer authority: a vector result that arrives after it is dropped by
+      // `recall-service`, so this can only ever shorten the arm.
+      budgetMs: vectorArmBudgetMs(input.settings),
       ...(input.now === undefined ? {} : { now: input.now }),
     });
     return {
@@ -266,6 +266,21 @@ export type MaybeCreateRecallEmbeddingArmsInput = {
 export type RecallEmbeddingArmsBackend = {
   getLocalStorageDir?: () => string;
 };
+
+/**
+ * The vector arm's wall-clock budget (48-2 §4.5).
+ *
+ * `p90 × 40` clamped to 50–300 ms, falling back to the documented 300 ms cap
+ * when no calibration was recorded. The turn deadline (`timeout`, default
+ * 1,000 ms) remains the outer authority; this budget only bounds one phase.
+ */
+export function vectorArmBudgetMs(settings: ResolvedEmbeddingSettings): number {
+  const p90 = settings.calibration?.queryLatencyP90Ms;
+  if (typeof p90 === "number" && Number.isFinite(p90) && p90 > 0) {
+    return Math.min(300, Math.max(50, Math.round(p90 * 40)));
+  }
+  return VECTOR_RECALL_DEFAULT_BUDGET_MS;
+}
 
 /**
  * The engine/probe entry point: resolve the agent's storage and memory roots

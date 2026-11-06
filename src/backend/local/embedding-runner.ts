@@ -52,10 +52,6 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { EmbeddingCalibrationBudget } from "@/backend/local/embedding/calibration";
 import type { EmbeddingBuildMode } from "@/types/embedding-protocol";
-import { debugWarn } from "@/utils/debug";
-import { ANN_TRIGGER_CHUNK_COUNT } from "./embedding-ann-index";
-import { writeAnnShardSidecar } from "./embedding-ann-search-sidecar";
-
 import {
   buildEmbeddingIndex,
   type EmbeddingBuildResult,
@@ -73,6 +69,10 @@ import {
   snapshotEmbeddingBuildState,
   updateEmbeddingBuildState,
 } from "./embedding-build-state";
+import {
+  clearEmbeddingCrossProcessCancel,
+  readEmbeddingCrossProcessCancel,
+} from "./embedding-cancel";
 import type { EmbeddingChunk, EmbeddingChunkPlan } from "./embedding-chunk";
 import {
   type EmbeddingIndexQuant,
@@ -95,12 +95,17 @@ import {
   type EmbeddingBuildLockEnvironment,
   type EmbeddingBuildLockHandle,
 } from "./embedding-lock";
+import {
+  type EmbeddingProfile,
+  writeEmbeddingProfileBestEffort,
+} from "./embedding-profile";
 import { dequantizeEmbeddingVectors } from "./embedding-quant";
 import {
   type EmbeddingQuantIndexSnapshot,
   readEmbeddingQuantIndex,
   writeEmbeddingQuantIndex,
 } from "./embedding-quant-format";
+import { maybeWriteAnnSidecar } from "./embedding-runner-ann";
 
 /** Chunks per `embed` call when no other limit applies (48-2 §4.4). */
 export const EMBEDDING_RUN_MAX_CHUNKS_PER_BATCH = 32;
@@ -331,6 +336,12 @@ export type EmbeddingRunnerOptions = {
    * status read can prove which execution providers the worker accepted.
    */
   device?: EmbeddingBuildDeviceSnapshot;
+  /**
+   * The space profile (48-4 D-10). Written once this run owns the lock, so a
+   * build that never started cannot leave a profile describing a space it did
+   * not touch.
+   */
+  profile?: EmbeddingProfile;
 };
 
 /**
@@ -520,6 +531,15 @@ export async function runEmbeddingBuild(
     );
   }
 
+  // A request left by a previous owner must not cancel this run; once the lock
+  // and lease are ours, the space has no other builder to address.
+  clearEmbeddingCrossProcessCancel(spaceDir);
+  // The profile describes the space this run owns; writing it before the lock
+  // would leave a description behind when another builder owns the space.
+  if (options.profile !== undefined) {
+    await writeEmbeddingProfileBestEffort(spaceDir, options.profile);
+  }
+
   try {
     /** Read → merge → write one checkpoint; a null return means it worked. */
     const checkpoint = async (
@@ -634,7 +654,10 @@ export async function runEmbeddingBuild(
     };
 
     for (const runUnit of units) {
-      if (abortRequested(options)) {
+      if (
+        abortRequested(options) ||
+        readEmbeddingCrossProcessCancel(spaceDir) !== null
+      ) {
         aborted = true;
         break;
       }
@@ -860,55 +883,9 @@ export async function runEmbeddingBuild(
     }
     return result(aborted ? "aborted" : "completed");
   } finally {
+    clearEmbeddingCrossProcessCancel(spaceDir);
     await lease.release().catch(() => false);
     await lock.release().catch(() => false);
-  }
-}
-
-/**
- * Writes the ANN sidecar for a space big enough to need one (48-2 §4.10).
- *
- * Below the trigger the exact B2 scan is the answer, so the build writes
- * nothing extra; at or above it the query path can use A6 after this file
- * exists. Best effort: a sidecar failure never fails a build that already
- * committed its vectors (the query path simply keeps scanning flat).
- *
- * int8-only spaces are skipped: the sidecar format carries float32 vectors, and
- * an int8 space's query path scores codes directly (no float32 view exists to
- * build one from without paying the memory int8 was chosen to avoid).
- */
-function maybeWriteAnnSidecar(
-  options: EmbeddingRunnerOptions,
-  units: readonly EmbeddingRunUnit[],
-  root: string,
-  identity: EmbeddingBuildIdentity,
-  totalChunks: number,
-): void {
-  if ((options.quant ?? "f32") !== "f32") return;
-  const trigger = options.annTriggerChunkCount ?? ANN_TRIGGER_CHUNK_COUNT;
-  if (totalChunks <= trigger || units.length === 0) return;
-  const annUnits = units.map(({ unit }) =>
-    "memoryFileKey" in unit
-      ? { kind: "memory" as const, file: "", memoryFileKey: unit.memoryFileKey }
-      : { kind: "transcript" as const, conversationKey: unit.conversationKey },
-  );
-  try {
-    const written = writeAnnShardSidecar({
-      space: { agentId: identity.agentId, spaceId: identity.spaceId },
-      units: annUnits,
-      root,
-    });
-    if (!written.ok) {
-      debugWarn(
-        "embedding",
-        `ANN sidecar not written (${written.problem}${written.detail === undefined ? "" : `: ${written.detail}`}); queries keep scanning flat.`,
-      );
-    }
-  } catch (error) {
-    debugWarn(
-      "embedding",
-      `ANN sidecar could not be written: ${error instanceof Error ? error.message : String(error)}`,
-    );
   }
 }
 

@@ -45,6 +45,7 @@ import {
   resolveEmbeddingAgentMemoryDir,
   scanEmbeddingBuildUnits,
 } from "@/backend/local/embedding-build-units";
+import { requestEmbeddingCrossProcessCancel } from "@/backend/local/embedding-cancel";
 import {
   EMBEDDING_INDEX_CHUNKER_VERSION,
   getRecallVectorsRoot,
@@ -767,7 +768,7 @@ export function createEmbeddingRuntimePort(
         return `Could not start the embedding build: ${getErrorMessage(error)}. Nothing is running.`;
       }
     },
-    async cancel(_scope: EmbeddingRuntimeScope): Promise<string> {
+    async cancel(scope: EmbeddingRuntimeScope): Promise<string> {
       try {
         const result = await (deps.cancelBuild ?? cancelEmbeddingBuild)();
         if (result.cancelled) {
@@ -775,9 +776,22 @@ export function createEmbeddingRuntimePort(
             ? "Cancelled the embedding build; committed chunks stay and the next run resumes from them."
             : "Cancelling the embedding build; it stops at its next checkpoint (at most one batch).";
         }
+        // No holder in this process: a detached child or another host may own
+        // the build. The sentinel is read by the runner between units.
+        let spaceDir: string | null = null;
+        try {
+          spaceDir = resolveEmbeddingSpace(scope.agentId, settingsOf(deps), {
+            root: recallRoot(deps),
+          }).spaceDir;
+        } catch {
+          spaceDir = null;
+        }
+        if (spaceDir !== null && requestEmbeddingCrossProcessCancel(spaceDir)) {
+          return "Cancellation requested for the build owned by another process; it stops at its next checkpoint (at most one batch).";
+        }
         return [
           "No embedding build is running in this process.",
-          "A build started by another process (or a detached child) is not this process's to stop; check /recall embedding status.",
+          "A build started by another process (or a detached child) could not be reached; check /recall embedding status.",
         ].join("\n");
       } catch (error) {
         return `Could not cancel the embedding build: ${getErrorMessage(error)}`;
