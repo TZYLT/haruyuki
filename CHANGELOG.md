@@ -8,6 +8,137 @@
 > **版本号谱系说明**：本 fork 早期使用 `0.35.0-better` … `0.36.2-better` 命名；分家后**重起为 `0.1.0`**（见 `0.1.0` 条目）。
 > 因此语义化排序上 `0.36.x-better` 早于 `0.1.0`，这是**刻意的重编号**，不是版本回退。
 
+## [0.6.0] - 2026-11-06
+
+> 0.6.0 是 **性能自适应向量嵌入增强召回**：在既有的**同步词法召回**旁边加一条**语义召回臂**——
+> 转录与记忆两个语料各自两路检索，按**加权 RRF** 融合；嵌入模型可以用内置的（首次按需下载、编码在独立
+> 子进程里），也可以接你自己的 OpenAI 兼容 / Ollama 端点；索引在后台**增量**构建，查询期只做本地向量
+> 比较，失败**静默回退词法**并给出一行可解释的原因。
+> 同一版本新增只读检索工具 **RecallSearch**，并把 app-server 的 `embedding_*` 协议族**破坏性**改名到与
+> CLI 一致。**向量臂默认关闭**，首次开启走四步向导；不开启时不会替你做任何嵌入或下载。
+
+### 新增
+
+- **两路召回（向量臂 + 词法臂）**：两臂并行、各自覆盖转录与记忆，按**加权 RRF**（`k=60`、默认等权
+  `weight=0.5`、两臂候选等深 `50`）融合；同一父单元的两路命中合并而不是重复注入。向量命中以命中块为中心
+  取 **300 字焦点 + 100 字邻居**（总长仍 ≤400 字），不再套用词法命中的「从头截 400 字」，长消息里指错
+  位置的概率明显下降。词法臂与融合沿用 `ratio`（默认 0.35）的相对分数下限；向量候选另有一道 0.35 余弦
+  安全阀，只拦「基本无关」的段落（bge 系相似度压缩在 0.6–1 之间，阈值再高会误杀真实命中）。
+- **内置模型与外部端点二选一**：内置三款 ONNX 模型——`bge-small-zh-v1.5`（512 维，q8 权重 24,010,842 字节，
+  默认）、`bge-m3`（1024 维，CLS 池化）、`Qwen3-Embedding-0.6B`（1024 维，实验 / 手选）；外部端点支持
+  OpenAI 兼容 `/v1/embeddings` 与 Ollama 原生 `/api/embed`，写入时探测维度，只接受 `https://` 或回环
+  `http://`。**运行时与权重都不进 npm 包**：首次使用按需下载运行时（`onnxruntime-node@1.31.1` 等，向导
+  预计 ~115 MB）与模型文件（hf-mirror → Hugging Face → ModelScope 同一 LFS，断点续传、sha256 校验、
+  支持手动导入）。内置模型 + 本机端点可全程离线。`bge-m3` 与 `Qwen3` 的清单尚未钉 sha256，下载时按体积
+  校验并在向导里明确披露。
+- **按机器自适应（校准）**：开启时做一次有界校准（≤5 秒、可跳过）：测单条查询延迟、批量吞吐、内存余量、
+  GPU 可用性，据此选线程 / 量化 / GPU 角色并派生查询预算；测量结果**写回生效值**而不是只打印，没测到就
+  如实记「未测量」。校准结果按硬件指纹缓存。**查询恒定 CPU**——batch=1 时 GPU 的固定开销远大于计算；
+  GPU 只在建索引时用，且**只在 Windows 上试 DirectML**，初始化失败自动回 CPU 并记录原因。
+- **后台增量构建**：默认只重嵌落后的部分（`build --full` 才全量）；进度、覆盖率、速率与 ETA 可见；
+  checkpoint + lease 让它打断后续跑而不是从头再来；原生编码在独立子进程里跑（`embedding-worker.js`，
+  原生库不加载进主进程）。`build --keep-after-exit` 让构建以 detached 子进程活过主进程（默认随宿主退出，
+  checkpoint 保留）。取消是协作式的（≤1 批见效）；跨进程取消写空间目录里的 `.build.cancel` 哨兵，
+  另一个进程会在下一个 unit 边界停下。
+- **回合结束补齐 + 空闲自检**：每轮结束在后台补一次（5 分钟冷却，避免每轮都建）；冷却到期后再做一次
+  stat 级自检，直到追平、关闭或失败为止（链上限 3 次，定时器不阻止进程退出）。TUI / headless / websocket
+  三路径走同一入口，行为一致。
+- **规模：int8 + 原生 IVF + 分片**：精度在 `connect` 里选——`float32`（默认）或 `int8`（只存码、不存
+  float32 原件，512 维约 0.5 KB/块）。单分片超过 **20 万块或实测 p95 > 150 ms** 自动切 ANN（分片 IVF），
+  int8 空间用**原生 int8 IVF**（只反量化抽样行训练质心，不反量化整库）。低于阈值走精确扫描；sidecar
+  缺失 / 陈旧 / 量化不匹配时自动降级回精确扫描，不会误读字节。
+- **空间、档案与生命周期**：空间 id 现在包含后端、端点指纹与 `max-chunks`——换端点或改切分不再静默复用
+  旧索引（内置旧空间自动改名迁移；端点旧空间无法证明来源，首次构建会重新嵌入）；每个空间写 `profile.json`
+  （模型 / 端点指纹 / 精度 / 切分参数 / pin，**不含密钥**）；`keepSpaces`（默认 2）只清理「未激活且未 pin」
+  的旧空间；端点密钥按档案独立存放（`EMBEDDING_ENDPOINT_API_KEY.<profileId>`，读不到回退旧名），多档案
+  不再互相覆盖。
+- **命令面**：`/recall config` 收拢 10 个召回参数（`timeout` `dedup` `limit` `excerpt` `chars` `ratio`
+  `diversity` `display` `weight` `depth`），裸命令在 TUI 打开选面、`config <key>` 打印、
+  `config <key> <value>` 设置，子命令补全覆盖全部键（值仍为自由文本）。`/recall embedding connect` 是唯一
+  的「添加 / 连接向量来源」入口：`1/4 Backend` → `2/4` 配置（GPU / 精度 / 模型或端点）→ `3/4 Calibration`
+  → `4/4 Finish`，取消不写任何东西。`model` 是模型选择面（Enter 选择、`D` 两段确认删除、`P` pin/unpin；
+  非 TUI 用 `--select/--delete/--pin/--unpin/--confirm/--json`）；`build [--full | --keep-after-exit |
+  --cancel]`；`device [--test]` 只读显示或实测执行提供器与吞吐；`reset [--all | --model <id>] [--confirm]`
+  **先预览后删除**，只删向量，转录、记忆与设置保留。
+- **RecallSearch 工具（只读）**：agent 可以主动检索自己的索引，而不是等被动召回捎带。参数
+  `query` / `scope`（`transcript` | `memory` | `both`，默认 both）/ `limit`（默认 5，上限 20）；命中带语料、
+  精确坐标（会话 + 消息号，或记忆路径 + 行范围）、余弦分与正文。每次回答首行披露**索引截至时间、落后时长、
+  精度与覆盖**（落后 ≥5 分钟时提示跑 `build`），过期索引要当成「当时知道什么」而不是当前状态。索引不可用
+  时返回错误与修复命令，**绝不悄悄回退词法**——「没工作」不能伪装成「没命中」。只读、免审批、不读隐藏
+  会话，当前会话包含在内。
+- **TUI 与状态面**：product-status 与侧栏显示构建进度与向量臂状态；`/recall embedding status` 增加
+  `Device:`（requested / initialized provider、降级原因、线程、warmup）、`Egress:`（查询是否出网）与
+  `Ready:` 行，降级改报「最近一轮 + 连续次数」而不再只报生命周期累计；设置页与 `RecallOverlay` 覆盖全部
+  10 个召回键，并新增 Build settings 子页（6 个构建键读写，非法值留在编辑器）。
+- **app-server 协议**：`embedding_*` 命令族进协议（14 条，破坏性改名见下节），并补上 `AppServerClient`
+  对应 helper；首次 `embedding_enable` 没启动构建时回传可选 `reason`，客户端能区分「已建好」与「模型缺失」。
+
+### 变更（破坏性请先读）
+
+- **协议改名（breaking，无别名）**：`embedding_configure` → `embedding_connect`（响应多 `space_id`）；
+  `embedding_reset` → `embedding_profile_delete`（`scope` + `confirm`，预览 / 删除分离）；
+  `embedding_calibrate` → `embedding_device_test`（只读测量，不再写设置）。新增
+  `embedding_profiles_list` / `embedding_profile_select` / `embedding_profile_pin` / `embedding_config_get` /
+  `embedding_config_set` / `embedding_device`；`embedding_status` / `enable` / `disable` / `build` / `cancel`
+  保留名字并按新语义扩展字段。仍按旧名发送的客户端必须改。
+- **CLI 旧动词全部删除（breaking，无别名）**：`/recall` 的顶层配置动词改走 `config`
+  （`/recall timeout 500` → `/recall config timeout 500`，其余键同理）；`/recall embedding` 删除
+  `setup`（→ `connect`）、`use` / `remove`（→ `model --select/--delete`）、`spaces`、`quant`、`backend`、
+  `endpoint`、`cancel`（→ `build --cancel`）、`calibrate`（→ `device --test`），以及 embedding 下的
+  `weight` / `depth` / `chunk*` / `max-chunks` / `threads` / `gpu` 旧拼写（分别归 `/recall config` 与
+  `/recall embedding config`）。`reset` 保留（裸命令只预览）。精度不再有 `config precision`，只能经
+  `connect` 选。脚本、别名与旧笔记里的写法需要改。
+- **`ratio` 语义扩展**：一个 `ratio` 现在同时约束词法臂阈值与融合输出（此前融合阈值固定 0.35）。
+- **GPU 值域收成 `auto | off`**：`index-only` 从命令行消失，旧设置值读入时按 `auto` 处理（两条路径本来
+  就等价）；查询任何情况下都在 CPU。设置页下拉里仍残留 `index-only` 选项（读回会被规范化），属已知小缺口。
+- **启动旗标真正生效**：`--recall-embedding*` 五个旗标在交互（TTY）路径以前被解析后静默忽略，现在会生效；
+  脚本里带着它们启动 TUI 的行为会变。
+- **索引空间变了**：`backend`、`max-chunks` 与端点指纹进入 space id，改这些键等于换空间（旧索引保留直到
+  重建或清理）。
+- **产物多一个 `embedding-worker.js`**：构建与发布包因此多一个产物；主包仍不内联模型与运行时。
+
+### 修复
+
+- **安全阀与融合口径**：0.35 余弦下限此前根本没传给搜索，现在真正生效；两臂候选深度统一（此前词法 12 /
+  向量 50，RRF 按位置投票会结构性偏向向量）；每臂先按自己的分数排序再融合（此前记忆命中被排到全部转录
+  命中之后）；「没命中」不再被记成 degraded。
+- **注入预算**：向量邻居 clamp 到 100 字（短消息命中不再被上一条用户消息填满 400 字预算）；上下文内消息
+  不再被向量臂重复注入。
+- **构建与并发**：并发启动同一空间只放行一个（第二个明确回 `already_running`），不再开两个 runner 或两个
+  detached 子进程；启动探测窗口里的 `cancel` 不再谎报「没在跑」，而是记意图并真的 aborted；构建锁在批之间
+  续心跳；`embedding_cancel` 认 `build_id`，过期 id 不再取消无关构建。
+- **编码正确性**：按 manifest 池化（`bge-m3` = CLS、`Qwen3` = last，此前恒 mean）；补 `token_type_ids`
+  并按名解析 ONNX 输入；worker 的 stdout / stderr 独立解码，多字节 UTF-8 跨块不再破坏 JSON-Lines；
+  分块响应头限制在 8 KiB；失败的 worker init 会被真正释放。
+- **端点与密钥**：端点密钥按档案隔离（多档案不再互相覆盖）；调用方主动取消不再计入端点熔断；端点配置
+  校验改用合并后的设置（先填端点再切 backend 的合法两步配置不再被拒）；表单改动会作废已通过的端点测试。
+- **模型与数据**：模型导入失败不再遗留整份权重副本；提交后清理被取代的旧索引世代；空 int8 世代不再留下
+  幻影 float32 文件；`keepSpaces` 此前只声明不执行，现在构建前真的清理。
+- **状态面**：跳过的校准不再被画成 0 延迟；`Remaining: 0` 不再打印 ETA；`device --test` 打印实测吞吐
+  （失败如实写 not measured）；会话数与记忆文件数分开统计。
+- **发布完整性**：缺少 `embedding-worker.js` 的构建不再通过发布预检（否则装完才在 spawn 处 ENOENT）。
+
+### 已知限制
+
+- **默认关闭**，首次使用必须先 `connect`；**首次启用需要联网**下载运行时（向导预计 ~115 MB）与模型
+  （`bge-small-zh-v1.5` 四个文件约 24.4 MB；`bge-m3` / `Qwen3` 更大），下完即可离线。
+- **平台**：Windows 是唯一实机承诺（建索引可试 DirectML，查询恒 CPU）；**Linux / macOS 纯 CPU**；Linux
+  CUDA 不在本版（需要 CUDA/cuDNN + CUDA 版 ONNX Runtime，npm 包不提供）；**Intel Mac 不支持**（运行时
+  没有 `darwin-x64` 目标）；mac CoreML 未验证。
+- **远程端点每轮会把查询文本发出去**（状态面 `Egress:` 明示，只警告不拦截）；本机端点仅限回环地址；
+  没有独立的「禁网」开关。Node 发布包里端点密钥退回 0600 明文文件（Bun 下走系统密钥链），界面与状态会
+  披露；密钥永不出现在状态或协议响应里。
+- **索引是派生缓存**：不进 `haruyuki export` 快照（连同模型与运行时缓存一起排除），恢复后缺失需重建；
+  删除会话 / agent 会级联删除对应向量；`reset` 只删向量。
+- **`bge-m3` / `Qwen3-Embedding-0.6B` 的清单未钉 sha256**（体积校验 + 向导披露），属实验 / 手选；Qwen 另需
+  ~2.09 GB 外部数据。
+- **int8 原生 IVF 的真实效果待实测**：合成语料上 nprobe=nlist 与暴力码扫描逐条相等，真实大规模语料的
+  recall@10 与 p95 仍需实机验证；**p95 是目标值，不是运行时强制预算**（状态面只报 p50/p90）。
+- **设置只有全局一层**：向量召回的所有键都没有 project / agent 覆盖，per-agent 的只是磁盘上的空间目录。
+- **websocket listener 退出时不取消同进程构建**（已登记、不修）；`--keep-after-exit` 之外的构建随宿主退出
+  停止，但 checkpoint 保留。
+- **RecallSearch 不走 ANN**：显式检索走精确扫描（足够快且不依赖 sidecar），与被动召回的 ANN 路径不同。
+
 ## [0.5.1] - 2026-11-02
 
 > 0.5.1 是 **TUI 显示与操作优化 I**：把每天要看的显示面与每天要用的操作面补齐——

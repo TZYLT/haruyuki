@@ -72,6 +72,7 @@ to that end.
 | **Topic trimming** | `/topic` marks a boundary; `/topic list`, `/topic search`, and `/topic show` look topics up and read one back; `/compact` **computes the overview and cut points first and trims only once you pick** (nothing touches disk before that; cancel and failure write nothing), instead of dropping the tail proportionally |
 | **Memory as a file tree** | MemFS: all context (including memory blocks) is tracked by git — diffable, revertible, and pushable to your own remote |
 | **Passive memory** | **Reflection rewritten**: reflection runs as a hidden session on the current context, adds only one task message, and writes the memory repository directly, so it no longer produces conflicting commits; `/reflect`, `/dream`, and `/memory config` control triggers and the time limit; the TUI's `/usage` detail now shows reflection cost under "Automated tasks" |
+| **Vector recall** | The second arm of passive recall: a built-in ONNX model or your own OpenAI-compatible / Ollama endpoint embeds earlier conversations and memory files, so passages are found **by meaning** rather than by literal match, then fused with the lexical arm. Incremental background builds, silent fallback to lexical, cancellable and degradable throughout; **off by default**, and the first enable walks a four-step wizard. The agent can also query its own index with the read-only `RecallSearch` tool |
 | **Dreaming** | It automatically organizes memories during idle time to prevent the memory library from accumulating clutter.  |
 | **Local backend** | A single backend mode (`--backend local`): agent, conversations, memory, and transcripts all live on this machine |
 | **Multi-agent** | Any agent can act as another agent's subagent (including built-in subagents such as fork and recall) |
@@ -96,7 +97,7 @@ to that end.
    callback page has been removed and replaced with the fork's own mark, and the bundled default avatar has
    been replaced with an original image.
 5. **Mechanism changes and additions**: prefix freezing, topic trimming, background reflection, the local
-   backend and memory sync, and more (see the highlights table above).
+   backend and memory sync, vector recall, and more (see the highlights table above).
 6. **Documentation held by the fork**: no mirroring of upstream documentation text; this README plus
    [CONTRIBUTING.md](CONTRIBUTING.md) and [NOTICE](NOTICE) are the authoritative explanation.
 
@@ -114,9 +115,10 @@ bun run build        # produces haruyuki.js at the repo root (gitignored)
 node ./haruyuki.js   # start the interactive UI
 ```
 
-> The build output is a **single-file bundle** (~15.0 MiB) with production dependencies inlined;
-> `--version` should print `0.5.1 (Haruyuki)`. The number comes from `package.json`'s `version`
-> and is **inlined at build time**, so changing it requires a rebuild.
+> The build output is a **single-file bundle** (~15.9 MiB) with production dependencies inlined; it also emits
+> `--version` should print `0.6.0 (Haruyuki)`. The number comes from `package.json`'s `version` and is **inlined at build time**, so
+> changing it requires a rebuild. Model weights and the ONNX runtime are **not** in the package; they are
+> downloaded the first time vector recall is enabled.
 
 ### Option 2 — the npm package (recommended)
 
@@ -181,6 +183,9 @@ memory.
 | Reflection | Automatic reflection now runs **on compaction** on every platform (the Windows environment-variable gate is gone). A run longer than `reflectionTimeoutMinutes` (default 3) is aborted and **its uncommitted memory changes are discarded** (backed up first as `refs/letta-backup/*` plus a patch, but there is no one-click restore entry). While a run is active, Edit/Write/ApplyPatch against memory are rejected; Bash is not blocked |
 | Compaction | While the summarizer runs (`preparing`) the cut-point picker owns the keyboard, so those tens of seconds take no input (Esc exits and hands it back); the byte-identical prefix has only been verified against the local stub provider (Anthropic / OpenAI-Responses / Fable-shaped probes not run); the topic index takes no cross-process lock, so two processes refreshing different conversations can lose the other's merge — the next refresh or query heals it |
 | Sandboxing | Kernel-level filesystem sandboxing is available only on macOS (seatbelt) and Linux (bwrap); **Windows has no kernel backend** (a code fact — see `src/sandbox/availability.ts`), so the cross-agent memory fence falls back to a static path guard |
+| Vector recall | **Off by default**; the first enable downloads the runtime (the wizard estimates ~115 MB) and a model (from ~24 MB for `bge-small-zh-v1.5` up to several hundred MB for `bge-m3` / `Qwen3`), after which it works offline. The index is a **derived cache**: it is not part of a `haruyuki export` snapshot, and deleting a conversation or agent deletes its vectors. `int8` native IVF recall / p95 still needs a large-corpus real-machine run |
+| Embedding backends | Three built-in ONNX models, default `bge-small-zh-v1.5`; `bge-m3` / `Qwen3-Embedding-0.6B` are experimental with unpinned sha256 manifests (the wizard verifies by size and says so). External endpoints accept only `https://` or loopback `http://`; **a remote endpoint sends the query text out every turn**, and the status face says so |
+| GPU and platforms | Only the **index build** on Windows can try DirectML (falling back to CPU on failure); **queries always run on the CPU**; Linux CUDA is not in this release; Intel Macs cannot install the ONNX runtime (no `darwin-x64` binary) |
 | Legacy flags | `--computer`, `--no-wait`, `--memfs-startup` and similar are still in the help output (upstream compatibility surface); this fork does not promise their cloud semantics work |
 | Multiple platforms untested | This project is developed on Windows and I have no other machines to test on. If you hit a problem, please open an issue |
 
@@ -212,7 +217,7 @@ something or want to contribute, a pull request is very welcome.
 - [ ] Network access and a web UI
 - [x] A stable "dreaming" mechanism → a little extra spend on memory upkeep and on finishing leftover small tasks. It remains to be further verified.
 - [ ] Stable personality and conversational style
-- [ ] Vector-embedding-enhanced retrieval
+- [x] Vector-embedding-enhanced retrieval → It's ultimately better than keyword matching. The specific improvement can only be felt through practical use
 
 ### Version history at a glance
 
@@ -228,6 +233,7 @@ older in time**, and they record what changed **relative to the original project
 
 | Version | On npm | What changed, and why you would care |
 |---|---|---|
+| `0.6.0` | + | **Vector recall**: Add vector embeddings for recall and search to enhance recall efficiency. |
 | `0.5.1` | + | **TUI display and operation pass**: some TUI operations improved, conversation-switching tabs and command completion added, and known issues fixed along the way. |
 | `0.5.0` | + | **Dreaming**: The agent organizes its memories during idle time to maintain a stable and tidy memory library. Please use this experimental functions with caution. |
 | `0.4.5` | + | **Resident scheduling**: The entire scheduling task system has been rewritten to automatically launch scheduled tasks when the software is not running, ensuring that timed tasks can truly execute on schedule, provided the computer remains powered on. |
@@ -254,6 +260,11 @@ older in time**, and they record what changed **relative to the original project
 - All agent state, memory, and transcripts live in `~/.haruyuki` (or wherever `HARUYUKI_HOME` points) and
   in your own provider account; this project **never** reports telemetry and **never** sends diagnostic
   content to a third party.
+- Vector recall's index lives in `~/.haruyuki/recall-vectors/`, and models and the ONNX runtime are cached in
+  `~/.haruyuki/cache/embedding/`; both are **derived data** and are excluded from `haruyuki export` snapshots.
+  The first enable fetches models from hf-mirror / Hugging Face / ModelScope and the runtime from
+  npmmirror / npmjs — that is a **download**, not a report.
+- **Warning!** If you configure a **remote** embedding endpoint, passive recall sends the query text to it on every turn; built-in models and loopback endpoints stay off the network.
 - Crash/boundary-error logs and `/maintenance feedback` reports are written to local files (`~/.haruyuki/logs/`).
 - `haruyuki memory backup` takes a snapshot before you touch memory, and the memory directory is itself a
   git repository, so every change has a commit — see

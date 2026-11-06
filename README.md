@@ -50,6 +50,7 @@ Haruyuki 把 agent 的记忆、身份与行为当作**可以长期演进的资�
 | **话题裁切** | `/topic` 标边界，`/topic list`／`/topic search`／`/topic show` 查与回看；`/compact` **先算概况与切点、你选完才裁**（不落盘，取消与失败零写入），而不是默认按比例丢尾巴 |
 | **记忆即文件树** | MemFS：全部上下文（含记忆块）由 git 跟踪，可 diff、可回滚、可推到自己的远端仓库 |
 | **被动记忆** | **重写反思机制**：反思作为隐藏会话在当前上下文上运行，只多一条任务消息，直接写记忆仓、不再产生冲突提交；`/reflect`、`/memory config` 控制触发与时限；TUI 同步添加相关成本统计（`/usage` 明细「Automated tasks」） |
+| **向量召回** | 被动召回的第二条臂：内置 ONNX 模型或你自己的 OpenAI 兼容 / Ollama 端点把历史会话与记忆嵌成向量，按**语义**找回（不只字面命中），再与词法臂加权融合。后台增量建索引、失败静默回退词法、全程可降级可取消；**默认关闭**，首次开启走四步向导。agent 也能用只读工具 `RecallSearch` 主动查自己的索引 |
 | **梦游** | 会在空闲时间自动整理记忆，避免记忆库不断累积杂乱。 |
 | **本地后端** | 单一后端模式（`--backend local`）：agent、会话、记忆、transcript 全在本机 |
 | **多 agent** | 任意 agent 可作为另一个 agent 的 subagent（含 fork、recall 等内置 subagent） |
@@ -68,7 +69,7 @@ Haruyuki 把 agent 的记忆、身份与行为当作**可以长期演进的资�
 3. **改名**：包名、可执行文件、配置目录（`~/.haruyuki`）与环境变量前缀（`HARUYUKI_*`）。
    仅有 8 个与上游 SDK 契约绑定的名字**刻意保留 `LETTA_` 前缀**。
 4. **品牌与素材自持**：自有配色与标记；上游 OAuth 回调页的 ASCII art 已删除并换为自有标记，随包的默认头像已替换为原创图像。
-5. **机制调整与新增**：前缀冻结、话题裁切、后台反思、本地后端与记忆同步等（见上表"特色"）。
+5. **机制调整与新增**：前缀冻结、话题裁切、后台反思、本地后端与记忆同步、向量召回等（见上表"特色"）。
 6. **文档自持**：不镜像上游文档正文；本 README ＋ [CONTRIBUTING.md](CONTRIBUTING.md) ＋ [NOTICE](NOTICE) 是权威说明。
 
 ## 三、安装
@@ -85,7 +86,7 @@ bun run build        # 产出仓根 haruyuki.js（已 gitignore）
 node ./haruyuki.js   # 启动交互界面
 ```
 
-> 构建产物是**单文件 bundle**（约 15.0 MiB），它把生产依赖内联其中；`--version` 应打印 `0.5.1 (Haruyuki)`（版本号取自 `package.json` 的 `version`，且是**构建期内联**——改了版本号必须重新构建才会生效）。
+> 构建产物是**单文件 bundle**（约 15.9 MiB），它把生产依赖内联其中；`--version` 应打印 `0.6.0 (Haruyuki)`（版本号取自 `package.json` 的 `version`，且是**构建期内联**——改了版本号必须重新构建才会生效）。模型权重与 ONNX 运行时**不在包内**，首次启用向量召回时按需下载。
 
 ### 方式二：npm 包（推荐）
 
@@ -145,6 +146,9 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 | 反思 | 自动触发默认在**压缩时**运行（全平台，不再有 Windows 环境变量门）；时长超过 `reflectionTimeoutMinutes`（默认 3 分钟）会中止并**丢弃未提交的记忆改动**（先备份为 `refs/letta-backup/*` 与 patch，但没有一键回滚入口）。反思运行期间，主会话用 Edit／Write／ApplyPatch 写记忆会被拒绝，Bash 不拦 |
 | 压缩 | `preparing`（摘要器在跑）期间由选点面接管键盘，这几十秒里不能继续输入（Esc 退出即可）；逐字节前缀目前只在本地桩 provider 上验过，Anthropic／OpenAI-Responses／Fable 形状未跑；话题索引并发无锁，两个进程同时刷不同会话时后写者可能丢掉另一次的合并结果，靠下次刷新或查询自愈 |
 | 沙箱 | 内核级文件沙箱只在 macOS（seatbelt）与 Linux（bwrap）可用；**Windows 没有内核后端**（代码事实，见 `src/sandbox/availability.ts`），跨 agent 记忆围栏退回到静态路径守卫 |
+| 向量召回 | **默认关闭**；首次打开需联网下载运行时（向导预计 ~115 MB）与模型（`bge-small-zh-v1.5` 约 24 MB 起，`bge-m3` / `Qwen3` 更大），之后可离线。索引是**派生缓存**：不进 `haruyuki export` 快照，删会话 / agent 会级联删向量；`int8` 原生 IVF 的真实 recall / p95 仍待大规模实测 |
+| 嵌入后端 | 内置三款 ONNX 模型，默认 `bge-small-zh-v1.5`；`bge-m3` / `Qwen3-Embedding-0.6B` 属实验、清单未钉 sha256（向导按体积校验并披露）。外部端点只接受 `https://` 或回环 `http://`；**远程端点每轮会把查询文本发出去**，状态面会明示 |
+| GPU 与平台 | 只有 Windows 的**建索引**可尝试 DirectML（失败自动回 CPU）；**查询恒 CPU**；Linux CUDA 不在本版；Intel Mac 装不了 ONNX 运行时（无 `darwin-x64` 二进制） |
 | 遗留接口 | `--computer`、`--no-wait`、`--memfs-startup` 等参数仍在帮助里（上游兼容面），本分支不承诺其云端语义可用 |
 | 多平台验证缺失 | 本项目在 Windows 平台上开发，暂时没有其他系统的机器以供测试，如果您发现了问题，欢迎提交 issue |
 
@@ -172,7 +176,7 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 - [ ] 网络访问与webUI
 - [x] 稳定的梦游机制 -> 多花一点点钱做记忆整理和完成余留小任务，有待进一步验证。
 - [ ] 人格与对话风格稳定
-- [ ] 向量嵌入增强检索
+- [x] 向量嵌入增强检索 -> 总归是比关键词匹配要好点的，具体提升有多大得实际用才能感觉
 
 ### 版本变动清单
 
@@ -186,7 +190,8 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 
 | 版本 | npm 上有同版本包 | 更新了什么、有什么好处 |
 |---|---|---|
-| `0.5.1` | + | **TUI 显示与操作优化**：优化部分TUI操作，增加会话切换标签页和命令补全，顺带修复已知问题。 |
+| `0.6.0` | + | **向量召回**：为召回和搜索增加向量嵌入，增强召回效率。|
+| `0.5.1` | + | TUI 显示与操作优化：优化部分TUI操作，增加会话切换标签页和命令补全，顺带修复已知问题。 |
 | `0.5.0` | + | **梦游**：agent 在空闲时间自己整理记忆，维持记忆库稳定整齐，实验性功能请谨慎使用。 |
 | `0.4.5` | + | 常驻调度：重写了整个定时任务系统，可以自动在软件本身不在运行时启动计划的任务，让定时任务可以真正的按时运行起来，当然电脑必须是开着的。 |
 | `0.4.4` | + | **压缩重设计**：让摘要和话题标记在压缩前自动处理，使得话题启发压缩可以真正实用化，并为话题和对应原文提供查询。 |
@@ -210,6 +215,8 @@ haruyuki -p "用一句话说明你自己" --output-format json   # headless，�
 ## 七、关于您的数据、日志与隐私
 
 - 所有 agent 状态、记忆与 transcript 都在 `~/.haruyuki`（或 `HARUYUKI_HOME` 指向的位置）与你自己的 provider 账号里；本项目**绝不上报遥测**，也绝不把诊断内容发给第三方。
+- 向量召回的索引写在 `~/.haruyuki/recall-vectors/`，模型与 ONNX 运行时缓存在 `~/.haruyuki/cache/embedding/`；两者都是**派生数据**，不进 `haruyuki export` 快照。首次启用会从 hf-mirror / Hugging Face / ModelScope 取回模型、从 npmmirror / npmjs 取回运行时——这是**下载**，不是上报。
+- **警告！**若把嵌入后端配成**远程**端点，被动召回每轮会把查询文本发到该端点，其中包含您的对话数据；内置模型与回环端点不出网。
 - 崩溃/边界错误日志、`/maintenance feedback` 报告都写本地文件（`~/.haruyuki/logs/`）。
 - `haruyuki memory backup` 可在动记忆前留快照；记忆目录本身是 git 仓，任何改动都有提交记录，详见 [常用命令参考](https://github.com/TZYLT/haruyuki/blob/main/docs/commands.zh-CN.md)。
 - 与上游共用的 8 个 `LETTA_*` 环境变量只影响**本地路径与 provider 凭据**的读取，不产生出站调用。
