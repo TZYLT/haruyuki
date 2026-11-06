@@ -39,6 +39,20 @@ export interface EmbeddingSubmitRunner {
 }
 
 /**
+ * D4's deps plus the shell seam this path owns.
+ *
+ * `openConfig` raises the recall overlay's build-keys page for a bare
+ * `/recall embedding config`; a shell that has no such face omits it and keeps
+ * the printed table, which is the only answer it can give. It lives here rather
+ * than on `EmbeddingCommandDeps` because the command handler must not know a
+ * TUI exists.
+ */
+export interface EmbeddingSubmitDeps extends EmbeddingCommandDeps {
+  /** Raise the build-settings face; `false` means "this shell has none". */
+  openConfig?: () => boolean;
+}
+
+/**
  * Parse the words after `/recall embedding`.
  *
  * Exported because the parenthesis-thin part is exactly what a future surface
@@ -62,30 +76,43 @@ function openEmbeddingSettings(): boolean {
  *
  * `deps` is forwarded to D4's handler; tests use it to inject settings/runtime
  * fakes and to short-circuit the setup seam.
+ *
+ * A **bare** `config` is the one spelling the TUI answers with a face instead of
+ * text (48-4 D-16): the build keys are preferences, and the overlay already owns
+ * their editor. `config <key>` and `config <key> <value>` still print, so the
+ * non-interactive surfaces and this one agree on everything but the bare table.
  */
 export async function runEmbeddingSubmitCommand(
   input: string,
   scope: DreamCommandScope | undefined,
   runner: EmbeddingSubmitRunner,
-  deps: EmbeddingCommandDeps = {},
+  deps: EmbeddingSubmitDeps = {},
 ): Promise<string> {
+  const args = embeddingSubmitArgs(input);
+  if (
+    args.length === 1 &&
+    args[0] === "config" &&
+    deps.openConfig?.() === true
+  ) {
+    // The face owns the command row (`openOverlay` starts it), so this path must
+    // not start a second one and print a duplicate receipt. The empty reply is
+    // discarded by the TUI, and no other shell reaches here — only the TUI
+    // passes `openConfig`.
+    return "";
+  }
   const command = runner.start(input, "Checking vector recall...");
   try {
-    const output = await handleEmbeddingCommand(
-      embeddingSubmitArgs(input),
-      scope,
-      {
-        ...deps,
-        // The TUI owns an in-process build: the receipt returns immediately and
-        // progress reaches the status line through A5. Only the caller-supplied
-        // runtime wins, so tests can still inject a fake.
-        runtime:
-          deps.runtime === undefined
-            ? createEmbeddingRuntimePort({ lifecycle: "tui" })
-            : deps.runtime,
-        openSetup: deps.openSetup ?? openEmbeddingSettings,
-      },
-    );
+    const output = await handleEmbeddingCommand(args, scope, {
+      ...deps,
+      // The TUI owns an in-process build: the receipt returns immediately and
+      // progress reaches the status line through A5. Only the caller-supplied
+      // runtime wins, so tests can still inject a fake.
+      runtime:
+        deps.runtime === undefined
+          ? createEmbeddingRuntimePort({ lifecycle: "tui" })
+          : deps.runtime,
+      openSetup: deps.openSetup ?? openEmbeddingSettings,
+    });
     command.finish(output, true);
     return output;
   } catch (error) {

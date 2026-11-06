@@ -182,4 +182,58 @@ describe("runEmbeddingSubmitCommand", () => {
     expect(runner.failures[0]).toContain("Vector recall failed");
     expect(runner.outputs).toHaveLength(0);
   });
+
+  test("a bare config raises the face when the shell has one", async () => {
+    const runner = fakeRunner();
+    let opened = 0;
+    const output = await runEmbeddingSubmitCommand(
+      "/recall embedding config",
+      SCOPE,
+      runner,
+      {
+        ...deps(),
+        openConfig: () => {
+          opened += 1;
+          return true;
+        },
+      },
+    );
+    expect(opened).toBe(1);
+    // The face owns the command row: this path must neither start one nor print.
+    expect(output).toBe("");
+    expect(runner.started).toEqual([]);
+    expect(runner.outputs).toEqual([]);
+  });
+
+  test("without the face a bare config still prints the table", async () => {
+    const runner = fakeRunner();
+    const output = await runEmbeddingSubmitCommand(
+      "/recall embedding config",
+      SCOPE,
+      runner,
+      deps(),
+    );
+    expect(output).toContain("Embedding config");
+    expect(runner.started).toEqual(["/recall embedding config"]);
+    expect(runner.outputs).toHaveLength(1);
+  });
+
+  test("`config <key>` prints even when the shell has the face", async () => {
+    const runner = fakeRunner();
+    let opened = 0;
+    const output = await runEmbeddingSubmitCommand(
+      "/recall embedding config threads",
+      SCOPE,
+      runner,
+      {
+        ...deps(),
+        openConfig: () => {
+          opened += 1;
+          return true;
+        },
+      },
+    );
+    expect(opened).toBe(0);
+    expect(output).toContain("threads:");
+  });
 });

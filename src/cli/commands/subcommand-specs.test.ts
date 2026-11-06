@@ -18,7 +18,9 @@
  */
 import { describe, expect, test } from "bun:test";
 import { parseDreamAction } from "@/cli/commands/dream";
+import { EMBEDDING_CONFIG_KEYS } from "@/cli/commands/embedding-command-parser";
 import { HUBS } from "@/cli/commands/hubs";
+import { RECALL_CONFIG_KEYS } from "@/cli/commands/recall-config-keys";
 import {
   formatScheduleHelp,
   parseScheduleInvocation,
@@ -27,11 +29,13 @@ import {
 import {
   COMMAND_SPECS,
   DREAM_COMMAND_SPECS,
+  EMBEDDING_COMMAND_SPECS,
   findSubcommandSpec,
   formatSubcommandUsage,
   getSubcommandSpecs,
   hasSubcommand,
   hubSubcommandSpecs,
+  RECALL_COMMAND_SPECS,
   SCHEDULE_COMMAND_SPECS,
   type SubcommandSpecRow,
   TOPIC_COMMAND_SPECS,
@@ -312,6 +316,48 @@ describe("/topic spec ↔ dispatch (G-2)", () => {
     expect(findSubcommandSpec(TOPIC_COMMAND_SPECS, "show")).toBeDefined();
     expect(findSubcommandSpec(TOPIC_COMMAND_SPECS, "list")).toBeDefined();
     expect(await handleTopicCommand(["show"])).toContain("Which topic?");
+  });
+});
+
+/**
+ * The two `config` rows (48-4 D-05/D-16) are built from the parsers' own key
+ * vocabularies, so this is the assertion that the popup offers exactly what the
+ * commands accept: no key missing, none offered for a key the parser refuses,
+ * and no enumerated value under a key — the value there is free text, so its
+ * shape belongs in `args`/`desc`, never in `options` (O-07).
+ */
+describe("the config key rows (D-05, D-16)", () => {
+  test("each row offers exactly the parser's keys, each with a value hint", () => {
+    const cases = [
+      {
+        label: "/recall",
+        specs: RECALL_COMMAND_SPECS,
+        keys: RECALL_CONFIG_KEYS,
+      },
+      {
+        label: "/recall embedding",
+        specs: EMBEDDING_COMMAND_SPECS,
+        keys: EMBEDDING_CONFIG_KEYS,
+      },
+    ];
+    for (const { label, specs, keys } of cases) {
+      const config = findSubcommandSpec(specs, "config");
+      expect({ label, keys: config?.children?.map((row) => row.name) }).toEqual(
+        {
+          label,
+          keys: [...keys],
+        },
+      );
+      for (const row of config?.children ?? []) {
+        expect({ label, key: row.name, args: row.args }).toMatchObject({
+          label,
+          key: row.name,
+          args: expect.any(String),
+        });
+        expect(row.desc.length).toBeGreaterThan(0);
+        expect(row.options).toBeUndefined();
+      }
+    }
   });
 });
 

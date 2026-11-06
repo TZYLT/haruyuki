@@ -629,10 +629,18 @@ export function AppView(props: AppViewRenderProps) {
               />
             )}
 
-            {activeOverlay === "recall" && (
+            {/* `/recall` and `/recall embedding config` are one face: the
+                latter only opens on the build-keys page (`initialPage`). */}
+            {(activeOverlay === "recall" ||
+              activeOverlay === "recall-embedding-config") && (
               <RecallOverlay
                 settings={readRecallSettings()}
                 embeddingSettings={readEmbeddingSettings()}
+                initialPage={
+                  activeOverlay === "recall-embedding-config"
+                    ? "embedding-build"
+                    : "list"
+                }
                 agentId={agentId}
                 conversationId={conversationId}
                 onSave={handleRecallOverlaySave}

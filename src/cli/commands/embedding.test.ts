@@ -32,7 +32,9 @@ import {
   isEmbeddingConfigured,
   parseEmbeddingCommand,
 } from "@/cli/commands/embedding";
+import { EMBEDDING_CONFIG_KEYS } from "@/cli/commands/embedding-command-parser";
 import { handleRecallCommand, parseRecallCommand } from "@/cli/commands/recall";
+import { RECALL_CONFIG_KEYS } from "@/cli/commands/recall-config-keys";
 import {
   EMBEDDING_COMMAND_SPECS,
   RECALL_COMMAND_SPECS,
@@ -940,10 +942,18 @@ describe("/recall completion", () => {
     expect(EMBEDDING_COMMAND_SPECS).toHaveLength(8);
   });
 
-  test("prefixes still narrow the entrances", () => {
+  test("prefixes still narrow the entrances and the config keys", () => {
     expect(completionLabels("/recall embedding o")).toEqual(["on", "off"]);
     expect(completionLabels("/recall embedding conn")).toEqual(["connect"]);
-    expect(completionLabels("/recall config ")).toEqual([]);
+    // 48-4 D-05/D-16: the one level under `config` is the key list, read from
+    // the parsers' own vocabulary rather than a second table.
+    expect(completionLabels("/recall config ")).toEqual([
+      ...RECALL_CONFIG_KEYS,
+    ]);
+    expect(completionLabels("/recall embedding config ")).toEqual([
+      ...EMBEDDING_CONFIG_KEYS,
+    ]);
+    expect(completionLabels("/recall config de")).toEqual(["dedup", "depth"]);
   });
 
   test("every row the popup offers is accepted by the parser (G-2)", () => {

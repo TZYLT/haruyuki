@@ -60,7 +60,14 @@ export type EmbeddingConfigKey =
   | "threads"
   | "gpu";
 
-const EMBEDDING_CONFIG_KEYS: readonly EmbeddingConfigKey[] = [
+/**
+ * Every key `/recall embedding config` accepts (48-4 D-16).
+ *
+ * Exported because completion renders these keys as the `config` row's
+ * children, and the status table iterates them: one list, so the popup cannot
+ * offer a key the parser refuses (or the reverse).
+ */
+export const EMBEDDING_CONFIG_KEYS: readonly EmbeddingConfigKey[] = [
   "chunk-target",
   "chunk-max",
   "chunk-overlap",

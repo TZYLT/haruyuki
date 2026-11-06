@@ -111,6 +111,7 @@ import {
   createClientOtid,
   uid,
 } from "./ids";
+import { isRecallOverlayCommand } from "./recall-config-overlay";
 import { prepareSessionExit } from "./session";
 import { runShellCommand } from "./shell-commands";
 import {
@@ -738,12 +739,13 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           return { submitted: true };
         }
 
-        // Feature ②: a bare /recall opens the settings picker; `/recall <setting>`
-        // and every other subcommand fall through to the registry handler.
-        if (trimmed === "/recall") {
+        // Feature ②: a bare /recall — or a bare `/recall config`, which is the
+        // same face — opens the settings picker; `/recall config <key>` and every
+        // other subcommand fall through to the registry handler.
+        if (isRecallOverlayCommand(trimmed)) {
           openOverlay(
             "recall",
-            "/recall",
+            trimmed,
             "Opening recall settings...",
             "Recall settings dismissed",
           );
@@ -759,11 +761,17 @@ export function useSubmitHandler(ctx: SubmitHandlerContext) {
           const { embeddingWizardSetupOpener } = await import(
             "@/cli/app/embedding-wizard-overlay"
           );
+          const { embeddingConfigFaceOpener } = await import(
+            "@/cli/app/recall-config-overlay"
+          );
           await runEmbeddingSubmitCommand(
             trimmed,
             commandScope,
             commandRunner,
-            { openSetup: embeddingWizardSetupOpener(openOverlay) },
+            {
+              openSetup: embeddingWizardSetupOpener(openOverlay),
+              openConfig: embeddingConfigFaceOpener(openOverlay),
+            },
           );
           return { submitted: true };
         }

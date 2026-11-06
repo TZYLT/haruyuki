@@ -18,6 +18,11 @@ import {
   type EmbeddingCommandDeps,
   handleEmbeddingCommand,
 } from "@/cli/commands/embedding";
+import {
+  isRecallConfigKey,
+  RECALL_CONFIG_KEYS,
+  type RecallConfigKey,
+} from "@/cli/commands/recall-config-keys";
 import { setRecallDisplay } from "@/cli/components/transcript-display-state";
 import { createEmbeddingRuntimePort } from "@/cli/helpers/embedding-runtime";
 import {
@@ -91,40 +96,10 @@ export type RecallCommand =
   | { kind: "enable" }
   | { kind: "disable" };
 
-/** Every key `/recall config` accepts (48-4 D-05/D-16). */
-export type RecallConfigKey =
-  | "timeout"
-  | "dedup"
-  | "limit"
-  | "excerpt"
-  | "chars"
-  | "ratio"
-  | "diversity"
-  | "display"
-  | "weight"
-  | "depth";
-
-const RECALL_CONFIG_KEYS: readonly RecallConfigKey[] = [
-  "timeout",
-  "dedup",
-  "limit",
-  "excerpt",
-  "chars",
-  "ratio",
-  "diversity",
-  "display",
-  "weight",
-  "depth",
-];
-
-function isRecallConfigKey(
-  value: string | undefined,
-): value is RecallConfigKey {
-  return (
-    value !== undefined &&
-    (RECALL_CONFIG_KEYS as readonly string[]).includes(value)
-  );
-}
+// The key vocabulary lives in its own leaf module so completion can offer the
+// same list without importing this file (see `recall-config-keys.ts`).
+export { RECALL_CONFIG_KEYS };
+export type { RecallConfigKey };
 
 /**
  * A non-negative whole number, or `null` when the text is not one.

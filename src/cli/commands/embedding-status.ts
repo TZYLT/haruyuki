@@ -14,7 +14,10 @@
  */
 
 import type { EmbeddingBuildStateSnapshot } from "@/backend/local/embedding-build-state";
-import type { EmbeddingConfigKey } from "@/cli/commands/embedding-command-parser";
+import {
+  EMBEDDING_CONFIG_KEYS,
+  type EmbeddingConfigKey,
+} from "@/cli/commands/embedding-command-parser";
 import type {
   EmbeddingCalibrationSettings,
   ResolvedEmbeddingSettings,
@@ -152,16 +155,18 @@ export function formatEmbeddingBuildSnapshotLines(
 }
 
 /**
- * `/recall embedding config` output (48-4 D-16).
+ * The six build keys' values, in the phrasing the config table and the picker's
+ * build-settings page both show.
  *
- * One table for the six build keys. The ones that create a new space say so, so
- * a user changing `chunk-target` is not surprised by an empty index.
+ * Structured rather than pre-joined so a second surface (the `/recall` picker's
+ * sub-page) can read one key without re-deriving the wording. It stays the only
+ * place these sentences exist, so the table and the picker cannot say different
+ * things about the same stored value.
  */
-export function formatEmbeddingConfigLines(
+export function embeddingConfigRows(
   settings: ResolvedEmbeddingSettings,
-  key?: EmbeddingConfigKey,
-): string {
-  const rows: Record<EmbeddingConfigKey, string> = {
+): Record<EmbeddingConfigKey, string> {
+  return {
     "chunk-target": `${settings.chunkTarget} tokens (new space)`,
     "chunk-max": `${settings.chunkMax} tokens (new space)`,
     "chunk-overlap": `${settings.chunkOverlap} tokens (new space)`,
@@ -172,20 +177,27 @@ export function formatEmbeddingConfigLines(
         ? "off"
         : "auto (tries DirectML on Windows for index builds)",
   };
-  const keys: readonly EmbeddingConfigKey[] = [
-    "chunk-target",
-    "chunk-max",
-    "chunk-overlap",
-    "max-chunks",
-    "threads",
-    "gpu",
-  ];
+}
+
+/**
+ * `/recall embedding config` output (48-4 D-16).
+ *
+ * One table for the six build keys. The ones that create a new space say so, so
+ * a user changing `chunk-target` is not surprised by an empty index.
+ */
+export function formatEmbeddingConfigLines(
+  settings: ResolvedEmbeddingSettings,
+  key?: EmbeddingConfigKey,
+): string {
+  const rows = embeddingConfigRows(settings);
   if (key !== undefined) {
     return `${key}: ${rows[key]}\nSet it with /recall embedding config ${key} <value>.`;
   }
-  const width = Math.max(...keys.map((name) => name.length));
+  const width = Math.max(...EMBEDDING_CONFIG_KEYS.map((name) => name.length));
   const lines = ["Embedding config"];
-  for (const name of keys) lines.push(`  ${name.padEnd(width)}  ${rows[name]}`);
+  for (const name of EMBEDDING_CONFIG_KEYS) {
+    lines.push(`  ${name.padEnd(width)}  ${rows[name]}`);
+  }
   lines.push("Set one with /recall embedding config <key> <value>.");
   return lines.join("\n");
 }

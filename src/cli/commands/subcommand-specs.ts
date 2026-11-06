@@ -23,9 +23,20 @@
  * `options` is the enumerated-argument slot (O-07): only values the command
  * actually accepts, transcribed from the registry's `args` hint or the help
  * text. They are candidates at the next level, not subcommands.
+ *
+ * The two `config` rows (`/recall` D-05 and `/recall embedding` D-16) carry one
+ * child per accepted key, built from the parsers' own vocabulary lists. The
+ * keys are completed; the *values* under them are not, because they are free
+ * text (`weight 0.4`) with per-key shapes — that is what each child's `args`
+ * and `desc` spell out.
  */
 
+import {
+  EMBEDDING_CONFIG_KEYS,
+  type EmbeddingConfigKey,
+} from "./embedding-command-parser";
 import { HUBS, type HubSubcommand } from "./hubs";
+import { RECALL_CONFIG_KEYS, type RecallConfigKey } from "./recall-config-keys";
 
 export interface SubcommandSpec {
   /** The literal word the user types (`list`, `remove`, …). */
@@ -173,6 +184,77 @@ export const TOPIC_COMMAND_SPECS = [
 // ── /recall ─────────────────────────────────────────────────────────
 
 /**
+ * One `config` key's second-level row: the value hint (`[<ms>]`) and a one-line
+ * description carrying the accepted shape.
+ *
+ * The key list comes from the vocabulary modules below, and the hint table is
+ * typed `Record<Key, …>`: a key added to the vocabulary without a hint — or a
+ * hint for a key the parser refuses — is a type error rather than a popup that
+ * offers something the dispatcher rejects.
+ */
+function configKeyChildren<Key extends string>(
+  keys: readonly Key[],
+  hints: Readonly<Record<Key, { args: string; desc: string }>>,
+): SubcommandSpec[] {
+  return keys.map((name) => ({ name, ...hints[name], textArg: true }));
+}
+
+/** What each `/recall config` key accepts (48-4 D-05). */
+const RECALL_CONFIG_KEY_HINTS: Readonly<
+  Record<RecallConfigKey, { args: string; desc: string }>
+> = {
+  timeout: { args: "<ms>", desc: "Wall-clock budget per turn (0 = no limit)" },
+  dedup: { args: "<turns>", desc: "Turns a recalled passage stays suppressed" },
+  limit: { args: "<n>", desc: "Passages injected per turn" },
+  excerpt: { args: "<±lines>", desc: "Memory context lines around a hit" },
+  chars: {
+    args: "<per> [total]",
+    desc: "Per-passage and total character budget",
+  },
+  ratio: { args: "<0..1>", desc: "Relative score floor (lexical and fused)" },
+  diversity: {
+    args: "<mode>",
+    desc: "none | file | split — how the slots are shared out",
+  },
+  display: {
+    args: "<tier>",
+    desc: "silent | summary | full — how much of a recall block to show",
+  },
+  weight: {
+    args: "<0..1>",
+    desc: "Vector-arm weight (needs vector recall on)",
+  },
+  depth: { args: "<n>", desc: "Candidates per arm (needs vector recall on)" },
+};
+
+/** What each `/recall embedding config` key accepts (48-4 D-16). */
+const EMBEDDING_CONFIG_KEY_HINTS: Readonly<
+  Record<EmbeddingConfigKey, { args: string; desc: string }>
+> = {
+  "chunk-target": {
+    args: "<tokens>",
+    desc: "Target chunk window (creates a new space)",
+  },
+  "chunk-max": {
+    args: "<tokens>",
+    desc: "Hard chunk ceiling (creates a new space)",
+  },
+  "chunk-overlap": {
+    args: "<tokens>",
+    desc: "Chunk overlap (creates a new space)",
+  },
+  "max-chunks": {
+    args: "<n>",
+    desc: "Chunks embedded per message (creates a new space)",
+  },
+  threads: { args: "<n>", desc: "Encode/build threads (0 = automatic)" },
+  gpu: {
+    args: "<auto|off>",
+    desc: "Try the GPU for index builds (Windows only)",
+  },
+};
+
+/**
  * `/recall embedding`'s words (48-4 D-07…D-13).
  *
  * Eight entrances, one `config` table instead of one command per knob, and one
@@ -205,7 +287,10 @@ export const EMBEDDING_COMMAND_SPECS = [
     name: "config",
     args: "[<key> [value]]",
     desc: "Build keys: chunk-target, chunk-max, chunk-overlap, max-chunks, threads, gpu",
-    textArg: true,
+    children: configKeyChildren(
+      EMBEDDING_CONFIG_KEYS,
+      EMBEDDING_CONFIG_KEY_HINTS,
+    ),
   },
   {
     name: "device",
@@ -232,8 +317,8 @@ export const RECALL_COMMAND_SPECS = [
   {
     name: "config",
     args: "[<key> [value]]",
-    desc: "Tuning: timeout, dedup, limit, excerpt, chars, ratio, diversity, display, weight, depth",
-    textArg: true,
+    desc: "Tuning keys: timeout, dedup, limit, excerpt, chars, ratio, diversity, display, weight, depth",
+    children: configKeyChildren(RECALL_CONFIG_KEYS, RECALL_CONFIG_KEY_HINTS),
   },
   {
     name: "embedding",

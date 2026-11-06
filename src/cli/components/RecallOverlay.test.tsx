@@ -5,9 +5,11 @@
  * that marker is the only thing telling the user what they are changing.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { EMBEDDING_CONFIG_KEYS } from "@/cli/commands/embedding-command-parser";
 import {
   buildDisplayRows,
   buildDiversityRows,
+  buildEmbeddingBuildRows,
   buildEmbeddingRows,
   buildRecallPickerRows,
   RECALL_DISPLAY_ROW_KEY,
@@ -21,6 +23,7 @@ import type { EmbeddingModelRow } from "@/cli/helpers/embedding-models";
 import {
   EMBEDDING_SETTING_DEFAULTS,
   RECALL_SETTING_DEFAULTS,
+  type ResolvedEmbeddingSettings,
 } from "@/recall-settings";
 import type { Settings } from "@/settings-manager";
 import { mountInkTty, resetInkTtyState } from "@/test-utils/ink-tty";
@@ -34,9 +37,9 @@ describe("the picker rows", () => {
     expect(keys.at(-1)).toBe(RECALL_DIVERSITY_ROW_KEY);
     expect(new Set(keys).size).toBe(keys.length);
 
-    // The seven numeric knobs plus the toggle, display, embedding block and
-    // diversity.
-    expect(keys).toHaveLength(11);
+    // The nine numeric knobs (seven lexical, then the two vector-only ones),
+    // plus the toggle, display, embedding block and diversity.
+    expect(keys).toHaveLength(13);
     expect(keys).toContain(RECALL_EMBEDDING_ROW_KEY);
     for (const key of [
       "recallLimit",
@@ -46,23 +49,31 @@ describe("the picker rows", () => {
       "recallExcerptCharacters",
       "recallTotalCharacters",
       "recallMinScoreRatio",
+      "recallEmbeddingWeight",
+      "recallEmbeddingCandidateDepth",
     ]) {
       expect(keys).toContain(key);
     }
   });
 
   test("shows the current value next to each row", () => {
-    const rows = buildRecallPickerRows({
-      ...RECALL_SETTING_DEFAULTS,
-      limit: 7,
-      timeoutMs: 0,
-      display: "full",
-    });
+    const rows = buildRecallPickerRows(
+      {
+        ...RECALL_SETTING_DEFAULTS,
+        limit: 7,
+        timeoutMs: 0,
+        display: "full",
+      },
+      { ...EMBEDDING_SETTING_DEFAULTS, weight: 0.25, candidateDepth: 12 },
+    );
     const byKey = new Map(rows.map((row) => [row.key, row.description ?? ""]));
     expect(byKey.get("recallLimit")).toContain("7");
     // `0` reads as the setting it is, not as "unset".
     expect(byKey.get("recallTimeoutMs")).toContain("0 ms");
     expect(byKey.get(RECALL_DISPLAY_ROW_KEY)).toContain("full");
+    // The vector-only knobs come from the embedding record, not the recall one.
+    expect(byKey.get("recallEmbeddingWeight")).toContain("0.25");
+    expect(byKey.get("recallEmbeddingCandidateDepth")).toContain("12");
   });
 
   test("the toggle says which way it will go", () => {
@@ -92,6 +103,7 @@ describe("the embedding block", () => {
       "reset",
       "connect",
       "model",
+      "build-settings",
     ]);
     expect(on[0]?.label).toContain("off");
     expect(on[0]?.description).toContain("builtin");
@@ -101,6 +113,13 @@ describe("the embedding block", () => {
       enabled: false,
     });
     expect(off[0]?.label).toContain("on");
+  });
+
+  test("the build-settings row says what it edits", () => {
+    const rows = buildEmbeddingRows(EMBEDDING_SETTING_DEFAULTS);
+    const row = rows.find((item) => item.key === "build-settings");
+    expect(row?.label).toBe("Build settings");
+    expect(row?.description).toContain("chunk window");
   });
 
   test("the picker row shows whether the vector arm is on", () => {
@@ -134,6 +153,28 @@ describe("the sub-pickers", () => {
   });
 });
 
+describe("the build-settings page", () => {
+  test("lists the six keys with the values the config table prints", () => {
+    const rows = buildEmbeddingBuildRows({
+      ...EMBEDDING_SETTING_DEFAULTS,
+      chunkTarget: 256,
+      chunkMax: 1_024,
+      chunkOverlap: 32,
+      maxChunksPerMessage: 4,
+      threads: 0,
+      gpu: "off",
+    });
+    expect(rows.map((row) => row.key)).toEqual([...EMBEDDING_CONFIG_KEYS]);
+    const byKey = new Map(rows.map((row) => [row.key, row.description ?? ""]));
+    expect(byKey.get("chunk-target")).toContain("256 tokens (new space)");
+    expect(byKey.get("chunk-max")).toContain("1024 tokens (new space)");
+    expect(byKey.get("max-chunks")).toContain("4 /message (new space)");
+    expect(byKey.get("threads")).toContain("auto");
+    expect(byKey.get("gpu")).toContain("off");
+    expect(rows.every((row) => (row.description ?? "").length > 0)).toBe(true);
+  });
+});
+
 /**
  * The overlay's steps and the keys that walk them: the rows open a view of their
  * own, Escape returns to the list from there, and the numeric editor is a real
@@ -145,6 +186,11 @@ const ENTER = "\r";
 const CTRL_C = "\u0003";
 const DOWN = "\u001b[B";
 const HOME = "\u001b[H";
+
+/** `count` cursor-down presses: the rows are a list, so a test counts them. */
+function downs(count: number): string[] {
+  return Array.from({ length: count }, () => DOWN);
+}
 
 afterEach(resetInkTtyState);
 
@@ -276,21 +322,9 @@ describe("the overlay's keys", () => {
       },
     });
     try {
-      // The block sits after the seven numeric rows (toggle, display = 0..1).
-      await pressKeysSlowly(
-        tty,
-        HOME,
-        DOWN,
-        DOWN,
-        DOWN,
-        DOWN,
-        DOWN,
-        DOWN,
-        DOWN,
-        DOWN,
-        DOWN,
-        ENTER,
-      );
+      // The block sits after the nine numeric rows, plus the toggle at 0 and
+      // display at 1: `list` index 11.
+      await pressKeysSlowly(tty, HOME, ...downs(11), ENTER);
       expect(await tty.text()).toContain("Turn vector recall on");
 
       // The sub-picker reuses the list's picker instance, so its cursor is
@@ -347,22 +381,9 @@ describe("the overlay's keys", () => {
       loadEmbeddingModels: async () => rows,
     });
     try {
-      // Toggle, display, seven numbers → embedding; then toggle, status, build,
-      // reset, connect → model.
-      await pressKeysSlowly(
-        tty,
-        HOME,
-        DOWN,
-        DOWN,
-        DOWN,
-        DOWN,
-        DOWN,
-        DOWN,
-        DOWN,
-        DOWN,
-        DOWN,
-        ENTER,
-      );
+      // Toggle, display, nine numbers → embedding (index 11); then toggle,
+      // status, build, reset, connect → model (index 5).
+      await pressKeysSlowly(tty, HOME, ...downs(11), ENTER);
       expect(await tty.text()).toContain("Turn vector recall off");
       await pressKeysSlowly(tty, HOME, DOWN, DOWN, DOWN, DOWN, DOWN, ENTER);
       const frame = await tty.text();
@@ -397,6 +418,209 @@ describe("the overlay's keys", () => {
       expect(await tty.text()).toContain("Passages per turn");
       await tty.press(CTRL_C);
       expect(cancels).toEqual(["cancel"]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the vector-weight row reads the embedding record and writes its key", async () => {
+    const { tty, saved } = mountOverlay({
+      embeddingSettings: {
+        ...EMBEDDING_SETTING_DEFAULTS,
+        weight: 0.5,
+        candidateDepth: 50,
+      },
+    });
+    try {
+      // Toggle, display, seven lexical knobs → row 9 is the weight.
+      await pressKeysSlowly(tty, HOME, ...downs(9), ENTER);
+      expect(await tty.text()).toContain("Vector arm weight");
+      // The draft opens at 0.5, so one key appends to it.
+      await pressKeysSlowly(tty, "4", ENTER);
+      expect(saved).toEqual([{ recallEmbeddingWeight: 0.54 }]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the candidate-depth row accepts a whole number", async () => {
+    const { tty, saved } = mountOverlay({
+      embeddingSettings: {
+        ...EMBEDDING_SETTING_DEFAULTS,
+        weight: 0.5,
+        candidateDepth: 50,
+      },
+    });
+    try {
+      await pressKeysSlowly(tty, HOME, ...downs(10), ENTER);
+      expect(await tty.text()).toContain("Vector candidate depth");
+      await pressKeysSlowly(tty, "0", ENTER);
+      expect(saved).toEqual([{ recallEmbeddingCandidateDepth: 500 }]);
+    } finally {
+      tty.stop();
+    }
+  });
+});
+
+/**
+ * The build-keys page (48-4 D-16): six rows read from the embedding record, one
+ * editor per key, the write goes through `/recall embedding config <key>
+ * <value>`, and a refusal is the handler's own sentence rather than a second
+ * message the typed command would not say.
+ */
+describe("the build-settings page keys", () => {
+  test("a direct landing lists the six keys and their values", async () => {
+    const { tty } = mountOverlay({
+      initialPage: "embedding-build",
+      embeddingSettings: {
+        ...EMBEDDING_SETTING_DEFAULTS,
+        chunkTarget: 256,
+        threads: 0,
+      },
+    });
+    try {
+      const painted = await tty.text();
+      expect(painted).toContain("Build settings");
+      expect(painted).toContain("chunk-target");
+      expect(painted).toContain("256 tokens (new space)");
+      expect(painted).toContain("threads");
+      expect(painted).toContain("auto");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a saved value goes through the command and the page re-reads it", async () => {
+    const calls: string[][] = [];
+    let current: ResolvedEmbeddingSettings = {
+      ...EMBEDDING_SETTING_DEFAULTS,
+      chunkTarget: 256,
+    };
+    const { tty } = mountOverlay({
+      initialPage: "embedding-build",
+      embeddingSettings: current,
+      reloadEmbeddingSettings: () => current,
+      runEmbeddingCommand: async (args) => {
+        calls.push(args);
+        current = { ...current, chunkTarget: Number(args[2]) };
+        return `Updated ${args[1]}.\n  target ${args[2]} tokens`;
+      },
+    });
+    try {
+      // The first row is `chunk-target`.
+      await pressKeysSlowly(tty, ENTER);
+      expect(await tty.text()).toContain("Config · chunk-target");
+
+      // The draft opens at the current value (256), so the key appends.
+      await pressKeysSlowly(tty, "0", ENTER);
+      await settle();
+      expect(calls).toEqual([["config", "chunk-target", "2560"]]);
+      expect(await tty.text()).toContain("Updated chunk-target.");
+
+      // Escape walks back to the page, which now reads the refreshed settings.
+      await pressKeysSlowly(tty, ESC);
+      const refreshed = await tty.text();
+      expect(refreshed).toContain("Build settings");
+      expect(refreshed).toContain("2560 tokens (new space)");
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a refused value stays in the editor with the handler's sentence", async () => {
+    let reloads = 0;
+    const { tty } = mountOverlay({
+      initialPage: "embedding-build",
+      embeddingSettings: { ...EMBEDDING_SETTING_DEFAULTS, chunkTarget: 256 },
+      reloadEmbeddingSettings: () => {
+        reloads += 1;
+        return EMBEDDING_SETTING_DEFAULTS;
+      },
+      runEmbeddingCommand: async () =>
+        "Not saved: chunk target must be between 1 and 4096.",
+    });
+    try {
+      await pressKeysSlowly(tty, ENTER);
+      expect(await tty.text()).toContain("Config · chunk-target");
+      await pressKeysSlowly(tty, "x", ENTER);
+      await settle();
+      const painted = await tty.text();
+      expect(painted).toContain(
+        "Not saved: chunk target must be between 1 and 4096.",
+      );
+      // Still the editor, and nothing was re-read: the write did not happen.
+      expect(painted).toContain("Config · chunk-target");
+      expect(reloads).toBe(0);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("a parser syntax error keeps the editor open as well", async () => {
+    let reloads = 0;
+    const { tty } = mountOverlay({
+      initialPage: "embedding-build",
+      embeddingSettings: { ...EMBEDDING_SETTING_DEFAULTS, chunkTarget: 256 },
+      reloadEmbeddingSettings: () => {
+        reloads += 1;
+        return EMBEDDING_SETTING_DEFAULTS;
+      },
+      runEmbeddingCommand: async () =>
+        "`/recall embedding config chunk-target` needs a whole number: /recall embedding config chunk-target <n>.\n\nUSAGE",
+    });
+    try {
+      await pressKeysSlowly(tty, ENTER);
+      expect(await tty.text()).toContain("Config · chunk-target");
+      await pressKeysSlowly(tty, "x", ENTER);
+      await settle();
+      const painted = await tty.text();
+      // The parser's message is a refusal too: the editor keeps it and no
+      // settings re-read happens, exactly like the validator's "Not saved".
+      expect(painted).toContain("needs a whole number");
+      expect(painted).toContain("Config · chunk-target");
+      expect(reloads).toBe(0);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("Escape from the editor returns to the page; at the root it closes", async () => {
+    const { tty, cancels } = mountOverlay({
+      initialPage: "embedding-build",
+      embeddingSettings: EMBEDDING_SETTING_DEFAULTS,
+    });
+    try {
+      await pressKeysSlowly(tty, ENTER);
+      expect(await tty.text()).toContain("Config · chunk-target");
+      await pressKeysSlowly(tty, ESC);
+      expect(await tty.text()).toContain("chunk-target");
+      expect(cancels).toEqual([]);
+
+      // The page was raised as the root, so Escape there is the close.
+      await pressKeysSlowly(tty, ESC);
+      expect(cancels).toEqual(["cancel"]);
+    } finally {
+      tty.stop();
+    }
+  });
+
+  test("the block's row opens the page and Escape returns to the block", async () => {
+    const { tty, cancels } = mountOverlay({
+      embeddingSettings: EMBEDDING_SETTING_DEFAULTS,
+      runEmbeddingCommand: async (args) => `RESULT:${args.join(" ")}`,
+    });
+    try {
+      await pressKeysSlowly(tty, HOME, ...downs(11), ENTER);
+      expect(await tty.text()).toContain("Turn vector recall on");
+
+      // The block's rows: toggle, status, build, reset, connect, model, settings.
+      await pressKeysSlowly(tty, HOME, ...downs(6), ENTER);
+      expect(await tty.text()).toContain("chunk-target");
+
+      await pressKeysSlowly(tty, ESC);
+      const painted = await tty.text();
+      expect(painted).toContain("Turn vector recall on");
+      expect(cancels).toEqual([]);
     } finally {
       tty.stop();
     }

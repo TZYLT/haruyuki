@@ -59,6 +59,7 @@ export type ActiveOverlay =
   | "sleeptime"
   | "compaction"
   | "recall"
+  | "recall-embedding-config"
   | "toolset"
   | "system"
   | "personality"
