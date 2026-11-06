@@ -872,6 +872,11 @@ function getDefaultDecision(
     // same reason `Read` is. The dream-run allowance below also needs it:
     // unattended `ask` would otherwise deny the run its own context tool.
     "SessionRead",
+    // Semantic search over the agent's own transcript and memory vector index
+    // (48-4 D-24): it reads committed indexes and live parent text, never
+    // writes, never builds, and never reads a hidden conversation. Auto-allow
+    // for the same reason `Read` and `SessionRead` are.
+    "RecallSearch",
   ];
 
   if (autoAllowTools.includes(toolName)) {

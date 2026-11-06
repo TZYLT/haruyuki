@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "The text to search for, embedded with the configured embedding model. A sentence or a question works better than a few keywords, because the index stores whole passages."
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["transcript", "memory", "both"],
+      "description": "Which corpus to search: earlier conversations and the current one (`transcript`), the agent's memory files (`memory`), or both. Defaults to `both`."
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20,
+      "description": "How many passages to return, best score first. Defaults to 5; at most 20."
+    }
+  },
+  "required": ["query"],
+  "additionalProperties": false,
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

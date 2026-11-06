@@ -264,6 +264,20 @@ test("Grep within working directory is auto-allowed", () => {
   expect(result.decision).toBe("allow");
 });
 
+test("RecallSearch is auto-allowed without approval", () => {
+  // Read-only semantic search over the agent's own vector index (48-4 D-24):
+  // it writes nothing, builds nothing and reads no hidden conversation, so it
+  // belongs in the same default-allow group as Read/Grep/SessionRead.
+  const result = checkPermission(
+    "RecallSearch",
+    { query: "retry backoff policy" },
+    { allow: [], deny: [], ask: [] },
+    "/Users/test/project",
+  );
+
+  expect(result.decision).toBe("allow");
+});
+
 // ============================================================================
 // Additional Directories Tests
 // ============================================================================
