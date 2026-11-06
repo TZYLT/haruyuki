@@ -29,9 +29,9 @@ import type {
   EmbeddingRunResult,
   EmbeddingRunUnit,
 } from "@/backend/local/embedding-runner";
+import { createBuiltinEmbedAdapter } from "@/cli/helpers/embedding-build-embed-adapters";
 import {
   cancelEmbeddingBuild,
-  createBuiltinEmbedAdapter,
   EMBEDDING_BUILD_HOST_EXIT_WAIT_MS,
   type EmbeddingBuildHostOptions,
   type EmbeddingBuildHostStartResult,

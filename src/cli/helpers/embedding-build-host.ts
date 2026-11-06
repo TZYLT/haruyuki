@@ -57,6 +57,7 @@ import type {
 } from "@/types/embedding-protocol";
 import { debugWarn } from "@/utils/debug";
 import { getErrorMessage } from "@/utils/error";
+import { createEmbeddingBuildStartGuard } from "./embedding-build-start-guard";
 import {
   type EmbeddingDetachedChild,
   type EmbeddingDetachedCommand,
@@ -200,57 +201,6 @@ async function resolveCalibration(
       message: `Calibration failed and was skipped: ${getErrorMessage(error)}`,
     };
   }
-}
-
-// ── Embed adapters (C3 / C6 → A3) ───────────────────────────────────────────
-
-export interface EmbeddingBuiltinEmbedSource {
-  embedBatched(
-    texts: readonly string[],
-    options?: { batchSize?: number; signal?: AbortSignal },
-  ): Promise<{ vectors: readonly (Float32Array | null)[]; cancelled: boolean }>;
-}
-
-function assertVectors(
-  vectors: readonly (Float32Array | null)[],
-  expected: number,
-  cancelled: boolean,
-  source: string,
-): readonly Float32Array[] {
-  if (cancelled) {
-    throw new Error(
-      `${source} cancelled the batch before committing vectors; the unit will be retried from its checkpoint.`,
-    );
-  }
-  if (vectors.length !== expected) {
-    throw new Error(
-      `${source} returned ${vectors.length} vector(s) for ${expected} chunk(s).`,
-    );
-  }
-  return vectors.map((vector, index) => {
-    if (!(vector instanceof Float32Array)) {
-      throw new Error(`${source} returned no vector for chunk ${index + 1}.`);
-    }
-    return vector;
-  });
-}
-
-export function createBuiltinEmbedAdapter(
-  source: EmbeddingBuiltinEmbedSource,
-  options: { batchSize?: number; signal?: AbortSignal } = {},
-): EmbeddingEmbedCallback {
-  return async (chunks) => {
-    const output = await source.embedBatched(
-      chunks.map((chunk) => chunk.text),
-      options,
-    );
-    return assertVectors(
-      output.vectors,
-      chunks.length,
-      output.cancelled,
-      "The embedding worker",
-    );
-  };
 }
 
 // ── Host options ────────────────────────────────────────────────────────────
@@ -405,6 +355,8 @@ let hostGeneration = 0;
 let hostState = createIdleHostState();
 let hostIdentity: HostIdentity | null = null;
 let current: RunningBuild | null = null;
+/** Admission for the async start window; see `embedding-build-start-guard.ts`. */
+const startGuard = createEmbeddingBuildStartGuard();
 
 function createIdleHostState(): EmbeddingBuildHostState {
   return {
@@ -484,7 +436,14 @@ async function resolveUnits(
   return Array.from(produced);
 }
 
-/** Start one build under the caller's lifecycle, or refuse with a typed error. */
+/**
+ * Start one build under the caller's lifecycle, or refuse with a typed error.
+ *
+ * The admission claim is synchronous; everything that can await happens inside
+ * {@link startEmbeddingBuildExclusive}. That split is what makes the guard
+ * sound: `current` does not exist yet while the install probe/lock preflight/
+ * calibration run, so without the claim a second caller would also be admitted.
+ */
 export async function startEmbeddingBuild(
   options: EmbeddingBuildHostOptions,
 ): Promise<EmbeddingBuildHostStartResult> {
@@ -495,6 +454,40 @@ export async function startEmbeddingBuild(
       "Cancel it first (/recall embedding cancel), or wait for it to finish.",
     );
   }
+  const admission = startGuard.tryBegin();
+  if (admission === null) {
+    return refuse(
+      "already_running",
+      "An embedding build is already starting in this process.",
+      "Wait for it to finish, or cancel it first (/recall embedding cancel).",
+    );
+  }
+  try {
+    return await startEmbeddingBuildExclusive(options);
+  } finally {
+    startGuard.finish(admission);
+  }
+}
+
+/**
+ * Refuse a start that a cancel reached while it was still in its preflight.
+ *
+ * Called after every awaited preflight step and before the run is installed:
+ * the cancel has already been answered with "cancelling", so starting anyway
+ * would make that answer a lie.
+ */
+function cancelledStartRefusal(): EmbeddingBuildHostStartResult | null {
+  if (!startGuard.isCancelRequested()) return null;
+  return refuse(
+    "aborted",
+    "The build was cancelled while it was starting; nothing is running.",
+    "Run /recall embedding build again when you want it to continue.",
+  );
+}
+
+async function startEmbeddingBuildExclusive(
+  options: EmbeddingBuildHostOptions,
+): Promise<EmbeddingBuildHostStartResult> {
   if (!isHostLifecycle(options.lifecycle)) {
     return refuse(
       "no_host",
@@ -579,6 +572,9 @@ export async function startEmbeddingBuild(
     }
   }
 
+  const cancelledAfterInstall = cancelledStartRefusal();
+  if (cancelledAfterInstall !== null) return cancelledAfterInstall;
+
   // ── A2: read-only lock preflight (A3 still owns the authoritative acquire) ─
   const inspectLock =
     options.inspectLock ??
@@ -599,6 +595,9 @@ export async function startEmbeddingBuild(
     );
   }
 
+  const cancelledAfterLock = cancelledStartRefusal();
+  if (cancelledAfterLock !== null) return cancelledAfterLock;
+
   hostIdentity = { identity, spaceDir, clock };
   if (keepAfterExit) {
     return startDetachedChild(
@@ -613,6 +612,8 @@ export async function startEmbeddingBuild(
 
   // ── C5: a failed/skipped calibration never blocks the build ──────────────
   const calibration = await resolveCalibration(options);
+  const cancelledAfterCalibration = cancelledStartRefusal();
+  if (cancelledAfterCalibration !== null) return cancelledAfterCalibration;
   const generation = hostGeneration + 1;
   hostGeneration = generation;
   const run = createRun(generation, null, timers);
@@ -859,6 +860,13 @@ export async function cancelEmbeddingBuild(
 ): Promise<EmbeddingBuildCancelResult> {
   const run = current;
   const timeoutMs = options.timeoutMs ?? EMBEDDING_BUILD_HOST_EXIT_WAIT_MS;
+  // A start that is still in its async preflight has no `RunningBuild` to abort.
+  // Answering "nothing is running" here would be false — the build starts at
+  // the end of that preflight — so record the intent (the start checks it after
+  // every awaited step) and report that a stop was requested.
+  if ((run === null || run.finished) && startGuard.requestCancel()) {
+    return { cancelled: true, settled: false, phase: "cancelling" };
+  }
   if (run === null || run.finished) {
     return { cancelled: false, settled: true, phase: hostState.phase };
   }
@@ -935,6 +943,9 @@ export function resetEmbeddingBuildHost(): void {
   hostGeneration += 1;
   hostIdentity = null;
   hostState = createIdleHostState();
+  // Drop a start that is still inside its preflight. Its own `finally` is
+  // token-checked, so a late return cannot clear a later start's claim.
+  startGuard.reset();
   if (run === null || run.finished) return;
   run.finished = true;
   run.abortRequested = true;

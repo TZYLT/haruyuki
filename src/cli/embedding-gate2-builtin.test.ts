@@ -55,9 +55,9 @@ import {
   type EmbeddingSubmitRunner,
   runEmbeddingSubmitCommand,
 } from "@/cli/commands/embedding-submit";
+import { createBuiltinEmbedAdapter } from "@/cli/helpers/embedding-build-embed-adapters";
 import {
   cancelEmbeddingBuild,
-  createBuiltinEmbedAdapter,
   resetEmbeddingBuildHost,
   startEmbeddingBuild,
 } from "@/cli/helpers/embedding-build-host";
