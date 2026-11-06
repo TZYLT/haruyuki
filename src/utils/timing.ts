@@ -60,8 +60,11 @@ export function markMilestone(name: string): void {
 
   if (isTimingsEnabled()) {
     const relative = now - firstMilestoneTime;
+    // Since process start, so the first milestone also exposes the module-load
+    // window that happens before any code in `main()` can log.
+    const sinceProcessStart = process.uptime() * 1000;
     console.error(
-      `[timing] MILESTONE ${name} at +${formatDuration(relative)} (${formatTimestamp(new Date())})`,
+      `[timing] MILESTONE ${name} at +${formatDuration(relative)} (process +${formatDuration(sinceProcessStart)}) (${formatTimestamp(new Date())})`,
     );
   }
 }

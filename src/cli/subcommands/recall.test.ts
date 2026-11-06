@@ -70,7 +70,7 @@ test("no arguments or help prints the usage and succeeds", async () => {
 });
 
 test("a bad argument fails with a message on stderr", async () => {
-  const code = await runRecallSubcommand(["display", "loud"], {
+  const code = await runRecallSubcommand(["config", "display", "loud"], {
     initializeSettings: noopInitialize,
   });
   expect(code).toBe(1);
@@ -121,7 +121,7 @@ test("build indexes the store and now prints what a query finds", async () => {
 });
 
 test("a setting can be written from a script", async () => {
-  const code = await runRecallSubcommand(["display", "silent"], {
+  const code = await runRecallSubcommand(["config", "display", "silent"], {
     initializeSettings: noopInitialize,
   });
   expect(code).toBe(0);
@@ -130,16 +130,16 @@ test("a setting can be written from a script", async () => {
 
 test("embedding flags reach the embedding command instead of the recall parser", async () => {
   await withRecallFixture(async (fixture) => {
-    // `--confirm` is an embedding-family flag, not a `haruyuki recall` option.
-    // Before the split it failed as an unknown option; it must now reach
-    // `/recall embedding reset --confirm` and find nothing to delete.
+    // `--json` belongs to the embedding family, not to `haruyuki recall`. Before
+    // the split it failed as an unknown option; it must now reach
+    // `/recall embedding model --json` and print the (empty) model list.
     const code = await runRecallSubcommand(
-      ["embedding", "reset", "--confirm", "--agent", fixture.agentId],
+      ["embedding", "model", "--json", "--agent", fixture.agentId],
       { initializeSettings: noopInitialize, backend: fixture.backend },
     );
     expect(code).toBe(0);
     expect(stderr.join("\n")).not.toContain("Unknown option");
-    expect(stdout.join("\n")).toContain("nothing was deleted");
+    expect(JSON.parse(stdout.join("\n"))).toEqual([]);
   });
 });
 
@@ -152,7 +152,7 @@ test("an unknown embedding flag fails the script", async () => {
   });
   expect(code).toBe(1);
   expect(stderr.join("\n")).toContain(
-    "takes only --full and --keep-after-exit",
+    "takes --full, --keep-after-exit or --cancel",
   );
 });
 

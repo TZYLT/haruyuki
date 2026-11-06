@@ -496,7 +496,7 @@ describe("group B - built-in model path", () => {
     if (!started.ok) {
       expect(started.error.code).toBe("model_missing");
       expect(started.error.message).toContain("not installed");
-      expect(started.error.action).toContain("setup");
+      expect(started.error.action).toContain("connect");
     }
     // The refusal is immediate: nothing was downloaded or spawned.
     expect(performance.now() - before).toBeLessThan(2_000);
