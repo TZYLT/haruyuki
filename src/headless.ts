@@ -624,6 +624,12 @@ async function emitHeadlessTurnEnd(options: {
       assistantMessage: options.assistantMessage,
     };
     await options.adapter.events.emit("turn_end", event, options.context);
+    // 48-1 §6.8: the turn is on disk, so the catch-up runs after completion.
+    void import("@/reminders/recall-embedding-turn-end")
+      .then(({ scheduleEmbeddingCatchUpAfterTurn }) =>
+        scheduleEmbeddingCatchUpAfterTurn(options.agent.id),
+      )
+      .catch(() => undefined);
     return typeof event.continue === "string" ? event.continue : undefined;
   } catch {
     // Mod turn_end handlers should not block turn completion.

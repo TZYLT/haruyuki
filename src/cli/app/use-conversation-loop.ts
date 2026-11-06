@@ -1532,6 +1532,14 @@ export function useConversationLoop(ctx: ConversationLoopContext) {
               turnEndContinue = undefined;
             }
 
+            // 48-1 §6.8: the finished turn is on disk now, so the incremental
+            // catch-up can run while the user reads the answer.
+            void import("@/reminders/recall-embedding-turn-end")
+              .then(({ scheduleEmbeddingCatchUpAfterTurn }) =>
+                scheduleEmbeddingCatchUpAfterTurn(agentIdRef.current),
+              )
+              .catch(() => undefined);
+
             if (turnEndContinue) {
               const continueOtid = randomUUID();
               setTimeout(() => {

@@ -119,6 +119,12 @@ export async function emitListenerTurnEnd(options: {
       assistantMessage: options.assistantMessage,
     };
     await createListenerModEvents(modAdapters).emit("turn_end", event, context);
+    // 48-1 §6.8: the finished turn is on disk; schedule the catch-up now.
+    void import("@/reminders/recall-embedding-turn-end")
+      .then(({ scheduleEmbeddingCatchUpAfterTurn }) =>
+        scheduleEmbeddingCatchUpAfterTurn(options.agentId),
+      )
+      .catch(() => undefined);
     return typeof event.continue === "string" && event.continue.length > 0
       ? event.continue
       : undefined;
