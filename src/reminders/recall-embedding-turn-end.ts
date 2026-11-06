@@ -10,6 +10,10 @@
  * so the policy stays in one place. It is fire-and-forget and swallows every
  * error: a failed catch-up must never affect turn completion.
  *
+ * It also arms the cooldown-expiry self-check (`recall-embedding-autobuild.ts`):
+ * when this turn is the last one for a while, the index is re-checked once the
+ * cooldown expires instead of waiting for a user to send another message.
+ *
  * Layer: `reminders/`. Imports `backend/` (lower layer) and the settings reader.
  */
 
@@ -18,8 +22,10 @@ import { readEmbeddingSettings } from "@/recall-settings";
 import { debugWarn } from "@/utils/debug";
 import { getErrorMessage } from "@/utils/error";
 import {
+  cancelScheduledEmbeddingSelfCheck,
   isEmbeddingAutobuildRequested,
   maybeScheduleEmbeddingCatchUp,
+  scheduleEmbeddingIdleSelfCheck,
 } from "./recall-embedding-autobuild";
 
 /** Schedule one debounced catch-up for a finished turn. Never throws. */
@@ -29,8 +35,17 @@ export function scheduleEmbeddingCatchUpAfterTurn(
   if (agentId === null || agentId === undefined || agentId.length === 0) return;
   try {
     const settings = readEmbeddingSettings();
-    if (!isEmbeddingAutobuildRequested(settings)) return;
-    maybeScheduleEmbeddingCatchUp({ backend: getBackend(), agentId, settings });
+    const input = { backend: getBackend(), agentId, settings };
+    if (!isEmbeddingAutobuildRequested(settings)) {
+      // Turning embedding off also ends a pending self-check.
+      cancelScheduledEmbeddingSelfCheck();
+      return;
+    }
+    maybeScheduleEmbeddingCatchUp(input);
+    // This turn may be the last one for a while: arm the cooldown-expiry
+    // self-check so a build the cooldown/in-flight window refused, or one that
+    // finished while more messages landed, is retried without a next turn.
+    scheduleEmbeddingIdleSelfCheck(input);
   } catch (error) {
     debugWarn(
       "recall",
