@@ -161,10 +161,13 @@ describe("the embedding rows write through the single writer", () => {
     expect(item("recallEmbeddingEnabled").read(CTX)).toBe("true");
   });
 
-  test("a select write persists the stored key", () => {
+  test("a select write persists the stored key and the row reads it normalized", () => {
     write("recallEmbeddingGpu", "index-only");
     expect(settingsManager.getSetting("recallEmbeddingGpu")).toBe("index-only");
-    expect(item("recallEmbeddingGpu").read(CTX)).toBe("index-only");
+    // D-01: the UI only offers auto | off, and the resolver maps the legacy
+    // `index-only` role to `auto`. The stored value is kept (first assertion);
+    // the row shows what the resolver actually uses.
+    expect(item("recallEmbeddingGpu").read(CTX)).toBe("auto");
   });
 
   test("a number write persists the number, not the text", () => {
