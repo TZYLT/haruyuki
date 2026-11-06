@@ -89,6 +89,7 @@ describe("the embedding block", () => {
       "toggle",
       "status",
       "build",
+      "reset",
       "connect",
       "model",
     ]);
@@ -347,7 +348,7 @@ describe("the overlay's keys", () => {
     });
     try {
       // Toggle, display, seven numbers → embedding; then toggle, status, build,
-      // connect → model.
+      // reset, connect → model.
       await pressKeysSlowly(
         tty,
         HOME,
@@ -363,7 +364,7 @@ describe("the overlay's keys", () => {
         ENTER,
       );
       expect(await tty.text()).toContain("Turn vector recall off");
-      await pressKeysSlowly(tty, HOME, DOWN, DOWN, DOWN, DOWN, ENTER);
+      await pressKeysSlowly(tty, HOME, DOWN, DOWN, DOWN, DOWN, DOWN, ENTER);
       const frame = await tty.text();
       expect(frame).toContain("Stored vector models");
       expect(frame).toContain("#1 bge-m3");

@@ -28,6 +28,8 @@ export const EMBEDDING_COMMAND_USAGE = [
   "  /recall embedding model            choose a stored model (TUI picker)",
   "  /recall embedding build [--full]   build or refresh the vector index",
   "  /recall embedding build --cancel   stop the running build",
+  "  /recall embedding reset            preview deleting stored vectors",
+  "  /recall embedding reset --confirm  delete the active space's vectors",
   "  /recall embedding config           list the build keys and their values",
   "  /recall embedding config <key> <value>",
   "  /recall embedding device [--test]  show (or measure) the build device",
@@ -45,6 +47,7 @@ export const EMBEDDING_COMMAND_USAGE = [
   "  haruyuki recall embedding model --json",
   "  haruyuki recall embedding model --select <n>",
   "  haruyuki recall embedding model --delete <n> --confirm",
+  "  haruyuki recall embedding reset --confirm",
   "  haruyuki --recall-embedding on --recall-embedding-backend builtin",
 ].join("\n");
 
@@ -102,6 +105,16 @@ export type EmbeddingCommand =
     }
   /** Device facts, or a read-only measurement with `test`. */
   | { kind: "device"; test: boolean }
+  /**
+   * Delete stored vectors (`current`/`all`/one model). A bare reset is a
+   * preview; the delete itself always needs `--confirm`.
+   */
+  | {
+      kind: "reset";
+      scope: "current" | "all" | "model";
+      model?: string;
+      confirmed: boolean;
+    }
   | {
       kind: "build";
       mode: EmbeddingBuildMode;
@@ -282,6 +295,57 @@ function parseEmbeddingConfig(rest: string[]): EmbeddingCommand {
 }
 
 /**
+ * Parse `reset` (48-4 D-07, restored as an explicit lifecycle entry): the bare
+ * form previews, `--confirm` deletes. `--all` and `--model <id>` choose the
+ * target; they are mutually exclusive with each other and with the default.
+ */
+function parseReset(rest: string[]): EmbeddingCommand {
+  let scope: "current" | "all" | "model" = "current";
+  let model: string | undefined;
+  let confirmed = false;
+  for (let cursor = 0; cursor < rest.length; cursor += 1) {
+    const word = rest[cursor];
+    if (word === "--confirm") {
+      confirmed = true;
+      continue;
+    }
+    if (word === "--all") {
+      if (scope !== "current") {
+        return error(
+          "`/recall embedding reset` takes one of --all or --model.",
+        );
+      }
+      scope = "all";
+      continue;
+    }
+    if (word === "--model") {
+      if (scope !== "current") {
+        return error(
+          "`/recall embedding reset` takes one of --all or --model.",
+        );
+      }
+      const value = rest[cursor + 1];
+      if (value === undefined || value.startsWith("--")) {
+        return error(
+          "`/recall embedding reset --model` needs a model id: --model bge-m3.",
+        );
+      }
+      scope = "model";
+      model = value;
+      cursor += 1;
+      continue;
+    }
+    return error(`\`/recall embedding reset\` does not take "${word}".`);
+  }
+  return {
+    kind: "reset",
+    scope,
+    ...(model === undefined ? {} : { model }),
+    confirmed,
+  };
+}
+
+/**
  * Parse the words after `/recall embedding`.
  *
  * A bare invocation answers the status, because opening an overlay is the TUI
@@ -326,6 +390,8 @@ export function parseEmbeddingCommand(args: string[]): EmbeddingCommand {
     }
     case "build":
       return parseBuild(rest);
+    case "reset":
+      return parseReset(rest);
     case "config":
       return parseEmbeddingConfig(rest);
     default:

@@ -78,6 +78,7 @@ export {
 // The runtime contract lives in its own module so the parser/handler stay under
 // the file-size ceiling; these re-exports keep the public import site.
 import type {
+  EmbeddingResetTarget,
   EmbeddingRuntimeBuildProgress,
   EmbeddingRuntimeCalibration,
   EmbeddingRuntimePort,
@@ -528,6 +529,49 @@ async function runCancel(
   return deps.runtime.cancel(runtimeScopeValue);
 }
 
+/**
+ * `/recall embedding reset [--all | --model <id>] [--confirm]` (48-1 §6.10).
+ *
+ * A bare reset is only a preview; the deletion always needs `--confirm`, the
+ * same preview/delete split every other destructive command in this repo uses.
+ * Only vectors are removed — transcripts, memory and settings stay.
+ */
+async function runReset(
+  command: Extract<EmbeddingCommand, { kind: "reset" }>,
+  scope: DreamCommandScope | undefined,
+  deps: ResolvedDeps,
+): Promise<string> {
+  const runtimeScopeValue = runtimeScope(scope);
+  if (runtimeScopeValue === null) return NEEDS_AGENT;
+  const target: EmbeddingResetTarget =
+    command.scope === "all"
+      ? { kind: "all" }
+      : command.scope === "model"
+        ? { kind: "model", model: command.model ?? "" }
+        : { kind: "current" };
+  if (!command.confirmed) {
+    const what =
+      command.scope === "all"
+        ? "every stored vector space for this agent"
+        : command.scope === "model"
+          ? `the stored vector space for model ${command.model}`
+          : "the vector space the current settings address";
+    const confirm =
+      command.scope === "all"
+        ? "/recall embedding reset --all --confirm"
+        : command.scope === "model"
+          ? `/recall embedding reset --model ${command.model} --confirm`
+          : "/recall embedding reset --confirm";
+    return [
+      `This deletes ${what}.`,
+      "Transcripts, memory files and settings are kept. Nothing was deleted. To confirm:",
+      `  ${confirm}`,
+    ].join("\n");
+  }
+  if (deps.runtime?.reset === undefined) return RUNTIME_UNAVAILABLE.reset;
+  return deps.runtime.reset(runtimeScopeValue, target);
+}
+
 function runSet(
   command: Extract<EmbeddingCommand, { kind: "set" }>,
   deps: ResolvedDeps,
@@ -625,6 +669,8 @@ export async function handleEmbeddingCommand(
       return runModelCommand(command, scope, resolved);
     case "device":
       return runDeviceCommand(command, scope, resolved);
+    case "reset":
+      return runReset(command, scope, resolved);
     case "set":
       return runSet(command, resolved);
   }

@@ -173,6 +173,11 @@ export function buildEmbeddingRows(
       description: "incremental; runs in the background",
     },
     {
+      key: "reset",
+      label: "Delete stored vectors",
+      description: "preview first; the delete itself needs --confirm",
+    },
+    {
       key: "connect",
       label: "Connect a vector source",
       description: "model, endpoint, precision, then build",
@@ -416,7 +421,9 @@ export const RecallOverlay = memo(function RecallOverlay({
             ? ["status"]
             : key === "build"
               ? ["build"]
-              : ["connect"];
+              : key === "reset"
+                ? ["reset"]
+                : ["connect"];
       void (async () => {
         try {
           const text = await runEmbedding(args);
